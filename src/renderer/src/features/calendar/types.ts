@@ -15,6 +15,8 @@ export interface CalendarEvent {
   provider?: string
   externalId?: string
   htmlLink?: string
+  /** Google-only: true when the event's calendar allows writes (owner/writer). */
+  writable?: boolean
   googleUpdatedAt?: string
   sync?: { state: EventSyncState; lastPushedAt?: string; lastError?: string }
   createdAt: string
@@ -42,11 +44,14 @@ export interface CalendarItem {
   done?: boolean // for tasks
 }
 
-/** The editable fields for the create/edit dialog. */
+/** The editable fields for the create/edit dialog. Supports all-day and
+ *  multi-day events (start/end dates); times are used only when not all-day. */
 export interface EventDraft {
   title: string
-  date: string // YYYY-MM-DD (local)
-  startTime: string // HH:mm
-  endTime: string // HH:mm
+  allDay: boolean
+  startDate: string // YYYY-MM-DD (local)
+  endDate: string // YYYY-MM-DD (local; >= startDate)
+  startTime: string // HH:mm (ignored when allDay)
+  endTime: string // HH:mm (ignored when allDay)
   notes: string
 }

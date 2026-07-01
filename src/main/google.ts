@@ -13,13 +13,15 @@ import { randomBytes, createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { OAuth2Client, CodeChallengeMethod } from 'google-auth-library'
-import type { CalendarEvent } from './events-fs'
+import { listTombstonedKeys, type CalendarEvent } from './events-fs'
 import {
   toGoogleBody,
   toGoogleEventId,
   httpStatus,
   classifyPushError,
-  type PushResult
+  linkKey,
+  type PushResult,
+  type DeleteResult
 } from './google-sync'
 
 // M13 read-only scope. M14 adds a SEPARATE write flow (calendar.events) so the
@@ -292,6 +294,9 @@ export interface GoogleEvent {
   source: 'google'
   provider: string // `google:<calendarId>`
   externalId: string // the Google event id
+  /** True only on calendars the user can write to (owner/writer) — read-only
+   *  calendars (holidays, subscribed, freeBusy) can't be edited/deleted. */
+  writable: boolean
   htmlLink?: string
   createdAt: string
   updatedAt: string
@@ -310,6 +315,18 @@ function cachePath(): string {
 async function writeCache(events: GoogleEvent[]): Promise<void> {
   await fs.mkdir(googleDir(), { recursive: true })
   await fs.writeFile(cachePath(), JSON.stringify(events), 'utf8')
+}
+
+// Serialize cache mutations so a pull's writeCache can't interleave with a
+// delete's dropCachedEvent (which would let a just-deleted event reappear).
+let cacheOp: Promise<unknown> = Promise.resolve()
+function withCacheLock<T>(fn: () => Promise<T>): Promise<T> {
+  const result = cacheOp.then(fn, fn)
+  cacheOp = result.then(
+    () => {},
+    () => {}
+  )
+  return result
 }
 
 async function readCache(): Promise<GoogleEvent[]> {
@@ -348,7 +365,7 @@ interface RawEvent {
 }
 
 /** Map a Google API event to a GoogleEvent, or null to drop it (cancelled/invalid). */
-function mapEvent(raw: RawEvent, calendarId: string): GoogleEvent | null {
+function mapEvent(raw: RawEvent, calendarId: string, writable: boolean): GoogleEvent | null {
   if (!raw.id || raw.status === 'cancelled') return null
   const provider = `google:${calendarId}`
   const allDay = Boolean(raw.start?.date && !raw.start?.dateTime)
@@ -378,18 +395,27 @@ function mapEvent(raw: RawEvent, calendarId: string): GoogleEvent | null {
     source: 'google',
     provider,
     externalId: raw.id,
+    writable,
     htmlLink: raw.htmlLink,
     createdAt: raw.created ?? now,
     updatedAt: raw.updated ?? now
   }
 }
 
-async function fetchCalendarIds(client: OAuth2Client): Promise<string[]> {
-  const res = await client.request<{ items?: Array<{ id?: string }> }>({
+/** Calendars the user has, with whether they can WRITE events to each (owner or
+ *  writer role). Read-only calendars (reader/freeBusyReader) can't be edited. */
+async function fetchCalendars(
+  client: OAuth2Client
+): Promise<Array<{ id: string; writable: boolean }>> {
+  const res = await client.request<{
+    items?: Array<{ id?: string; accessRole?: string }>
+  }>({
     url: 'https://www.googleapis.com/calendar/v3/users/me/calendarList',
     params: { maxResults: 50 }
   })
-  return (res.data.items ?? []).map((i) => i.id).filter((id): id is string => Boolean(id))
+  return (res.data.items ?? [])
+    .filter((i): i is { id: string; accessRole?: string } => Boolean(i.id))
+    .map((i) => ({ id: i.id, writable: i.accessRole === 'owner' || i.accessRole === 'writer' }))
 }
 
 /** Pull recent + upcoming events from every calendar into the read-only cache. */
@@ -401,13 +427,13 @@ async function pullEvents(): Promise<PullEventsResult> {
   const timeMax = new Date(now + PULL_FWD_DAYS * DAY_MS).toISOString()
   const all: GoogleEvent[] = []
   try {
-    const calendarIds = await fetchCalendarIds(client)
-    for (const calId of calendarIds) {
+    const calendars = await fetchCalendars(client)
+    for (const cal of calendars) {
       let pageToken: string | undefined
       let pages = 0
       do {
         const res = await client.request<{ items?: RawEvent[]; nextPageToken?: string }>({
-          url: `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events`,
+          url: `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events`,
           params: {
             timeMin,
             timeMax,
@@ -418,7 +444,7 @@ async function pullEvents(): Promise<PullEventsResult> {
           }
         })
         for (const raw of res.data.items ?? []) {
-          const ev = mapEvent(raw, calId)
+          const ev = mapEvent(raw, cal.id, cal.writable)
           if (ev) all.push(ev)
         }
         pageToken = res.data.nextPageToken ?? undefined
@@ -428,13 +454,39 @@ async function pullEvents(): Promise<PullEventsResult> {
   } catch {
     return { ok: false, error: 'read-failed' }
   }
-  await writeCache(all)
-  return { ok: true, events: all }
+  // Filter tombstoned events out at WRITE time too (not just on read), so a pull
+  // can never persist a mirror of an event that's being deleted locally.
+  const events = await withoutTombstoned(all)
+  await withCacheLock(() => writeCache(events))
+  return { ok: true, events }
+}
+
+function eventsDirPath(): string {
+  return join(app.getPath('userData'), 'events')
+}
+
+/** Drop pulled Google events that mirror a locally-deleted (tombstoned) event.
+ *  Without this, deleting a synced event locally would leave its Google copy
+ *  showing as a read-only green chip until the background delete lands (or
+ *  forever, if we're offline and the delete keeps retrying). */
+async function withoutTombstoned(events: GoogleEvent[]): Promise<GoogleEvent[]> {
+  const gone = await listTombstonedKeys(eventsDirPath())
+  return gone.size ? events.filter((e) => !gone.has(linkKey(e.provider, e.externalId))) : events
 }
 
 // --- Push local events OUT to Google (M14 two-way sync) --------------------
 
-const EVENTS_URL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events'
+// The events endpoint for a given calendar. App-created events go to 'primary';
+// an ADOPTED Google event keeps its OWN calendar (from its provider) so edits/
+// deletes hit the real event instead of creating a stray copy on primary.
+function eventsUrl(calId: string): string {
+  return `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events`
+}
+
+/** The concrete calendar id inside a `google:<calId>` provider, else 'primary'. */
+function calendarIdFromProvider(provider?: string): string {
+  return provider?.startsWith('google:') ? provider.slice('google:'.length) : 'primary'
+}
 
 // The concrete primary calendar id (e.g. "you@gmail.com"), cached per session.
 // We stamp THIS on pushed events — never the "primary" alias — so their
@@ -456,10 +508,14 @@ async function primaryCalendarId(client: OAuth2Client): Promise<string | null> {
   }
 }
 
-async function fetchEventUpdated(client: OAuth2Client, id: string): Promise<string | undefined> {
+async function fetchEventUpdated(
+  client: OAuth2Client,
+  calId: string,
+  id: string
+): Promise<string | undefined> {
   try {
     const res = await client.request<{ updated?: string }>({
-      url: `${EVENTS_URL}/${encodeURIComponent(id)}`
+      url: `${eventsUrl(calId)}/${encodeURIComponent(id)}`
     })
     return res.data.updated
   } catch {
@@ -467,20 +523,23 @@ async function fetchEventUpdated(client: OAuth2Client, id: string): Promise<stri
   }
 }
 
-/** Create the event in Google's primary calendar. Idempotent: uses a
- *  deterministic id so a crash-retry can't double-create. */
-export async function pushInsertEvent(ev: CalendarEvent): Promise<PushResult> {
+/** Create the event in Google (the primary calendar unless `calId` says
+ *  otherwise). Idempotent: uses a deterministic id so a crash-retry can't
+ *  double-create. */
+export async function pushInsertEvent(ev: CalendarEvent, calId = 'primary'): Promise<PushResult> {
   if (!(await isGoogleSyncEnabled())) return { ok: false, error: 'not-enabled', retryable: false }
   const client = await authedClient()
   if (!client) return { ok: false, error: 'not-connected', retryable: false }
-  const primaryId = await primaryCalendarId(client)
-  if (!primaryId) return { ok: false, error: 'offline', retryable: true }
-  const provider = `google:${primaryId}`
+  // Stamp the CONCRETE calendar id (resolve the 'primary' alias) so the
+  // (provider, externalId) key equals what the pull produces and dedups.
+  const concreteId = calId === 'primary' ? await primaryCalendarId(client) : calId
+  if (!concreteId) return { ok: false, error: 'offline', retryable: true }
+  const provider = `google:${concreteId}`
   const externalId = toGoogleEventId(ev.id)
   try {
     const res = await client.request<{ updated?: string }>({
       method: 'POST',
-      url: EVENTS_URL,
+      url: eventsUrl(calId),
       data: { id: externalId, ...toGoogleBody(ev) }
     })
     return { ok: true, externalId, provider, googleUpdatedAt: res.data.updated }
@@ -488,11 +547,73 @@ export async function pushInsertEvent(ev: CalendarEvent): Promise<PushResult> {
     // 409 = this id already exists (a prior attempt succeeded before we recorded
     // the link). That's success — adopt the existing event, don't re-create.
     if (httpStatus(e) === 409) {
-      const googleUpdatedAt = await fetchEventUpdated(client, externalId)
+      const googleUpdatedAt = await fetchEventUpdated(client, calId, externalId)
       return { ok: true, externalId, provider, googleUpdatedAt }
     }
     return classifyPushError(e)
   }
+}
+
+/** Update the linked Google event with PATCH (only the fields we manage —
+ *  Google-only fields like attendees/reminders are left untouched). An event
+ *  that was never linked is created instead (adoption); one that Google no
+ *  longer has (404/410) is re-created. */
+export async function pushUpdateEvent(ev: CalendarEvent): Promise<PushResult> {
+  if (!(await isGoogleSyncEnabled())) return { ok: false, error: 'not-enabled', retryable: false }
+  if (!ev.externalId) return pushInsertEvent(ev) // never linked → create on primary + link
+  const client = await authedClient()
+  if (!client) return { ok: false, error: 'not-connected', retryable: false }
+  const calId = calendarIdFromProvider(ev.provider) // the event's OWN calendar, not always primary
+  try {
+    const res = await client.request<{ updated?: string }>({
+      method: 'PATCH',
+      url: `${eventsUrl(calId)}/${encodeURIComponent(ev.externalId)}`,
+      data: toGoogleBody(ev)
+    })
+    const provider = ev.provider ?? `google:${(await primaryCalendarId(client)) ?? 'primary'}`
+    return { ok: true, externalId: ev.externalId, provider, googleUpdatedAt: res.data.updated }
+  } catch (e) {
+    // Gone on Google's side → recreate on the SAME calendar (fresh deterministic id).
+    if (httpStatus(e) === 404 || httpStatus(e) === 410) return pushInsertEvent(ev, calId)
+    return classifyPushError(e)
+  }
+}
+
+/** Delete the linked Google event from its OWN calendar (from `provider`).
+ *  Already-gone (404/410) counts as success. */
+export async function pushDeleteEvent(
+  externalId: string,
+  provider?: string
+): Promise<DeleteResult> {
+  if (!(await isGoogleSyncEnabled())) return { ok: false, error: 'not-enabled', retryable: false }
+  const client = await authedClient()
+  if (!client) return { ok: false, error: 'not-connected', retryable: false }
+  const calId = calendarIdFromProvider(provider)
+  try {
+    await client.request({
+      method: 'DELETE',
+      url: `${eventsUrl(calId)}/${encodeURIComponent(externalId)}`
+    })
+    return { ok: true }
+  } catch (e) {
+    if (httpStatus(e) === 404 || httpStatus(e) === 410) return { ok: true } // already gone
+    return classifyPushError(e)
+  }
+}
+
+/** Remove one event from the read-only cache by its Google id, so a confirmed
+ *  delete stops showing as a green chip before the next full pull. */
+export async function dropCachedEvent(externalId: string, provider?: string): Promise<void> {
+  const key = provider ? linkKey(provider, externalId) : null
+  await withCacheLock(async () => {
+    const events = await readCache()
+    // Match the exact (provider, externalId) event; fall back to externalId when
+    // no provider is known (still narrower than dropping every same-id copy).
+    const filtered = key
+      ? events.filter((e) => linkKey(e.provider, e.externalId) !== key)
+      : events.filter((e) => e.externalId !== externalId)
+    if (filtered.length !== events.length) await writeCache(filtered)
+  })
 }
 
 let registered = false
@@ -506,5 +627,5 @@ export function registerGoogle(): void {
   ipcMain.handle('google:disconnect', () => disconnect())
   ipcMain.handle('google:listCalendars', () => listCalendars())
   ipcMain.handle('google:pullEvents', () => pullEvents())
-  ipcMain.handle('google:cachedEvents', () => readCache())
+  ipcMain.handle('google:cachedEvents', () => readCache().then(withoutTombstoned))
 }

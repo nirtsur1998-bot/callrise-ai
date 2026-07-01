@@ -300,6 +300,8 @@ export interface CalendarEvent {
   externalId?: string
   /** Deep-link back to the source (e.g. "Open in Google Calendar"). */
   htmlLink?: string
+  /** Google-only: true when the event's calendar allows writes (owner/writer). */
+  writable?: boolean
   /** Google's `updated` at last sync — the echo-loop watermark (M14). */
   googleUpdatedAt?: string
   /** Google mirror lifecycle for local events (M14 two-way sync). */
@@ -316,6 +318,14 @@ export interface EventCreateInput {
   notes?: string | null
 }
 
+/** Editing/deleting a Google event carries its link so the change targets the
+ *  same Google event (and the pulled copy dedups). */
+export interface AdoptEventInput extends EventCreateInput {
+  provider?: string
+  externalId?: string
+  googleUpdatedAt?: string
+}
+
 export interface EventUpdateInput {
   title?: string
   start?: string
@@ -329,6 +339,12 @@ export interface EventsApi {
   create: (input: EventCreateInput) => Promise<CalendarEvent>
   update: (id: string, patch: EventUpdateInput) => Promise<CalendarEvent | null>
   delete: (id: string) => Promise<{ ok: boolean }>
+  /** Adopt a Google event as a local, editable event linked back to Google. */
+  adopt: (input: AdoptEventInput) => Promise<CalendarEvent>
+  /** Delete a Google-originated event from the app (and from Google). */
+  deleteExternal: (link: AdoptEventInput) => Promise<{ ok: boolean }>
+  /** Retry any pending Google pushes/deletes (offline backlog). */
+  reconcile: () => Promise<void>
   /** Fires when a background Google sync changes events on disk. */
   onChanged: (cb: () => void) => () => void
 }

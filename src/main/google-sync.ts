@@ -8,6 +8,15 @@ export type PushResult =
   | { ok: true; externalId: string; provider: string; googleUpdatedAt?: string }
   | { ok: false; error: string; retryable: boolean }
 
+export type DeleteResult = { ok: true } | { ok: false; error: string; retryable: boolean }
+
+/** The identity of a linked event: the (provider, externalId) PAIR, JSON-encoded
+ *  so it can't collide. The same Google event id can appear on two calendars, so
+ *  keying on externalId alone would over-match — always use both. */
+export function linkKey(provider: string, externalId: string): string {
+  return JSON.stringify([provider, externalId])
+}
+
 /**
  * A Google-legal event id derived from the local id. A UUID minus its hyphens
  * is 32 lowercase hex chars — valid base32hex (Google allows a-v + 0-9, length
@@ -60,7 +69,8 @@ export function httpStatus(e: unknown): number | null {
  *  (A 409 is handled by the caller as success, so it's not represented here.) */
 export function classifyPushError(e: unknown): { ok: false; error: string; retryable: boolean } {
   const s = httpStatus(e)
-  if (s === 401 || s === 403) return { ok: false, error: 'forbidden', retryable: false }
+  if (s === 401) return { ok: false, error: 'auth', retryable: true } // token expired → refresh & retry
+  if (s === 403) return { ok: false, error: 'forbidden', retryable: false } // genuine permission denial
   if (s === 404 || s === 410) return { ok: false, error: 'not-found', retryable: false }
   if (s === 429 || (s !== null && s >= 500)) return { ok: false, error: 'server', retryable: true }
   if (s === null) return { ok: false, error: 'offline', retryable: true } // no HTTP response

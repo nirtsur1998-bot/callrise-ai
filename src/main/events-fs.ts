@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { linkKey } from './google-sync'
 
 /** Lifecycle of a local event's mirror in Google (M14 two-way sync). */
 export type SyncState =
@@ -40,13 +41,17 @@ export interface CalendarEvent {
   updatedAt: string
 }
 
-/** Fields the renderer may send when creating an event. */
+/** Fields the renderer may send when creating an event. The optional link fields
+ *  are set only when "adopting" a Google event (making it locally editable). */
 export interface EventCreateInput {
   title?: unknown
   start?: unknown
   end?: unknown
   allDay?: unknown
   notes?: unknown
+  provider?: unknown
+  externalId?: unknown
+  googleUpdatedAt?: unknown
 }
 
 /** Fields the renderer may change (any absent key is left untouched). */
@@ -156,6 +161,10 @@ function sanitizeEventRecord(value: unknown): CalendarEvent | null {
   }
 }
 
+function sanitizeLinkField(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value.slice(0, 200) : undefined
+}
+
 export async function createEvent(dir: string, input: EventCreateInput): Promise<CalendarEvent> {
   await ensureDir(dir)
   const now = new Date().toISOString()
@@ -168,6 +177,11 @@ export async function createEvent(dir: string, input: EventCreateInput): Promise
     allDay: input?.allDay === true,
     notes: sanitizeNotes(input?.notes),
     source: 'local',
+    // Present only when adopting a Google event — the link makes future edits
+    // PATCH the same Google event and dedups the pulled copy.
+    provider: sanitizeLinkField(input?.provider),
+    externalId: sanitizeLinkField(input?.externalId),
+    googleUpdatedAt: toIso(input?.googleUpdatedAt) ?? undefined,
     createdAt: now,
     updatedAt: now
   }
@@ -201,6 +215,21 @@ export async function listEvents(
   }
   events.sort((a, b) => a.start.localeCompare(b.start)) // earliest first
   return events
+}
+
+/** (provider, externalId) keys of locally-deleted events awaiting a confirmed
+ *  Google delete. The Google read-sync uses these to hide their pulled mirror.
+ *  Keyed on the PAIR (not externalId alone) so a delete on one calendar can't
+ *  hide the same-id event on another. */
+export async function listTombstonedKeys(dir: string): Promise<Set<string>> {
+  const all = await listEvents(dir, { includeDeleted: true })
+  const keys = new Set<string>()
+  for (const e of all) {
+    if (e.sync?.state === 'deleted' && e.provider && e.externalId) {
+      keys.add(linkKey(e.provider, e.externalId))
+    }
+  }
+  return keys
 }
 
 export async function getEvent(dir: string, id: string): Promise<CalendarEvent | null> {

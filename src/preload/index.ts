@@ -58,6 +58,12 @@ const api = {
     create: (input: unknown) => ipcRenderer.invoke('events:create', input),
     update: (id: string, patch: unknown) => ipcRenderer.invoke('events:update', id, patch),
     delete: (id: string) => ipcRenderer.invoke('events:delete', id),
+    // Adopt a Google event as a local, editable event linked back to Google.
+    adopt: (input: unknown) => ipcRenderer.invoke('events:adopt', input),
+    // Delete a Google-originated event from the app (and from Google).
+    deleteExternal: (link: unknown) => ipcRenderer.invoke('events:deleteExternal', link),
+    // Retry any pending Google pushes/deletes (offline backlog). Fire-and-forget.
+    reconcile: () => ipcRenderer.invoke('events:reconcile'),
     // Fires when a background Google sync changes events on disk (re-pull needed).
     onChanged: (cb: () => void) => subscribe('events:changed', cb)
   },

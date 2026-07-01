@@ -105,7 +105,7 @@ function Chip({
   onEditEvent: (event: CalendarEvent) => void
 }): React.JSX.Element {
   const style = ITEM_STYLES[item.kind]
-  const editable = item.kind === 'event' && item.event
+  const editable = Boolean(item.event) // 'event' + adopted-editable 'google' items
   return (
     <button
       type="button"

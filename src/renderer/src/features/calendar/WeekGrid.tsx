@@ -84,19 +84,33 @@ export function WeekGrid({
               key={day.toISOString()}
               className="min-h-[28px] space-y-0.5 border-r border-line-soft p-1 last:border-r-0"
             >
-              {allDay.map((item) => (
-                <div
-                  key={item.key}
-                  title={item.subtitle ? `${item.title} · ${item.subtitle}` : item.title}
-                  className={cn(
-                    'truncate rounded px-1.5 py-0.5 text-[11px] leading-tight',
-                    ITEM_STYLES[item.kind].chip,
-                    item.done && 'line-through opacity-60'
-                  )}
-                >
-                  {item.title}
-                </div>
-              ))}
+              {allDay.map((item) => {
+                const editable = Boolean(item.event) // editable events open the dialog; tasks/read-only don't
+                const title = item.subtitle ? `${item.title} · ${item.subtitle}` : item.title
+                const className = cn(
+                  'block w-full truncate rounded px-1.5 py-0.5 text-left text-[11px] leading-tight',
+                  ITEM_STYLES[item.kind].chip,
+                  item.done && 'line-through opacity-60',
+                  editable ? 'hover:brightness-125' : 'cursor-default'
+                )
+                return editable ? (
+                  <button
+                    key={item.key}
+                    type="button"
+                    title={title}
+                    onClick={() => {
+                      if (item.event) onEditEvent(item.event)
+                    }}
+                    className={className}
+                  >
+                    {item.title}
+                  </button>
+                ) : (
+                  <div key={item.key} title={title} className={className}>
+                    {item.title}
+                  </div>
+                )
+              })}
             </div>
           )
         })}
@@ -150,7 +164,7 @@ export function WeekGrid({
                   const top = (startMin / 60) * HOUR_HEIGHT
                   const height = Math.max(((endMin - startMin) / 60) * HOUR_HEIGHT, 18)
                   const laneWidth = 100 / lanes
-                  const editable = item.kind === 'event' && item.event
+                  const editable = Boolean(item.event) // 'event' + adopted-editable 'google'
                   const style = ITEM_STYLES[item.kind]
                   return (
                     <button

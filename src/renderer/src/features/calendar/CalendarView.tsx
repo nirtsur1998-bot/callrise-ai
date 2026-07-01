@@ -33,6 +33,8 @@ interface DialogState {
   mode: 'new' | 'edit'
   draft: EventDraft
   eventId?: string
+  /** The source event being edited — used to route Google events to adopt. */
+  event?: CalendarEvent
 }
 
 function rangeTitle(cursor: Date, view: View): string {
@@ -53,9 +55,12 @@ export function CalendarView(): React.JSX.Element {
     googleSyncing,
     googleLastSynced,
     loading,
+    googleWritable,
     createEvent,
     updateEvent,
     deleteEvent,
+    adoptEvent,
+    deleteExternalEvent,
     refreshGoogle
   } = useCalendar()
   const [view, setView] = useState<View>('month')
@@ -63,8 +68,8 @@ export function CalendarView(): React.JSX.Element {
   const [dialog, setDialog] = useState<DialogState | null>(null)
 
   const items = useMemo(
-    () => buildItems(events, tasks, calls, googleEvents),
-    [events, tasks, calls, googleEvents]
+    () => buildItems(events, tasks, calls, googleEvents, googleWritable),
+    [events, tasks, calls, googleEvents, googleWritable]
   )
 
   const goPrev = (): void => setCursor((c) => (view === 'month' ? subMonths(c, 1) : subWeeks(c, 1)))
@@ -73,7 +78,7 @@ export function CalendarView(): React.JSX.Element {
   const openNew = (day: Date, hour?: number): void =>
     setDialog({ mode: 'new', draft: newDraft(day, hour) })
   const openEdit = (event: CalendarEvent): void =>
-    setDialog({ mode: 'edit', draft: draftFromEvent(event), eventId: event.id })
+    setDialog({ mode: 'edit', draft: draftFromEvent(event), eventId: event.id, event })
   const zoomDay = (day: Date): void => {
     setCursor(day)
     setView('week')
@@ -82,13 +87,17 @@ export function CalendarView(): React.JSX.Element {
   const submitDialog = async (draft: EventDraft): Promise<void> => {
     if (!dialog) return
     const input = draftToInput(draft)
-    if (dialog.mode === 'edit' && dialog.eventId) await updateEvent(dialog.eventId, input)
+    // A Google-origin event is adopted (a linked local copy) so the edit PATCHes
+    // the same Google event; local events edit/create normally.
+    if (dialog.event?.source === 'google') await adoptEvent(dialog.event, input)
+    else if (dialog.mode === 'edit' && dialog.eventId) await updateEvent(dialog.eventId, input)
     else await createEvent(input)
     setDialog(null)
   }
 
   const deleteDialog = async (): Promise<void> => {
-    if (dialog?.eventId) await deleteEvent(dialog.eventId)
+    if (dialog?.event?.source === 'google') await deleteExternalEvent(dialog.event)
+    else if (dialog?.eventId) await deleteEvent(dialog.eventId)
     setDialog(null)
   }
 

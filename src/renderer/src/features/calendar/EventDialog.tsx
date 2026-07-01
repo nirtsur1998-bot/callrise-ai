@@ -108,32 +108,60 @@ export function EventDialog({
               className={fieldClass}
             />
           </Field>
-          <Field label="Date">
+          <label className="flex items-center gap-2 text-[13px] text-muted">
             <input
-              type="date"
-              value={draft.date}
-              onChange={(e) => set({ date: e.target.value })}
-              className={fieldClass}
+              type="checkbox"
+              checked={draft.allDay}
+              onChange={(e) => set({ allDay: e.target.checked })}
+              className="h-4 w-4 accent-accent"
             />
-          </Field>
+            All day
+          </label>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Start">
+            <Field label="Start date">
               <input
-                type="time"
-                value={draft.startTime}
-                onChange={(e) => set({ startTime: e.target.value })}
+                type="date"
+                value={draft.startDate}
+                onChange={(e) => {
+                  const startDate = e.target.value
+                  // Keep the end on/after the start (compare YYYY-MM-DD strings).
+                  set({ startDate, endDate: draft.endDate < startDate ? startDate : draft.endDate })
+                }}
                 className={fieldClass}
               />
             </Field>
-            <Field label="End">
+            <Field label="End date">
               <input
-                type="time"
-                value={draft.endTime}
-                onChange={(e) => set({ endTime: e.target.value })}
+                type="date"
+                value={draft.endDate}
+                onChange={(e) => {
+                  const endDate = e.target.value
+                  set({ endDate: endDate < draft.startDate ? draft.startDate : endDate })
+                }}
                 className={fieldClass}
               />
             </Field>
           </div>
+          {!draft.allDay && (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Start time">
+                <input
+                  type="time"
+                  value={draft.startTime}
+                  onChange={(e) => set({ startTime: e.target.value })}
+                  className={fieldClass}
+                />
+              </Field>
+              <Field label="End time">
+                <input
+                  type="time"
+                  value={draft.endTime}
+                  onChange={(e) => set({ endTime: e.target.value })}
+                  className={fieldClass}
+                />
+              </Field>
+            </div>
+          )}
           <Field label="Notes (optional)">
             <textarea
               value={draft.notes}
