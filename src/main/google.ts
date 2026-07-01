@@ -14,8 +14,20 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { OAuth2Client, CodeChallengeMethod } from 'google-auth-library'
 
-const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
+// M13 read-only scope. M14 adds a SEPARATE write flow (calendar.events) so the
+// read-only path is never silently widened — the user explicitly opts into it.
+const SCOPES_RO = ['https://www.googleapis.com/auth/calendar.readonly']
+// Two-way sync: calendar.events grants event create/edit/delete (NOT calendar
+// management). We keep readonly too so the pull's calendarList enumeration works.
+const SCOPES_RW = [
+  'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/calendar.readonly'
+]
 const AUTH_TIMEOUT_MS = 5 * 60_000 // give up if the user never finishes authorizing
+const HOUR_MS = 3_600_000
+
+/** Whether the app may write to Google: 'readonly' (M13) or 'readwrite' (M14). */
+export type SyncMode = 'readonly' | 'readwrite'
 
 interface Creds {
   clientId: string
@@ -59,6 +71,39 @@ async function clearRefreshToken(): Promise<void> {
   await fs.unlink(tokenPath()).catch(() => {})
 }
 
+// --- Sync mode (read-only vs two-way) --------------------------------------
+
+function modePath(): string {
+  return join(googleDir(), 'sync-mode.json')
+}
+
+// The mode is not a secret — it grants nothing on its own (only the token does),
+// so it's plain JSON. A missing file means 'readonly' (M13 tokens predate it).
+async function saveMode(mode: SyncMode): Promise<void> {
+  await fs.mkdir(googleDir(), { recursive: true })
+  await fs.writeFile(modePath(), JSON.stringify({ mode }), 'utf8')
+}
+
+async function loadMode(): Promise<SyncMode> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(modePath(), 'utf8'))
+    return parsed?.mode === 'readwrite' ? 'readwrite' : 'readonly'
+  } catch {
+    return 'readonly'
+  }
+}
+
+async function clearMode(): Promise<void> {
+  await fs.unlink(modePath()).catch(() => {})
+}
+
+/** True only when the user enabled two-way sync AND a token is stored. Every
+ *  write path (M14) gates on this — no write can happen in read-only mode. */
+async function isGoogleSyncEnabled(): Promise<boolean> {
+  if ((await loadMode()) !== 'readwrite') return false
+  return (await loadRefreshToken()) !== null
+}
+
 /** An OAuth client primed with the stored refresh token (auto-refreshes access
  *  tokens), or null when not connected. */
 async function authedClient(): Promise<OAuth2Client | null> {
@@ -76,7 +121,7 @@ export type ConnectResult = { ok: true } | { ok: false; error: string }
 
 let activeServer: Server | null = null
 
-function connect(): Promise<ConnectResult> {
+function connect(scopes: string[], mode: SyncMode): Promise<ConnectResult> {
   return new Promise<ConnectResult>((resolve) => {
     const c = creds()
     if (!c) return resolve({ ok: false, error: 'no-credentials' })
@@ -133,6 +178,7 @@ function connect(): Promise<ConnectResult> {
         .then(async ({ tokens }) => {
           if (!tokens.refresh_token) return finish({ ok: false, error: 'no-refresh-token' })
           await saveRefreshToken(tokens.refresh_token)
+          await saveMode(mode)
           finish({ ok: true })
         })
         .catch(() => finish({ ok: false, error: 'token-exchange-failed' }))
@@ -157,7 +203,8 @@ function connect(): Promise<ConnectResult> {
           const authUrl = oauth.generateAuthUrl({
             access_type: 'offline', // ask for a refresh token
             prompt: 'consent', // ensure a refresh token is returned
-            scope: SCOPES,
+            include_granted_scopes: true, // incremental: new grant also covers prior scopes
+            scope: scopes,
             code_challenge_method: CodeChallengeMethod.S256,
             code_challenge: pkce.codeChallenge,
             state
@@ -175,10 +222,11 @@ function connect(): Promise<ConnectResult> {
 
 // --- Status / disconnect / the proof read ----------------------------------
 
-async function getStatus(): Promise<{ connected: boolean; configured: boolean }> {
+async function getStatus(): Promise<{ connected: boolean; configured: boolean; mode: SyncMode }> {
   const configured = creds() !== null && safeStorage.isEncryptionAvailable()
   const connected = configured ? (await loadRefreshToken()) !== null : false
-  return { connected, configured }
+  const mode = connected ? await loadMode() : 'readonly'
+  return { connected, configured, mode }
 }
 
 async function disconnect(): Promise<{ ok: boolean }> {
@@ -190,6 +238,7 @@ async function disconnect(): Promise<{ ok: boolean }> {
     await client.revokeToken(token).catch(() => {})
   }
   await clearRefreshToken()
+  await clearMode() // back to read-only on the next connect
   await clearCache() // pulled events are meaningless once disconnected
   return { ok: true }
 }
@@ -375,15 +424,45 @@ async function pullEvents(): Promise<PullEventsResult> {
   return { ok: true, events: all }
 }
 
+// --- TEMP (Step A proof): write one event to prove two-way sync works -------
+// Removed in Step B once real event push replaces it. Writes to the primary
+// calendar; gated on two-way sync being enabled.
+export type TestEventResult = { ok: true; htmlLink?: string } | { ok: false; error: string }
+
+async function createTestEvent(): Promise<TestEventResult> {
+  if (!(await isGoogleSyncEnabled())) return { ok: false, error: 'not-enabled' }
+  const client = await authedClient()
+  if (!client) return { ok: false, error: 'not-connected' }
+  const start = new Date(Date.now() + HOUR_MS)
+  const end = new Date(start.getTime() + HOUR_MS)
+  try {
+    const res = await client.request<{ htmlLink?: string }>({
+      method: 'POST',
+      url: 'https://www.googleapis.com/calendar/v3/calendars/primary/events',
+      data: {
+        summary: 'Sales OS test event',
+        description: 'Created by Sales OS to verify two-way sync — safe to delete.',
+        start: { dateTime: start.toISOString() },
+        end: { dateTime: end.toISOString() }
+      }
+    })
+    return { ok: true, htmlLink: res.data.htmlLink }
+  } catch {
+    return { ok: false, error: 'write-failed' }
+  }
+}
+
 let registered = false
 
 export function registerGoogle(): void {
   if (registered) return
   registered = true
   ipcMain.handle('google:getStatus', () => getStatus())
-  ipcMain.handle('google:connect', () => connect())
+  ipcMain.handle('google:connect', () => connect(SCOPES_RO, 'readonly'))
+  ipcMain.handle('google:connectWrite', () => connect(SCOPES_RW, 'readwrite'))
   ipcMain.handle('google:disconnect', () => disconnect())
   ipcMain.handle('google:listCalendars', () => listCalendars())
   ipcMain.handle('google:pullEvents', () => pullEvents())
   ipcMain.handle('google:cachedEvents', () => readCache())
+  ipcMain.handle('google:createTestEvent', () => createTestEvent()) // TEMP (Step A)
 }

@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
-import { CalendarCheck2, Loader2, RefreshCw, Plug, Check, AlertTriangle } from 'lucide-react'
+import {
+  CalendarCheck2,
+  Loader2,
+  RefreshCw,
+  Plug,
+  Check,
+  AlertTriangle,
+  ArrowLeftRight
+} from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+
+type SyncMode = 'readonly' | 'readwrite'
 
 interface Calendar {
   id: string
@@ -20,6 +30,8 @@ function friendlyError(code: string): string {
       return 'Authorization timed out — click Connect to try again.'
     case 'read-failed':
       return "Couldn't read your calendars — try Refresh."
+    case 'write-failed':
+      return "Couldn't write to Google — try reconnecting two-way sync."
     default:
       return "Couldn't finish connecting to Google — click Connect to try again."
   }
@@ -50,9 +62,12 @@ export function GoogleConnect({
   const [loading, setLoading] = useState(true)
   const [configured, setConfigured] = useState(true)
   const [connected, setConnected] = useState(false)
+  const [mode, setMode] = useState<SyncMode>('readonly')
   const [connecting, setConnecting] = useState(false)
+  const [enablingSync, setEnablingSync] = useState(false)
   const [calendars, setCalendars] = useState<Calendar[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [testMsg, setTestMsg] = useState<string | null>(null) // TEMP (Step A)
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -74,6 +89,7 @@ export function GoogleConnect({
     if (!mounted.current) return
     setConfigured(status.configured)
     setConnected(status.connected)
+    setMode(status.mode)
     if (status.connected) await loadCalendars()
   }
 
@@ -100,12 +116,40 @@ export function GoogleConnect({
     }
   }
 
+  const enableTwoWaySync = async (): Promise<void> => {
+    setError(null)
+    setTestMsg(null)
+    setEnablingSync(true)
+    try {
+      const res = await window.api.google.connectWrite()
+      if (!mounted.current) return
+      if (res.ok) {
+        await refreshStatus()
+        onChange?.()
+      } else setError(friendlyError(res.error))
+    } finally {
+      if (mounted.current) setEnablingSync(false)
+    }
+  }
+
+  // TEMP (Step A): proves the write scope actually works end-to-end.
+  const createTestEvent = async (): Promise<void> => {
+    setTestMsg(null)
+    setError(null)
+    const res = await window.api.google.createTestEvent()
+    if (!mounted.current) return
+    if (res.ok) setTestMsg('Test event created in your Google Calendar (safe to delete).')
+    else setError(friendlyError(res.error))
+  }
+
   const disconnect = async (): Promise<void> => {
     await window.api.google.disconnect()
     if (!mounted.current) return
     setConnected(false)
+    setMode('readonly')
     setCalendars([])
     setError(null)
+    setTestMsg(null)
     onChange?.() // clear the Google events from the calendar
   }
 
@@ -132,7 +176,9 @@ export function GoogleConnect({
             <>
               <CalendarCheck2 className="h-4 w-4 text-emerald-300" />
               <span className="font-medium text-emerald-300">Connected to Google Calendar</span>
-              <span className="text-faint">· read-only</span>
+              <span className="text-faint">
+                · {mode === 'readwrite' ? 'two-way sync on' : 'read-only'}
+              </span>
               {syncing ? (
                 <span className="text-faint">· syncing…</span>
               ) : lastSynced ? (
@@ -150,6 +196,40 @@ export function GoogleConnect({
         <div className="flex items-center gap-2">
           {connected ? (
             <>
+              {mode === 'readonly' ? (
+                <button
+                  type="button"
+                  onClick={() => void enableTwoWaySync()}
+                  disabled={enablingSync}
+                  title="Let Sales OS add and update events in your Google Calendar"
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition',
+                    enablingSync
+                      ? 'cursor-default bg-elevated text-muted'
+                      : 'bg-accent text-white hover:brightness-110'
+                  )}
+                >
+                  {enablingSync ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Waiting for Google…
+                    </>
+                  ) : (
+                    <>
+                      <ArrowLeftRight className="h-3.5 w-3.5" /> Enable two-way sync
+                    </>
+                  )}
+                </button>
+              ) : (
+                // TEMP (Step A): proof the write scope works. Replaced in Step B.
+                <button
+                  type="button"
+                  onClick={() => void createTestEvent()}
+                  title="Create a throwaway event in your Google Calendar to verify writing works"
+                  className="rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
+                >
+                  Create test event
+                </button>
+              )}
               <button
                 type="button"
                 disabled={syncing}
@@ -196,10 +276,18 @@ export function GoogleConnect({
         </div>
       </div>
 
-      {connecting && (
+      {(connecting || enablingSync) && (
         <p className="mt-2 text-[11px] text-faint">
           A Google sign-in opened in your browser. Approve it there (click past the “unverified app”
-          warning), then come back — this updates automatically.
+          warning){enablingSync && ' and allow the “see and edit events” permission'}, then come
+          back — this updates automatically.
+        </p>
+      )}
+
+      {/* TEMP (Step A): confirmation that a write reached Google. */}
+      {testMsg && (
+        <p className="mt-2 flex items-center gap-1.5 text-[11px] text-emerald-300">
+          <Check className="h-3 w-3 shrink-0" /> {testMsg}
         </p>
       )}
 

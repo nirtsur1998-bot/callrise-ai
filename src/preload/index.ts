@@ -84,10 +84,12 @@ const api = {
   google: {
     getStatus: () => ipcRenderer.invoke('google:getStatus'),
     connect: () => ipcRenderer.invoke('google:connect'),
+    connectWrite: () => ipcRenderer.invoke('google:connectWrite'),
     disconnect: () => ipcRenderer.invoke('google:disconnect'),
     listCalendars: () => ipcRenderer.invoke('google:listCalendars'),
     pullEvents: () => ipcRenderer.invoke('google:pullEvents'),
-    cachedEvents: () => ipcRenderer.invoke('google:cachedEvents')
+    cachedEvents: () => ipcRenderer.invoke('google:cachedEvents'),
+    createTestEvent: () => ipcRenderer.invoke('google:createTestEvent') // TEMP (Step A)
   }
 }
 

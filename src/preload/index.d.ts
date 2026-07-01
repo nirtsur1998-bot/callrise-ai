@@ -378,10 +378,17 @@ export interface GoogleCalendarSummary {
 }
 
 export interface GoogleApi {
-  /** connected = a stored token exists; configured = client id/secret present. */
-  getStatus: () => Promise<{ connected: boolean; configured: boolean }>
-  /** Runs the browser OAuth flow; resolves when the user finishes (or times out). */
+  /** connected = a stored token exists; configured = client id/secret present;
+   *  mode = whether two-way sync (write) is enabled. */
+  getStatus: () => Promise<{
+    connected: boolean
+    configured: boolean
+    mode: 'readonly' | 'readwrite'
+  }>
+  /** Runs the read-only browser OAuth flow; resolves when the user finishes. */
   connect: () => Promise<{ ok: true } | { ok: false; error: string }>
+  /** Runs the two-way (write) OAuth flow, requesting the calendar.events scope. */
+  connectWrite: () => Promise<{ ok: true } | { ok: false; error: string }>
   disconnect: () => Promise<{ ok: boolean }>
   /** Read-only proof call: lists the user's calendars. */
   listCalendars: () => Promise<
@@ -391,6 +398,8 @@ export interface GoogleApi {
   pullEvents: () => Promise<{ ok: true; events: CalendarEvent[] } | { ok: false; error: string }>
   /** The last-pulled events from the local cache (instant, no network). */
   cachedEvents: () => Promise<CalendarEvent[]>
+  /** TEMP (Step A proof): write one test event to the primary calendar. */
+  createTestEvent: () => Promise<{ ok: true; htmlLink?: string } | { ok: false; error: string }>
 }
 
 declare global {
