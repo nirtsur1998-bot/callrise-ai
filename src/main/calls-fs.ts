@@ -164,6 +164,10 @@ interface CallBase {
   id: string
   title: string
   createdAt: string // ISO timestamp
+  /** Last modification (save or any edit), ISO timestamp — the ordering key a
+   *  future cloud backup uses for "newest wins". Backfilled from createdAt for
+   *  calls saved before this field existed. */
+  updatedAt: string
   durationMs: number
   speakerCount: number
   preview: string
@@ -267,6 +271,7 @@ function toSummary(call: Call): CallSummary {
     id: call.id,
     title: call.title,
     createdAt: call.createdAt,
+    updatedAt: isoOrUndefined(call.updatedAt) ?? call.createdAt, // backfill for old calls
     durationMs: call.durationMs,
     speakerCount: call.speakerCount,
     preview: call.preview,
@@ -332,6 +337,7 @@ export async function saveCall(dir: string, input: CallSaveInput): Promise<CallS
     id,
     title: formatTitle(createdDate),
     createdAt: createdDate.toISOString(),
+    updatedAt: createdDate.toISOString(), // equals createdAt at birth; bumped on edits
     durationMs,
     speakerCount: new Set(segments.map((s) => s.speaker)).size,
     preview: transcriptText.slice(0, 160),
@@ -384,6 +390,9 @@ export async function getCall(dir: string, id: string): Promise<Call | null> {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
     if (typeof (parsed as { id?: unknown }).id !== 'string') return null
     const call = parsed as Call
+    // Backfill updatedAt for calls saved before the field existed, so it's never
+    // missing downstream (a future backup keys "newest wins" off it).
+    call.updatedAt = isoOrUndefined(call.updatedAt) ?? call.createdAt
     // Normalize consent on READ too, so the invariant holds even for old or
     // hand-edited files: a tampered `recordOtherParty: true` can't survive this.
     call.consent = sanitizeConsent(call.consent)
@@ -423,6 +432,7 @@ export async function setCallSummary(
   const clean = sanitizeSummary(summary)
   if (!clean) return null // nothing usable to save — signal failure to the caller
   call.summary = clean
+  call.updatedAt = new Date().toISOString()
   await writeCall(dir, call)
   return call
 }
@@ -441,6 +451,7 @@ export async function setAttachmentSummary(
   const clean = sanitizeSummary(summary)
   if (!clean) return null // nothing usable to save — signal failure to the caller
   att.summary = clean
+  call.updatedAt = new Date().toISOString()
   await writeCall(dir, call)
   return call
 }
@@ -553,6 +564,7 @@ export async function setCallCoaching(
   const clean = sanitizeCoaching(report)
   if (!clean) return null // nothing usable to save — signal failure to the caller
   call.coaching = clean
+  call.updatedAt = new Date().toISOString()
   await writeCall(dir, call)
   return call
 }
@@ -598,6 +610,7 @@ export async function addAttachment(
   }
   call.attachments = Array.isArray(call.attachments) ? call.attachments : []
   call.attachments.push(attachment)
+  call.updatedAt = new Date().toISOString()
   try {
     await writeCall(dir, call)
   } catch (err) {
@@ -625,6 +638,7 @@ export async function removeAttachment(
     }
   }
   call.attachments = (call.attachments ?? []).filter((a) => a.id !== attachmentId)
+  call.updatedAt = new Date().toISOString()
   try {
     await writeCall(dir, call)
   } catch {

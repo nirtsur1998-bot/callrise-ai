@@ -43,6 +43,7 @@ interface CallBase {
   id: string
   title: string
   createdAt: string
+  updatedAt: string
   durationMs: number
   speakerCount: number
   preview: string

@@ -166,6 +166,8 @@ interface CallBase {
   id: string
   title: string
   createdAt: string
+  /** Last modification (save or edit); backup "newest wins" key. */
+  updatedAt: string
   durationMs: number
   speakerCount: number
   preview: string
@@ -218,6 +220,8 @@ export interface Task {
   callTitle?: string
   source: TaskSource
   createdAt: string
+  /** Last modification (create or edit); backup "newest wins" key. */
+  updatedAt: string
   completedAt?: string
 }
 

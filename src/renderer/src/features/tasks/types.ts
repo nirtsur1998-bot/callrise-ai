@@ -20,6 +20,7 @@ export interface Task {
   callTitle?: string
   source: TaskSource
   createdAt: string
+  updatedAt: string
   completedAt?: string
 }
 

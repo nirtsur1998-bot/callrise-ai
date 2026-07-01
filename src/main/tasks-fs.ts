@@ -27,6 +27,10 @@ export interface Task {
   /** Where the task came from. */
   source: TaskSource
   createdAt: string // ISO timestamp
+  /** Last modification (create or any edit), ISO timestamp — the ordering key a
+   *  future cloud backup uses for "newest wins". Backfilled from createdAt for
+   *  tasks saved before this field existed. */
+  updatedAt: string
   /** Set when status flips to 'done'; cleared when reopened. */
   completedAt?: string
 }
@@ -126,6 +130,16 @@ function sanitizeTaskRecord(value: unknown): Task | null {
   const title = sanitizeOptionalText(v.title, MAX_TITLE)
   if (!title) return null
   const status = sanitizeStatus(v.status)
+  const createdAt =
+    typeof v.createdAt === 'string' && !Number.isNaN(Date.parse(v.createdAt))
+      ? v.createdAt
+      : new Date().toISOString()
+  // Preserve updatedAt across the read/write round-trip; backfill from createdAt
+  // for tasks written before this field existed (so it's never dropped/missing).
+  const updatedAt =
+    typeof v.updatedAt === 'string' && !Number.isNaN(Date.parse(v.updatedAt))
+      ? v.updatedAt
+      : createdAt
   return {
     id: v.id,
     title,
@@ -138,10 +152,8 @@ function sanitizeTaskRecord(value: unknown): Task | null {
     callId: isSafeId(v.callId) ? v.callId : undefined,
     callTitle: sanitizeOptionalText(v.callTitle, MAX_CALL_TITLE),
     source: v.source === 'ai' ? 'ai' : 'manual',
-    createdAt:
-      typeof v.createdAt === 'string' && !Number.isNaN(Date.parse(v.createdAt))
-        ? v.createdAt
-        : new Date().toISOString(),
+    createdAt,
+    updatedAt,
     completedAt:
       status === 'done' ? (sanitizeDueAt(v.completedAt) ?? new Date().toISOString()) : undefined
   }
@@ -164,6 +176,7 @@ export async function createTask(dir: string, input: TaskCreateInput): Promise<T
     callTitle: sanitizeOptionalText(input?.callTitle, MAX_CALL_TITLE),
     source: input?.source === 'ai' ? 'ai' : 'manual',
     createdAt: now,
+    updatedAt: now,
     completedAt: status === 'done' ? now : undefined
   }
   await writeTask(dir, task)
@@ -229,6 +242,8 @@ export async function updateTask(
   if ('dueAt' in patch) task.dueAt = sanitizeDueAt(patch.dueAt)
   if ('clientName' in patch) task.clientName = sanitizeOptionalText(patch.clientName, MAX_CLIENT)
   if ('note' in patch) task.note = sanitizeOptionalText(patch.note, MAX_NOTE)
+
+  task.updatedAt = new Date().toISOString() // mark modified (backup ordering key)
 
   try {
     await writeTask(dir, task)
