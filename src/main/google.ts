@@ -13,6 +13,14 @@ import { randomBytes, createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { OAuth2Client, CodeChallengeMethod } from 'google-auth-library'
+import type { CalendarEvent } from './events-fs'
+import {
+  toGoogleBody,
+  toGoogleEventId,
+  httpStatus,
+  classifyPushError,
+  type PushResult
+} from './google-sync'
 
 // M13 read-only scope. M14 adds a SEPARATE write flow (calendar.events) so the
 // read-only path is never silently widened — the user explicitly opts into it.
@@ -24,7 +32,6 @@ const SCOPES_RW = [
   'https://www.googleapis.com/auth/calendar.readonly'
 ]
 const AUTH_TIMEOUT_MS = 5 * 60_000 // give up if the user never finishes authorizing
-const HOUR_MS = 3_600_000
 
 /** Whether the app may write to Google: 'readonly' (M13) or 'readwrite' (M14). */
 export type SyncMode = 'readonly' | 'readwrite'
@@ -99,7 +106,7 @@ async function clearMode(): Promise<void> {
 
 /** True only when the user enabled two-way sync AND a token is stored. Every
  *  write path (M14) gates on this — no write can happen in read-only mode. */
-async function isGoogleSyncEnabled(): Promise<boolean> {
+export async function isGoogleSyncEnabled(): Promise<boolean> {
   if ((await loadMode()) !== 'readwrite') return false
   return (await loadRefreshToken()) !== null
 }
@@ -240,6 +247,7 @@ async function disconnect(): Promise<{ ok: boolean }> {
   await clearRefreshToken()
   await clearMode() // back to read-only on the next connect
   await clearCache() // pulled events are meaningless once disconnected
+  cachedPrimaryId = null
   return { ok: true }
 }
 
@@ -424,31 +432,66 @@ async function pullEvents(): Promise<PullEventsResult> {
   return { ok: true, events: all }
 }
 
-// --- TEMP (Step A proof): write one event to prove two-way sync works -------
-// Removed in Step B once real event push replaces it. Writes to the primary
-// calendar; gated on two-way sync being enabled.
-export type TestEventResult = { ok: true; htmlLink?: string } | { ok: false; error: string }
+// --- Push local events OUT to Google (M14 two-way sync) --------------------
 
-async function createTestEvent(): Promise<TestEventResult> {
-  if (!(await isGoogleSyncEnabled())) return { ok: false, error: 'not-enabled' }
-  const client = await authedClient()
-  if (!client) return { ok: false, error: 'not-connected' }
-  const start = new Date(Date.now() + HOUR_MS)
-  const end = new Date(start.getTime() + HOUR_MS)
+const EVENTS_URL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events'
+
+// The concrete primary calendar id (e.g. "you@gmail.com"), cached per session.
+// We stamp THIS on pushed events — never the "primary" alias — so their
+// (provider, externalId) match key equals what the pull produces, and the
+// dedup drops the echoed copy instead of showing it twice.
+let cachedPrimaryId: string | null = null
+
+async function primaryCalendarId(client: OAuth2Client): Promise<string | null> {
+  if (cachedPrimaryId) return cachedPrimaryId
   try {
-    const res = await client.request<{ htmlLink?: string }>({
-      method: 'POST',
-      url: 'https://www.googleapis.com/calendar/v3/calendars/primary/events',
-      data: {
-        summary: 'Sales OS test event',
-        description: 'Created by Sales OS to verify two-way sync — safe to delete.',
-        start: { dateTime: start.toISOString() },
-        end: { dateTime: end.toISOString() }
-      }
+    const res = await client.request<{ items?: Array<{ id?: string; primary?: boolean }> }>({
+      url: 'https://www.googleapis.com/calendar/v3/users/me/calendarList',
+      params: { maxResults: 50 }
     })
-    return { ok: true, htmlLink: res.data.htmlLink }
+    cachedPrimaryId = (res.data.items ?? []).find((i) => i.primary === true)?.id ?? null
+    return cachedPrimaryId
   } catch {
-    return { ok: false, error: 'write-failed' }
+    return null
+  }
+}
+
+async function fetchEventUpdated(client: OAuth2Client, id: string): Promise<string | undefined> {
+  try {
+    const res = await client.request<{ updated?: string }>({
+      url: `${EVENTS_URL}/${encodeURIComponent(id)}`
+    })
+    return res.data.updated
+  } catch {
+    return undefined
+  }
+}
+
+/** Create the event in Google's primary calendar. Idempotent: uses a
+ *  deterministic id so a crash-retry can't double-create. */
+export async function pushInsertEvent(ev: CalendarEvent): Promise<PushResult> {
+  if (!(await isGoogleSyncEnabled())) return { ok: false, error: 'not-enabled', retryable: false }
+  const client = await authedClient()
+  if (!client) return { ok: false, error: 'not-connected', retryable: false }
+  const primaryId = await primaryCalendarId(client)
+  if (!primaryId) return { ok: false, error: 'offline', retryable: true }
+  const provider = `google:${primaryId}`
+  const externalId = toGoogleEventId(ev.id)
+  try {
+    const res = await client.request<{ updated?: string }>({
+      method: 'POST',
+      url: EVENTS_URL,
+      data: { id: externalId, ...toGoogleBody(ev) }
+    })
+    return { ok: true, externalId, provider, googleUpdatedAt: res.data.updated }
+  } catch (e) {
+    // 409 = this id already exists (a prior attempt succeeded before we recorded
+    // the link). That's success — adopt the existing event, don't re-create.
+    if (httpStatus(e) === 409) {
+      const googleUpdatedAt = await fetchEventUpdated(client, externalId)
+      return { ok: true, externalId, provider, googleUpdatedAt }
+    }
+    return classifyPushError(e)
   }
 }
 
@@ -464,5 +507,4 @@ export function registerGoogle(): void {
   ipcMain.handle('google:listCalendars', () => listCalendars())
   ipcMain.handle('google:pullEvents', () => pullEvents())
   ipcMain.handle('google:cachedEvents', () => readCache())
-  ipcMain.handle('google:createTestEvent', () => createTestEvent()) // TEMP (Step A)
 }

@@ -92,6 +92,13 @@ export function useCalendar(): UseCalendar {
     void refreshGoogle()
   }, [refresh, refreshGoogle])
 
+  // A background Google push (fire-and-forget) stamps the event's link after
+  // the create returns; re-read local events then so the pulled copy dedups.
+  useEffect(() => {
+    const off = window.api.events.onChanged(() => void refresh())
+    return off
+  }, [refresh])
+
   const createEvent = useCallback(
     async (input: EventCreateInput) => {
       await window.api.events.create(input)

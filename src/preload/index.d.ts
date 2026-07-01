@@ -280,6 +280,14 @@ export interface TasksApi {
   generateFromCall: (callId: string) => Promise<GenerateTasksResult>
 }
 
+export type EventSyncState = 'local-only' | 'synced' | 'dirty' | 'deleted' | 'error'
+
+export interface EventSync {
+  state: EventSyncState
+  lastPushedAt?: string
+  lastError?: string
+}
+
 export interface CalendarEvent {
   id: string
   title: string
@@ -292,6 +300,10 @@ export interface CalendarEvent {
   externalId?: string
   /** Deep-link back to the source (e.g. "Open in Google Calendar"). */
   htmlLink?: string
+  /** Google's `updated` at last sync — the echo-loop watermark (M14). */
+  googleUpdatedAt?: string
+  /** Google mirror lifecycle for local events (M14 two-way sync). */
+  sync?: EventSync
   createdAt: string
   updatedAt: string
 }
@@ -317,6 +329,8 @@ export interface EventsApi {
   create: (input: EventCreateInput) => Promise<CalendarEvent>
   update: (id: string, patch: EventUpdateInput) => Promise<CalendarEvent | null>
   delete: (id: string) => Promise<{ ok: boolean }>
+  /** Fires when a background Google sync changes events on disk. */
+  onChanged: (cb: () => void) => () => void
 }
 
 export interface AuthUser {
@@ -398,8 +412,6 @@ export interface GoogleApi {
   pullEvents: () => Promise<{ ok: true; events: CalendarEvent[] } | { ok: false; error: string }>
   /** The last-pulled events from the local cache (instant, no network). */
   cachedEvents: () => Promise<CalendarEvent[]>
-  /** TEMP (Step A proof): write one test event to the primary calendar. */
-  createTestEvent: () => Promise<{ ok: true; htmlLink?: string } | { ok: false; error: string }>
 }
 
 declare global {

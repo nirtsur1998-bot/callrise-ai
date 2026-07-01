@@ -67,7 +67,6 @@ export function GoogleConnect({
   const [enablingSync, setEnablingSync] = useState(false)
   const [calendars, setCalendars] = useState<Calendar[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [testMsg, setTestMsg] = useState<string | null>(null) // TEMP (Step A)
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -118,7 +117,6 @@ export function GoogleConnect({
 
   const enableTwoWaySync = async (): Promise<void> => {
     setError(null)
-    setTestMsg(null)
     setEnablingSync(true)
     try {
       const res = await window.api.google.connectWrite()
@@ -132,16 +130,6 @@ export function GoogleConnect({
     }
   }
 
-  // TEMP (Step A): proves the write scope actually works end-to-end.
-  const createTestEvent = async (): Promise<void> => {
-    setTestMsg(null)
-    setError(null)
-    const res = await window.api.google.createTestEvent()
-    if (!mounted.current) return
-    if (res.ok) setTestMsg('Test event created in your Google Calendar (safe to delete).')
-    else setError(friendlyError(res.error))
-  }
-
   const disconnect = async (): Promise<void> => {
     await window.api.google.disconnect()
     if (!mounted.current) return
@@ -149,7 +137,6 @@ export function GoogleConnect({
     setMode('readonly')
     setCalendars([])
     setError(null)
-    setTestMsg(null)
     onChange?.() // clear the Google events from the calendar
   }
 
@@ -196,7 +183,7 @@ export function GoogleConnect({
         <div className="flex items-center gap-2">
           {connected ? (
             <>
-              {mode === 'readonly' ? (
+              {mode === 'readonly' && (
                 <button
                   type="button"
                   onClick={() => void enableTwoWaySync()}
@@ -218,16 +205,6 @@ export function GoogleConnect({
                       <ArrowLeftRight className="h-3.5 w-3.5" /> Enable two-way sync
                     </>
                   )}
-                </button>
-              ) : (
-                // TEMP (Step A): proof the write scope works. Replaced in Step B.
-                <button
-                  type="button"
-                  onClick={() => void createTestEvent()}
-                  title="Create a throwaway event in your Google Calendar to verify writing works"
-                  className="rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
-                >
-                  Create test event
                 </button>
               )}
               <button
@@ -281,13 +258,6 @@ export function GoogleConnect({
           A Google sign-in opened in your browser. Approve it there (click past the “unverified app”
           warning){enablingSync && ' and allow the “see and edit events” permission'}, then come
           back — this updates automatically.
-        </p>
-      )}
-
-      {/* TEMP (Step A): confirmation that a write reached Google. */}
-      {testMsg && (
-        <p className="mt-2 flex items-center gap-1.5 text-[11px] text-emerald-300">
-          <Check className="h-3 w-3 shrink-0" /> {testMsg}
         </p>
       )}
 

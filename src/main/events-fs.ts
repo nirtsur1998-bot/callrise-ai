@@ -2,11 +2,26 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
+/** Lifecycle of a local event's mirror in Google (M14 two-way sync). */
+export type SyncState =
+  | 'local-only' // never pushed (sync off, or created while disconnected)
+  | 'synced' // local matches Google as of lastPushedAt
+  | 'dirty' // local changed since the last push; needs a re-push
+  | 'deleted' // tombstone: file kept until Google confirms the delete
+  | 'error' // last push failed for a non-transient reason (needs reconnect)
+
+export interface EventSync {
+  state: SyncState
+  lastPushedAt?: string // ISO, when Google last confirmed the write
+  lastError?: string // short code from the last failed attempt
+}
+
 /**
  * A calendar event stored on disk (one JSON file per event). Times are
- * absolute ISO instants so they're unambiguous across time zones, and the
- * sync-oriented fields (source/provider/externalId) are reserved now so the
- * future Google/Outlook two-way-sync milestone won't need a data migration.
+ * absolute ISO instants so they're unambiguous across time zones. The
+ * source stays 'local' even once mirrored to Google — the event is still
+ * locally owned and editable; provider/externalId carry the Google link and
+ * `sync` tracks the push lifecycle separately from user edits.
  */
 export interface CalendarEvent {
   id: string
@@ -16,8 +31,11 @@ export interface CalendarEvent {
   allDay: boolean
   notes?: string
   source: 'local' // later: 'google' | 'outlook'
-  provider?: string // external calendar id (unused for now)
-  externalId?: string // id in the external provider (unused for now)
+  provider?: string // linked Google calendar, e.g. 'google:you@gmail.com'
+  externalId?: string // the linked Google event id
+  /** Google's `updated` timestamp at last sync — the echo-loop watermark (M14 step D). */
+  googleUpdatedAt?: string
+  sync?: EventSync // omitted = never synced (treated as local-only)
   createdAt: string
   updatedAt: string
 }
@@ -97,6 +115,20 @@ async function writeEvent(dir: string, event: CalendarEvent): Promise<void> {
   await fs.writeFile(join(dir, `${event.id}.json`), JSON.stringify(event, null, 2), 'utf8')
 }
 
+const SYNC_STATES: SyncState[] = ['local-only', 'synced', 'dirty', 'deleted', 'error']
+
+/** Coerce an untrusted parsed sync sub-object into a clean EventSync, or undefined. */
+function sanitizeSync(value: unknown): EventSync | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const v = value as Record<string, unknown>
+  if (typeof v.state !== 'string' || !SYNC_STATES.includes(v.state as SyncState)) return undefined
+  return {
+    state: v.state as SyncState,
+    lastPushedAt: toIso(v.lastPushedAt) ?? undefined,
+    lastError: typeof v.lastError === 'string' ? v.lastError.slice(0, 120) : undefined
+  }
+}
+
 /** Coerce an untrusted parsed object into a clean CalendarEvent, or null. */
 function sanitizeEventRecord(value: unknown): CalendarEvent | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
@@ -117,6 +149,8 @@ function sanitizeEventRecord(value: unknown): CalendarEvent | null {
     source: 'local',
     provider: typeof v.provider === 'string' ? v.provider.slice(0, 200) : undefined,
     externalId: typeof v.externalId === 'string' ? v.externalId.slice(0, 200) : undefined,
+    googleUpdatedAt: toIso(v.googleUpdatedAt) ?? undefined,
+    sync: sanitizeSync(v.sync),
     createdAt,
     updatedAt: toIso(v.updatedAt) ?? createdAt
   }
@@ -141,7 +175,10 @@ export async function createEvent(dir: string, input: EventCreateInput): Promise
   return event
 }
 
-export async function listEvents(dir: string): Promise<CalendarEvent[]> {
+export async function listEvents(
+  dir: string,
+  opts?: { includeDeleted?: boolean }
+): Promise<CalendarEvent[]> {
   await ensureDir(dir)
   let files: string[]
   try {
@@ -155,7 +192,9 @@ export async function listEvents(dir: string): Promise<CalendarEvent[]> {
     try {
       const raw = await fs.readFile(join(dir, file), 'utf8')
       const event = sanitizeEventRecord(JSON.parse(raw))
-      if (event) events.push(event)
+      // Tombstones (deleted locally, awaiting Google confirmation) never render;
+      // the reconcile pass reads them via includeDeleted to finish the delete.
+      if (event && (opts?.includeDeleted || event.sync?.state !== 'deleted')) events.push(event)
     } catch {
       /* skip unreadable / corrupt file */
     }
@@ -201,6 +240,30 @@ export async function updateEvent(
 
   try {
     await writeEvent(dir, event)
+  } catch {
+    return null
+  }
+  return event
+}
+
+/**
+ * Attach/overwrite the Google link + sync state WITHOUT touching user fields or
+ * `updatedAt`. Used only by the push layer, so a Google confirmation is never
+ * mistaken for a user edit (which would otherwise re-trigger a push / conflict).
+ */
+export async function setEventSync(
+  dir: string,
+  id: string,
+  link: { provider?: string; externalId?: string; googleUpdatedAt?: string; sync: EventSync }
+): Promise<CalendarEvent | null> {
+  const event = await getEvent(dir, id)
+  if (!event) return null
+  if (link.provider !== undefined) event.provider = link.provider
+  if (link.externalId !== undefined) event.externalId = link.externalId
+  if (link.googleUpdatedAt !== undefined) event.googleUpdatedAt = link.googleUpdatedAt
+  event.sync = link.sync
+  try {
+    await writeEvent(dir, event) // deliberately does NOT bump updatedAt
   } catch {
     return null
   }

@@ -57,7 +57,9 @@ const api = {
     list: () => ipcRenderer.invoke('events:list'),
     create: (input: unknown) => ipcRenderer.invoke('events:create', input),
     update: (id: string, patch: unknown) => ipcRenderer.invoke('events:update', id, patch),
-    delete: (id: string) => ipcRenderer.invoke('events:delete', id)
+    delete: (id: string) => ipcRenderer.invoke('events:delete', id),
+    // Fires when a background Google sync changes events on disk (re-pull needed).
+    onChanged: (cb: () => void) => subscribe('events:changed', cb)
   },
   auth: {
     getStatus: () => ipcRenderer.invoke('auth:getStatus'),
@@ -88,8 +90,7 @@ const api = {
     disconnect: () => ipcRenderer.invoke('google:disconnect'),
     listCalendars: () => ipcRenderer.invoke('google:listCalendars'),
     pullEvents: () => ipcRenderer.invoke('google:pullEvents'),
-    cachedEvents: () => ipcRenderer.invoke('google:cachedEvents'),
-    createTestEvent: () => ipcRenderer.invoke('google:createTestEvent') // TEMP (Step A)
+    cachedEvents: () => ipcRenderer.invoke('google:cachedEvents')
   }
 }
 

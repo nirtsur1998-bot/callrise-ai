@@ -2,6 +2,8 @@
 // preload bridge exposes (see src/preload/index.d.ts); kept local so the
 // feature is self-contained, matching the calls/tasks convention.
 
+export type EventSyncState = 'local-only' | 'synced' | 'dirty' | 'deleted' | 'error'
+
 export interface CalendarEvent {
   id: string
   title: string
@@ -13,6 +15,8 @@ export interface CalendarEvent {
   provider?: string
   externalId?: string
   htmlLink?: string
+  googleUpdatedAt?: string
+  sync?: { state: EventSyncState; lastPushedAt?: string; lastError?: string }
   createdAt: string
   updatedAt: string
 }
