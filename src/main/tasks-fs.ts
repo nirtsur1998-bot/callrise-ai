@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { writeJsonAtomic } from './atomic-write'
 
 export type TaskType = 'follow-up' | 'email' | 'meeting' | 'research' | 'general'
 export type TaskPriority = 'low' | 'medium' | 'high'
@@ -33,6 +34,9 @@ export interface Task {
   updatedAt: string
   /** Set when status flips to 'done'; cleared when reopened. */
   completedAt?: string
+  /** Tombstone: a deleted task is kept (not erased) so the deletion can
+   *  propagate to a future cloud backup. Hidden from every normal listing. */
+  deleted?: boolean
 }
 
 /** Fields the renderer may send when creating a task (AI-accepted or manual). */
@@ -119,7 +123,7 @@ async function ensureDir(dir: string): Promise<void> {
 }
 
 async function writeTask(dir: string, task: Task): Promise<void> {
-  await fs.writeFile(join(dir, `${task.id}.json`), JSON.stringify(task, null, 2), 'utf8')
+  await writeJsonAtomic(join(dir, `${task.id}.json`), task)
 }
 
 /** Coerce an untrusted parsed object into a clean Task, or null if unusable. */
@@ -155,7 +159,8 @@ function sanitizeTaskRecord(value: unknown): Task | null {
     createdAt,
     updatedAt,
     completedAt:
-      status === 'done' ? (sanitizeDueAt(v.completedAt) ?? new Date().toISOString()) : undefined
+      status === 'done' ? (sanitizeDueAt(v.completedAt) ?? new Date().toISOString()) : undefined,
+    deleted: v.deleted === true ? true : undefined // preserve the tombstone flag
   }
 }
 
@@ -183,7 +188,7 @@ export async function createTask(dir: string, input: TaskCreateInput): Promise<T
   return task
 }
 
-export async function listTasks(dir: string): Promise<Task[]> {
+export async function listTasks(dir: string, opts?: { includeDeleted?: boolean }): Promise<Task[]> {
   await ensureDir(dir)
   let files: string[]
   try {
@@ -197,7 +202,8 @@ export async function listTasks(dir: string): Promise<Task[]> {
     try {
       const raw = await fs.readFile(join(dir, file), 'utf8')
       const task = sanitizeTaskRecord(JSON.parse(raw))
-      if (task) tasks.push(task)
+      // Tombstones stay hidden from the app; the backup reads them via includeDeleted.
+      if (task && (opts?.includeDeleted || !task.deleted)) tasks.push(task)
     } catch {
       /* skip unreadable / corrupt file */
     }
@@ -211,7 +217,8 @@ export async function getTask(dir: string, id: string): Promise<Task | null> {
   if (!isSafeId(id)) return null
   try {
     const raw = await fs.readFile(join(dir, `${id}.json`), 'utf8')
-    return sanitizeTaskRecord(JSON.parse(raw))
+    const task = sanitizeTaskRecord(JSON.parse(raw))
+    return task && !task.deleted ? task : null // a tombstone reads as "gone"
   } catch {
     return null
   }
@@ -254,9 +261,13 @@ export async function updateTask(
 }
 
 export async function deleteTask(dir: string, id: string): Promise<{ ok: boolean }> {
-  if (!isSafeId(id)) return { ok: false }
+  const task = await getTask(dir, id)
+  if (!task) return { ok: false } // missing or already a tombstone
+  // Tombstone instead of erase, so the deletion can propagate to a future backup.
+  task.deleted = true
+  task.updatedAt = new Date().toISOString()
   try {
-    await fs.unlink(join(dir, `${id}.json`))
+    await writeTask(dir, task)
   } catch {
     return { ok: false }
   }

@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { writeJsonAtomic } from './atomic-write'
 
 export interface CallSegment {
   speaker: number
@@ -189,6 +190,9 @@ export interface Call extends CallBase {
   coaching?: CoachingReport
   /** Recording-consent record. Always present on calls saved from M11 on. */
   consent?: ConsentRecord
+  /** Tombstone: a deleted call is kept as a minimal record (transcript dropped)
+   *  so the deletion can propagate to a future cloud backup. Hidden everywhere. */
+  deleted?: boolean
 }
 
 export interface CallSaveInput {
@@ -292,7 +296,7 @@ function filesDir(dir: string): string {
 }
 
 async function writeCall(dir: string, call: Call): Promise<void> {
-  await fs.writeFile(join(dir, `${call.id}.json`), JSON.stringify(call, null, 2), 'utf8')
+  await writeJsonAtomic(join(dir, `${call.id}.json`), call)
 }
 
 // The other party's turns ride on speaker/channel 1 (Deepgram multichannel).
@@ -352,7 +356,10 @@ export async function saveCall(dir: string, input: CallSaveInput): Promise<CallS
   return toSummary(call)
 }
 
-export async function listCalls(dir: string): Promise<CallSummary[]> {
+export async function listCalls(
+  dir: string,
+  opts?: { includeDeleted?: boolean }
+): Promise<CallSummary[]> {
   await ensureDir(dir)
   let files: string[]
   try {
@@ -366,7 +373,8 @@ export async function listCalls(dir: string): Promise<CallSummary[]> {
     try {
       const raw = await fs.readFile(join(dir, file), 'utf8')
       const call = JSON.parse(raw) as Call
-      if (call && typeof call.id === 'string') {
+      // Tombstones stay hidden from the app; the backup reads them via includeDeleted.
+      if (call && typeof call.id === 'string' && (opts?.includeDeleted || !call.deleted)) {
         // Normalize consent + strip unconsented buyer turns so the list preview
         // and speaker count never surface the other party's words either.
         call.consent = sanitizeConsent(call.consent)
@@ -390,6 +398,7 @@ export async function getCall(dir: string, id: string): Promise<Call | null> {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
     if (typeof (parsed as { id?: unknown }).id !== 'string') return null
     const call = parsed as Call
+    if (call.deleted === true) return null // a tombstone reads as "gone"
     // Backfill updatedAt for calls saved before the field existed, so it's never
     // missing downstream (a future backup keys "newest wins" off it).
     call.updatedAt = isoOrUndefined(call.updatedAt) ?? call.createdAt
@@ -405,17 +414,34 @@ export async function getCall(dir: string, id: string): Promise<Call | null> {
 }
 
 export async function deleteCall(dir: string, id: string): Promise<{ ok: boolean }> {
-  if (!isSafeId(id)) return { ok: false }
   const call = await getCall(dir, id)
-  // Remove the call record first, so a later failure leaves a re-deletable state.
+  if (!call) return { ok: false } // missing or already a tombstone
+  // Best-effort remove the attachment blobs (local-only, never backed up — free
+  // the disk; the call is gone from the UI regardless).
+  for (const att of call.attachments ?? []) {
+    await fs.unlink(join(filesDir(dir), `${att.id}.${att.ext}`)).catch(() => {})
+  }
+  // Tombstone instead of erase: keep an id + timestamp so the deletion can
+  // propagate to a future cloud backup, but DROP the transcript, coaching, and
+  // attachment metadata (privacy — a deleted call must not retain buyer words —
+  // and space). The record reads as "gone" everywhere (getCall/listCalls).
+  const tombstone: Call = {
+    id: call.id,
+    title: call.title,
+    createdAt: call.createdAt,
+    updatedAt: new Date().toISOString(),
+    durationMs: call.durationMs,
+    speakerCount: 0,
+    preview: '',
+    segments: [],
+    attachments: [],
+    consent: call.consent,
+    deleted: true
+  }
   try {
-    await fs.unlink(join(dir, `${id}.json`))
+    await writeCall(dir, tombstone)
   } catch {
     return { ok: false }
-  }
-  // The call is gone — best-effort clean up its attachment files.
-  for (const att of call?.attachments ?? []) {
-    await fs.unlink(join(filesDir(dir), `${att.id}.${att.ext}`)).catch(() => {})
   }
   return { ok: true }
 }

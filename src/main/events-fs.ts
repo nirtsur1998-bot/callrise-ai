@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { linkKey } from './google-sync'
+import { writeJsonAtomic } from './atomic-write'
 
 /** Lifecycle of a local event's mirror in Google (M14 two-way sync). */
 export type SyncState =
@@ -117,7 +118,7 @@ async function ensureDir(dir: string): Promise<void> {
 }
 
 async function writeEvent(dir: string, event: CalendarEvent): Promise<void> {
-  await fs.writeFile(join(dir, `${event.id}.json`), JSON.stringify(event, null, 2), 'utf8')
+  await writeJsonAtomic(join(dir, `${event.id}.json`), event)
 }
 
 const SYNC_STATES: SyncState[] = ['local-only', 'synced', 'dirty', 'deleted', 'error']
