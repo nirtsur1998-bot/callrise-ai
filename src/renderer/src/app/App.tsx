@@ -3,6 +3,7 @@ import AppShell from './AppShell'
 import { Sidebar } from '@renderer/features/navigation/Sidebar'
 import { CopilotPanel } from '@renderer/features/copilot/CopilotPanel'
 import { HomeView } from '@renderer/features/home/HomeView'
+import { LiveView } from '@renderer/features/live/LiveView'
 import { PlaceholderView } from '@renderer/components/PlaceholderView'
 import { NAV_ITEMS, type NavId } from '@renderer/features/navigation/nav-items'
 
@@ -20,6 +21,8 @@ function App(): React.JSX.Element {
     >
       {active === 'home' ? (
         <HomeView />
+      ) : active === 'live-calls' ? (
+        <LiveView />
       ) : (
         <PlaceholderView title={activeItem.label} icon={activeItem.icon} />
       )}

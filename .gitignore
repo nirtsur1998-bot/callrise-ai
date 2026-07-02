@@ -4,3 +4,8 @@ out
 .DS_Store
 .eslintcache
 *.log*
+
+# Secrets — never commit your API keys
+.env
+.env.local
+.env.*.local
