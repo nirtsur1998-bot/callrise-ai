@@ -445,8 +445,12 @@ export type BackupRestoreResult =
 export interface BackupStatus {
   lastPushAt?: string
   lastSyncAt?: string
-  lastError?: string
-  lastErrorAt?: string
+  // Tracked separately so a successful push can't silently clear a genuine
+  // pull (restore) failure, or vice versa.
+  lastPushError?: string
+  lastPushErrorAt?: string
+  lastPullError?: string
+  lastPullErrorAt?: string
 }
 
 export interface BackupApi {

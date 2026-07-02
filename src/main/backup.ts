@@ -69,8 +69,16 @@ export interface BackupState {
    *  for concurrent-edit detection: a local record edited after this AND
    *  superseded by a newer cloud version gets a .conflict copy. */
   lastSyncAt?: string
-  lastError?: string
-  lastErrorAt?: string
+  // Push and pull errors are tracked SEPARATELY (not one shared `lastError`):
+  // pushAll and pullAll both run inside syncNow, and if they shared one field,
+  // whichever ran second would clear the other's failure on its own success —
+  // e.g. a genuinely broken restore (pull fails) followed by a normal push
+  // (succeeds) would silently erase the pull's error, and the trust UI would
+  // show "backed up" while restore was actually broken.
+  lastPushError?: string
+  lastPushErrorAt?: string
+  lastPullError?: string
+  lastPullErrorAt?: string
 }
 
 async function readState(): Promise<BackupState> {
@@ -143,7 +151,10 @@ export async function pushAll(): Promise<BackupResult> {
     owner = await readOwner()
   }
   if (owner !== userId) {
-    await writeState({ lastError: 'ownership-mismatch', lastErrorAt: new Date().toISOString() })
+    await writeState({
+      lastPushError: 'ownership-mismatch',
+      lastPushErrorAt: new Date().toISOString()
+    })
     return { ok: false, error: 'ownership-mismatch' }
   }
   try {
@@ -184,14 +195,18 @@ export async function pushAll(): Promise<BackupResult> {
     await upsertRows(client, 'backup_tasks', taskRows)
     await upsertRows(client, 'backup_events', eventRows)
     await upsertRows(client, 'backup_calls', callRows)
-    await writeState({ lastPushAt: new Date().toISOString(), lastError: undefined })
+    await writeState({
+      lastPushAt: new Date().toISOString(),
+      lastPushError: undefined,
+      lastPushErrorAt: undefined
+    })
     return {
       ok: true,
       pushed: { tasks: taskRows.length, events: eventRows.length, calls: callRows.length }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'push-failed'
-    await writeState({ lastError: msg, lastErrorAt: new Date().toISOString() })
+    await writeState({ lastPushError: msg, lastPushErrorAt: new Date().toISOString() })
     return { ok: false, error: msg }
   }
 }
@@ -260,7 +275,10 @@ export async function pullAll(): Promise<RestoreResult> {
     owner = await readOwner()
   }
   if (owner !== userId) {
-    await writeState({ lastError: 'ownership-mismatch', lastErrorAt: new Date().toISOString() })
+    await writeState({
+      lastPullError: 'ownership-mismatch',
+      lastPullErrorAt: new Date().toISOString()
+    })
     return { ok: false, error: 'ownership-mismatch' }
   }
   try {
@@ -314,13 +332,14 @@ export async function pullAll(): Promise<RestoreResult> {
 
     if (eventsChanged > 0) notifyEventsChanged() // the calendar re-reads live
     if (tasksChanged > 0 || callsChanged > 0) notifyDataChanged() // Tasks / Past Calls refresh
+    await writeState({ lastPullError: undefined, lastPullErrorAt: undefined })
     return {
       ok: true,
       imported: { tasks: tasksChanged, events: eventsChanged, calls: callsChanged }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'pull-failed'
-    await writeState({ lastError: msg, lastErrorAt: new Date().toISOString() })
+    await writeState({ lastPullError: msg, lastPullErrorAt: new Date().toISOString() })
     return { ok: false, error: msg }
   }
 }
