@@ -1,0 +1,68 @@
+@import 'tailwindcss';
+
+/*
+  Dark-mode-first theme tokens for Sales OS.
+  Inspired by Linear / Raycast / Arc: calm dark surfaces, one restrained
+  indigo accent, soft borders. These names become Tailwind utilities,
+  e.g. --color-surface -> `bg-surface`, --color-muted -> `text-muted`.
+*/
+@theme {
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
+
+  --color-canvas: #0b0d11; /* app background */
+  --color-surface: #14171d; /* sidebar / panels / cards */
+  --color-elevated: #1a1e26; /* raised surfaces, hover */
+  --color-line: #242a33; /* borders */
+  --color-line-soft: #1c2128; /* subtle dividers */
+  --color-ink: #e7e9ec; /* primary text */
+  --color-muted: #98a0ab; /* secondary text */
+  --color-faint: #686f7a; /* tertiary text / icons */
+  --color-accent: #6e7bf2; /* single indigo accent */
+  --color-accent-soft: #6e7bf21f; /* 12% accent tint */
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Slim, unobtrusive scrollbars to match the aesthetic. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2a313b;
+    border-radius: 9999px;
+    border: 3px solid var(--color-canvas);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #353d49;
+  }
+}
+
+@layer utilities {
+  /* Electron window drag regions (used by the custom title bar areas). */
+  .drag {
+    -webkit-app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+}
