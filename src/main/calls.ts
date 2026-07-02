@@ -16,6 +16,7 @@ import {
 } from './calls-fs'
 import { summarize, type SummarizeInput, type SummaryResult } from './summarize'
 import { coachCall, type CoachResult } from './coach'
+import { scheduleBackup } from './backup'
 
 function callsDir(): string {
   return join(app.getPath('userData'), 'calls')
@@ -58,8 +59,16 @@ export function registerCalls(): void {
 
   ipcMain.handle('calls:list', () => listCalls(callsDir()))
   ipcMain.handle('calls:get', (_event, id: string) => getCall(callsDir(), id))
-  ipcMain.handle('calls:save', (_event, input: CallSaveInput) => saveCall(callsDir(), input))
-  ipcMain.handle('calls:delete', (_event, id: string) => deleteCall(callsDir(), id))
+  ipcMain.handle('calls:save', async (_event, input: CallSaveInput) => {
+    const summary = await saveCall(callsDir(), input)
+    scheduleBackup() // metadata only reaches the cloud (segments never included)
+    return summary
+  })
+  ipcMain.handle('calls:delete', async (_event, id: string) => {
+    const res = await deleteCall(callsDir(), id)
+    scheduleBackup() // propagate the deletion tombstone
+    return res
+  })
 
   // --- Attachments ---------------------------------------------------------
   ipcMain.handle(
@@ -86,6 +95,7 @@ export function registerCalls(): void {
       if (result.ok) {
         const saved = await setCallSummary(callsDir(), callId, result.summary)
         if (!saved) return SAVE_FAILED
+        scheduleBackup() // the summary (paraphrase, not the transcript) syncs
       }
       return result
     } catch {
@@ -162,6 +172,7 @@ export function registerCalls(): void {
             message: 'The coaching report could not be saved. Please try again.'
           }
         }
+        scheduleBackup() // quote-free scores/advice sync; evidence quotes never do
       }
       return result
     } catch {

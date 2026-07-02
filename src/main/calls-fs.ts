@@ -446,6 +446,211 @@ export async function deleteCall(dir: string, id: string): Promise<{ ok: boolean
   return { ok: true }
 }
 
+// --- Cloud backup (M16): privacy-stripped payload + id-preserving restore -----
+
+/**
+ * Strip a call down to ONLY what may leave the device for the cloud mirror:
+ * metadata + the AI summary + coaching SCORES/ADVICE. It NEVER includes:
+ *   - `segments` — THE TRANSCRIPT (verbatim rep + buyer words) → forced to []
+ *   - `preview` — transcript-derived text → forced to ''
+ *   - coaching `evidence` — verbatim buyer/rep quotes → the whole evidence object
+ *     is dropped from strength / every dimension / every improvement
+ *   - attachment file contents and their AI summaries → only name/size metadata
+ * Pure + unit-provable; this function is the privacy guarantee for the push.
+ */
+export function callBackupPayload(call: Call): Record<string, unknown> {
+  const c = call.coaching
+  const coaching = c
+    ? {
+        overallScore: c.overallScore,
+        dealContext: c.dealContext,
+        // Quote-free: keep the score/comment, DROP the verbatim `evidence`.
+        strength: { text: c.strength.text },
+        dimensions: c.dimensions.map((d) => ({ key: d.key, score: d.score, comment: d.comment })),
+        improvements: c.improvements.map((i) => ({
+          kind: i.kind,
+          title: i.title,
+          detail: i.detail
+        })),
+        nextAction: c.nextAction,
+        metrics: c.metrics,
+        model: c.model,
+        createdAt: c.createdAt
+      }
+    : undefined
+  return {
+    id: call.id,
+    title: call.title,
+    createdAt: call.createdAt,
+    updatedAt: call.updatedAt,
+    durationMs: call.durationMs,
+    speakerCount: call.speakerCount,
+    preview: '', // transcript-derived — never leaves the device
+    segments: [], // THE TRANSCRIPT — never leaves the device
+    summary: call.summary, // AI paraphrase; synced per the privacy decision
+    coaching,
+    // Attachment metadata only (name/size) so the list shows; NOT file contents
+    // (local-only) nor the AI summary of the attached document.
+    attachments: (call.attachments ?? []).map((a) => ({
+      id: a.id,
+      name: a.name,
+      ext: a.ext,
+      sizeBytes: a.sizeBytes,
+      addedAt: a.addedAt
+    })),
+    consent: call.consent,
+    ...(call.deleted ? { deleted: true } : {})
+  }
+}
+
+/** All calls for the backup push — full records INCLUDING tombstones (so
+ *  deletions propagate). Consent is normalized + unconsented buyer turns
+ *  stripped on read (defense in depth); the payload builder then removes ALL
+ *  segments regardless, so no transcript can ever reach the row. */
+export async function listCallsForBackup(dir: string): Promise<Call[]> {
+  await ensureDir(dir)
+  let files: string[]
+  try {
+    files = await fs.readdir(dir)
+  } catch {
+    return []
+  }
+  const calls: Call[] = []
+  for (const file of files) {
+    if (!file.endsWith('.json')) continue
+    try {
+      const parsed = JSON.parse(await fs.readFile(join(dir, file), 'utf8')) as Call
+      if (!parsed || typeof parsed.id !== 'string') continue
+      parsed.updatedAt = isoOrUndefined(parsed.updatedAt) ?? parsed.createdAt
+      parsed.consent = sanitizeConsent(parsed.consent)
+      applyConsentRetention(parsed)
+      calls.push(parsed)
+    } catch {
+      /* skip unreadable / corrupt file */
+    }
+  }
+  return calls
+}
+
+function sanitizeBackupAttachment(value: unknown): Attachment | null {
+  if (!value || typeof value !== 'object') return null
+  const v = value as Record<string, unknown>
+  if (!isSafeId(v.id)) return null
+  const ext = typeof v.ext === 'string' ? v.ext.toLowerCase() : ''
+  if (!ALLOWED_EXT.has(ext as AttachmentExt)) return null
+  return {
+    id: v.id,
+    name: typeof v.name === 'string' ? v.name.replace(/[\r\n]/g, ' ').slice(0, 200) : `file.${ext}`,
+    ext: ext as AttachmentExt,
+    sizeBytes: Number.isFinite(v.sizeBytes) ? Math.max(0, Math.trunc(v.sizeBytes as number)) : 0,
+    addedAt: isoOrUndefined(v.addedAt) ?? new Date().toISOString()
+    // no `summary` — the AI summary of the attached doc never leaves the device
+  }
+}
+
+/**
+ * ID-PRESERVING restore importer for calls. Keeps the cloud id (idempotent
+ * re-pulls) and re-runs every sub-sanitizer (a tampered cloud payload can't
+ * plant an unsafe id/path or malformed data).
+ *
+ * UNLIKE tasks/events, the call cloud payload is a deliberately LOSSY
+ * projection — it never carries the transcript, preview, or attachment AI
+ * summaries (the privacy guarantee). So this importer MERGES onto the current
+ * on-disk record instead of replacing it: those local-only fields are always
+ * preserved from THIS machine's copy, never taken from (or blanked by) the
+ * cloud row. Blindly replacing the whole record — as a full-mirror importer
+ * would — silently and permanently erases the transcript and attachment
+ * summaries on this machine the next time a merely-unrelated cloud edit (e.g.
+ * a coaching update pushed from another device) is newer than this call's
+ * local `updatedAt`, since the cloud never had that data to restore.
+ *
+ * A cloud TOMBSTONE (`deleted: true`) is the one case that must NOT preserve
+ * local data — it becomes a real local tombstone (no transcript, no
+ * attachments), matching what a local `deleteCall` produces.
+ *
+ * `onlyIfNewer` skips the import unless the incoming version is strictly newer
+ * than what's on disk, so a mid-restore local edit/delete is never clobbered
+ * by stale cloud data.
+ */
+export async function importCall(
+  dir: string,
+  payload: unknown,
+  opts?: { onlyIfNewer?: boolean }
+): Promise<Call | null> {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
+  const v = payload as Record<string, unknown>
+  if (!isSafeId(v.id)) return null
+  const createdAt = isoOrUndefined(v.createdAt) ?? new Date().toISOString()
+  const updatedAt = isoOrUndefined(v.updatedAt) ?? createdAt
+
+  // Always read the current on-disk record (raw — a tombstone included) so a
+  // genuine import can MERGE onto it rather than replace it wholesale.
+  let current: Call | null = null
+  try {
+    const parsed = JSON.parse(await fs.readFile(join(dir, `${v.id}.json`), 'utf8')) as Call
+    if (parsed && typeof parsed.id === 'string') current = parsed
+  } catch {
+    /* no current record — this is a genuinely new call being restored */
+  }
+
+  if (opts?.onlyIfNewer && current) {
+    const curU = isoOrUndefined(current.updatedAt) ?? current.createdAt
+    if (Date.parse(curU) >= Date.parse(updatedAt)) return null // local is same-or-newer
+  }
+
+  const deleted = v.deleted === true
+  const title = typeof v.title === 'string' && v.title.trim() ? v.title.slice(0, 300) : 'Call'
+
+  // A cloud tombstone becomes a REAL local tombstone (no transcript/
+  // attachments) — never resurrect local data into a "deleted" record.
+  let attachments: Attachment[] = []
+  if (!deleted) {
+    const incoming: Attachment[] = Array.isArray(v.attachments)
+      ? v.attachments
+          .slice(0, MAX_LIST_ITEMS)
+          .map(sanitizeBackupAttachment)
+          .filter((a): a is Attachment => a !== null)
+      : []
+    // Merge: an attachment's `summary` (an AI document summary — costs a
+    // Claude API call, and never leaves the device) is preserved from the
+    // matching LOCAL attachment id; the cloud's metadata otherwise wins.
+    const currentAttById = new Map((current?.attachments ?? []).map((a) => [a.id, a]))
+    attachments = incoming.map((a) => {
+      const localMatch = currentAttById.get(a.id)
+      return localMatch?.summary ? { ...a, summary: localMatch.summary } : a
+    })
+  }
+
+  const call: Call = {
+    id: v.id,
+    title,
+    createdAt,
+    updatedAt,
+    durationMs: Number.isFinite(v.durationMs) ? Math.max(0, Math.trunc(v.durationMs as number)) : 0,
+    speakerCount: deleted
+      ? 0
+      : Number.isFinite(v.speakerCount)
+        ? Math.max(0, Math.trunc(v.speakerCount as number))
+        : 0,
+    // The transcript and its derived preview NEVER come from the cloud (the
+    // payload never carries them) — preserve THIS machine's copy, if any.
+    preview: deleted ? '' : (current?.preview ?? ''),
+    segments: deleted ? [] : (current?.segments ?? []),
+    summary: deleted ? undefined : (sanitizeSummary(v.summary) ?? undefined),
+    coaching: deleted ? undefined : (sanitizeCoaching(v.coaching) ?? undefined),
+    attachments,
+    consent: sanitizeConsent(v.consent),
+    ...(deleted ? { deleted: true } : {})
+  }
+  await ensureDir(dir)
+  try {
+    await writeCall(dir, call)
+  } catch {
+    return null
+  }
+  return call
+}
+
 // --- AI summaries -----------------------------------------------------------
 
 export async function setCallSummary(

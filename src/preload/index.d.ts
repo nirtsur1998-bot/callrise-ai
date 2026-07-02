@@ -435,10 +435,12 @@ export interface GoogleApi {
 }
 
 export type BackupPushResult =
-  { ok: true; pushed: { tasks: number; events: number } } | { ok: false; error: string }
+  | { ok: true; pushed: { tasks: number; events: number; calls: number } }
+  | { ok: false; error: string }
 
 export type BackupRestoreResult =
-  { ok: true; imported: { tasks: number; events: number } } | { ok: false; error: string }
+  | { ok: true; imported: { tasks: number; events: number; calls: number } }
+  | { ok: false; error: string }
 
 export interface BackupStatus {
   lastPushAt?: string
@@ -454,6 +456,8 @@ export interface BackupApi {
   syncNow: () => Promise<{ pull: BackupRestoreResult; push: BackupPushResult }>
   /** Last-backed-up time / last error, for the trust UI. */
   getStatus: () => Promise<BackupStatus>
+  /** Fires when a restore changed tasks/calls on disk (screens should re-read). */
+  onChanged: (cb: () => void) => () => void
 }
 
 declare global {

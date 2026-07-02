@@ -16,6 +16,7 @@ import { promises as fs } from 'node:fs'
 import { getSupabaseClient, getSignedInUserId } from './auth'
 import { listTasks, importTask, type Task } from './tasks-fs'
 import { listEvents, importEvent, type CalendarEvent } from './events-fs'
+import { listCallsForBackup, callBackupPayload, importCall, type Call } from './calls-fs'
 import { reconcileStore, type CloudRow } from './backup-core'
 
 function tasksDir(): string {
@@ -23,6 +24,9 @@ function tasksDir(): string {
 }
 function eventsDir(): string {
   return join(app.getPath('userData'), 'events')
+}
+function callsDir(): string {
+  return join(app.getPath('userData'), 'calls')
 }
 function statePath(): string {
   return join(app.getPath('userData'), 'backup-state.json')
@@ -120,7 +124,8 @@ async function upsertRows(
 }
 
 export type BackupResult =
-  { ok: true; pushed: { tasks: number; events: number } } | { ok: false; error: string }
+  | { ok: true; pushed: { tasks: number; events: number; calls: number } }
+  | { ok: false; error: string }
 
 /** Push all local tasks + events to the cloud (full upsert). Never throws. */
 export async function pushAll(): Promise<BackupResult> {
@@ -164,10 +169,26 @@ export async function pushAll(): Promise<BackupResult> {
       return { id: e.id, user_id: userId, updated_at: e.updatedAt, deleted, payload }
     })
 
+    // Calls: metadata + summary + quote-free coaching ONLY. callBackupPayload is
+    // the privacy guarantee — it strips segments (transcript), preview, coaching
+    // evidence quotes, and attachment contents. Tombstones carry `deleted`.
+    const calls = await listCallsForBackup(callsDir())
+    const callRows: BackupRow[] = calls.map((c: Call) => ({
+      id: c.id,
+      user_id: userId,
+      updated_at: c.updatedAt,
+      deleted: c.deleted === true,
+      payload: callBackupPayload(c)
+    }))
+
     await upsertRows(client, 'backup_tasks', taskRows)
     await upsertRows(client, 'backup_events', eventRows)
+    await upsertRows(client, 'backup_calls', callRows)
     await writeState({ lastPushAt: new Date().toISOString(), lastError: undefined })
-    return { ok: true, pushed: { tasks: taskRows.length, events: eventRows.length } }
+    return {
+      ok: true,
+      pushed: { tasks: taskRows.length, events: eventRows.length, calls: callRows.length }
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'push-failed'
     await writeState({ lastError: msg, lastErrorAt: new Date().toISOString() })
@@ -212,8 +233,17 @@ function notifyEventsChanged(): void {
   }
 }
 
+/** Tell the renderer a restore changed tasks/calls on disk, so those screens
+ *  re-read (otherwise restored data only appears on re-navigation). */
+function notifyDataChanged(): void {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('backup:changed')
+  }
+}
+
 export type RestoreResult =
-  { ok: true; imported: { tasks: number; events: number } } | { ok: false; error: string }
+  | { ok: true; imported: { tasks: number; events: number; calls: number } }
+  | { ok: false; error: string }
 
 /** Pull the cloud mirror and reconcile it into the local stores. Never throws,
  *  never wipes: every change is per-record, and only when the cloud is newer. */
@@ -243,6 +273,8 @@ export async function pullAll(): Promise<RestoreResult> {
       importTask(dir, p, { onlyIfNewer: true })
     const guardedImportEvent = (dir: string, p: unknown): ReturnType<typeof importEvent> =>
       importEvent(dir, p, { onlyIfNewer: true })
+    const guardedImportCall = (dir: string, p: unknown): ReturnType<typeof importCall> =>
+      importCall(dir, p, { onlyIfNewer: true })
 
     const taskRows = await fetchAllRows(client, 'backup_tasks', userId)
     const taskMap = new Map(
@@ -270,8 +302,22 @@ export async function pullAll(): Promise<RestoreResult> {
       lastSyncAt
     )
 
+    const callRows = await fetchAllRows(client, 'backup_calls', userId)
+    const callMap = new Map((await listCallsForBackup(callsDir())).map((c) => [c.id, c]))
+    const callsChanged = await reconcileStore(
+      callsDir(),
+      callRows,
+      callMap,
+      guardedImportCall,
+      lastSyncAt
+    )
+
     if (eventsChanged > 0) notifyEventsChanged() // the calendar re-reads live
-    return { ok: true, imported: { tasks: tasksChanged, events: eventsChanged } }
+    if (tasksChanged > 0 || callsChanged > 0) notifyDataChanged() // Tasks / Past Calls refresh
+    return {
+      ok: true,
+      imported: { tasks: tasksChanged, events: eventsChanged, calls: callsChanged }
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'pull-failed'
     await writeState({ lastError: msg, lastErrorAt: new Date().toISOString() })

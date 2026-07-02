@@ -49,6 +49,12 @@ export function useTasks(): UseTasks {
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    // A cloud restore can create/update/delete tasks in the background; re-read
+    // so the list reflects it without needing a manual re-navigation.
+    return window.api.backup.onChanged(() => void refresh())
+  }, [refresh])
+
   const create = useCallback(
     async (input: TaskCreateInput) => {
       await window.api.tasks.create(input)

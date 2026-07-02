@@ -95,7 +95,9 @@ const api = {
     // Full sync: restore (pull + reconcile) then push.
     syncNow: () => ipcRenderer.invoke('backup:syncNow'),
     // Last-backed-up time / last error, for the trust UI.
-    getStatus: () => ipcRenderer.invoke('backup:getStatus')
+    getStatus: () => ipcRenderer.invoke('backup:getStatus'),
+    // Fires when a restore changed tasks/calls on disk (screens should re-read).
+    onChanged: (cb: () => void) => subscribe('backup:changed', cb)
   },
   google: {
     getStatus: () => ipcRenderer.invoke('google:getStatus'),

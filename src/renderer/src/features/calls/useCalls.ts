@@ -28,6 +28,12 @@ export function useCalls(): UseCalls {
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    // A cloud restore can bring back call metadata (never the transcript) in
+    // the background; re-read so Past Calls reflects it automatically.
+    return window.api.backup.onChanged(() => void refresh())
+  }, [refresh])
+
   const remove = useCallback(
     async (id: string) => {
       try {
