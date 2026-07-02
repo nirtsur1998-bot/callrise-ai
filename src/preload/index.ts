@@ -24,7 +24,14 @@ const api = {
     onState: (cb: (payload: unknown) => void) => subscribe('transcription:state', cb),
     onTranscript: (cb: (payload: unknown) => void) => subscribe('transcription:transcript', cb),
     onError: (cb: (payload: unknown) => void) => subscribe('transcription:error', cb),
-    onUtteranceEnd: (cb: (payload: unknown) => void) => subscribe('transcription:utteranceEnd', cb)
+    onUtteranceEnd: (cb: (payload: unknown) => void) => subscribe('transcription:utteranceEnd', cb),
+    onClosed: (cb: (payload: unknown) => void) => subscribe('transcription:closed', cb)
+  },
+  calls: {
+    list: () => ipcRenderer.invoke('calls:list'),
+    get: (id: string) => ipcRenderer.invoke('calls:get', id),
+    save: (input: unknown) => ipcRenderer.invoke('calls:save', input),
+    delete: (id: string) => ipcRenderer.invoke('calls:delete', id)
   }
 }
 

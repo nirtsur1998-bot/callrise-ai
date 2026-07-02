@@ -15,17 +15,18 @@ import {
 export function LiveView(): React.JSX.Element {
   const {
     status,
-    finalText,
+    segments,
     interimText,
     latencyMs,
     errorMessage,
     analyser,
+    savedNotice,
     start,
     stop,
     togglePause
   } = useTranscription()
 
-  const hasTranscript = finalText.length > 0
+  const hasTranscript = segments.length > 0
 
   // Full-screen states — only when there's no transcript worth preserving.
   if (!hasTranscript) {
@@ -126,6 +127,11 @@ export function LiveView(): React.JSX.Element {
       </div>
 
       {/* Inline banners — keep the transcript visible underneath. */}
+      {status === 'idle' && savedNotice && (
+        <InlineBanner tone="emerald">
+          <span>Call saved to Past Calls.</span>
+        </InlineBanner>
+      )}
       {status === 'reconnecting' && (
         <InlineBanner tone="amber">
           <span>Reconnecting to the transcription service…</span>
@@ -189,7 +195,7 @@ export function LiveView(): React.JSX.Element {
         </InlineBanner>
       )}
 
-      <TranscriptView finalText={finalText} interimText={interimText} />
+      <TranscriptView segments={segments} interimText={interimText} />
     </div>
   )
 }

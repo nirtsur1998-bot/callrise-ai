@@ -6,6 +6,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerTranscription, disposeTranscription } from './transcription'
+import { registerCalls } from './calls'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -82,6 +83,7 @@ app.whenReady().then(() => {
   )
 
   registerTranscription()
+  registerCalls()
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

@@ -44,6 +44,7 @@ function buildUrl(sampleRate: number): string {
     sample_rate: String(sampleRate),
     channels: '1',
     interim_results: 'true', // word-by-word partial results
+    diarize: 'true', // tag each word with a speaker number
     smart_format: 'true',
     punctuate: 'true',
     utterance_end_ms: '1000',
@@ -134,16 +135,30 @@ function connect(s: Session): void {
       return
     }
     if (msg.type === 'Results') {
-      const channel = msg.channel as
-        | { alternatives?: Array<{ transcript?: string }> }
-        | undefined
-      const transcript = channel?.alternatives?.[0]?.transcript ?? ''
+      const alt = (
+        msg.channel as
+          | {
+              alternatives?: Array<{
+                transcript?: string
+                words?: Array<{ speaker?: number; word?: string; punctuated_word?: string }>
+              }>
+            }
+          | undefined
+      )?.alternatives?.[0]
+      const transcript = alt?.transcript ?? ''
+      // Each word carries a speaker number (diarization) — pass them through
+      // so the renderer can group the transcript by speaker.
+      const words = (alt?.words ?? []).map((w) => ({
+        speaker: typeof w.speaker === 'number' ? w.speaker : 0,
+        text: w.punctuated_word ?? w.word ?? ''
+      }))
       const start = typeof msg.start === 'number' ? msg.start : 0
       const duration = typeof msg.duration === 'number' ? msg.duration : 0
       // Real-time lag = how far behind live audio this transcript is.
       const lagMs = Math.max(0, (s.audioSecondsSent - (start + duration)) * 1000)
       emit(s, 'transcription:transcript', {
         transcript,
+        words,
         isFinal: msg.is_final === true,
         speechFinal: msg.speech_final === true,
         lagMs
@@ -182,8 +197,9 @@ function connect(s: Session): void {
       s.stableTimer = null
     }
     if (s.stopping) {
-      // Graceful stop finished flushing — we're done.
+      // Graceful stop finished flushing — the final words have been sent.
       session = null
+      emit(s, 'transcription:closed', {})
       return
     }
     // Unexpected drop — reconnect with exponential backoff.
@@ -299,6 +315,7 @@ export function registerTranscription(): void {
     } else {
       teardown(s)
       session = null
+      emit(s, 'transcription:closed', {})
     }
     emit(s, 'transcription:state', { state: 'idle' })
     return { ok: true as const }

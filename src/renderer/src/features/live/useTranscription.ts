@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { startRecorder, type Recorder } from './audio/recorder'
+import { groupWords, mergeSegments } from './segments'
 import type { LiveStatus } from './types'
+import type { CallSegment } from '@renderer/features/calls/types'
 
-// The lifecycle phase, driven by us + the main process. "paused" is tracked
-// separately (see below) so a network blip can't silently un-pause the UI.
 type LivePhase = Exclude<LiveStatus, 'paused'>
 
 interface UseTranscription {
   status: LiveStatus
-  finalText: string
+  segments: CallSegment[]
   interimText: string
   latencyMs: number | null
   errorMessage: string | null
   analyser: AnalyserNode | null
+  savedNotice: boolean
   start: () => Promise<void>
   stop: () => Promise<void>
   togglePause: () => void
@@ -21,17 +22,49 @@ interface UseTranscription {
 export function useTranscription(): UseTranscription {
   const [phase, setPhase] = useState<LivePhase>('idle')
   const [paused, setPaused] = useState(false)
-  const [finalText, setFinalText] = useState('')
+  const [segments, setSegments] = useState<CallSegment[]>([])
   const [interimText, setInterimText] = useState('')
   const [latencyMs, setLatencyMs] = useState<number | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null)
+  const [savedNotice, setSavedNotice] = useState(false)
 
   const recorderRef = useRef<Recorder | null>(null)
   const latencySamples = useRef<number[]>([])
-  const lastFinalRef = useRef('')
+  // Synchronous mirror of `segments` so the save (on close) sees the latest.
+  const segmentsRef = useRef<CallSegment[]>([])
+  const startedAtRef = useRef<string>('')
+  const startMsRef = useRef<number>(0)
+  const durationMsRef = useRef<number>(0)
+  const savePendingRef = useRef(false)
 
-  // Subscribe to main-process events once.
+  // Arm a save (used by both Stop and mic-unplug, so they can't drift).
+  const armSave = useCallback(() => {
+    durationMsRef.current = startMsRef.current
+      ? Math.round(performance.now() - startMsRef.current)
+      : 0
+    savePendingRef.current = segmentsRef.current.length > 0
+  }, [])
+
+  // Persist the call exactly once. Called when the session closes, but also on
+  // a fast restart / unmount so a pending save is never lost to a new session.
+  const flushPendingSave = useCallback(() => {
+    if (!savePendingRef.current) return
+    savePendingRef.current = false
+    const captured = segmentsRef.current
+    if (captured.length === 0) return
+    void window.api.calls
+      .save({
+        startedAt: startedAtRef.current,
+        durationMs: durationMsRef.current,
+        segments: captured
+      })
+      .then(() => setSavedNotice(true))
+      .catch(() => {
+        /* non-fatal: the transcript is still on screen */
+      })
+  }, [])
+
   useEffect(() => {
     const offState = window.api.transcription.onState((payload) => {
       if (payload.state === 'listening') setPhase('listening')
@@ -40,24 +73,32 @@ export function useTranscription(): UseTranscription {
       else if (payload.state === 'error') {
         setPhase('error')
         setPaused(false)
+        savePendingRef.current = false
       }
-      // 'idle' is driven by our own stop().
     })
 
     const offTranscript = window.api.transcription.onTranscript((payload) => {
       const text = payload.transcript.trim()
       if (payload.isFinal) {
-        if (text) {
-          setFinalText((prev) => (prev ? `${prev} ${text}` : text))
-          lastFinalRef.current = text
+        let runs: CallSegment[] = []
+        if (payload.words.length > 0) {
+          runs = groupWords(payload.words)
+        } else if (text) {
+          // Rare: a final with no per-word data. Attribute it to the current
+          // speaker rather than defaulting to Speaker 1.
+          const lastSpeaker = segmentsRef.current.at(-1)?.speaker ?? 0
+          runs = [{ speaker: lastSpeaker, text }]
         }
-        // Always clear interim on a final — including an empty final (Deepgram
-        // emits these during silence), which would otherwise freeze on screen.
+        if (runs.length > 0) {
+          const merged = mergeSegments(segmentsRef.current, runs)
+          segmentsRef.current = merged
+          setSegments(merged)
+        }
         setInterimText('')
-      } else if (!text) {
-        setInterimText('')
-      } else if (text !== lastFinalRef.current) {
-        // Drop a late interim that merely repeats the words we just finalized.
+      } else {
+        // Interim words carry speaker labels too, but we intentionally show the
+        // in-progress text as one faint line; it re-flows into speaker turns on
+        // finalization.
         setInterimText(text)
       }
       if (text) {
@@ -73,26 +114,39 @@ export function useTranscription(): UseTranscription {
       setErrorMessage(payload.message)
       setPhase('error')
       setPaused(false)
+      savePendingRef.current = false
       recorderRef.current?.stop()
       recorderRef.current = null
       setAnalyser(null)
+    })
+
+    // The session fully closed after a stop — the final flushed words are in,
+    // so save now.
+    const offClosed = window.api.transcription.onClosed(() => {
+      flushPendingSave()
     })
 
     return () => {
       offState()
       offTranscript()
       offError()
+      offClosed()
     }
-  }, [])
+  }, [flushPendingSave])
 
   const start = useCallback(async () => {
+    // If a previous call is still waiting to be saved, save it before we reset.
+    flushPendingSave()
+
     setErrorMessage(null)
-    setFinalText('')
+    setSegments([])
     setInterimText('')
     setLatencyMs(null)
     setPaused(false)
+    setSavedNotice(false)
+    segmentsRef.current = []
     latencySamples.current = []
-    lastFinalRef.current = ''
+    savePendingRef.current = false
     setPhase('requesting')
 
     const access = await window.api.transcription.ensureMicAccess()
@@ -106,7 +160,8 @@ export function useTranscription(): UseTranscription {
       recorder = await startRecorder(
         (chunk) => window.api.transcription.sendAudio(chunk),
         () => {
-          // Mic unplugged mid-session.
+          // Mic unplugged mid-session — save what we have, then end the session.
+          armSave()
           recorderRef.current?.stop()
           recorderRef.current = null
           setAnalyser(null)
@@ -131,6 +186,8 @@ export function useTranscription(): UseTranscription {
 
     recorderRef.current = recorder
     setAnalyser(recorder.analyser)
+    startedAtRef.current = new Date().toISOString()
+    startMsRef.current = performance.now()
     setPhase('connecting')
 
     try {
@@ -141,7 +198,6 @@ export function useTranscription(): UseTranscription {
         setAnalyser(null)
         setPhase(result.error === 'no-key' ? 'no-key' : 'error')
       }
-      // On success, main emits 'listening' which flips the phase.
     } catch {
       recorder.stop()
       recorderRef.current = null
@@ -149,9 +205,10 @@ export function useTranscription(): UseTranscription {
       setErrorMessage('Could not start transcription. Please try again.')
       setPhase('error')
     }
-  }, [])
+  }, [armSave, flushPendingSave])
 
   const stop = useCallback(async () => {
+    armSave()
     recorderRef.current?.stop()
     recorderRef.current = null
     setAnalyser(null)
@@ -159,8 +216,8 @@ export function useTranscription(): UseTranscription {
     await window.api.transcription.stop()
     setInterimText('')
     setPhase('idle')
-    // finalText is intentionally kept on screen after stopping.
-  }, [])
+    // segments stay on screen after stopping; save fires on 'closed'.
+  }, [armSave])
 
   const togglePause = useCallback(() => {
     const recorder = recorderRef.current
@@ -172,26 +229,27 @@ export function useTranscription(): UseTranscription {
     })
   }, [])
 
-  // Stop everything if the view unmounts.
   useEffect(() => {
     return () => {
+      // Save a stopped-but-not-yet-flushed call before tearing down.
+      flushPendingSave()
       recorderRef.current?.stop()
       recorderRef.current = null
       void window.api.transcription.stop()
     }
-  }, [])
+  }, [flushPendingSave])
 
-  // "paused" only makes sense while a session is live; otherwise show the phase.
   const status: LiveStatus =
     paused && (phase === 'listening' || phase === 'reconnecting') ? 'paused' : phase
 
   return {
     status,
-    finalText,
+    segments,
     interimText,
     latencyMs,
     errorMessage,
     analyser,
+    savedNotice,
     start,
     stop,
     togglePause

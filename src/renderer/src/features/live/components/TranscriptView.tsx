@@ -1,13 +1,15 @@
 import { useEffect, useRef } from 'react'
+import { SpeakerTranscript } from '@renderer/components/SpeakerTranscript'
+import type { CallSegment } from '@renderer/features/calls/types'
 
 interface TranscriptViewProps {
-  finalText: string
+  segments: CallSegment[]
   interimText: string
 }
 
-/** Scrollable transcript: solid finalized text + faint live interim text. */
+/** Scrollable live transcript: speaker-labeled finalized turns + faint interim. */
 export function TranscriptView({
-  finalText,
+  segments,
   interimText
 }: TranscriptViewProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -18,16 +20,15 @@ export function TranscriptView({
     if (el && stickToBottom.current) {
       el.scrollTop = el.scrollHeight
     }
-  }, [finalText, interimText])
+  }, [segments, interimText])
 
   const handleScroll = (): void => {
     const el = scrollRef.current
     if (!el) return
-    // Re-enable auto-scroll only when the user is near the bottom.
     stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
   }
 
-  const isEmpty = !finalText && !interimText
+  const isEmpty = segments.length === 0 && !interimText
 
   return (
     <div
@@ -40,11 +41,7 @@ export function TranscriptView({
           <p className="text-sm text-faint">Your words will appear here as you speak…</p>
         </div>
       ) : (
-        <p className="text-[19px] leading-[1.7] tracking-[-0.01em]">
-          <span className="text-ink">{finalText}</span>
-          {finalText && interimText ? ' ' : ''}
-          <span className="text-faint">{interimText}</span>
-        </p>
+        <SpeakerTranscript segments={segments} interimText={interimText} />
       )}
     </div>
   )

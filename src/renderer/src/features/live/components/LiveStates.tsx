@@ -147,13 +147,15 @@ export function InlineBanner({
   tone,
   children
 }: {
-  tone: 'amber' | 'rose'
+  tone: 'amber' | 'rose' | 'emerald'
   children: ReactNode
 }): React.JSX.Element {
   const cls =
     tone === 'rose'
       ? 'border-rose-500/30 bg-rose-500/10 text-rose-300'
-      : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+      : tone === 'emerald'
+        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+        : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
   return (
     <div
       className={cn(
