@@ -94,6 +94,28 @@ function getClient(): SupabaseClient | null {
   return client
 }
 
+// --- Accessors for the backup layer (main process only) ---------------------
+
+/** The authenticated Supabase client (anon key + the signed-in user's session),
+ *  or null if accounts aren't configured. The backup makes all its calls
+ *  through THIS client, so every request carries the user's JWT and RLS applies
+ *  — it never uses a service-role/admin key (there is none in the app). */
+export function getSupabaseClient(): SupabaseClient | null {
+  return getClient()
+}
+
+/** The signed-in user's id (to stamp backup rows), or null if not signed in. */
+export async function getSignedInUserId(): Promise<string | null> {
+  const c = getClient()
+  if (!c) return null
+  try {
+    const { data } = await c.auth.getSession()
+    return data.session?.user?.id ?? null
+  } catch {
+    return null
+  }
+}
+
 // --- Helpers ----------------------------------------------------------------
 
 function toAuthUser(user: User | null | undefined): AuthUser | null {

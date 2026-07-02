@@ -434,6 +434,22 @@ export interface GoogleApi {
   cachedEvents: () => Promise<CalendarEvent[]>
 }
 
+export type BackupPushResult =
+  { ok: true; pushed: { tasks: number; events: number } } | { ok: false; error: string }
+
+export interface BackupStatus {
+  lastPushAt?: string
+  lastError?: string
+  lastErrorAt?: string
+}
+
+export interface BackupApi {
+  /** Force a backup now (the "Back up now" button). */
+  pushNow: () => Promise<BackupPushResult>
+  /** Last-backed-up time / last error, for the trust UI. */
+  getStatus: () => Promise<BackupStatus>
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -445,6 +461,7 @@ declare global {
       auth: AuthApi
       loopback: LoopbackApi
       google: GoogleApi
+      backup: BackupApi
     }
   }
 }

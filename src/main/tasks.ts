@@ -11,6 +11,7 @@ import {
 } from './tasks-fs'
 import { getCall } from './calls-fs'
 import { generateTasks, type GenerateTasksResult } from './generate-tasks'
+import { scheduleBackup } from './backup'
 
 function tasksDir(): string {
   return join(app.getPath('userData'), 'tasks')
@@ -49,11 +50,21 @@ export function registerTasks(): void {
   registered = true
 
   ipcMain.handle('tasks:list', (): Promise<Task[]> => listTasks(tasksDir()))
-  ipcMain.handle('tasks:create', (_event, input: TaskCreateInput) => createTask(tasksDir(), input))
-  ipcMain.handle('tasks:update', (_event, id: string, patch: TaskUpdateInput) =>
-    updateTask(tasksDir(), id, patch)
-  )
-  ipcMain.handle('tasks:delete', (_event, id: string) => deleteTask(tasksDir(), id))
+  ipcMain.handle('tasks:create', async (_event, input: TaskCreateInput) => {
+    const task = await createTask(tasksDir(), input)
+    scheduleBackup() // mirror the change to the cloud (debounced, best-effort)
+    return task
+  })
+  ipcMain.handle('tasks:update', async (_event, id: string, patch: TaskUpdateInput) => {
+    const task = await updateTask(tasksDir(), id, patch)
+    scheduleBackup()
+    return task
+  })
+  ipcMain.handle('tasks:delete', async (_event, id: string) => {
+    const res = await deleteTask(tasksDir(), id)
+    scheduleBackup()
+    return res
+  })
 
   // Ask Claude for suggested tasks from a saved call. Returns proposals only —
   // nothing is saved until the user reviews and accepts them via tasks:create.

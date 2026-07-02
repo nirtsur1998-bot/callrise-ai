@@ -89,6 +89,12 @@ const api = {
     },
     openScreenSettings: () => ipcRenderer.invoke('loopback:openScreenSettings')
   },
+  backup: {
+    // Force a backup now (the "Back up now" button uses this).
+    pushNow: () => ipcRenderer.invoke('backup:pushNow'),
+    // Last-backed-up time / last error, for the trust UI.
+    getStatus: () => ipcRenderer.invoke('backup:getStatus')
+  },
   google: {
     getStatus: () => ipcRenderer.invoke('google:getStatus'),
     connect: () => ipcRenderer.invoke('google:connect'),

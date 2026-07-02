@@ -18,6 +18,7 @@ import {
   pushDeleteEvent,
   dropCachedEvent
 } from './google'
+import { scheduleBackup } from './backup'
 
 function eventsDir(): string {
   return join(app.getPath('userData'), 'events')
@@ -193,11 +194,15 @@ export function registerEvents(): void {
   ipcMain.handle('events:create', async (_e, input: EventCreateInput) => {
     const event = await createEvent(eventsDir(), input) // local truth first — always succeeds
     schedulePush(event.id) // fire-and-forget: offline/errors never block the local create
+    scheduleBackup() // mirror to the cloud (debounced, best-effort)
     return event
   })
   ipcMain.handle('events:update', async (_e, id: string, patch: EventUpdateInput) => {
     const event = await updateEvent(eventsDir(), id, patch) // local truth first
-    if (event) schedulePush(id)
+    if (event) {
+      schedulePush(id)
+      scheduleBackup()
+    }
     return event
   })
   ipcMain.handle('events:delete', async (_e, id: string) => {
@@ -226,6 +231,7 @@ export function registerEvents(): void {
   ipcMain.handle('events:adopt', async (_e, input: EventCreateInput) => {
     const event = await createEvent(eventsDir(), input) // linked (has externalId)
     schedulePush(event.id) // externalId present → PATCH the existing Google event
+    scheduleBackup()
     return event
   })
   // Delete a Google event from the app: materialize a tombstone linked to it,

@@ -23,6 +23,13 @@ language plpgsql
 set search_path = ''  -- pin the search path (Supabase best practice; silences the linter)
 as $$
 begin
+  -- Server-decided "newest wins": on an update, if the incoming row is NOT newer
+  -- than what's already stored, keep the stored row unchanged (return OLD). A
+  -- device with a wrong/behind clock therefore cannot overwrite a newer edit,
+  -- and re-pushing the same version is a harmless no-op.
+  if tg_op = 'UPDATE' and new.updated_at <= old.updated_at then
+    return old;
+  end if;
   new.server_updated_at := now();  -- now() lives in pg_catalog, always in scope
   return new;
 end;
