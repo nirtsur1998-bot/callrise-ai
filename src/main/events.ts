@@ -4,9 +4,9 @@ import {
   createEvent,
   listEvents,
   updateEvent,
-  deleteEvent,
   getEvent,
   setEventSync,
+  markEventDeleted,
   type CalendarEvent,
   type EventCreateInput,
   type EventUpdateInput
@@ -112,13 +112,16 @@ async function syncPush(id: string): Promise<boolean> {
 
     if (event.sync?.state === 'deleted') {
       if (!event.externalId) {
-        await withState(id, () => deleteEvent(eventsDir(), id))
+        // Nothing to remove on Google — convert straight to a backup tombstone.
+        await withState(id, () => markEventDeleted(eventsDir(), id))
         return true
       }
       const res = await pushDeleteEvent(event.externalId, event.provider)
       if (res.ok) {
         await dropCachedEvent(event.externalId, event.provider) // stop the green chip reappearing
-        await withState(id, () => deleteEvent(eventsDir(), id)) // remove the tombstone file
+        // Google confirmed — convert the transient Google tombstone into a
+        // permanent BACKUP tombstone so the deletion propagates to the cloud.
+        await withState(id, () => markEventDeleted(eventsDir(), id))
         return true
       }
       if (res.retryable) {
@@ -136,11 +139,15 @@ async function syncPush(id: string): Promise<boolean> {
       // pull window wouldn't come back and would silently vanish. Un-tombstone it
       // (back to synced) so it stays visible and the app matches Google; the user
       // can retry. reconcile() skips 'synced', so no retry storm.
+      // bumpUpdatedAt: the revival must carry a FRESH timestamp — the deletion
+      // may already be in the cloud mirror, and its server-side newest-wins
+      // would reject a revival dated the same as the tombstone (split-brain).
       await withState(id, () =>
         setEventSync(eventsDir(), id, {
           provider: event.provider,
           externalId: event.externalId,
-          sync: { state: 'synced', lastError: res.error }
+          sync: { state: 'synced', lastError: res.error },
+          bumpUpdatedAt: true
         })
       )
       return true
@@ -208,21 +215,28 @@ export function registerEvents(): void {
   ipcMain.handle('events:delete', async (_e, id: string) => {
     const event = await getEvent(eventsDir(), id)
     if (!event) return { ok: false }
-    // Unlinked, or sync off → nothing in Google to remove; hard-delete now.
+    // Unlinked, or sync off → nothing in Google to remove; backup-tombstone now
+    // (kept, not erased, so the deletion propagates to the cloud mirror).
     if (!event.externalId || !(await isGoogleSyncEnabled())) {
-      return deleteEvent(eventsDir(), id)
+      const res = await withState(id, () => markEventDeleted(eventsDir(), id))
+      scheduleBackup()
+      return res
     }
-    // Linked: tombstone locally (hidden from the UI immediately, serialized so a
-    // late push can't overwrite it), then delete on Google via the push queue.
-    // The file is removed for real only once Google confirms.
+    // Linked: Google-tombstone locally (hidden from the UI immediately,
+    // serialized so a late push can't overwrite it), then delete on Google via
+    // the push queue; once Google confirms it becomes a backup tombstone.
+    // bumpUpdatedAt: a delete IS a user action — the cloud backup's newest-wins
+    // needs the fresh timestamp to accept the deletion row.
     await withState(id, () =>
       setEventSync(eventsDir(), id, {
         provider: event.provider,
         externalId: event.externalId,
-        sync: { state: 'deleted' }
+        sync: { state: 'deleted' },
+        bumpUpdatedAt: true
       })
     )
     schedulePush(id)
+    scheduleBackup() // the deletion is visible to the backup immediately
     return { ok: true }
   })
   // Adopt a Google event: create a LOCAL event linked to it (carrying the edited
@@ -243,10 +257,12 @@ export function registerEvents(): void {
       setEventSync(eventsDir(), event.id, {
         provider: event.provider,
         externalId: event.externalId,
-        sync: { state: 'deleted' }
+        sync: { state: 'deleted' },
+        bumpUpdatedAt: true
       })
     )
     schedulePush(event.id)
+    scheduleBackup()
     return { ok: true }
   })
   ipcMain.handle('events:reconcile', () => reconcile())

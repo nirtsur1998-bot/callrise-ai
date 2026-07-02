@@ -92,6 +92,8 @@ const api = {
   backup: {
     // Force a backup now (the "Back up now" button uses this).
     pushNow: () => ipcRenderer.invoke('backup:pushNow'),
+    // Full sync: restore (pull + reconcile) then push.
+    syncNow: () => ipcRenderer.invoke('backup:syncNow'),
     // Last-backed-up time / last error, for the trust UI.
     getStatus: () => ipcRenderer.invoke('backup:getStatus')
   },

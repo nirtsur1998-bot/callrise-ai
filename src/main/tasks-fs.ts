@@ -273,3 +273,39 @@ export async function deleteTask(dir: string, id: string): Promise<{ ok: boolean
   }
   return { ok: true }
 }
+
+/**
+ * ID-PRESERVING importer for restore. Writes a cloud payload as a local task,
+ * keeping its original id (so re-pulls are idempotent and can't duplicate) and
+ * re-running the full sanitizer (so a tampered cloud payload can't plant an
+ * unsafe id/path or malformed fields). NEVER used by normal create/update.
+ *
+ * `onlyIfNewer` re-reads the CURRENT on-disk record at write time and skips
+ * unless the incoming version is strictly newer — so a user edit or delete that
+ * lands while a restore is running (after its snapshot) can never be clobbered
+ * by stale cloud data.
+ */
+export async function importTask(
+  dir: string,
+  payload: unknown,
+  opts?: { onlyIfNewer?: boolean }
+): Promise<Task | null> {
+  const task = sanitizeTaskRecord(payload)
+  if (!task) return null
+  if (opts?.onlyIfNewer) {
+    try {
+      const raw = await fs.readFile(join(dir, `${task.id}.json`), 'utf8')
+      const current = sanitizeTaskRecord(JSON.parse(raw)) // raw: tombstones included
+      if (current && Date.parse(current.updatedAt) >= Date.parse(task.updatedAt)) return null
+    } catch {
+      /* no current record (or unreadable) — proceed with the import */
+    }
+  }
+  await ensureDir(dir)
+  try {
+    await writeTask(dir, task)
+  } catch {
+    return null
+  }
+  return task
+}

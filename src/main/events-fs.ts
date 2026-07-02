@@ -38,6 +38,11 @@ export interface CalendarEvent {
   /** Google's `updated` timestamp at last sync — the echo-loop watermark (M14 step D). */
   googleUpdatedAt?: string
   sync?: EventSync // omitted = never synced (treated as local-only)
+  /** Backup tombstone: a deleted event is kept (not erased) so the deletion can
+   *  propagate to the cloud mirror. Distinct from sync.state='deleted', which is
+   *  the TRANSIENT Google-delete state; this flag is the permanent record.
+   *  Hidden from every normal listing. */
+  deleted?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -157,6 +162,7 @@ function sanitizeEventRecord(value: unknown): CalendarEvent | null {
     externalId: typeof v.externalId === 'string' ? v.externalId.slice(0, 200) : undefined,
     googleUpdatedAt: toIso(v.googleUpdatedAt) ?? undefined,
     sync: sanitizeSync(v.sync),
+    deleted: v.deleted === true ? true : undefined, // preserve the tombstone flag
     createdAt,
     updatedAt: toIso(v.updatedAt) ?? createdAt
   }
@@ -207,9 +213,11 @@ export async function listEvents(
     try {
       const raw = await fs.readFile(join(dir, file), 'utf8')
       const event = sanitizeEventRecord(JSON.parse(raw))
-      // Tombstones (deleted locally, awaiting Google confirmation) never render;
-      // the reconcile pass reads them via includeDeleted to finish the delete.
-      if (event && (opts?.includeDeleted || event.sync?.state !== 'deleted')) events.push(event)
+      // Tombstones never render: sync.state='deleted' is the transient awaiting-
+      // Google state, `deleted` is the permanent backup tombstone. The Google
+      // reconcile pass and the backup read them via includeDeleted.
+      const tombstoned = event?.sync?.state === 'deleted' || event?.deleted === true
+      if (event && (opts?.includeDeleted || !tombstoned)) events.push(event)
     } catch {
       /* skip unreadable / corrupt file */
     }
@@ -233,7 +241,8 @@ export async function listTombstonedKeys(dir: string): Promise<Set<string>> {
   return keys
 }
 
-export async function getEvent(dir: string, id: string): Promise<CalendarEvent | null> {
+/** Raw read: returns the record even when it's a backup tombstone. */
+async function readEventRecord(dir: string, id: string): Promise<CalendarEvent | null> {
   if (!isSafeId(id)) return null
   try {
     const raw = await fs.readFile(join(dir, `${id}.json`), 'utf8')
@@ -241,6 +250,11 @@ export async function getEvent(dir: string, id: string): Promise<CalendarEvent |
   } catch {
     return null
   }
+}
+
+export async function getEvent(dir: string, id: string): Promise<CalendarEvent | null> {
+  const event = await readEventRecord(dir, id)
+  return event && !event.deleted ? event : null // a backup tombstone reads as "gone"
 }
 
 export async function updateEvent(
@@ -278,13 +292,20 @@ export async function updateEvent(
 
 /**
  * Attach/overwrite the Google link + sync state WITHOUT touching user fields or
- * `updatedAt`. Used only by the push layer, so a Google confirmation is never
- * mistaken for a user edit (which would otherwise re-trigger a push / conflict).
+ * `updatedAt` (a Google confirmation is never mistaken for a user edit) —
+ * UNLESS `bumpUpdatedAt` is set, for state writes that ARE user actions (a
+ * delete): the cloud backup's newest-wins needs a fresh timestamp to accept it.
  */
 export async function setEventSync(
   dir: string,
   id: string,
-  link: { provider?: string; externalId?: string; googleUpdatedAt?: string; sync: EventSync }
+  link: {
+    provider?: string
+    externalId?: string
+    googleUpdatedAt?: string
+    sync: EventSync
+    bumpUpdatedAt?: boolean
+  }
 ): Promise<CalendarEvent | null> {
   const event = await getEvent(dir, id)
   if (!event) return null
@@ -292,20 +313,119 @@ export async function setEventSync(
   if (link.externalId !== undefined) event.externalId = link.externalId
   if (link.googleUpdatedAt !== undefined) event.googleUpdatedAt = link.googleUpdatedAt
   event.sync = link.sync
+  if (link.bumpUpdatedAt) event.updatedAt = new Date().toISOString()
   try {
-    await writeEvent(dir, event) // deliberately does NOT bump updatedAt
+    await writeEvent(dir, event)
   } catch {
     return null
   }
   return event
 }
 
-export async function deleteEvent(dir: string, id: string): Promise<{ ok: boolean }> {
-  if (!isSafeId(id)) return { ok: false }
+/**
+ * Convert an event into a permanent BACKUP tombstone (deleted=true), so the
+ * deletion can propagate to the cloud mirror. Clears the Google link + sync
+ * state (any Google-side delete has already been handled by the caller).
+ * `updatedAt` defaults to now; a pull passes the cloud's timestamp instead so
+ * applying a remote deletion doesn't look like a fresh local edit.
+ */
+export async function markEventDeleted(
+  dir: string,
+  id: string,
+  opts?: { updatedAt?: string }
+): Promise<{ ok: boolean }> {
+  const event = await readEventRecord(dir, id) // raw: also works on tombstones
+  if (!event) return { ok: false }
+  event.deleted = true
+  event.updatedAt = toIso(opts?.updatedAt) ?? new Date().toISOString()
+  event.provider = undefined
+  event.externalId = undefined
+  event.googleUpdatedAt = undefined
+  event.sync = undefined
   try {
-    await fs.unlink(join(dir, `${id}.json`))
+    await writeEvent(dir, event)
   } catch {
     return { ok: false }
   }
   return { ok: true }
+}
+
+/**
+ * ID-PRESERVING importer for restore. Writes a cloud payload as a local event,
+ * keeping its original id (so re-pulls are idempotent and can't duplicate) and
+ * re-running the full sanitizer (so a tampered cloud payload can't plant an
+ * unsafe id/path or malformed fields). NEVER used by normal create/update.
+ *
+ * `onlyIfNewer` re-reads the CURRENT on-disk record at write time and skips
+ * unless the incoming version is strictly newer — so a user edit or delete that
+ * lands while a restore is running can never be clobbered by stale cloud data.
+ *
+ * Cloud payloads carry NO Google-link fields (stripped at push — they're
+ * machine-specific), so an import MERGES the existing record's link back in:
+ * - content import onto a linked event keeps the link and marks it `dirty`, so
+ *   the Google sync PATCHes the same Google event (never a duplicate insert);
+ * - a cloud TOMBSTONE onto a still-linked event becomes the TRANSIENT Google
+ *   tombstone (sync.state='deleted', link kept) so the Google copy is deleted
+ *   too; unlinked events become plain backup tombstones.
+ */
+export async function importEvent(
+  dir: string,
+  payload: unknown,
+  opts?: { onlyIfNewer?: boolean }
+): Promise<CalendarEvent | null> {
+  const event = sanitizeEventRecord(payload)
+  if (!event) return null
+  const current = await readEventRecord(dir, event.id) // raw: tombstones included
+  if (
+    opts?.onlyIfNewer &&
+    current &&
+    Date.parse(current.updatedAt) >= Date.parse(event.updatedAt)
+  ) {
+    return null
+  }
+  if (current) {
+    // Preserve THIS machine's Google link — the cloud payload never carries one.
+    event.provider = current.provider
+    event.externalId = current.externalId
+    event.googleUpdatedAt = current.googleUpdatedAt
+    event.sync = current.sync
+  }
+  if (event.deleted) {
+    // Still linked = there is a Google copy to remove — INCLUDING a record whose
+    // Google delete is already pending (sync.state='deleted'): downgrading that
+    // to a plain tombstone would abandon the pending Google delete and leave the
+    // event alive on Google. (A prior backup tombstone has no externalId after
+    // the merge, so it stays on the plain branch.)
+    const stillLinked = Boolean(event.externalId) && current?.deleted !== true
+    if (stillLinked) {
+      // Deleted elsewhere but linked HERE: route through the Google delete flow
+      // (the M14 reconcile pass drains it), so the Google copy is removed too.
+      event.deleted = undefined
+      event.sync = { state: 'deleted' }
+    } else {
+      // Plain backup tombstone — mirror markEventDeleted's shape.
+      event.provider = undefined
+      event.externalId = undefined
+      event.googleUpdatedAt = undefined
+      event.sync = undefined
+    }
+  } else if (current && current.sync?.state === 'deleted') {
+    // Live content NEWER than a pending local delete → the edit wins: RESURRECT.
+    // Keeping sync='deleted' here would let the Google drain delete the event and
+    // then re-tombstone it with a fresh timestamp, destroying the newer edit on
+    // every machine. Linked → 'dirty' (the drain re-PATCHes, or re-creates via
+    // the 404 path if Google already deleted it); unlinked → plain local.
+    event.sync = event.externalId ? { state: 'dirty' } : undefined
+  } else if (current && event.externalId && current.sync?.state === 'synced') {
+    // The restored content differs from what Google holds — mark dirty so the
+    // Google sync re-PATCHes the SAME event (never inserts a duplicate).
+    event.sync = { state: 'dirty' }
+  }
+  await ensureDir(dir)
+  try {
+    await writeEvent(dir, event)
+  } catch {
+    return null
+  }
+  return event
 }

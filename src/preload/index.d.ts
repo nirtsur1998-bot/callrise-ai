@@ -437,8 +437,12 @@ export interface GoogleApi {
 export type BackupPushResult =
   { ok: true; pushed: { tasks: number; events: number } } | { ok: false; error: string }
 
+export type BackupRestoreResult =
+  { ok: true; imported: { tasks: number; events: number } } | { ok: false; error: string }
+
 export interface BackupStatus {
   lastPushAt?: string
+  lastSyncAt?: string
   lastError?: string
   lastErrorAt?: string
 }
@@ -446,6 +450,8 @@ export interface BackupStatus {
 export interface BackupApi {
   /** Force a backup now (the "Back up now" button). */
   pushNow: () => Promise<BackupPushResult>
+  /** Full sync: restore (pull + reconcile) then push. */
+  syncNow: () => Promise<{ pull: BackupRestoreResult; push: BackupPushResult }>
   /** Last-backed-up time / last error, for the trust UI. */
   getStatus: () => Promise<BackupStatus>
 }
