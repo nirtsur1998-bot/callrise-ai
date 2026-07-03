@@ -95,12 +95,68 @@ export interface CallSaveInput {
 }
 
 export type SummaryResult =
-  | { ok: true; summary: Summary }
-  | { ok: false; error: 'no-key' | 'failed'; message?: string }
+  { ok: true; summary: Summary } | { ok: false; error: 'no-key' | 'failed'; message?: string }
 
 export type AddAttachmentResult =
   | { ok: true; attachment: Attachment }
   | { ok: false; error: 'not-found' | 'unsupported-type' | 'empty' | 'too-large' }
+
+export type TaskType = 'follow-up' | 'email' | 'meeting' | 'research' | 'general'
+export type TaskPriority = 'low' | 'medium' | 'high'
+export type TaskStatus = 'open' | 'done'
+export type TaskSource = 'ai' | 'manual'
+
+export interface Task {
+  id: string
+  title: string
+  type: TaskType
+  priority: TaskPriority
+  status: TaskStatus
+  dueAt?: string
+  clientName?: string
+  note?: string
+  callId?: string
+  callTitle?: string
+  source: TaskSource
+  createdAt: string
+  completedAt?: string
+}
+
+/** A task Claude proposes from a call (not yet saved). */
+export interface ProposedTask {
+  title: string
+  type: TaskType
+  priority: TaskPriority
+  dueAt?: string
+  clientName?: string
+  note?: string
+}
+
+export interface TaskCreateInput {
+  title: string
+  type: TaskType
+  priority: TaskPriority
+  status?: TaskStatus
+  dueAt?: string | null
+  clientName?: string | null
+  note?: string | null
+  callId?: string
+  callTitle?: string
+  source?: TaskSource
+}
+
+export interface TaskUpdateInput {
+  title?: string
+  type?: TaskType
+  priority?: TaskPriority
+  status?: TaskStatus
+  dueAt?: string | null
+  clientName?: string | null
+  note?: string | null
+}
+
+export type GenerateTasksResult =
+  { ok: true; tasks: ProposedTask[] } | { ok: false; error: 'no-key' | 'failed'; message?: string }
 
 export interface CallsApi {
   list: () => Promise<CallSummary[]>
@@ -116,12 +172,21 @@ export interface CallsApi {
   summarizeAttachment: (callId: string, attachmentId: string) => Promise<SummaryResult>
 }
 
+export interface TasksApi {
+  list: () => Promise<Task[]>
+  create: (input: TaskCreateInput) => Promise<Task>
+  update: (id: string, patch: TaskUpdateInput) => Promise<Task | null>
+  delete: (id: string) => Promise<{ ok: boolean }>
+  generateFromCall: (callId: string) => Promise<GenerateTasksResult>
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
     api: {
       transcription: TranscriptionApi
       calls: CallsApi
+      tasks: TasksApi
     }
   }
 }

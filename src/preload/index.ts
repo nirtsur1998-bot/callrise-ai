@@ -17,8 +17,7 @@ const api = {
   transcription: {
     ensureMicAccess: () => ipcRenderer.invoke('mic:ensureAccess'),
     openMicSettings: () => ipcRenderer.invoke('mic:openSettings'),
-    start: (options: { sampleRate: number }) =>
-      ipcRenderer.invoke('transcription:start', options),
+    start: (options: { sampleRate: number }) => ipcRenderer.invoke('transcription:start', options),
     sendAudio: (chunk: ArrayBuffer) => ipcRenderer.send('transcription:audio', chunk),
     stop: () => ipcRenderer.invoke('transcription:stop'),
     onState: (cb: (payload: unknown) => void) => subscribe('transcription:state', cb),
@@ -39,6 +38,13 @@ const api = {
     summarizeCall: (callId: string) => ipcRenderer.invoke('summary:call', callId),
     summarizeAttachment: (callId: string, attachmentId: string) =>
       ipcRenderer.invoke('summary:attachment', callId, attachmentId)
+  },
+  tasks: {
+    list: () => ipcRenderer.invoke('tasks:list'),
+    create: (input: unknown) => ipcRenderer.invoke('tasks:create', input),
+    update: (id: string, patch: unknown) => ipcRenderer.invoke('tasks:update', id, patch),
+    delete: (id: string) => ipcRenderer.invoke('tasks:delete', id),
+    generateFromCall: (callId: string) => ipcRenderer.invoke('tasks:generateFromCall', callId)
   }
 }
 
