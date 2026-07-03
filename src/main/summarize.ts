@@ -73,6 +73,10 @@ function friendlyError(err: unknown): string {
     return 'Could not reach Anthropic. Check your internet connection and try again.'
   }
   if (err instanceof Anthropic.APIError) {
+    const msg = typeof err.message === 'string' ? err.message.toLowerCase() : ''
+    if (msg.includes('credit balance') || msg.includes('plans & billing') || msg.includes('billing')) {
+      return 'Your Anthropic account is out of credits. Add credits at console.anthropic.com (Plans & Billing), then try again.'
+    }
     return `Anthropic returned an error (${err.status ?? 'unknown'}). Please try again.`
   }
   return 'Something went wrong while generating the summary. Please try again.'
