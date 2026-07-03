@@ -236,23 +236,28 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
   if (transcript.trim().length < 30) return { ok: false } // not enough yet
 
   try {
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 150,
-      tools: [LIVE_TOOL],
-      tool_choice: { type: 'tool', name: 'live_cue' },
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: `${livePrompt(repHint)}\n\n--- RECENT TRANSCRIPT ---\n${transcript}`
-            }
-          ]
-        }
-      ]
-    })
+    const response = await anthropic.messages.create(
+      {
+        model: MODEL,
+        max_tokens: 150,
+        tools: [LIVE_TOOL],
+        tool_choice: { type: 'tool', name: 'live_cue' },
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `${livePrompt(repHint)}\n\n--- RECENT TRANSCRIPT ---\n${transcript}`
+              }
+            ]
+          }
+        ]
+      },
+      // Live cue: fail fast. No SDK auto-retries (a 429/529 retry-after can
+      // stack into ~25s) and a short timeout — a missed cue beats a late one.
+      { maxRetries: 0, timeout: 6000 }
+    )
     const block = response.content.find((b) => b.type === 'tool_use')
     if (!block || block.type !== 'tool_use') return { ok: false }
     const raw = block.input as { repSpeaker?: unknown; cue?: unknown; text?: unknown }
@@ -268,7 +273,16 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
     if (text.length > 80) text = '' // too long to glance at → suppress
     if (cue === 'none' || !text) return { ok: true, repSpeaker, cue: 'none', text: '' }
     return { ok: true, repSpeaker, cue, text }
-  } catch {
+  } catch (err) {
+    const e = err as {
+      status?: number
+      name?: string
+      headers?: { get?: (k: string) => string | null }
+    }
+    const retryAfter = e.headers?.get?.('retry-after') ?? '-'
+    console.log(
+      `[live-cue] brain error: status=${e.status ?? '?'} retry-after=${retryAfter} name=${e.name ?? 'unknown'}`
+    )
     return { ok: false }
   }
 }
