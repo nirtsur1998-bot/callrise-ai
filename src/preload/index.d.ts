@@ -180,6 +180,48 @@ export interface TasksApi {
   generateFromCall: (callId: string) => Promise<GenerateTasksResult>
 }
 
+export interface AuthUser {
+  id: string
+  email: string
+  name?: string
+}
+
+export interface AuthStatus {
+  configured: boolean
+  user: AuthUser | null
+}
+
+export type AuthErrorCode =
+  | 'not-configured'
+  | 'invalid-credentials'
+  | 'email-not-confirmed'
+  | 'email-taken'
+  | 'invalid-code'
+  | 'weak-password'
+  | 'invalid-email'
+  | 'email-send-failed'
+  | 'rate-limited'
+  | 'network'
+  | 'server'
+  | 'failed'
+
+type AuthFail = { ok: false; error: AuthErrorCode; message: string }
+
+export type SignUpResult = { ok: true; status: 'confirm' | 'signed-in' } | AuthFail
+export type VerifyResult = { ok: true; user: AuthUser } | AuthFail
+export type SignInResult = { ok: true; user: AuthUser } | AuthFail
+export type SimpleAuthResult = { ok: true } | AuthFail
+
+export interface AuthApi {
+  getStatus: () => Promise<AuthStatus>
+  signUp: (email: string, password: string, name?: string) => Promise<SignUpResult>
+  verifyOtp: (email: string, token: string) => Promise<VerifyResult>
+  signIn: (email: string, password: string) => Promise<SignInResult>
+  resendCode: (email: string) => Promise<SimpleAuthResult>
+  signOut: () => Promise<SimpleAuthResult>
+  onChange: (cb: (user: AuthUser | null) => void) => () => void
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -187,6 +229,7 @@ declare global {
       transcription: TranscriptionApi
       calls: CallsApi
       tasks: TasksApi
+      auth: AuthApi
     }
   }
 }

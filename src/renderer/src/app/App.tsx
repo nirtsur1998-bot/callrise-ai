@@ -1,39 +1,29 @@
-import { useState } from 'react'
-import AppShell from './AppShell'
-import { Sidebar } from '@renderer/features/navigation/Sidebar'
-import { CopilotPanel } from '@renderer/features/copilot/CopilotPanel'
-import { HomeView } from '@renderer/features/home/HomeView'
-import { LiveView } from '@renderer/features/live/LiveView'
-import { PastCallsView } from '@renderer/features/calls/PastCallsView'
-import { TasksView } from '@renderer/features/tasks/TasksView'
-import { PlaceholderView } from '@renderer/components/PlaceholderView'
-import { NAV_ITEMS, type NavId } from '@renderer/features/navigation/nav-items'
+import { AudioLines } from 'lucide-react'
+import { useAuth } from '@renderer/features/auth/useAuth'
+import { AuthScreen } from '@renderer/features/auth/AuthScreen'
+import { MainApp } from './MainApp'
 
-function App(): React.JSX.Element {
-  // Which sidebar item is selected. Today only "Home" has real content;
-  // the rest show a tasteful placeholder until we build them.
-  const [active, setActive] = useState<NavId>('home')
-  const activeItem = NAV_ITEMS.find((item) => item.id === active) ?? NAV_ITEMS[0]
-
+/** A brief splash while we check whether someone is already signed in. */
+function Splash(): React.JSX.Element {
   return (
-    <AppShell
-      title={activeItem.label}
-      sidebar={<Sidebar active={active} onSelect={setActive} />}
-      copilot={<CopilotPanel />}
-    >
-      {active === 'home' ? (
-        <HomeView />
-      ) : active === 'live-calls' ? (
-        <LiveView />
-      ) : active === 'past-calls' ? (
-        <PastCallsView />
-      ) : active === 'tasks' ? (
-        <TasksView />
-      ) : (
-        <PlaceholderView title={activeItem.label} icon={activeItem.icon} />
-      )}
-    </AppShell>
+    <div className="flex h-screen w-screen items-center justify-center bg-canvas">
+      <div className="grid h-11 w-11 animate-pulse place-items-center rounded-xl bg-linear-to-br from-accent to-[#9b6cf2]">
+        <AudioLines className="h-5 w-5 text-white" strokeWidth={2.25} />
+      </div>
+    </div>
   )
+}
+
+/**
+ * Login gate: show a splash while checking, the auth screen when logged out,
+ * and the full app once a user is signed in.
+ */
+function App(): React.JSX.Element {
+  const { loading, configured, user } = useAuth()
+
+  if (loading) return <Splash />
+  if (!user) return <AuthScreen configured={configured} />
+  return <MainApp user={user} />
 }
 
 export default App

@@ -1,13 +1,18 @@
-import { AudioLines } from 'lucide-react'
+import { AudioLines, LogOut } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { NAV_ITEMS, type NavId } from './nav-items'
+import type { AuthUser } from '@renderer/features/auth/types'
 
 interface SidebarProps {
   active: NavId
   onSelect: (id: NavId) => void
+  user: AuthUser
+  onSignOut: () => void
 }
 
-export function Sidebar({ active, onSelect }: SidebarProps): React.JSX.Element {
+export function Sidebar({ active, onSelect, user, onSignOut }: SidebarProps): React.JSX.Element {
+  const displayName = user.name?.trim() || user.email.split('@')[0]
+  const initial = (user.name?.trim()?.[0] ?? user.email[0] ?? '?').toUpperCase()
   return (
     <div className="flex h-full flex-col">
       {/* Brand — draggable, padded down to clear the macOS traffic lights. */}
@@ -51,16 +56,24 @@ export function Sidebar({ active, onSelect }: SidebarProps): React.JSX.Element {
         </ul>
       </nav>
 
-      {/* Footer — workspace placeholder. */}
-      <div className="border-t border-line-soft px-4 py-3">
+      {/* Footer — signed-in user + log out. */}
+      <div className="border-t border-line-soft px-3 py-3">
         <div className="flex items-center gap-2.5">
-          <div className="grid h-7 w-7 place-items-center rounded-full bg-elevated text-[11px] font-semibold text-muted">
-            N
+          <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-accent-soft text-[11px] font-semibold text-accent">
+            {initial}
           </div>
-          <div className="min-w-0">
-            <p className="truncate text-[13px] font-medium">Your workspace</p>
-            <p className="truncate text-[11px] text-faint">v0.1.0 · dev</p>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[13px] font-medium">{displayName}</p>
+            <p className="truncate text-[11px] text-faint">{user.email}</p>
           </div>
+          <button
+            type="button"
+            onClick={onSignOut}
+            title="Log out"
+            className="no-drag grid h-8 w-8 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-ink"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
         </div>
       </div>
     </div>

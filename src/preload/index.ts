@@ -45,6 +45,18 @@ const api = {
     update: (id: string, patch: unknown) => ipcRenderer.invoke('tasks:update', id, patch),
     delete: (id: string) => ipcRenderer.invoke('tasks:delete', id),
     generateFromCall: (callId: string) => ipcRenderer.invoke('tasks:generateFromCall', callId)
+  },
+  auth: {
+    getStatus: () => ipcRenderer.invoke('auth:getStatus'),
+    signUp: (email: string, password: string, name?: string) =>
+      ipcRenderer.invoke('auth:signUp', { email, password, name }),
+    verifyOtp: (email: string, token: string) =>
+      ipcRenderer.invoke('auth:verifyOtp', { email, token }),
+    signIn: (email: string, password: string) =>
+      ipcRenderer.invoke('auth:signIn', { email, password }),
+    resendCode: (email: string) => ipcRenderer.invoke('auth:resendCode', { email }),
+    signOut: () => ipcRenderer.invoke('auth:signOut'),
+    onChange: (cb: (user: unknown) => void) => subscribe('auth:changed', cb)
   }
 }
 

@@ -4,6 +4,19 @@
 
 Sales OS is a desktop application that acts as an AI assistant for sales calls. Today it is a thin, static UI shell. Over time it will grow into a tool that listens to live calls, transcribes them in real time, and coaches the rep with in-the-moment suggestions — alongside a CRM, tasks, calendar, analytics, coaching, and a knowledge base. The long-form product vision lives in [`docs/VISION.md`](docs/VISION.md).
 
+## Progress
+
+Milestones completed:
+
+- **M1 — App shell.** ✅ Electron + React + Tailwind desktop shell (dark Linear/Raycast layout: sidebar nav, main view, copilot panel).
+- **M2 — Live transcription.** ✅ Real-time microphone transcription via Deepgram Nova-3, with speaker labels.
+- **M3 — Saved calls.** ✅ Calls saved to disk with speaker diarization; Past Calls list + detail view.
+- **M4 — AI summaries.** ✅ Claude summaries of saved calls and attached files (PDF/txt/md/docx), via the main-process `.env` relay.
+- **M5 — AI tasks.** ✅ Generate action items from a saved call (review/edit/accept) + a real Tasks screen (list, filters, complete/edit/delete/add).
+- **M6 — User accounts + email auth.** ✅ Sign-up / log-in gate via **Supabase Auth**, with email confirmation by a 6–10-digit code (no redirects/deep links). Auth runs in the main process (keys in the gitignored `.env`); the signed-in user shows in the sidebar with log-out.
+
+**Not yet done:** existing local data (calls/tasks/summaries) is **not tied to a user** yet — a later milestone will stamp records with `user.id` (or move them into Supabase) so data is per-account. Then: calendar, sync, coaching, analytics.
+
 ## Stack
 
 - **Electron** — desktop shell (main + preload + renderer processes)
