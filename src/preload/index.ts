@@ -24,7 +24,12 @@ const api = {
     onTranscript: (cb: (payload: unknown) => void) => subscribe('transcription:transcript', cb),
     onError: (cb: (payload: unknown) => void) => subscribe('transcription:error', cb),
     onUtteranceEnd: (cb: (payload: unknown) => void) => subscribe('transcription:utteranceEnd', cb),
-    onClosed: (cb: (payload: unknown) => void) => subscribe('transcription:closed', cb)
+    onClosed: (cb: (payload: unknown) => void) => subscribe('transcription:closed', cb),
+    suggestQuestion: (text: string) => ipcRenderer.invoke('live:suggestQuestion', text),
+    askCoach: (transcript: string, question: string) =>
+      ipcRenderer.invoke('live:askCoach', { transcript, question }),
+    liveCue: (transcript: string, repSpeaker: number | null) =>
+      ipcRenderer.invoke('live:cue', { transcript, repSpeaker })
   },
   calls: {
     list: () => ipcRenderer.invoke('calls:list'),

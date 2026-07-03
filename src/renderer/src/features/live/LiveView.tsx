@@ -1,8 +1,13 @@
 import { Mic, Square, Pause, Play, AlertTriangle, MicOff, Loader2 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { useTranscription } from './useTranscription'
+import { useLiveCues } from './useLiveCues'
+import { useCueSettings } from './useCueSettings'
 import { Waveform } from './components/Waveform'
 import { TranscriptView } from './components/TranscriptView'
+import { CueCard } from './components/CueCard'
+import { CueControls } from './components/CueControls'
+import { AskCoach } from './components/AskCoach'
 import {
   IdleHero,
   CenteredState,
@@ -25,6 +30,10 @@ export function LiveView(): React.JSX.Element {
     stop,
     togglePause
   } = useTranscription()
+
+  // Live coaching cues (hooks must run before any early return).
+  const { enabled, setEnabled, sensitivity, setSensitivity } = useCueSettings()
+  const { cue, dismiss } = useLiveCues(status === 'listening', enabled, sensitivity)
 
   const hasTranscript = segments.length > 0
 
@@ -71,7 +80,7 @@ export function LiveView(): React.JSX.Element {
     status === 'connecting'
 
   return (
-    <div className="flex h-full flex-col gap-4">
+    <div className="relative flex h-full flex-col gap-4">
       {/* Control bar */}
       <div className="flex items-center gap-4 rounded-2xl border border-line-soft bg-surface px-5 py-4">
         {stoppable ? (
@@ -108,6 +117,12 @@ export function LiveView(): React.JSX.Element {
         </div>
 
         <div className="flex items-center gap-3">
+          <CueControls
+            enabled={enabled}
+            onToggle={setEnabled}
+            sensitivity={sensitivity}
+            onSensitivity={setSensitivity}
+          />
           {status === 'connecting' && <Loader2 className="h-4 w-4 animate-spin text-muted" />}
           <StatusBadge status={status} />
           {latencyMs !== null && (status === 'listening' || status === 'paused') && (
@@ -195,7 +210,13 @@ export function LiveView(): React.JSX.Element {
         </InlineBanner>
       )}
 
-      <TranscriptView segments={segments} interimText={interimText} />
+      {/* Transcript + the floating cue card (kept above the Ask-coach bar). */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <TranscriptView segments={segments} interimText={interimText} />
+        {cue && <CueCard key={cue.id} cue={cue} onDismiss={dismiss} />}
+      </div>
+
+      <AskCoach segments={segments} interimText={interimText} />
     </div>
   )
 }

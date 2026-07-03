@@ -41,6 +41,26 @@ export interface TranscriptionApi {
   onUtteranceEnd: (cb: (payload: Record<string, never>) => void) => () => void
   /** Fires after a stopped session's connection has fully closed (flush done). */
   onClosed: (cb: (payload: Record<string, never>) => void) => () => void
+  /** Async, non-blocking: a short next-question suggestion for live cues. */
+  suggestQuestion: (text: string) => Promise<{ ok: true; question: string } | { ok: false }>
+  /** Manual mid-call help: sends the running transcript + the rep's question. */
+  askCoach: (
+    transcript: string,
+    question: string
+  ) => Promise<{ ok: true; headline: string; tips: string[] } | { ok: false; message?: string }>
+  /** Conversation-aware live cue from a speaker-labeled transcript window. */
+  liveCue: (
+    transcript: string,
+    repSpeaker: number | null
+  ) => Promise<
+    | {
+        ok: true
+        repSpeaker: number | null
+        cue: 'objection' | 'discovery' | 'next-question' | 'buying-signal' | 'none'
+        text: string
+      }
+    | { ok: false }
+  >
 }
 
 export interface CallSegment {

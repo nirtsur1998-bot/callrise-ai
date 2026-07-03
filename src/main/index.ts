@@ -10,6 +10,7 @@ import { registerCalls } from './calls'
 import { registerTasks } from './tasks'
 import { registerAuth } from './auth'
 import { registerEvents } from './events'
+import { registerLiveCue } from './live-cue'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -90,6 +91,7 @@ app.whenReady().then(() => {
   registerTasks()
   registerAuth()
   registerEvents()
+  registerLiveCue()
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
