@@ -5,6 +5,7 @@ import { CopilotPanel } from '@renderer/features/copilot/CopilotPanel'
 import { HomeView } from '@renderer/features/home/HomeView'
 import { LiveView } from '@renderer/features/live/LiveView'
 import { PastCallsView } from '@renderer/features/calls/PastCallsView'
+import { TasksView } from '@renderer/features/tasks/TasksView'
 import { PlaceholderView } from '@renderer/components/PlaceholderView'
 import { NAV_ITEMS, type NavId } from '@renderer/features/navigation/nav-items'
 
@@ -26,6 +27,8 @@ function App(): React.JSX.Element {
         <LiveView />
       ) : active === 'past-calls' ? (
         <PastCallsView />
+      ) : active === 'tasks' ? (
+        <TasksView />
       ) : (
         <PlaceholderView title={activeItem.label} icon={activeItem.icon} />
       )}
