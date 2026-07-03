@@ -180,6 +180,43 @@ export interface TasksApi {
   generateFromCall: (callId: string) => Promise<GenerateTasksResult>
 }
 
+export interface CalendarEvent {
+  id: string
+  title: string
+  start: string
+  end: string
+  allDay: boolean
+  notes?: string
+  source: 'local'
+  provider?: string
+  externalId?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface EventCreateInput {
+  title: string
+  start: string
+  end: string
+  allDay?: boolean
+  notes?: string | null
+}
+
+export interface EventUpdateInput {
+  title?: string
+  start?: string
+  end?: string
+  allDay?: boolean
+  notes?: string | null
+}
+
+export interface EventsApi {
+  list: () => Promise<CalendarEvent[]>
+  create: (input: EventCreateInput) => Promise<CalendarEvent>
+  update: (id: string, patch: EventUpdateInput) => Promise<CalendarEvent | null>
+  delete: (id: string) => Promise<{ ok: boolean }>
+}
+
 export interface AuthUser {
   id: string
   email: string
@@ -229,6 +266,7 @@ declare global {
       transcription: TranscriptionApi
       calls: CallsApi
       tasks: TasksApi
+      events: EventsApi
       auth: AuthApi
     }
   }

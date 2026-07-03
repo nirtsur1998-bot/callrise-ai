@@ -46,6 +46,12 @@ const api = {
     delete: (id: string) => ipcRenderer.invoke('tasks:delete', id),
     generateFromCall: (callId: string) => ipcRenderer.invoke('tasks:generateFromCall', callId)
   },
+  events: {
+    list: () => ipcRenderer.invoke('events:list'),
+    create: (input: unknown) => ipcRenderer.invoke('events:create', input),
+    update: (id: string, patch: unknown) => ipcRenderer.invoke('events:update', id, patch),
+    delete: (id: string) => ipcRenderer.invoke('events:delete', id)
+  },
   auth: {
     getStatus: () => ipcRenderer.invoke('auth:getStatus'),
     signUp: (email: string, password: string, name?: string) =>

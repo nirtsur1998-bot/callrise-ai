@@ -9,6 +9,7 @@ import { registerTranscription, disposeTranscription } from './transcription'
 import { registerCalls } from './calls'
 import { registerTasks } from './tasks'
 import { registerAuth } from './auth'
+import { registerEvents } from './events'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -88,6 +89,7 @@ app.whenReady().then(() => {
   registerCalls()
   registerTasks()
   registerAuth()
+  registerEvents()
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
