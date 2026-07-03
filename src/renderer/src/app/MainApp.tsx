@@ -8,6 +8,7 @@ import { PastCallsView } from '@renderer/features/calls/PastCallsView'
 import { TasksView } from '@renderer/features/tasks/TasksView'
 import { CalendarView } from '@renderer/features/calendar/CalendarView'
 import { CoachingView } from '@renderer/features/coaching/CoachingView'
+import { AnalyticsView } from '@renderer/features/analytics/AnalyticsView'
 import { PlaceholderView } from '@renderer/components/PlaceholderView'
 import { NAV_ITEMS, type NavId } from '@renderer/features/navigation/nav-items'
 import type { AuthUser } from '@renderer/features/auth/types'
@@ -39,6 +40,8 @@ export function MainApp({ user }: { user: AuthUser }): React.JSX.Element {
         <CalendarView />
       ) : active === 'coaching' ? (
         <CoachingView />
+      ) : active === 'analytics' ? (
+        <AnalyticsView />
       ) : (
         <PlaceholderView title={activeItem.label} icon={activeItem.icon} />
       )}
