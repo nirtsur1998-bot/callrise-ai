@@ -32,7 +32,10 @@ export interface TranscriptionErrorEvent {
 export interface TranscriptionApi {
   ensureMicAccess: () => Promise<{ status: MicAccessStatus }>
   openMicSettings: () => Promise<{ ok: boolean }>
-  start: (options: { sampleRate: number }) => Promise<{ ok: boolean; error?: 'no-key' }>
+  start: (options: {
+    sampleRate: number
+    multichannel?: boolean
+  }) => Promise<{ ok: boolean; error?: 'no-key' }>
   sendAudio: (chunk: ArrayBuffer) => void
   stop: () => Promise<{ ok: boolean }>
   onState: (cb: (payload: TranscriptionStateEvent) => void) => () => void

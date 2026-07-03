@@ -11,6 +11,9 @@ const MAX_RECONNECTS = 3
 
 interface StartOptions {
   sampleRate: number
+  /** When true, stream 2 interleaved channels (0=rep, 1=buyer) via Deepgram
+   *  multichannel. Defaults to false (mono + diarize) for mic-only calls. */
+  multichannel?: boolean
 }
 
 // Everything about one live session lives here, so restarts/reconnects can't
@@ -19,6 +22,10 @@ interface Session {
   window: BrowserWindow
   apiKey: string
   sampleRate: number
+  /** 1 for mono (mic only) or 2 for multichannel (rep + buyer). */
+  channels: number
+  /** True when streaming 2 channels with per-channel labels (no diarize). */
+  multichannel: boolean
   ws: WebSocket | null
   keepAlive: ReturnType<typeof setInterval> | null
   connectTimer: ReturnType<typeof setTimeout> | null
@@ -36,20 +43,23 @@ function emit(s: Session, channel: string, payload: unknown): void {
   }
 }
 
-function buildUrl(sampleRate: number): string {
+function buildUrl(s: Session): string {
   const params = new URLSearchParams({
     model: 'nova-3',
     language: 'en-US',
     encoding: 'linear16',
-    sample_rate: String(sampleRate),
-    channels: '1',
+    sample_rate: String(s.sampleRate),
+    channels: String(s.channels),
     interim_results: 'true', // word-by-word partial results
-    diarize: 'true', // tag each word with a speaker number
     smart_format: 'true',
     punctuate: 'true',
     utterance_end_ms: '1000',
     vad_events: 'true'
   })
+  // Multichannel labels speakers by channel (0=rep, 1=buyer); for mic-only we
+  // fall back to diarization to guess speakers within the single channel.
+  if (s.multichannel) params.set('multichannel', 'true')
+  else params.set('diarize', 'true')
   return `${DEEPGRAM_LISTEN_URL}?${params.toString()}`
 }
 
@@ -90,7 +100,7 @@ function failSession(s: Session, message: string): void {
 }
 
 function connect(s: Session): void {
-  const ws = new WebSocket(buildUrl(s.sampleRate), {
+  const ws = new WebSocket(buildUrl(s), {
     headers: { Authorization: `Token ${s.apiKey}` }
   })
   s.ws = ws
@@ -98,7 +108,10 @@ function connect(s: Session): void {
   // Watchdog: if we never reach 'open', don't hang in "connecting" forever.
   s.connectTimer = setTimeout(() => {
     if (session === s && ws.readyState !== WebSocket.OPEN) {
-      failSession(s, 'Could not reach the transcription service. Check your internet and try again.')
+      failSession(
+        s,
+        'Could not reach the transcription service. Check your internet and try again.'
+      )
     }
   }, CONNECT_TIMEOUT_MS)
 
@@ -146,10 +159,20 @@ function connect(s: Session): void {
           | undefined
       )?.alternatives?.[0]
       const transcript = alt?.transcript ?? ''
-      // Each word carries a speaker number (diarization) — pass them through
-      // so the renderer can group the transcript by speaker.
+      // In multichannel mode the speaker IS the channel: channel_index[0] is 0
+      // (rep) or 1 (buyer). Otherwise fall back to per-word diarization.
+      const channelIndex = Array.isArray(msg.channel_index)
+        ? (msg.channel_index as unknown[])
+        : null
+      const channel =
+        channelIndex && typeof channelIndex[0] === 'number' ? (channelIndex[0] as number) : null
       const words = (alt?.words ?? []).map((w) => ({
-        speaker: typeof w.speaker === 'number' ? w.speaker : 0,
+        speaker:
+          s.multichannel && (channel === 0 || channel === 1)
+            ? channel
+            : typeof w.speaker === 'number'
+              ? w.speaker
+              : 0,
         text: w.punctuated_word ?? w.word ?? ''
       }))
       const start = typeof msg.start === 'number' ? msg.start : 0
@@ -211,7 +234,10 @@ function connect(s: Session): void {
         if (session === s && !s.stopping) connect(s)
       }, delay)
     } else {
-      failSession(s, 'Lost connection to the transcription service. Check your internet and try again.')
+      failSession(
+        s,
+        'Lost connection to the transcription service. Check your internet and try again.'
+      )
     }
   })
 }
@@ -241,10 +267,13 @@ export function registerTranscription(): void {
 
     // Replace any previous session entirely.
     disposeTranscription()
+    const multichannel = options?.multichannel === true
     const s: Session = {
       window,
       apiKey: key,
       sampleRate: Number(options?.sampleRate) > 0 ? Number(options.sampleRate) : 16000,
+      channels: multichannel ? 2 : 1,
+      multichannel,
       ws: null,
       keepAlive: null,
       connectTimer: null,
@@ -272,8 +301,9 @@ export function registerTranscription(): void {
           : -1
     if (byteLength <= 0 || byteLength > MAX_CHUNK_BYTES) return
     s.ws.send(chunk)
-    // 16-bit PCM => 2 bytes per sample.
-    s.audioSecondsSent += byteLength / 2 / s.sampleRate
+    // 16-bit PCM => 2 bytes per sample, times the channel count (stereo when
+    // multichannel) — so the real-time latency math stays correct.
+    s.audioSecondsSent += byteLength / 2 / s.channels / s.sampleRate
   })
 
   ipcMain.handle('transcription:stop', () => {

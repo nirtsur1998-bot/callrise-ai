@@ -17,7 +17,8 @@ const api = {
   transcription: {
     ensureMicAccess: () => ipcRenderer.invoke('mic:ensureAccess'),
     openMicSettings: () => ipcRenderer.invoke('mic:openSettings'),
-    start: (options: { sampleRate: number }) => ipcRenderer.invoke('transcription:start', options),
+    start: (options: { sampleRate: number; multichannel?: boolean }) =>
+      ipcRenderer.invoke('transcription:start', options),
     sendAudio: (chunk: ArrayBuffer) => ipcRenderer.send('transcription:audio', chunk),
     stop: () => ipcRenderer.invoke('transcription:stop'),
     onState: (cb: (payload: unknown) => void) => subscribe('transcription:state', cb),
