@@ -44,6 +44,7 @@ docs/
 - **Explain in plain language** — the user is newer to coding.
 - **Pause and ask for confirmation before big or irreversible changes**: new major dependencies, architectural shifts, deleting things, or anything touching many files. When in doubt, ask instead of guessing.
 - Keep scope tight: **no backend, no audio, no AI, no live features** until we plan that work explicitly.
+- **Work in the main project folder, not hidden worktrees.** The user runs `npm run dev` from the main project folder, so all work must land there. Edit directly on the main checkout, or use a normal branch that we merge into `main` promptly — never leave finished work stranded in a `.claude/worktrees/…` folder where the running app can't see it.
 
 ## Common commands
 
