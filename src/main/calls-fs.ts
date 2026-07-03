@@ -75,6 +75,80 @@ export interface CoachingReport {
   createdAt: string
 }
 
+// --- Recording consent (stored on the call, like a summary) -----------------
+
+export type ConsentStatus = 'not-asked' | 'disclosed' | 'consented' | 'declined'
+export type ConsentJurisdiction = 'one-party' | 'two-party'
+export type ConsentMethod = 'verbal-on-call' | 'pre-agreed' | 'written'
+
+export interface ConsentRecord {
+  status: ConsentStatus
+  jurisdiction: ConsentJurisdiction
+  /** How consent was obtained — only meaningful once `status` is 'consented'. */
+  method?: ConsentMethod
+  /**
+   * Whether this call may record the OTHER party. HARD INVARIANT: only ever
+   * true when `status === 'consented'`. This is the flag M12's buyer-audio
+   * capture will gate on — "no consent = no capture". It is recomputed from
+   * `status` in `sanitizeConsent` (never trusted from input) on every save AND
+   * every read, so a hand-edited or malformed file can't grant capture.
+   */
+  recordOtherParty: boolean
+  /** When the other party was informed (the disclosure was read). */
+  disclosedAt?: string
+  /** When they said yes / no. */
+  decidedAt?: string
+}
+
+const CONSENT_STATUSES = new Set<ConsentStatus>(['not-asked', 'disclosed', 'consented', 'declined'])
+const CONSENT_JURISDICTIONS = new Set<ConsentJurisdiction>(['one-party', 'two-party'])
+const CONSENT_METHODS = new Set<ConsentMethod>(['verbal-on-call', 'pre-agreed', 'written'])
+
+function isoOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : undefined
+}
+
+/** The safe default consent for any call (two-party = always prompt for consent). */
+export function defaultConsent(): ConsentRecord {
+  return { status: 'not-asked', jurisdiction: 'two-party', recordOtherParty: false }
+}
+
+/**
+ * Coerce untrusted input (a renderer payload OR a parsed-from-disk record) into
+ * a clean ConsentRecord, filling safe defaults for anything missing/malformed.
+ *
+ * THE INVARIANT: `recordOtherParty` is derived as
+ *   status === 'consented' && input.recordOtherParty === true
+ * so the ONLY way a saved call can permit recording the other party is to carry
+ * an explicit 'consented' status. A hand-edited `recordOtherParty: true` paired
+ * with any other status collapses to false here — on both save and read.
+ */
+export function sanitizeConsent(value: unknown): ConsentRecord {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+
+  const status: ConsentStatus = CONSENT_STATUSES.has(v.status as ConsentStatus)
+    ? (v.status as ConsentStatus)
+    : 'not-asked'
+  const jurisdiction: ConsentJurisdiction = CONSENT_JURISDICTIONS.has(
+    v.jurisdiction as ConsentJurisdiction
+  )
+    ? (v.jurisdiction as ConsentJurisdiction)
+    : 'two-party'
+  const method = CONSENT_METHODS.has(v.method as ConsentMethod)
+    ? (v.method as ConsentMethod)
+    : undefined
+
+  return {
+    status,
+    jurisdiction,
+    method,
+    // The hard invariant — computed from status, never trusted from input.
+    recordOtherParty: status === 'consented' && v.recordOtherParty === true,
+    disclosedAt: isoOrUndefined(v.disclosedAt),
+    decidedAt: isoOrUndefined(v.decidedAt)
+  }
+}
+
 export type AttachmentExt = 'pdf' | 'txt' | 'md' | 'docx'
 
 export interface Attachment {
@@ -109,12 +183,16 @@ export interface Call extends CallBase {
   summary?: Summary
   attachments?: Attachment[]
   coaching?: CoachingReport
+  /** Recording-consent record. Always present on calls saved from M11 on. */
+  consent?: ConsentRecord
 }
 
 export interface CallSaveInput {
   startedAt: string
   durationMs: number
   segments: CallSegment[]
+  /** Optional consent captured during the live session; defaulted if absent. */
+  consent?: ConsentRecord
 }
 
 // Ids are used to build file paths, so they must be tightly constrained
@@ -231,7 +309,9 @@ export async function saveCall(dir: string, input: CallSaveInput): Promise<CallS
     speakerCount: new Set(segments.map((s) => s.speaker)).size,
     preview: transcriptText.slice(0, 160),
     segments,
-    attachments: []
+    attachments: [],
+    // Every call carries a consent record; the sanitizer enforces the invariant.
+    consent: sanitizeConsent(input?.consent)
   }
   await writeCall(dir, call)
   return toSummary(call)
@@ -268,7 +348,11 @@ export async function getCall(dir: string, id: string): Promise<Call | null> {
     // Guard the shape so a malformed file can't be corrupted by read-modify-write.
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
     if (typeof (parsed as { id?: unknown }).id !== 'string') return null
-    return parsed as Call
+    const call = parsed as Call
+    // Normalize consent on READ too, so the invariant holds even for old or
+    // hand-edited files: a tampered `recordOtherParty: true` can't survive this.
+    call.consent = sanitizeConsent(call.consent)
+    return call
   } catch {
     return null
   }

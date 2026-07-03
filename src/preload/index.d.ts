@@ -134,6 +134,20 @@ export interface CoachingReport {
 export type CoachResult =
   { ok: true; report: CoachingReport } | { ok: false; error: 'no-key' | 'failed'; message?: string }
 
+export type ConsentStatus = 'not-asked' | 'disclosed' | 'consented' | 'declined'
+export type ConsentJurisdiction = 'one-party' | 'two-party'
+export type ConsentMethod = 'verbal-on-call' | 'pre-agreed' | 'written'
+
+export interface ConsentRecord {
+  status: ConsentStatus
+  jurisdiction: ConsentJurisdiction
+  method?: ConsentMethod
+  /** Only ever true when status === 'consented' (enforced in the main process). */
+  recordOtherParty: boolean
+  disclosedAt?: string
+  decidedAt?: string
+}
+
 export type AttachmentExt = 'pdf' | 'txt' | 'md' | 'docx'
 
 export interface Attachment {
@@ -166,12 +180,14 @@ export interface Call extends CallBase {
   summary?: Summary
   attachments?: Attachment[]
   coaching?: CoachingReport
+  consent?: ConsentRecord
 }
 
 export interface CallSaveInput {
   startedAt: string
   durationMs: number
   segments: CallSegment[]
+  consent?: ConsentRecord
 }
 
 export type SummaryResult =

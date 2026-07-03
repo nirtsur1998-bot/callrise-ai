@@ -1,8 +1,13 @@
+import { useEffect, useState } from 'react'
 import { Mic, Square, Pause, Play, AlertTriangle, MicOff, Loader2 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { useTranscription } from './useTranscription'
 import { useLiveCues } from './useLiveCues'
 import { useCueSettings } from './useCueSettings'
+import { useConsent } from '@renderer/features/consent/useConsent'
+import { OtherPartyControl } from '@renderer/features/consent/OtherPartyControl'
+import { ConsentModal } from '@renderer/features/consent/ConsentModal'
+import { RecordingIndicator } from '@renderer/features/consent/RecordingIndicator'
 import { Waveform } from './components/Waveform'
 import { TranscriptView } from './components/TranscriptView'
 import { CueCard } from './components/CueCard'
@@ -18,6 +23,10 @@ import {
 } from './components/LiveStates'
 
 export function LiveView(): React.JSX.Element {
+  // Recording consent for the current call (gates future other-party capture).
+  const consent = useConsent()
+  const [consentOpen, setConsentOpen] = useState(false)
+
   const {
     status,
     segments,
@@ -29,11 +38,17 @@ export function LiveView(): React.JSX.Element {
     start,
     stop,
     togglePause
-  } = useTranscription()
+  } = useTranscription(consent.recordRef, consent.reset)
 
   // Live coaching cues (hooks must run before any early return).
   const { enabled, setEnabled, sensitivity, setSensitivity } = useCueSettings()
   const { cue, dismiss } = useLiveCues(status === 'listening', enabled, sensitivity)
+
+  // When a call is saved, consent resets to off so it never carries to the next.
+  const resetConsent = consent.reset
+  useEffect(() => {
+    if (savedNotice) resetConsent()
+  }, [savedNotice, resetConsent])
 
   const hasTranscript = segments.length > 0
 
@@ -79,8 +94,19 @@ export function LiveView(): React.JSX.Element {
     status === 'reconnecting' ||
     status === 'connecting'
 
+  const recording = status === 'listening' || status === 'connecting' || status === 'reconnecting'
+
   return (
     <div className="relative flex h-full flex-col gap-4">
+      {/* Persistent, honest recording state. otherPartyCaptureLive stays false
+          until M12 wires real buyer capture — until then it always says "your mic". */}
+      <RecordingIndicator
+        recording={recording}
+        paused={status === 'paused'}
+        otherPartyConsented={consent.canRecord}
+        otherPartyCaptureLive={false}
+      />
+
       {/* Control bar */}
       <div className="flex items-center gap-4 rounded-2xl border border-line-soft bg-surface px-5 py-4">
         {stoppable ? (
@@ -117,6 +143,7 @@ export function LiveView(): React.JSX.Element {
         </div>
 
         <div className="flex items-center gap-3">
+          <OtherPartyControl consent={consent} onOpen={() => setConsentOpen(true)} />
           <CueControls
             enabled={enabled}
             onToggle={setEnabled}
@@ -217,6 +244,8 @@ export function LiveView(): React.JSX.Element {
       </div>
 
       <AskCoach segments={segments} interimText={interimText} />
+
+      {consentOpen && <ConsentModal consent={consent} onClose={() => setConsentOpen(false)} />}
     </div>
   )
 }

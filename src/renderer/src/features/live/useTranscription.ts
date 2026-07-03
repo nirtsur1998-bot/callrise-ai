@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { startRecorder, type Recorder } from './audio/recorder'
 import { groupWords, mergeSegments } from './segments'
 import type { LiveStatus } from './types'
-import type { CallSegment } from '@renderer/features/calls/types'
+import type { CallSegment, ConsentRecord } from '@renderer/features/calls/types'
 
 type LivePhase = Exclude<LiveStatus, 'paused'>
 
@@ -19,7 +19,10 @@ interface UseTranscription {
   togglePause: () => void
 }
 
-export function useTranscription(): UseTranscription {
+export function useTranscription(
+  consentRef?: { current: ConsentRecord },
+  onStartReset?: () => void
+): UseTranscription {
   const [phase, setPhase] = useState<LivePhase>('idle')
   const [paused, setPaused] = useState(false)
   const [segments, setSegments] = useState<CallSegment[]>([])
@@ -57,13 +60,16 @@ export function useTranscription(): UseTranscription {
       .save({
         startedAt: startedAtRef.current,
         durationMs: durationMsRef.current,
-        segments: captured
+        segments: captured,
+        // Consent captured during the session; the main process re-sanitizes it
+        // and enforces the "no consent = no capture" invariant on save.
+        consent: consentRef?.current
       })
       .then(() => setSavedNotice(true))
       .catch(() => {
         /* non-fatal: the transcript is still on screen */
       })
-  }, [])
+  }, [consentRef])
 
   useEffect(() => {
     const offState = window.api.transcription.onState((payload) => {
@@ -137,6 +143,8 @@ export function useTranscription(): UseTranscription {
   const start = useCallback(async () => {
     // If a previous call is still waiting to be saved, save it before we reset.
     flushPendingSave()
+    // Each new call starts with consent reset to off — it never carries over.
+    onStartReset?.()
 
     setErrorMessage(null)
     setSegments([])
@@ -205,7 +213,7 @@ export function useTranscription(): UseTranscription {
       setErrorMessage('Could not start transcription. Please try again.')
       setPhase('error')
     }
-  }, [armSave, flushPendingSave])
+  }, [armSave, flushPendingSave, onStartReset])
 
   const stop = useCallback(async () => {
     armSave()

@@ -18,6 +18,10 @@ export function IdleHero({ onStart }: { onStart: () => void }): React.JSX.Elemen
       <p className="mt-2 max-w-sm text-sm text-muted">
         Click the mic and start speaking. Your words appear in real time, word by word.
       </p>
+      <p className="mt-3 max-w-sm text-xs text-faint">
+        Records your microphone only. To record the other party, you&rsquo;ll confirm their consent
+        once the call starts.
+      </p>
     </div>
   )
 }
@@ -109,7 +113,9 @@ export function NoKeyState({ onRetry }: { onRetry: () => void }): React.JSX.Elem
           </li>
           <li>
             Paste it:{' '}
-            <code className="rounded bg-canvas px-1 py-0.5 text-ink">DEEPGRAM_API_KEY=your_key</code>
+            <code className="rounded bg-canvas px-1 py-0.5 text-ink">
+              DEEPGRAM_API_KEY=your_key
+            </code>
           </li>
           <li>Restart the app, then click Try again</li>
         </ol>
@@ -130,7 +136,11 @@ export function StatusBadge({ status }: { status: LiveStatus }): React.JSX.Eleme
   const map: Partial<Record<LiveStatus, { label: string; dot: string; text: string }>> = {
     listening: { label: 'Listening', dot: 'bg-emerald-400', text: 'text-emerald-300' },
     paused: { label: 'Paused', dot: 'bg-amber-400', text: 'text-amber-300' },
-    reconnecting: { label: 'Reconnecting', dot: 'bg-amber-400 animate-pulse', text: 'text-amber-300' },
+    reconnecting: {
+      label: 'Reconnecting',
+      dot: 'bg-amber-400 animate-pulse',
+      text: 'text-amber-300'
+    },
     connecting: { label: 'Connecting', dot: 'bg-accent animate-pulse', text: 'text-muted' }
   }
   const s = map[status] ?? { label: 'Stopped', dot: 'bg-faint', text: 'text-faint' }
