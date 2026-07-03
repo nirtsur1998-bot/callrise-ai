@@ -48,7 +48,27 @@ export interface CallSegment {
   text: string
 }
 
-export interface CallSummary {
+export interface Summary {
+  executive: string
+  keyPoints: string[]
+  actionItems: string[]
+  questions: string[]
+  model: string
+  createdAt: string
+}
+
+export type AttachmentExt = 'pdf' | 'txt' | 'md' | 'docx'
+
+export interface Attachment {
+  id: string
+  name: string
+  ext: AttachmentExt
+  sizeBytes: number
+  addedAt: string
+  summary?: Summary
+}
+
+interface CallBase {
   id: string
   title: string
   createdAt: string
@@ -57,8 +77,15 @@ export interface CallSummary {
   preview: string
 }
 
-export interface Call extends CallSummary {
+export interface CallSummary extends CallBase {
+  hasSummary: boolean
+  attachmentCount: number
+}
+
+export interface Call extends CallBase {
   segments: CallSegment[]
+  summary?: Summary
+  attachments?: Attachment[]
 }
 
 export interface CallSaveInput {
@@ -67,11 +94,26 @@ export interface CallSaveInput {
   segments: CallSegment[]
 }
 
+export type SummaryResult =
+  | { ok: true; summary: Summary }
+  | { ok: false; error: 'no-key' | 'failed'; message?: string }
+
+export type AddAttachmentResult =
+  | { ok: true; attachment: Attachment }
+  | { ok: false; error: 'not-found' | 'unsupported-type' | 'empty' | 'too-large' }
+
 export interface CallsApi {
   list: () => Promise<CallSummary[]>
   get: (id: string) => Promise<Call | null>
   save: (input: CallSaveInput) => Promise<CallSummary>
   delete: (id: string) => Promise<{ ok: boolean }>
+  addAttachment: (
+    callId: string,
+    file: { name: string; ext: string; data: ArrayBuffer }
+  ) => Promise<AddAttachmentResult>
+  removeAttachment: (callId: string, attachmentId: string) => Promise<{ ok: boolean }>
+  summarizeCall: (callId: string) => Promise<SummaryResult>
+  summarizeAttachment: (callId: string, attachmentId: string) => Promise<SummaryResult>
 }
 
 declare global {

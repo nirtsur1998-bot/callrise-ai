@@ -3,7 +3,27 @@ export interface CallSegment {
   text: string
 }
 
-export interface CallSummary {
+export interface Summary {
+  executive: string
+  keyPoints: string[]
+  actionItems: string[]
+  questions: string[]
+  model: string
+  createdAt: string
+}
+
+export type AttachmentExt = 'pdf' | 'txt' | 'md' | 'docx'
+
+export interface Attachment {
+  id: string
+  name: string
+  ext: AttachmentExt
+  sizeBytes: number
+  addedAt: string
+  summary?: Summary
+}
+
+interface CallBase {
   id: string
   title: string
   createdAt: string
@@ -12,6 +32,17 @@ export interface CallSummary {
   preview: string
 }
 
-export interface Call extends CallSummary {
-  segments: CallSegment[]
+export interface CallSummary extends CallBase {
+  hasSummary: boolean
+  attachmentCount: number
 }
+
+export interface Call extends CallBase {
+  segments: CallSegment[]
+  summary?: Summary
+  attachments?: Attachment[]
+}
+
+export type SummaryResult =
+  | { ok: true; summary: Summary }
+  | { ok: false; error: 'no-key' | 'failed'; message?: string }

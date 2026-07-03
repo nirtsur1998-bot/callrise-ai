@@ -6,6 +6,7 @@ interface UseCalls {
   loading: boolean
   remove: (id: string) => Promise<void>
   get: (id: string) => Promise<Call | null>
+  refresh: () => Promise<void>
 }
 
 export function useCalls(): UseCalls {
@@ -13,9 +14,14 @@ export function useCalls(): UseCalls {
   const [loading, setLoading] = useState(true)
 
   const refresh = useCallback(async () => {
-    const list = await window.api.calls.list()
-    setCalls(list)
-    setLoading(false)
+    try {
+      const list = await window.api.calls.list()
+      setCalls(list)
+    } catch {
+      /* keep the last known list */
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
   useEffect(() => {
@@ -24,7 +30,11 @@ export function useCalls(): UseCalls {
 
   const remove = useCallback(
     async (id: string) => {
-      await window.api.calls.delete(id)
+      try {
+        await window.api.calls.delete(id)
+      } catch {
+        /* ignore — refresh reflects the true state */
+      }
       await refresh()
     },
     [refresh]
@@ -32,5 +42,5 @@ export function useCalls(): UseCalls {
 
   const get = useCallback((id: string) => window.api.calls.get(id), [])
 
-  return { calls, loading, remove, get }
+  return { calls, loading, remove, get, refresh }
 }

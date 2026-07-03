@@ -1,95 +1,23 @@
-import { useEffect, useState } from 'react'
-import { ArrowLeft, Trash2, Clock, Users, PhoneCall } from 'lucide-react'
-import { SpeakerTranscript } from '@renderer/components/SpeakerTranscript'
+import { useState } from 'react'
+import { Trash2, Clock, Users, PhoneCall, Sparkles, Paperclip } from 'lucide-react'
 import { useCalls } from './useCalls'
-import type { Call } from './types'
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  })
-}
-
-function formatDuration(ms: number): string {
-  const total = Math.round(ms / 1000)
-  const minutes = Math.floor(total / 60)
-  const seconds = total % 60
-  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
-}
+import { CallDetail } from './CallDetail'
+import { formatDate, formatDuration } from './format'
 
 export function PastCallsView(): React.JSX.Element {
-  const { calls, loading, remove, get } = useCalls()
+  const { calls, loading, remove, refresh } = useCalls()
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [selected, setSelected] = useState<Call | null>(null)
   const [confirmId, setConfirmId] = useState<string | null>(null)
-
-  useEffect(() => {
-    setSelected(null)
-    if (!selectedId) return
-    let active = true
-    void get(selectedId).then((call) => {
-      if (!active) return
-      if (call) setSelected(call)
-      else setSelectedId(null) // missing/corrupt file — return to the list
-    })
-    return () => {
-      active = false
-    }
-  }, [selectedId, get])
 
   // --- Detail view ---------------------------------------------------------
   if (selectedId) {
-    if (!selected) {
-      return (
-        <div className="flex h-full items-center justify-center text-sm text-faint">Loading…</div>
-      )
-    }
     return (
-      <div className="flex h-full flex-col">
-        <div className="mb-4 flex items-center justify-between">
-          <button
-            type="button"
-            onClick={() => setSelectedId(null)}
-            className="flex items-center gap-2 text-sm text-muted transition hover:text-ink"
-          >
-            <ArrowLeft className="h-4 w-4" /> Past Calls
-          </button>
-          <button
-            type="button"
-            onClick={async () => {
-              await remove(selected.id)
-              setSelectedId(null)
-            }}
-            className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-muted transition hover:border-rose-500/40 hover:text-rose-300"
-          >
-            <Trash2 className="h-3.5 w-3.5" /> Delete
-          </button>
-        </div>
-        <div className="mb-5">
-          <h2 className="text-xl font-semibold tracking-tight">{selected.title}</h2>
-          <div className="mt-1.5 flex items-center gap-4 text-[13px] text-muted">
-            <span>{formatDate(selected.createdAt)}</span>
-            <span className="flex items-center gap-1">
-              <Clock className="h-3.5 w-3.5" /> {formatDuration(selected.durationMs)}
-            </span>
-            <span className="flex items-center gap-1">
-              <Users className="h-3.5 w-3.5" /> {selected.speakerCount} speaker
-              {selected.speakerCount === 1 ? '' : 's'}
-            </span>
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto rounded-2xl border border-line-soft bg-surface px-7 py-6">
-          {selected.segments.length > 0 ? (
-            <SpeakerTranscript segments={selected.segments} />
-          ) : (
-            <p className="text-sm text-faint">This call has no transcript.</p>
-          )}
-        </div>
-      </div>
+      <CallDetail
+        callId={selectedId}
+        onBack={() => setSelectedId(null)}
+        onDeleted={() => setSelectedId(null)}
+        onChanged={refresh}
+      />
     )
   }
 
@@ -141,6 +69,16 @@ export function PastCallsView(): React.JSX.Element {
                   <span className="flex items-center gap-1">
                     <Users className="h-3 w-3" /> {call.speakerCount}
                   </span>
+                  {call.hasSummary && (
+                    <span className="flex items-center gap-1 text-accent">
+                      <Sparkles className="h-3 w-3" /> Summary
+                    </span>
+                  )}
+                  {call.attachmentCount > 0 && (
+                    <span className="flex items-center gap-1">
+                      <Paperclip className="h-3 w-3" /> {call.attachmentCount}
+                    </span>
+                  )}
                 </div>
               </button>
               {confirmId === call.id ? (
