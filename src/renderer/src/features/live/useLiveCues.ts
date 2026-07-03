@@ -22,17 +22,19 @@ interface Thresholds {
   cooldownMs: number // minimum gap between any two displayed cues
 }
 
-// "low" is the calm default; "high" shows cues more readily.
+// "low" is the calm default; "high" shows cues more readily. Cooldown tightened
+// so a cue surfaces close to the moment, not 10–20s later.
 export const SENSITIVITY_THRESHOLDS: Record<Sensitivity, Thresholds> = {
-  low: { paceWpm: 200, cooldownMs: 75_000 },
-  medium: { paceWpm: 185, cooldownMs: 60_000 },
-  high: { paceWpm: 170, cooldownMs: 45_000 }
+  low: { paceWpm: 200, cooldownMs: 45_000 },
+  medium: { paceWpm: 185, cooldownMs: 30_000 },
+  high: { paceWpm: 170, cooldownMs: 20_000 }
 }
 
-const LLM_WINDOW_MS = 120_000 // speaker-labeled context sent to the brain
+const WINDOW_TURNS = 24 // recent speaker turns sent to the brain (fixed size)
+const MAX_TURNS = 80 // cap the in-memory turn buffer
 const PACE_WINDOW_MS = 15_000 // window for the rep-only words/min estimate
-const CALL_GAP_MS = 9_000 // minimum gap between brain (LLM) calls
-const PERIODIC_MS = 20_000 // periodic brain check (catches ongoing situations)
+const CALL_GAP_MS = 2_500 // minimum gap between brain (LLM) calls
+const DEBOUNCE_MS = 400 // wait after a client turn-end before calling the brain
 const AUTO_DISMISS_MS = 10_000 // a cue fades on its own if not dismissed
 const MIN_CHARS = 30 // not enough transcript to coach on yet
 
@@ -75,6 +77,8 @@ export function useLiveCues(
   const lastSpeakerRef = useRef<number | null>(null)
   const repSpeakerRef = useRef<number | null>(null) // locked once identified
   const lastCallAtRef = useRef(0) // last brain call
+  const inFlightRef = useRef(false) // single-flight: only one brain call at a time
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
 
@@ -83,6 +87,7 @@ export function useLiveCues(
     return () => {
       mountedRef.current = false
       if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current)
+      if (debounceRef.current) clearTimeout(debounceRef.current)
     }
   }, [])
 
@@ -102,6 +107,8 @@ export function useLiveCues(
       repSpeakerRef.current = null
       lastCueAtRef.current = 0
       lastCallAtRef.current = 0
+      inFlightRef.current = false
+      if (debounceRef.current) clearTimeout(debounceRef.current)
       // eslint-disable-next-line react-hooks/set-state-in-effect -- clear a visible cue when cues mute / the call stops
       clearCue()
       return
@@ -111,6 +118,8 @@ export function useLiveCues(
     turnsRef.current = []
     lastSpeakerRef.current = null
     repSpeakerRef.current = null
+    inFlightRef.current = false
+    lastCallAtRef.current = 0
 
     const emit = (kind: CueKind, text: string): boolean => {
       const now = Date.now()
@@ -127,10 +136,9 @@ export function useLiveCues(
       return true
     }
 
-    const windowText = (now: number): string => {
-      const cutoff = now - LLM_WINDOW_MS
+    const windowText = (): string => {
       return turnsRef.current
-        .filter((t) => t.t >= cutoff)
+        .slice(-WINDOW_TURNS)
         .map((t) => `Speaker ${t.speaker}: ${t.text}`)
         .join('\n')
     }
@@ -149,13 +157,21 @@ export function useLiveCues(
     // Ask the brain for a contextual cue (non-blocking). Only call when we could
     // actually show one — so API calls track display opportunities, not chatter.
     const callBrain = (now: number): void => {
+      if (inFlightRef.current) {
+        console.log('[live-cue] skip: a request is already in flight')
+        return
+      }
       if (now - lastCallAtRef.current < CALL_GAP_MS) return
       if (cueRef.current) return // a cue is already showing
       const repKnown = repSpeakerRef.current !== null
       if (repKnown && now - lastCueAtRef.current < cfgRef.current.cooldownMs) return
-      const transcript = windowText(now)
+      const transcript = windowText()
       if (transcript.length < MIN_CHARS) return
+
       lastCallAtRef.current = now
+      inFlightRef.current = true
+      const startedAt = now
+      console.log(`[live-cue] → request (${turnsRef.current.length} turns buffered)`)
       void window.api.transcription
         .liveCue(transcript, repSpeakerRef.current)
         .then((res) => {
@@ -168,6 +184,17 @@ export function useLiveCues(
         .catch(() => {
           /* ignore — try again on the next turn */
         })
+        .finally(() => {
+          inFlightRef.current = false
+          console.log(`[live-cue] ← done in ${Date.now() - startedAt}ms`)
+        })
+    }
+
+    // A turn often ends with speechFinal AND utteranceEnd close together —
+    // debounce so we coalesce them into a single brain call ~400ms later.
+    const scheduleBrain = (): void => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+      debounceRef.current = setTimeout(() => callBrain(Date.now()), DEBOUNCE_MS)
     }
 
     const onTurnEnd = (now: number): void => {
@@ -177,7 +204,7 @@ export function useLiveCues(
         if (repWpm(now) > cfgRef.current.paceWpm) emit('pace', 'Slow down a touch')
       } else {
         // The client just finished (or we don't know the rep yet) — coach it.
-        callBrain(now)
+        scheduleBrain()
       }
     }
 
@@ -201,20 +228,19 @@ export function useLiveCues(
         const speaker = lastSpeakerRef.current ?? 0
         turnsRef.current.push({ speaker, text: payload.transcript.trim(), t: now })
       }
-      turnsRef.current = turnsRef.current.filter((t) => t.t >= now - LLM_WINDOW_MS)
+      if (turnsRef.current.length > MAX_TURNS) {
+        turnsRef.current = turnsRef.current.slice(-MAX_TURNS)
+      }
 
       if (payload.speechFinal) onTurnEnd(now)
     })
 
     const offUtteranceEnd = window.api.transcription.onUtteranceEnd(() => onTurnEnd(Date.now()))
 
-    // Periodic check, so an ongoing situation still gets coached without a pause.
-    const timer = setInterval(() => callBrain(Date.now()), PERIODIC_MS)
-
     return () => {
       offTranscript()
       offUtteranceEnd()
-      clearInterval(timer)
+      if (debounceRef.current) clearTimeout(debounceRef.current)
     }
   }, [active, enabled, clearCue])
 
