@@ -37,7 +37,8 @@ const api = {
       ipcRenderer.invoke('calls:removeAttachment', callId, attachmentId),
     summarizeCall: (callId: string) => ipcRenderer.invoke('summary:call', callId),
     summarizeAttachment: (callId: string, attachmentId: string) =>
-      ipcRenderer.invoke('summary:attachment', callId, attachmentId)
+      ipcRenderer.invoke('summary:attachment', callId, attachmentId),
+    coachCall: (callId: string) => ipcRenderer.invoke('coach:call', callId)
   },
   tasks: {
     list: () => ipcRenderer.invoke('tasks:list'),

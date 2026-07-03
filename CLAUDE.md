@@ -15,11 +15,13 @@ Milestones completed:
 - **M5 — AI tasks.** ✅ Generate action items from a saved call (review/edit/accept) + a real Tasks screen (list, filters, complete/edit/delete/add).
 - **M6 — User accounts + email auth.** ✅ Sign-up / log-in gate via **Supabase Auth**, with email confirmation by a 6–10-digit code (no redirects/deep links). Auth runs in the main process (keys in the gitignored `.env`); the signed-in user shows in the sidebar with log-out.
 - **M7 — In-app calendar (foundation).** ✅ Custom month + week grid (date-fns; no calendar library), local event storage (one JSON file per event, mirroring tasks/calls), create/edit/delete events, and a read-only overlay of tasks (on due dates) + past calls (on the day/time they happened). Events store `source: 'local'` + empty `provider`/`externalId` hooks and absolute ISO times so the future Google/Outlook sync needs no migration. **No external sync yet** (deliberately deferred).
+- **M8 — AI post-call coaching (scorecard).** ✅ "Coach this call" on a saved call → a Claude-scored, evidence-grounded scorecard: 6 rubric dimensions (1–5), a computed 0–100 Call score, deterministic metrics (talk ratio, longest monologue, question count, pace, turns), a lead strength, top-2 prioritized improvements (mechanical + strategic), and one next-call action (savable as a task). Every cited quote is **verified against the transcript** and ungrounded advice is dropped. Persisted on the call (`coaching` field); the **Coaching** screen lists coached calls. **No live/in-call coaching yet** (that's M9).
 
 **Not yet done:**
 - Existing local data (calls/tasks/summaries/events) is **not tied to a user** yet — a later milestone will stamp records with `user.id` (or move them into Supabase) so data is per-account.
 - **Google/Outlook two-way calendar sync** is a deliberate later milestone (M7 laid the local foundation for it).
-- Then: coaching, analytics, CRM, knowledge base.
+- **Live / in-call coaching** is the deliberate next milestone (M9); M8 covers post-call only.
+- Then: analytics, CRM, knowledge base.
 
 ## Stack
 

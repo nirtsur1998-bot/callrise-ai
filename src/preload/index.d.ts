@@ -57,6 +57,63 @@ export interface Summary {
   createdAt: string
 }
 
+export type CoachDimensionKey =
+  'discovery' | 'engagement' | 'objection' | 'value' | 'nextStep' | 'control'
+
+export interface CoachEvidence {
+  quote: string
+  speaker: number
+  verified: boolean
+}
+
+export interface CoachDimension {
+  key: CoachDimensionKey
+  score: number
+  comment: string
+  evidence?: CoachEvidence
+}
+
+export interface CoachImprovement {
+  kind: 'mechanical' | 'strategic'
+  title: string
+  detail: string
+  evidence?: CoachEvidence
+}
+
+export interface CoachMetrics {
+  repSpeaker: number | null
+  singleSpeaker: boolean
+  talkRatio: number | null
+  repWords: number
+  totalWords: number
+  longestMonologueWords: number
+  longestMonologueMinutes: number | null
+  questionCount: number
+  wordsPerMinute: number | null
+  turns: number
+}
+
+export interface CoachDealContext {
+  type: 'transactional' | 'complex' | 'unknown'
+  summary: string
+  lens: string
+}
+
+export interface CoachingReport {
+  overallScore: number
+  dealContext: CoachDealContext
+  strength: { text: string; evidence?: CoachEvidence }
+  dimensions: CoachDimension[]
+  improvements: CoachImprovement[]
+  nextAction: string
+  metrics: CoachMetrics
+  model: string
+  createdAt: string
+}
+
+export type CoachResult =
+  { ok: true; report: CoachingReport } | { ok: false; error: 'no-key' | 'failed'; message?: string }
+
 export type AttachmentExt = 'pdf' | 'txt' | 'md' | 'docx'
 
 export interface Attachment {
@@ -80,12 +137,15 @@ interface CallBase {
 export interface CallSummary extends CallBase {
   hasSummary: boolean
   attachmentCount: number
+  hasCoaching: boolean
+  coachScore?: number
 }
 
 export interface Call extends CallBase {
   segments: CallSegment[]
   summary?: Summary
   attachments?: Attachment[]
+  coaching?: CoachingReport
 }
 
 export interface CallSaveInput {
@@ -170,6 +230,7 @@ export interface CallsApi {
   removeAttachment: (callId: string, attachmentId: string) => Promise<{ ok: boolean }>
   summarizeCall: (callId: string) => Promise<SummaryResult>
   summarizeAttachment: (callId: string, attachmentId: string) => Promise<SummaryResult>
+  coachCall: (callId: string) => Promise<CoachResult>
 }
 
 export interface TasksApi {

@@ -9,11 +9,13 @@ import {
   Plus,
   FileText,
   RotateCw,
-  ListChecks
+  ListChecks,
+  GraduationCap
 } from 'lucide-react'
 import { SpeakerTranscript } from '@renderer/components/SpeakerTranscript'
 import { SummaryView, SummaryLoading } from '@renderer/components/SummaryView'
 import { GenerateTasksDialog } from '@renderer/features/tasks/GenerateTasksDialog'
+import { CoachReportView, CoachLoading } from '@renderer/features/coaching/CoachReportView'
 import { formatDate, formatDuration, formatBytes } from './format'
 import type { Attachment, Call } from './types'
 
@@ -43,6 +45,8 @@ export function CallDetail({
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [showTasks, setShowTasks] = useState(false)
   const [tasksAdded, setTasksAdded] = useState(0)
+  const [coaching, setCoaching] = useState(false)
+  const [coachError, setCoachError] = useState<string | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mountedRef = useRef(true)
@@ -93,6 +97,23 @@ export function CallDetail({
       if (mountedRef.current) setSummaryError('Could not generate the summary. Please try again.')
     } finally {
       if (mountedRef.current) setSummarizing(false)
+    }
+  }, [callId, notifyChanged])
+
+  const coachCall = useCallback(async () => {
+    setCoachError(null)
+    setNoKey(false)
+    setCoaching(true)
+    try {
+      const res = await window.api.calls.coachCall(callId)
+      if (!mountedRef.current) return
+      if (res.ok) await notifyChanged()
+      else if (res.error === 'no-key') setNoKey(true)
+      else setCoachError(res.message ?? 'Could not coach this call.')
+    } catch {
+      if (mountedRef.current) setCoachError('Could not coach this call. Please try again.')
+    } finally {
+      if (mountedRef.current) setCoaching(false)
     }
   }, [callId, notifyChanged])
 
@@ -240,6 +261,46 @@ export function CallDetail({
                 className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110"
               >
                 <Sparkles className="h-4 w-4" /> Summarize
+              </button>
+            </div>
+          )}
+        </section>
+
+        {/* Sales coaching */}
+        <section className="rounded-2xl border border-line-soft bg-surface p-6">
+          <div className="mb-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <GraduationCap className="h-4 w-4 text-accent" />
+              <h3 className="text-sm font-semibold">Sales coaching</h3>
+            </div>
+            {call.coaching && !coaching && (
+              <button
+                type="button"
+                onClick={coachCall}
+                className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
+              >
+                <RotateCw className="h-3.5 w-3.5" /> Re-coach
+              </button>
+            )}
+          </div>
+          {coaching ? (
+            <CoachLoading />
+          ) : call.coaching ? (
+            <CoachReportView report={call.coaching} callId={callId} callTitle={call.title} />
+          ) : (
+            <div className="flex flex-col items-start gap-3">
+              <p className="text-sm text-muted">
+                Get an evidence-based scorecard for this call — six coaching dimensions scored 1–5
+                with quotes from the transcript, your talk-time metrics, your top two things to
+                improve, and one concrete thing to try on your next call.
+              </p>
+              {coachError && <p className="text-[13px] text-rose-300">{coachError}</p>}
+              <button
+                type="button"
+                onClick={coachCall}
+                className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110"
+              >
+                <GraduationCap className="h-4 w-4" /> Coach this call
               </button>
             </div>
           )}

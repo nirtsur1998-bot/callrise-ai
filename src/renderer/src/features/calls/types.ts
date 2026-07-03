@@ -1,3 +1,5 @@
+import type { CoachingReport } from '@renderer/features/coaching/types'
+
 export interface CallSegment {
   speaker: number
   text: string
@@ -35,14 +37,16 @@ interface CallBase {
 export interface CallSummary extends CallBase {
   hasSummary: boolean
   attachmentCount: number
+  hasCoaching: boolean
+  coachScore?: number
 }
 
 export interface Call extends CallBase {
   segments: CallSegment[]
   summary?: Summary
   attachments?: Attachment[]
+  coaching?: CoachingReport
 }
 
 export type SummaryResult =
-  | { ok: true; summary: Summary }
-  | { ok: false; error: 'no-key' | 'failed'; message?: string }
+  { ok: true; summary: Summary } | { ok: false; error: 'no-key' | 'failed'; message?: string }

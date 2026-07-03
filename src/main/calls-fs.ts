@@ -16,6 +16,65 @@ export interface Summary {
   createdAt: string
 }
 
+// --- Coaching report (stored on the call, like a summary) -------------------
+
+export type CoachDimensionKey =
+  'discovery' | 'engagement' | 'objection' | 'value' | 'nextStep' | 'control'
+
+/** A verbatim transcript span backing a score or note. */
+export interface CoachEvidence {
+  quote: string
+  speaker: number
+  /** True only when the quote was found in the transcript (anti-hallucination). */
+  verified: boolean
+}
+
+export interface CoachDimension {
+  key: CoachDimensionKey
+  score: number // 1–5
+  comment: string
+  evidence?: CoachEvidence
+}
+
+export interface CoachImprovement {
+  kind: 'mechanical' | 'strategic'
+  title: string
+  detail: string
+  evidence?: CoachEvidence
+}
+
+/** Deterministic, locally-computed metrics shown beside the AI scores. */
+export interface CoachMetrics {
+  repSpeaker: number | null
+  singleSpeaker: boolean
+  talkRatio: number | null // 0–1, rep words ÷ total
+  repWords: number
+  totalWords: number
+  longestMonologueWords: number
+  longestMonologueMinutes: number | null
+  questionCount: number
+  wordsPerMinute: number | null
+  turns: number
+}
+
+export interface CoachDealContext {
+  type: 'transactional' | 'complex' | 'unknown'
+  summary: string
+  lens: string
+}
+
+export interface CoachingReport {
+  overallScore: number // 0–100 (computed from the dimension scores)
+  dealContext: CoachDealContext
+  strength: { text: string; evidence?: CoachEvidence }
+  dimensions: CoachDimension[]
+  improvements: CoachImprovement[]
+  nextAction: string
+  metrics: CoachMetrics
+  model: string
+  createdAt: string
+}
+
 export type AttachmentExt = 'pdf' | 'txt' | 'md' | 'docx'
 
 export interface Attachment {
@@ -40,6 +99,8 @@ interface CallBase {
 export interface CallSummary extends CallBase {
   hasSummary: boolean
   attachmentCount: number
+  hasCoaching: boolean
+  coachScore?: number // 0–100 overall, when coached
 }
 
 /** The full saved call (what's stored on disk). */
@@ -47,6 +108,7 @@ export interface Call extends CallBase {
   segments: CallSegment[]
   summary?: Summary
   attachments?: Attachment[]
+  coaching?: CoachingReport
 }
 
 export interface CallSaveInput {
@@ -131,7 +193,10 @@ function toSummary(call: Call): CallSummary {
     speakerCount: call.speakerCount,
     preview: call.preview,
     hasSummary: Boolean(call.summary),
-    attachmentCount: Array.isArray(call.attachments) ? call.attachments.length : 0
+    attachmentCount: Array.isArray(call.attachments) ? call.attachments.length : 0,
+    hasCoaching: Boolean(call.coaching),
+    coachScore:
+      typeof call.coaching?.overallScore === 'number' ? call.coaching.overallScore : undefined
   }
 }
 
@@ -255,6 +320,118 @@ export async function setAttachmentSummary(
   const clean = sanitizeSummary(summary)
   if (!clean) return null // nothing usable to save — signal failure to the caller
   att.summary = clean
+  await writeCall(dir, call)
+  return call
+}
+
+// --- Coaching ---------------------------------------------------------------
+
+const DIMENSION_KEYS = new Set<CoachDimensionKey>([
+  'discovery',
+  'engagement',
+  'objection',
+  'value',
+  'nextStep',
+  'control'
+])
+
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  const n = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : fallback
+  return Math.max(min, Math.min(max, n))
+}
+
+function numOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function str(value: unknown, max: number): string {
+  return typeof value === 'string' ? value.slice(0, max) : ''
+}
+
+function sanitizeEvidence(value: unknown): CoachEvidence | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const v = value as Record<string, unknown>
+  const quote = str(v.quote, 500).trim()
+  if (!quote) return undefined
+  return { quote, speaker: clampInt(v.speaker, 0, 1000, 0), verified: v.verified === true }
+}
+
+/** Coerce an untrusted object (an AI-built report) into a clean CoachingReport. */
+export function sanitizeCoaching(value: unknown): CoachingReport | null {
+  if (!value || typeof value !== 'object') return null
+  const v = value as Record<string, unknown>
+
+  const dimensions: CoachDimension[] = []
+  for (const d of Array.isArray(v.dimensions) ? v.dimensions : []) {
+    if (!d || typeof d !== 'object') continue
+    const dd = d as Record<string, unknown>
+    if (typeof dd.key !== 'string' || !DIMENSION_KEYS.has(dd.key as CoachDimensionKey)) continue
+    dimensions.push({
+      key: dd.key as CoachDimensionKey,
+      score: clampInt(dd.score, 1, 5, 3),
+      comment: str(dd.comment, 1000),
+      evidence: sanitizeEvidence(dd.evidence)
+    })
+  }
+  if (dimensions.length === 0) return null // nothing usable to save
+
+  const improvements: CoachImprovement[] = []
+  for (const i of (Array.isArray(v.improvements) ? v.improvements : []).slice(0, 5)) {
+    if (!i || typeof i !== 'object') continue
+    const ii = i as Record<string, unknown>
+    improvements.push({
+      kind: ii.kind === 'strategic' ? 'strategic' : 'mechanical',
+      title: str(ii.title, 300),
+      detail: str(ii.detail, 1500),
+      evidence: sanitizeEvidence(ii.evidence)
+    })
+  }
+
+  const dc = (v.dealContext ?? {}) as Record<string, unknown>
+  const strength = (v.strength ?? {}) as Record<string, unknown>
+  const m = (v.metrics ?? {}) as Record<string, unknown>
+
+  return {
+    overallScore: clampInt(v.overallScore, 0, 100, 0),
+    dealContext: {
+      type: dc.type === 'transactional' || dc.type === 'complex' ? dc.type : 'unknown',
+      summary: str(dc.summary, 500),
+      lens: str(dc.lens, 200)
+    },
+    strength: { text: str(strength.text, 600), evidence: sanitizeEvidence(strength.evidence) },
+    dimensions,
+    improvements,
+    nextAction: str(v.nextAction, 500),
+    metrics: {
+      repSpeaker: numOrNull(m.repSpeaker) === null ? null : clampInt(m.repSpeaker, 0, 1000, 0),
+      singleSpeaker: m.singleSpeaker === true,
+      talkRatio: numOrNull(m.talkRatio),
+      repWords: clampInt(m.repWords, 0, 10_000_000, 0),
+      totalWords: clampInt(m.totalWords, 0, 10_000_000, 0),
+      longestMonologueWords: clampInt(m.longestMonologueWords, 0, 10_000_000, 0),
+      longestMonologueMinutes: numOrNull(m.longestMonologueMinutes),
+      questionCount: clampInt(m.questionCount, 0, 1_000_000, 0),
+      wordsPerMinute: numOrNull(m.wordsPerMinute),
+      turns: clampInt(m.turns, 0, 1_000_000, 0)
+    },
+    model: str(v.model, 64) || 'claude',
+    createdAt:
+      typeof v.createdAt === 'string' && !Number.isNaN(Date.parse(v.createdAt))
+        ? v.createdAt
+        : new Date().toISOString()
+  }
+}
+
+export async function setCallCoaching(
+  dir: string,
+  callId: string,
+  report: CoachingReport
+): Promise<Call | null> {
+  const call = await getCall(dir, callId)
+  if (!call) return null
+  const clean = sanitizeCoaching(report)
+  if (!clean) return null // nothing usable to save — signal failure to the caller
+  call.coaching = clean
   await writeCall(dir, call)
   return call
 }

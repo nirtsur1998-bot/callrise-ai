@@ -11,9 +11,11 @@ import {
   readAttachment,
   setCallSummary,
   setAttachmentSummary,
+  setCallCoaching,
   type CallSaveInput
 } from './calls-fs'
 import { summarize, type SummarizeInput, type SummaryResult } from './summarize'
+import { coachCall, type CoachResult } from './coach'
 
 function callsDir(): string {
   return join(app.getPath('userData'), 'calls')
@@ -121,7 +123,11 @@ export function registerCalls(): void {
         } else {
           const text = file.bytes.toString('utf8')
           if (!looksLikeText(text)) {
-            return { ok: false, error: 'failed', message: "This file doesn't look like readable text." }
+            return {
+              ok: false,
+              error: 'failed',
+              message: "This file doesn't look like readable text."
+            }
           }
           input = { kind: 'text', text }
         }
@@ -137,4 +143,33 @@ export function registerCalls(): void {
       }
     }
   )
+
+  // --- AI coaching ---------------------------------------------------------
+  ipcMain.handle('coach:call', async (_event, callId: string): Promise<CoachResult> => {
+    try {
+      const call = await getCall(callsDir(), callId)
+      if (!call) return { ok: false, error: 'failed', message: 'Call not found.' }
+      if (!call.segments?.length) {
+        return { ok: false, error: 'failed', message: 'This call has no transcript to coach.' }
+      }
+      const result = await coachCall(call.segments, call.durationMs)
+      if (result.ok) {
+        const saved = await setCallCoaching(callsDir(), callId, result.report)
+        if (!saved) {
+          return {
+            ok: false,
+            error: 'failed',
+            message: 'The coaching report could not be saved. Please try again.'
+          }
+        }
+      }
+      return result
+    } catch {
+      return {
+        ok: false,
+        error: 'failed',
+        message: 'The coaching report could not be saved. Please try again.'
+      }
+    }
+  })
 }
