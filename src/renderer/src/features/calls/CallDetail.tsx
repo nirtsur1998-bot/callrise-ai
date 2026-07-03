@@ -8,10 +8,12 @@ import {
   Paperclip,
   Plus,
   FileText,
-  RotateCw
+  RotateCw,
+  ListChecks
 } from 'lucide-react'
 import { SpeakerTranscript } from '@renderer/components/SpeakerTranscript'
 import { SummaryView, SummaryLoading } from '@renderer/components/SummaryView'
+import { GenerateTasksDialog } from '@renderer/features/tasks/GenerateTasksDialog'
 import { formatDate, formatDuration, formatBytes } from './format'
 import type { Attachment, Call } from './types'
 
@@ -39,6 +41,8 @@ export function CallDetail({
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [showTasks, setShowTasks] = useState(false)
+  const [tasksAdded, setTasksAdded] = useState(0)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mountedRef = useRef(true)
@@ -137,7 +141,9 @@ export function CallDetail({
   }, [callId, onChanged, onDeleted])
 
   if (!call) {
-    return <div className="flex h-full items-center justify-center text-sm text-faint">Loading…</div>
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-faint">Loading…</div>
+    )
   }
 
   const attachments = call.attachments ?? []
@@ -239,6 +245,37 @@ export function CallDetail({
           )}
         </section>
 
+        {/* Tasks */}
+        <section className="rounded-2xl border border-line-soft bg-surface p-6">
+          <div className="mb-4 flex items-center gap-2">
+            <ListChecks className="h-4 w-4 text-accent" />
+            <h3 className="text-sm font-semibold">Tasks</h3>
+          </div>
+          <div className="flex flex-col items-start gap-3">
+            <p className="text-sm text-muted">
+              Let Claude suggest action items from this call — follow-ups, emails to send, meetings
+              to book, and research to do. You&apos;ll review and edit them before anything is
+              saved.{' '}
+              <span className="text-faint">
+                These are reminders only; the app won&apos;t send or schedule anything.
+              </span>
+            </p>
+            {tasksAdded > 0 && (
+              <p className="text-[13px] text-emerald-300">
+                Added {tasksAdded} {tasksAdded === 1 ? 'task' : 'tasks'} — find them in the Tasks
+                tab.
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowTasks(true)}
+              className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110"
+            >
+              <ListChecks className="h-4 w-4" /> Generate tasks
+            </button>
+          </div>
+        </section>
+
         {/* Files */}
         <section className="rounded-2xl border border-line-soft bg-surface p-6">
           <div className="mb-4 flex items-center justify-between">
@@ -299,6 +336,18 @@ export function CallDetail({
           )}
         </section>
       </div>
+
+      {showTasks && (
+        <GenerateTasksDialog
+          callId={callId}
+          callTitle={call.title}
+          onClose={() => setShowTasks(false)}
+          onSaved={(count) => {
+            setTasksAdded(count)
+            setShowTasks(false)
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -310,7 +359,9 @@ function NoKeyBanner(): React.JSX.Element {
       <p className="mt-1 text-amber-200/80">
         AI summaries need an Anthropic key. Get one at console.anthropic.com, paste it into the
         <code className="mx-1 rounded bg-canvas px-1 py-0.5 text-amber-100">.env</code> file as
-        <code className="mx-1 rounded bg-canvas px-1 py-0.5 text-amber-100">ANTHROPIC_API_KEY=…</code>
+        <code className="mx-1 rounded bg-canvas px-1 py-0.5 text-amber-100">
+          ANTHROPIC_API_KEY=…
+        </code>
         , then restart the app.
       </p>
     </div>
