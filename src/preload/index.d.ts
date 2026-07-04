@@ -369,6 +369,24 @@ export interface LoopbackApi {
   openScreenSettings: () => Promise<{ ok: boolean }>
 }
 
+export interface GoogleCalendarSummary {
+  id: string
+  summary: string
+  primary: boolean
+}
+
+export interface GoogleApi {
+  /** connected = a stored token exists; configured = client id/secret present. */
+  getStatus: () => Promise<{ connected: boolean; configured: boolean }>
+  /** Runs the browser OAuth flow; resolves when the user finishes (or times out). */
+  connect: () => Promise<{ ok: true } | { ok: false; error: string }>
+  disconnect: () => Promise<{ ok: boolean }>
+  /** Read-only proof call: lists the user's calendars. */
+  listCalendars: () => Promise<
+    { ok: true; calendars: GoogleCalendarSummary[] } | { ok: false; error: string }
+  >
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -379,6 +397,7 @@ declare global {
       events: EventsApi
       auth: AuthApi
       loopback: LoopbackApi
+      google: GoogleApi
     }
   }
 }

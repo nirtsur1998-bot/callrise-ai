@@ -13,6 +13,7 @@ import {
 import { ChevronLeft, ChevronRight, Plus, CalendarDays } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { useCalendar } from './useCalendar'
+import { GoogleConnect } from '@renderer/features/google/GoogleConnect'
 import { MonthGrid } from './MonthGrid'
 import { WeekGrid } from './WeekGrid'
 import { EventDialog } from './EventDialog'
@@ -137,6 +138,9 @@ export function CalendarView(): React.JSX.Element {
           </button>
         </div>
       </header>
+
+      {/* Google Calendar connection (M13, read-only) */}
+      <GoogleConnect />
 
       {items.length === 0 && !loading && (
         <p className="mb-3 flex items-center gap-2 text-[13px] text-faint">

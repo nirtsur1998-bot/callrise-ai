@@ -80,6 +80,12 @@ const api = {
       ipcRenderer.sendSync('loopback:disarm')
     },
     openScreenSettings: () => ipcRenderer.invoke('loopback:openScreenSettings')
+  },
+  google: {
+    getStatus: () => ipcRenderer.invoke('google:getStatus'),
+    connect: () => ipcRenderer.invoke('google:connect'),
+    disconnect: () => ipcRenderer.invoke('google:disconnect'),
+    listCalendars: () => ipcRenderer.invoke('google:listCalendars')
   }
 }
 

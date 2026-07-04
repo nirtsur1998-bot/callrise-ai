@@ -12,6 +12,7 @@ import { registerAuth } from './auth'
 import { registerEvents } from './events'
 import { registerLiveCue } from './live-cue'
 import { registerLoopbackCapture } from './loopback'
+import { registerGoogle } from './google'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -94,6 +95,7 @@ app.whenReady().then(() => {
   registerEvents()
   registerLiveCue()
   registerLoopbackCapture()
+  registerGoogle()
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
