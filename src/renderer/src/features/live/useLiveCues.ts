@@ -55,13 +55,18 @@ export interface UseLiveCues {
 }
 
 /**
- * @param active   true while the call is actually listening (not idle/paused)
- * @param enabled  the user's on/off (mute) toggle
+ * @param active           true while the call is actually listening
+ * @param enabled          the user's on/off (mute) toggle
+ * @param sensitivity      cue sensitivity
+ * @param knownRepSpeaker  the rep's speaker id when it's known deterministically
+ *                         (0 while buyer capture is live via multichannel); null
+ *                         falls back to the M9 heuristic that guesses the rep.
  */
 export function useLiveCues(
   active: boolean,
   enabled: boolean,
-  sensitivity: Sensitivity
+  sensitivity: Sensitivity,
+  knownRepSpeaker: number | null = null
 ): UseLiveCues {
   const [cue, setCue] = useState<LiveCue | null>(null)
 
@@ -76,6 +81,8 @@ export function useLiveCues(
   const turnsRef = useRef<Turn[]>([]) // recent speaker-labeled turns
   const lastSpeakerRef = useRef<number | null>(null)
   const repSpeakerRef = useRef<number | null>(null) // locked once identified
+  // When buyer capture is live the rep is deterministically channel 0.
+  const knownRepRef = useRef<number | null>(knownRepSpeaker)
   const lastCallAtRef = useRef(0) // last brain call
   const inFlightRef = useRef(false) // single-flight: only one brain call at a time
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -91,6 +98,13 @@ export function useLiveCues(
     }
   }, [])
 
+  // Buyer capture live → lock the rep to channel 0 and skip the brain's guess.
+  // (Can flip on mid-call; the main effect below re-reads knownRepRef on reset.)
+  useEffect(() => {
+    knownRepRef.current = knownRepSpeaker
+    if (knownRepSpeaker !== null) repSpeakerRef.current = knownRepSpeaker
+  }, [knownRepSpeaker])
+
   const clearCue = useCallback(() => {
     if (dismissTimerRef.current) {
       clearTimeout(dismissTimerRef.current)
@@ -104,7 +118,7 @@ export function useLiveCues(
     if (!active || !enabled) {
       turnsRef.current = []
       lastSpeakerRef.current = null
-      repSpeakerRef.current = null
+      repSpeakerRef.current = knownRepRef.current
       lastCueAtRef.current = 0
       lastCallAtRef.current = 0
       inFlightRef.current = false
@@ -117,7 +131,7 @@ export function useLiveCues(
     // Fresh start for this listening session.
     turnsRef.current = []
     lastSpeakerRef.current = null
-    repSpeakerRef.current = null
+    repSpeakerRef.current = knownRepRef.current
     inFlightRef.current = false
     lastCallAtRef.current = 0
 

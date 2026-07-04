@@ -47,7 +47,14 @@ export function LiveView(): React.JSX.Element {
 
   // Live coaching cues (hooks must run before any early return).
   const { enabled, setEnabled, sensitivity, setSensitivity } = useCueSettings()
-  const { cue, dismiss } = useLiveCues(status === 'listening', enabled, sensitivity)
+  // When buyer capture is live, the rep is channel 0 — tell the cues so they
+  // don't have to guess who the rep is.
+  const { cue, dismiss } = useLiveCues(
+    status === 'listening',
+    enabled,
+    sensitivity,
+    otherPartyLive ? 0 : null
+  )
 
   // When a call is saved, consent resets to off so it never carries to the next.
   const resetConsent = consent.reset
