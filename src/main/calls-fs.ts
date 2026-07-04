@@ -290,6 +290,33 @@ async function writeCall(dir: string, call: Call): Promise<void> {
   await fs.writeFile(join(dir, `${call.id}.json`), JSON.stringify(call, null, 2), 'utf8')
 }
 
+// The other party's turns ride on speaker/channel 1 (Deepgram multichannel).
+const BUYER_SPEAKER = 1
+
+/**
+ * Recording-consent RETENTION guard (M12 Step 6). Buyer capture only ever runs
+ * after consent (status becomes 'consented'); if the rep then withdrew it
+ * (recordOtherParty !== true — e.g. "turn recording off", or a file tampered to
+ * drop the flag), the other party's captured turns are removed. Runs on save
+ * AND read AND list, so a revoked/hand-edited call can never surface the other
+ * party's words. Calls that never consented (mic-only / declined,
+ * status !== 'consented') are left untouched, so ordinary diarized transcripts
+ * keep any speaker-1 turns.
+ */
+function applyConsentRetention(call: Call): void {
+  const c = call.consent
+  if (!c || c.status !== 'consented' || c.recordOtherParty === true) return
+  if (!Array.isArray(call.segments)) return
+  const kept = call.segments.filter((s) => s.speaker !== BUYER_SPEAKER)
+  if (kept.length === call.segments.length) return
+  call.segments = kept
+  call.preview = kept
+    .map((s) => s.text)
+    .join(' ')
+    .slice(0, 160)
+  call.speakerCount = new Set(kept.map((s) => s.speaker)).size
+}
+
 export async function saveCall(dir: string, input: CallSaveInput): Promise<CallSummary> {
   await ensureDir(dir)
   const segments = sanitizeSegments(input?.segments)
@@ -313,6 +340,8 @@ export async function saveCall(dir: string, input: CallSaveInput): Promise<CallS
     // Every call carries a consent record; the sanitizer enforces the invariant.
     consent: sanitizeConsent(input?.consent)
   }
+  // Drop the other party's turns if recording them isn't (still) consented.
+  applyConsentRetention(call)
   await writeCall(dir, call)
   return toSummary(call)
 }
@@ -331,7 +360,13 @@ export async function listCalls(dir: string): Promise<CallSummary[]> {
     try {
       const raw = await fs.readFile(join(dir, file), 'utf8')
       const call = JSON.parse(raw) as Call
-      if (call && typeof call.id === 'string') summaries.push(toSummary(call))
+      if (call && typeof call.id === 'string') {
+        // Normalize consent + strip unconsented buyer turns so the list preview
+        // and speaker count never surface the other party's words either.
+        call.consent = sanitizeConsent(call.consent)
+        applyConsentRetention(call)
+        summaries.push(toSummary(call))
+      }
     } catch {
       /* skip unreadable / corrupt file */
     }
@@ -352,6 +387,8 @@ export async function getCall(dir: string, id: string): Promise<Call | null> {
     // Normalize consent on READ too, so the invariant holds even for old or
     // hand-edited files: a tampered `recordOtherParty: true` can't survive this.
     call.consent = sanitizeConsent(call.consent)
+    // ...and drop the other party's turns if recording them isn't consented.
+    applyConsentRetention(call)
     return call
   } catch {
     return null
