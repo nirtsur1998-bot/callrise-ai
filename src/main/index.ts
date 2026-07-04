@@ -14,6 +14,7 @@ import { registerLiveCue } from './live-cue'
 import { registerLoopbackCapture } from './loopback'
 import { registerGoogle } from './google'
 import { registerBackup } from './backup'
+import { registerVirtualMic, disposeVirtualMic } from './virtualmic'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -98,6 +99,7 @@ app.whenReady().then(() => {
   registerLoopbackCapture()
   registerGoogle()
   registerBackup()
+  registerVirtualMic()
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -113,6 +115,7 @@ app.whenReady().then(() => {
 // Stop any live session before the process exits.
 app.on('before-quit', () => {
   disposeTranscription()
+  disposeVirtualMic()
 })
 
 // Quit when all windows are closed, except on macOS.

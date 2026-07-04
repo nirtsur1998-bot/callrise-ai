@@ -464,6 +464,30 @@ export interface BackupApi {
   onChanged: (cb: () => void) => () => void
 }
 
+export interface VirtualMicStatus {
+  /** The Core Audio driver is installed (the "Sales OS Microphone" device exists). */
+  driverInstalled: boolean
+  /** A michelper binary was found and can be launched. */
+  helperAvailable: boolean
+  /** The denoiser helper is currently running. */
+  helperRunning: boolean
+  /** The helper reported its denoiser actually loaded (vs raw passthrough). */
+  denoiseActive: boolean
+  /** Resolved helper binary path, or null if not found (diagnostics). */
+  helperPath: string | null
+}
+
+export interface VirtualMicApi {
+  /** Current driver/helper/denoise status. */
+  getStatus: () => Promise<VirtualMicStatus>
+  /** Start the denoiser helper. */
+  start: () => Promise<{ ok: boolean; error?: string }>
+  /** Stop the denoiser helper. */
+  stop: () => Promise<{ ok: boolean }>
+  /** Fires when the helper's running/denoise state changes. */
+  onChanged: (cb: (status: VirtualMicStatus) => void) => () => void
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -476,6 +500,7 @@ declare global {
       loopback: LoopbackApi
       google: GoogleApi
       backup: BackupApi
+      virtualmic: VirtualMicApi
     }
   }
 }

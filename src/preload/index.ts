@@ -107,6 +107,14 @@ const api = {
     listCalendars: () => ipcRenderer.invoke('google:listCalendars'),
     pullEvents: () => ipcRenderer.invoke('google:pullEvents'),
     cachedEvents: () => ipcRenderer.invoke('google:cachedEvents')
+  },
+  virtualmic: {
+    // App-managed noise cancellation: detect + start/stop the denoiser helper.
+    getStatus: () => ipcRenderer.invoke('virtualmic:getStatus'),
+    start: () => ipcRenderer.invoke('virtualmic:start'),
+    stop: () => ipcRenderer.invoke('virtualmic:stop'),
+    // Fires when the helper's running/denoise state changes (started, stopped, crashed).
+    onChanged: (cb: (status: unknown) => void) => subscribe('virtualmic:changed', cb)
   }
 }
 

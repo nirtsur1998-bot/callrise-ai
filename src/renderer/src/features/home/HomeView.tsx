@@ -1,6 +1,7 @@
 import { PhoneCall, Sparkles } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { AudioSourcesCard } from '@renderer/features/audio/AudioSourcesCard'
+import { NoiseCancellationCard } from '@renderer/features/audio/NoiseCancellationCard'
 
 const STATS = [
   { label: 'Calls today', value: '—' },
@@ -22,6 +23,9 @@ export function HomeView(): React.JSX.Element {
 
       {/* Audio sources — pick your mic, see where the call plays */}
       <AudioSourcesCard />
+
+      {/* Noise cancellation — clean the mic and publish it as a virtual device */}
+      <NoiseCancellationCard />
 
       {/* Primary action (placeholder, disabled) */}
       <Card className="mb-5 flex items-center justify-between gap-4 bg-elevated">
