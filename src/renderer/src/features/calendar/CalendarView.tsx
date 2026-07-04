@@ -50,6 +50,8 @@ export function CalendarView(): React.JSX.Element {
     tasks,
     calls,
     googleEvents,
+    googleSyncing,
+    googleLastSynced,
     loading,
     createEvent,
     updateEvent,
@@ -153,7 +155,11 @@ export function CalendarView(): React.JSX.Element {
       </header>
 
       {/* Google Calendar connection (M13, read-only) */}
-      <GoogleConnect onChange={() => void refreshGoogle()} />
+      <GoogleConnect
+        onChange={() => void refreshGoogle()}
+        syncing={googleSyncing}
+        lastSynced={googleLastSynced}
+      />
 
       {items.length === 0 && !loading && (
         <p className="mb-3 flex items-center gap-2 text-[13px] text-faint">

@@ -30,7 +30,23 @@ function friendlyError(code: string): string {
  * the calendar list, and calls `onChange` whenever the connection changes
  * (connect / disconnect / refresh) so the calendar can re-pull events.
  */
-export function GoogleConnect({ onChange }: { onChange?: () => void }): React.JSX.Element | null {
+function agoLabel(ts: number): string {
+  const secs = Math.max(0, Math.round((Date.now() - ts) / 1000))
+  if (secs < 60) return 'just now'
+  const mins = Math.round(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  return `${Math.round(mins / 60)}h ago`
+}
+
+export function GoogleConnect({
+  onChange,
+  syncing = false,
+  lastSynced = null
+}: {
+  onChange?: () => void
+  syncing?: boolean
+  lastSynced?: number | null
+}): React.JSX.Element | null {
   const [loading, setLoading] = useState(true)
   const [configured, setConfigured] = useState(true)
   const [connected, setConnected] = useState(false)
@@ -117,6 +133,11 @@ export function GoogleConnect({ onChange }: { onChange?: () => void }): React.JS
               <CalendarCheck2 className="h-4 w-4 text-emerald-300" />
               <span className="font-medium text-emerald-300">Connected to Google Calendar</span>
               <span className="text-faint">· read-only</span>
+              {syncing ? (
+                <span className="text-faint">· syncing…</span>
+              ) : lastSynced ? (
+                <span className="text-faint">· updated {agoLabel(lastSynced)}</span>
+              ) : null}
             </>
           ) : (
             <>
@@ -131,14 +152,15 @@ export function GoogleConnect({ onChange }: { onChange?: () => void }): React.JS
             <>
               <button
                 type="button"
+                disabled={syncing}
                 onClick={() => {
                   void loadCalendars()
                   onChange?.() // re-pull events too
                 }}
                 title="Re-read your calendars and events"
-                className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
+                className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink disabled:opacity-50"
               >
-                <RefreshCw className="h-3.5 w-3.5" /> Refresh
+                <RefreshCw className={cn('h-3.5 w-3.5', syncing && 'animate-spin')} /> Refresh
               </button>
               <button
                 type="button"

@@ -11,6 +11,10 @@ export interface UseCalendar {
   tasks: Task[]
   calls: CallSummary[]
   googleEvents: CalendarEvent[]
+  /** True while a Google network pull is in flight. */
+  googleSyncing: boolean
+  /** When the last successful Google pull finished (epoch ms), or null. */
+  googleLastSynced: number | null
   loading: boolean
   createEvent: (input: EventCreateInput) => Promise<void>
   updateEvent: (id: string, patch: EventUpdateInput) => Promise<void>
@@ -24,6 +28,8 @@ export function useCalendar(): UseCalendar {
   const [tasks, setTasks] = useState<Task[]>([])
   const [calls, setCalls] = useState<CallSummary[]>([])
   const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([])
+  const [googleSyncing, setGoogleSyncing] = useState(false)
+  const [googleLastSynced, setGoogleLastSynced] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const mountedRef = useRef(true)
 
@@ -61,13 +67,21 @@ export function useCalendar(): UseCalendar {
   // Network pull from Google. A transient outage keeps the cached events shown;
   // only an explicit not-connected clears them.
   const refreshGoogle = useCallback(async () => {
+    setGoogleSyncing(true)
     try {
       const res = await window.api.google.pullEvents()
       if (!mountedRef.current) return
-      if (res.ok) setGoogleEvents(res.events)
-      else if (res.error === 'not-connected') setGoogleEvents([])
+      if (res.ok) {
+        setGoogleEvents(res.events)
+        setGoogleLastSynced(Date.now())
+      } else if (res.error === 'not-connected') {
+        setGoogleEvents([])
+        setGoogleLastSynced(null)
+      }
     } catch {
       /* keep the cached events */
+    } finally {
+      if (mountedRef.current) setGoogleSyncing(false)
     }
   }, [])
 
@@ -107,6 +121,8 @@ export function useCalendar(): UseCalendar {
     tasks,
     calls,
     googleEvents,
+    googleSyncing,
+    googleLastSynced,
     loading,
     createEvent,
     updateEvent,
