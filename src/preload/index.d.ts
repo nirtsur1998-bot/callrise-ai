@@ -287,9 +287,11 @@ export interface CalendarEvent {
   end: string
   allDay: boolean
   notes?: string
-  source: 'local'
+  source: 'local' | 'google' | 'outlook'
   provider?: string
   externalId?: string
+  /** Deep-link back to the source (e.g. "Open in Google Calendar"). */
+  htmlLink?: string
   createdAt: string
   updatedAt: string
 }
@@ -385,6 +387,10 @@ export interface GoogleApi {
   listCalendars: () => Promise<
     { ok: true; calendars: GoogleCalendarSummary[] } | { ok: false; error: string }
   >
+  /** Pull recent + upcoming events from Google into the local read-only cache. */
+  pullEvents: () => Promise<{ ok: true; events: CalendarEvent[] } | { ok: false; error: string }>
+  /** The last-pulled events from the local cache (instant, no network). */
+  cachedEvents: () => Promise<CalendarEvent[]>
 }
 
 declare global {

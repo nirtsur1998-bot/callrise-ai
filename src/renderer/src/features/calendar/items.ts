@@ -19,22 +19,30 @@ export const ITEM_STYLES: Record<CalendarItemKind, { chip: string; block: string
     chip: 'bg-sky-500/15 text-sky-200',
     block: 'border-l-2 border-sky-400 bg-sky-500/15 text-sky-100',
     dot: 'bg-sky-400'
+  },
+  google: {
+    chip: 'bg-emerald-500/15 text-emerald-200',
+    block: 'border-l-2 border-emerald-400 bg-emerald-500/15 text-emerald-100',
+    dot: 'bg-emerald-400'
   }
 }
 
 export const KIND_LABEL: Record<CalendarItemKind, string> = {
   event: 'Event',
   task: 'Task',
-  call: 'Call'
+  call: 'Call',
+  google: 'Google'
 }
 
 const MIN_CALL_MINUTES = 15
 
-/** Merge manual events, due tasks, and past calls into one render-ready list. */
+/** Merge manual events, due tasks, past calls, and Google events into one
+ *  render-ready list. Google events are read-only overlays (no `event` field). */
 export function buildItems(
   events: CalendarEvent[],
   tasks: Task[],
-  calls: CallSummary[]
+  calls: CallSummary[],
+  googleEvents: CalendarEvent[] = []
 ): CalendarItem[] {
   const items: CalendarItem[] = []
 
@@ -48,6 +56,19 @@ export function buildItems(
       allDay: e.allDay,
       event: e,
       subtitle: e.notes
+    })
+  }
+
+  for (const g of googleEvents) {
+    // No `event` field → the grids treat it as read-only (can't edit/delete).
+    items.push({
+      key: `google-${g.id}`,
+      kind: 'google',
+      title: g.title,
+      start: new Date(g.start),
+      end: new Date(g.end),
+      allDay: g.allDay,
+      subtitle: 'Google Calendar'
     })
   }
 

@@ -26,11 +26,11 @@ function friendlyError(code: string): string {
 }
 
 /**
- * Step 1 UI: connect Google Calendar (read-only) and prove it by listing the
- * user's calendars. The sign-in happens in the system browser (main process);
- * this component just drives the IPC and shows status.
+ * Connect Google Calendar (read-only): drives the OAuth IPC, shows status +
+ * the calendar list, and calls `onChange` whenever the connection changes
+ * (connect / disconnect / refresh) so the calendar can re-pull events.
  */
-export function GoogleConnect(): React.JSX.Element | null {
+export function GoogleConnect({ onChange }: { onChange?: () => void }): React.JSX.Element | null {
   const [loading, setLoading] = useState(true)
   const [configured, setConfigured] = useState(true)
   const [connected, setConnected] = useState(false)
@@ -75,8 +75,10 @@ export function GoogleConnect(): React.JSX.Element | null {
     try {
       const res = await window.api.google.connect()
       if (!mounted.current) return
-      if (res.ok) await refreshStatus()
-      else setError(friendlyError(res.error))
+      if (res.ok) {
+        await refreshStatus()
+        onChange?.() // let the calendar pull events now that we're connected
+      } else setError(friendlyError(res.error))
     } finally {
       if (mounted.current) setConnecting(false)
     }
@@ -88,6 +90,7 @@ export function GoogleConnect(): React.JSX.Element | null {
     setConnected(false)
     setCalendars([])
     setError(null)
+    onChange?.() // clear the Google events from the calendar
   }
 
   if (loading) return null // nothing flickers before we know the status
@@ -128,8 +131,11 @@ export function GoogleConnect(): React.JSX.Element | null {
             <>
               <button
                 type="button"
-                onClick={() => void loadCalendars()}
-                title="Re-read your calendars"
+                onClick={() => {
+                  void loadCalendars()
+                  onChange?.() // re-pull events too
+                }}
+                title="Re-read your calendars and events"
                 className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
               >
                 <RefreshCw className="h-3.5 w-3.5" /> Refresh

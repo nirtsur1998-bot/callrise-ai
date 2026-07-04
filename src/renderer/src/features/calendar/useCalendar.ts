@@ -10,16 +10,20 @@ export interface UseCalendar {
   events: CalendarEvent[]
   tasks: Task[]
   calls: CallSummary[]
+  googleEvents: CalendarEvent[]
   loading: boolean
   createEvent: (input: EventCreateInput) => Promise<void>
   updateEvent: (id: string, patch: EventUpdateInput) => Promise<void>
   deleteEvent: (id: string) => Promise<void>
+  /** Re-pull Google events from the network (used on connect/refresh). */
+  refreshGoogle: () => Promise<void>
 }
 
 export function useCalendar(): UseCalendar {
   const [events, setEvents] = useState<CalendarEvent[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
   const [calls, setCalls] = useState<CallSummary[]>([])
+  const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([])
   const [loading, setLoading] = useState(true)
   const mountedRef = useRef(true)
 
@@ -34,15 +38,19 @@ export function useCalendar(): UseCalendar {
   // set after the awaits, so this is safe to call from an effect.
   const refresh = useCallback(async () => {
     try {
-      const [e, t, c] = await Promise.all([
+      // Google events come from the local cache here (instant, no network) so
+      // they persist across local edits; refreshGoogle() re-pulls from Google.
+      const [e, t, c, g] = await Promise.all([
         window.api.events.list(),
         window.api.tasks.list(),
-        window.api.calls.list()
+        window.api.calls.list(),
+        window.api.google.cachedEvents()
       ])
       if (!mountedRef.current) return
       setEvents(e)
       setTasks(t)
       setCalls(c)
+      setGoogleEvents(g)
     } catch {
       /* keep the last known data */
     } finally {
@@ -50,11 +58,25 @@ export function useCalendar(): UseCalendar {
     }
   }, [])
 
+  // Network pull from Google. A transient outage keeps the cached events shown;
+  // only an explicit not-connected clears them.
+  const refreshGoogle = useCallback(async () => {
+    try {
+      const res = await window.api.google.pullEvents()
+      if (!mountedRef.current) return
+      if (res.ok) setGoogleEvents(res.events)
+      else if (res.error === 'not-connected') setGoogleEvents([])
+    } catch {
+      /* keep the cached events */
+    }
+  }, [])
+
   useEffect(() => {
     // Load once on mount; a calendar fetch is exactly the intended pattern.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh()
-  }, [refresh])
+    void refreshGoogle()
+  }, [refresh, refreshGoogle])
 
   const createEvent = useCallback(
     async (input: EventCreateInput) => {
@@ -80,5 +102,15 @@ export function useCalendar(): UseCalendar {
     [refresh]
   )
 
-  return { events, tasks, calls, loading, createEvent, updateEvent, deleteEvent }
+  return {
+    events,
+    tasks,
+    calls,
+    googleEvents,
+    loading,
+    createEvent,
+    updateEvent,
+    deleteEvent,
+    refreshGoogle
+  }
 }

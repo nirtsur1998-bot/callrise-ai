@@ -9,7 +9,7 @@
 // (M14 will widen the scope for two-way sync.)
 import { app, ipcMain, shell, safeStorage } from 'electron'
 import { createServer, type Server } from 'node:http'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { OAuth2Client, CodeChallengeMethod } from 'google-auth-library'
@@ -190,6 +190,7 @@ async function disconnect(): Promise<{ ok: boolean }> {
     await client.revokeToken(token).catch(() => {})
   }
   await clearRefreshToken()
+  await clearCache() // pulled events are meaningless once disconnected
   return { ok: true }
 }
 
@@ -220,6 +221,160 @@ async function listCalendars(): Promise<ListCalendarsResult> {
   }
 }
 
+// --- Pull events (read-only) into a local cache ----------------------------
+
+// A pulled Google event, shaped like the app's CalendarEvent so the calendar UI
+// can render it directly. source/provider/externalId keep it distinct from
+// local events (the match key M14's two-way sync will use).
+export interface GoogleEvent {
+  id: string
+  title: string
+  start: string
+  end: string
+  allDay: boolean
+  source: 'google'
+  provider: string // `google:<calendarId>`
+  externalId: string // the Google event id
+  htmlLink?: string
+  createdAt: string
+  updatedAt: string
+}
+export type PullEventsResult = { ok: true; events: GoogleEvent[] } | { ok: false; error: string }
+
+const PULL_BACK_DAYS = 30
+const PULL_FWD_DAYS = 90
+const MAX_PAGES = 10 // safety cap per calendar
+const DAY_MS = 86_400_000
+
+function cachePath(): string {
+  return join(googleDir(), 'events.json')
+}
+
+async function writeCache(events: GoogleEvent[]): Promise<void> {
+  await fs.mkdir(googleDir(), { recursive: true })
+  await fs.writeFile(cachePath(), JSON.stringify(events), 'utf8')
+}
+
+async function readCache(): Promise<GoogleEvent[]> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(cachePath(), 'utf8'))
+    return Array.isArray(parsed) ? (parsed as GoogleEvent[]) : []
+  } catch {
+    return []
+  }
+}
+
+async function clearCache(): Promise<void> {
+  await fs.unlink(cachePath()).catch(() => {})
+}
+
+/** Deterministic app id from the Google identity, so re-pulls overwrite (never
+ *  duplicate) and M14 can match by it. */
+function stableId(provider: string, externalId: string): string {
+  return 'g-' + createHash('sha1').update(`${provider}|${externalId}`).digest('hex')
+}
+
+function parseLocalDate(d: string): Date {
+  const [y, m, day] = d.split('-').map(Number)
+  return new Date(y ?? 1970, (m ?? 1) - 1, day ?? 1)
+}
+
+interface RawEvent {
+  id?: string
+  status?: string
+  summary?: string
+  htmlLink?: string
+  created?: string
+  updated?: string
+  start?: { date?: string; dateTime?: string }
+  end?: { date?: string; dateTime?: string }
+}
+
+/** Map a Google API event to a GoogleEvent, or null to drop it (cancelled/invalid). */
+function mapEvent(raw: RawEvent, calendarId: string): GoogleEvent | null {
+  if (!raw.id || raw.status === 'cancelled') return null
+  const provider = `google:${calendarId}`
+  const allDay = Boolean(raw.start?.date && !raw.start?.dateTime)
+  let start: string
+  let end: string
+  if (allDay) {
+    const s = parseLocalDate(raw.start!.date as string)
+    // Google's all-day end.date is EXCLUSIVE (the day after) — make it inclusive.
+    const exclusiveEnd = raw.end?.date
+      ? parseLocalDate(raw.end.date)
+      : new Date(s.getTime() + DAY_MS)
+    start = s.toISOString()
+    end = new Date(exclusiveEnd.getTime() - 1).toISOString()
+  } else {
+    const sdt = raw.start?.dateTime
+    if (!sdt) return null
+    start = new Date(sdt).toISOString()
+    end = new Date(raw.end?.dateTime ?? sdt).toISOString()
+  }
+  const now = new Date().toISOString()
+  return {
+    id: stableId(provider, raw.id),
+    title: raw.summary?.trim() || '(no title)',
+    start,
+    end,
+    allDay,
+    source: 'google',
+    provider,
+    externalId: raw.id,
+    htmlLink: raw.htmlLink,
+    createdAt: raw.created ?? now,
+    updatedAt: raw.updated ?? now
+  }
+}
+
+async function fetchCalendarIds(client: OAuth2Client): Promise<string[]> {
+  const res = await client.request<{ items?: Array<{ id?: string }> }>({
+    url: 'https://www.googleapis.com/calendar/v3/users/me/calendarList',
+    params: { maxResults: 50 }
+  })
+  return (res.data.items ?? []).map((i) => i.id).filter((id): id is string => Boolean(id))
+}
+
+/** Pull recent + upcoming events from every calendar into the read-only cache. */
+async function pullEvents(): Promise<PullEventsResult> {
+  const client = await authedClient()
+  if (!client) return { ok: false, error: 'not-connected' }
+  const now = Date.now()
+  const timeMin = new Date(now - PULL_BACK_DAYS * DAY_MS).toISOString()
+  const timeMax = new Date(now + PULL_FWD_DAYS * DAY_MS).toISOString()
+  const all: GoogleEvent[] = []
+  try {
+    const calendarIds = await fetchCalendarIds(client)
+    for (const calId of calendarIds) {
+      let pageToken: string | undefined
+      let pages = 0
+      do {
+        const res = await client.request<{ items?: RawEvent[]; nextPageToken?: string }>({
+          url: `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events`,
+          params: {
+            timeMin,
+            timeMax,
+            singleEvents: true, // expand recurring events into instances
+            orderBy: 'startTime',
+            maxResults: 250,
+            ...(pageToken ? { pageToken } : {})
+          }
+        })
+        for (const raw of res.data.items ?? []) {
+          const ev = mapEvent(raw, calId)
+          if (ev) all.push(ev)
+        }
+        pageToken = res.data.nextPageToken ?? undefined
+        pages += 1
+      } while (pageToken && pages < MAX_PAGES)
+    }
+  } catch {
+    return { ok: false, error: 'read-failed' }
+  }
+  await writeCache(all)
+  return { ok: true, events: all }
+}
+
 let registered = false
 
 export function registerGoogle(): void {
@@ -229,4 +384,6 @@ export function registerGoogle(): void {
   ipcMain.handle('google:connect', () => connect())
   ipcMain.handle('google:disconnect', () => disconnect())
   ipcMain.handle('google:listCalendars', () => listCalendars())
+  ipcMain.handle('google:pullEvents', () => pullEvents())
+  ipcMain.handle('google:cachedEvents', () => readCache())
 }

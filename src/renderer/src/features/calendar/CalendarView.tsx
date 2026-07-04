@@ -45,12 +45,25 @@ function rangeTitle(cursor: Date, view: View): string {
 }
 
 export function CalendarView(): React.JSX.Element {
-  const { events, tasks, calls, loading, createEvent, updateEvent, deleteEvent } = useCalendar()
+  const {
+    events,
+    tasks,
+    calls,
+    googleEvents,
+    loading,
+    createEvent,
+    updateEvent,
+    deleteEvent,
+    refreshGoogle
+  } = useCalendar()
   const [view, setView] = useState<View>('month')
   const [cursor, setCursor] = useState<Date>(() => new Date())
   const [dialog, setDialog] = useState<DialogState | null>(null)
 
-  const items = useMemo(() => buildItems(events, tasks, calls), [events, tasks, calls])
+  const items = useMemo(
+    () => buildItems(events, tasks, calls, googleEvents),
+    [events, tasks, calls, googleEvents]
+  )
 
   const goPrev = (): void => setCursor((c) => (view === 'month' ? subMonths(c, 1) : subWeeks(c, 1)))
   const goNext = (): void => setCursor((c) => (view === 'month' ? addMonths(c, 1) : addWeeks(c, 1)))
@@ -140,7 +153,7 @@ export function CalendarView(): React.JSX.Element {
       </header>
 
       {/* Google Calendar connection (M13, read-only) */}
-      <GoogleConnect />
+      <GoogleConnect onChange={() => void refreshGoogle()} />
 
       {items.length === 0 && !loading && (
         <p className="mb-3 flex items-center gap-2 text-[13px] text-faint">
@@ -186,13 +199,13 @@ export function CalendarView(): React.JSX.Element {
 }
 
 function Legend(): React.JSX.Element {
-  const kinds: CalendarItemKind[] = ['event', 'task', 'call']
+  const kinds: CalendarItemKind[] = ['event', 'task', 'call', 'google']
   return (
     <div className="hidden items-center gap-3 text-[11px] text-faint sm:flex">
       {kinds.map((k) => (
         <span key={k} className="flex items-center gap-1.5">
           <span className={cn('h-2 w-2 rounded-full', ITEM_STYLES[k].dot)} />
-          {KIND_LABEL[k]}s
+          {k === 'google' ? 'Google' : `${KIND_LABEL[k]}s`}
         </span>
       ))}
     </div>

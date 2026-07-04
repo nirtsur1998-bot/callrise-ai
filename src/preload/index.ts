@@ -85,7 +85,9 @@ const api = {
     getStatus: () => ipcRenderer.invoke('google:getStatus'),
     connect: () => ipcRenderer.invoke('google:connect'),
     disconnect: () => ipcRenderer.invoke('google:disconnect'),
-    listCalendars: () => ipcRenderer.invoke('google:listCalendars')
+    listCalendars: () => ipcRenderer.invoke('google:listCalendars'),
+    pullEvents: () => ipcRenderer.invoke('google:pullEvents'),
+    cachedEvents: () => ipcRenderer.invoke('google:cachedEvents')
   }
 }
 

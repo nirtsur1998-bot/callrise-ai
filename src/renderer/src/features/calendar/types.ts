@@ -9,15 +9,16 @@ export interface CalendarEvent {
   end: string // ISO datetime
   allDay: boolean
   notes?: string
-  source: 'local'
+  source: 'local' | 'google' | 'outlook'
   provider?: string
   externalId?: string
+  htmlLink?: string
   createdAt: string
   updatedAt: string
 }
 
-/** The three things that can appear on the calendar. */
-export type CalendarItemKind = 'event' | 'task' | 'call'
+/** What can appear on the calendar. Google events are read-only overlays. */
+export type CalendarItemKind = 'event' | 'task' | 'call' | 'google'
 
 /**
  * A unified, render-ready item. Manual events are editable; tasks (on their
