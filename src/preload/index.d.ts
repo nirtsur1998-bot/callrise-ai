@@ -365,6 +365,8 @@ export interface LoopbackApi {
   arm: () => void
   /** Clear a pending arm (e.g. if capture was cancelled). */
   disarm: () => void
+  /** Open the macOS Screen & System Audio Recording settings pane. */
+  openScreenSettings: () => Promise<{ ok: boolean }>
 }
 
 declare global {

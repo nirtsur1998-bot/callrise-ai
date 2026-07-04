@@ -1,8 +1,7 @@
-// A persistent, honest "is recording on?" signal for the live screen. While the
-// app is mic-only (M11) it always says "your mic" — even when other-party
-// consent is recorded — and spells out that buyer capture isn't live yet. The
-// "you + the other party" variant exists but only shows when capture is real,
-// which M11 never sets (it's wired on in M12).
+// A persistent, honest "is recording on?" signal for the live screen. It says
+// "your mic" until the other party's audio is ACTUALLY streaming, and only then
+// shows "you + the other party" — so the label never over-claims what's being
+// captured (e.g. during the permission prompt, or if buyer capture failed).
 
 interface RecordingIndicatorProps {
   /** Mic capture is actively running (session live, not paused). */
@@ -12,9 +11,8 @@ interface RecordingIndicatorProps {
   /** Consent to record the other party has been recorded for this call. */
   otherPartyConsented: boolean
   /**
-   * Whether the other party's audio is ACTUALLY being captured. Always false in
-   * M11 (mic-only). M12 flips this on when real buyer capture exists — only then
-   * does the "you + the other party" label appear.
+   * Whether the other party's audio is ACTUALLY streaming right now (not merely
+   * consented). Only then does the "you + the other party" label appear.
    */
   otherPartyCaptureLive?: boolean
 }

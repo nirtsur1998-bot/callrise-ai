@@ -199,6 +199,29 @@ export function LiveView(): React.JSX.Element {
                 ? "Couldn't record the other party — no system audio came through."
                 : 'The other party’s audio stopped — continuing with your mic only.'}
           </span>
+          <span className="flex shrink-0 gap-2">
+            {otherPartyError === 'denied' && (
+              <button
+                type="button"
+                onClick={() => void window.api.loopback.openScreenSettings()}
+                className="no-drag rounded-lg bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/30"
+              >
+                Open Settings
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void enableOtherParty()}
+              className={cn(
+                'no-drag rounded-lg px-3 py-1.5 text-xs font-semibold',
+                otherPartyError === 'interrupted'
+                  ? 'bg-amber-500/20 text-amber-100 hover:bg-amber-500/30'
+                  : 'bg-rose-500/20 text-rose-200 hover:bg-rose-500/30'
+              )}
+            >
+              {otherPartyError === 'interrupted' ? 'Resume' : 'Try again'}
+            </button>
+          </span>
         </InlineBanner>
       )}
       {status === 'idle' && savedNotice && (

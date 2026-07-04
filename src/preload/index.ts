@@ -78,7 +78,8 @@ const api = {
     },
     disarm: (): void => {
       ipcRenderer.sendSync('loopback:disarm')
-    }
+    },
+    openScreenSettings: () => ipcRenderer.invoke('loopback:openScreenSettings')
   }
 }
 

@@ -8,12 +8,21 @@
 // the main-process guard for "no consent = no capture" on the CAPTURE path,
 // mirroring the retention guard in calls-fs.ts. It complements — never replaces
 // — the renderer-side consent checks.
-import { ipcMain, session, desktopCapturer } from 'electron'
+import { ipcMain, session, desktopCapturer, shell } from 'electron'
 
 // One-shot: set true by 'loopback:arm', consumed the moment a request is granted.
 let armed = false
 
 export function registerLoopbackCapture(): void {
+  // Deep-link to the macOS "Screen & System Audio Recording" pane so the rep can
+  // grant the permission buyer capture needs (mirrors the mic settings helper).
+  ipcMain.handle('loopback:openScreenSettings', async () => {
+    await shell.openExternal(
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
+    )
+    return { ok: true as const }
+  })
+
   // Synchronous arm/disarm so the renderer can flip this in the same tick as the
   // click gesture, right before getDisplayMedia (an async IPC would race).
   ipcMain.on('loopback:arm', (event) => {
