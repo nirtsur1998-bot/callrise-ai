@@ -1,16 +1,37 @@
 // Lets the renderer's getDisplayMedia() receive macOS system-audio loopback —
 // the other party's voice coming through the rep's headphones/output (M12).
 //
-// Security note: the renderer only ever calls getDisplayMedia AFTER the user
-// records consent (the M11 "no consent = no capture" invariant lives at the
-// call site + in the main-process retention strip). This handler simply hands
-// back a screen as the (required) video source — which the renderer discards —
-// plus system-audio loopback when asked.
-import { session, desktopCapturer } from 'electron'
+// Consent backstop: capture is DENIED unless the renderer has "armed" it first.
+// The renderer arms exactly one request, synchronously, immediately before each
+// getDisplayMedia call — and only after consent has been recorded. The handler
+// consumes the arm (one grant per arm) and rejects any un-armed request. This is
+// the main-process guard for "no consent = no capture" on the CAPTURE path,
+// mirroring the retention guard in calls-fs.ts. It complements — never replaces
+// — the renderer-side consent checks.
+import { ipcMain, session, desktopCapturer } from 'electron'
+
+// One-shot: set true by 'loopback:arm', consumed the moment a request is granted.
+let armed = false
 
 export function registerLoopbackCapture(): void {
+  // Synchronous arm/disarm so the renderer can flip this in the same tick as the
+  // click gesture, right before getDisplayMedia (an async IPC would race).
+  ipcMain.on('loopback:arm', (event) => {
+    armed = true
+    event.returnValue = true
+  })
+  ipcMain.on('loopback:disarm', (event) => {
+    armed = false
+    event.returnValue = true
+  })
+
   session.defaultSession.setDisplayMediaRequestHandler(
     (_request, callback) => {
+      if (!armed) {
+        callback({}) // deny — not armed by a consent-gated capture start
+        return
+      }
+      armed = false // consume: one grant per arm
       desktopCapturer
         .getSources({ types: ['screen'] })
         .then((sources) => {

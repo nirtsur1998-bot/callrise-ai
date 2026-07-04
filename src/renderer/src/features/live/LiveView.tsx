@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Mic, Square, Pause, Play, AlertTriangle, MicOff, Loader2 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import type { ConsentMethod } from '@renderer/features/calls/types'
 import { useTranscription } from './useTranscription'
 import { useLiveCues } from './useLiveCues'
 import { useCueSettings } from './useCueSettings'
@@ -35,9 +36,13 @@ export function LiveView(): React.JSX.Element {
     errorMessage,
     analyser,
     savedNotice,
+    otherPartyLive,
+    otherPartyError,
     start,
     stop,
-    togglePause
+    togglePause,
+    enableOtherParty,
+    disableOtherParty
   } = useTranscription(consent.recordRef, consent.reset)
 
   // Live coaching cues (hooks must run before any early return).
@@ -49,6 +54,22 @@ export function LiveView(): React.JSX.Element {
   useEffect(() => {
     if (savedNotice) resetConsent()
   }, [savedNotice, resetConsent])
+
+  // Buyer capture follows consent: turned ON from the modal's "yes" gesture;
+  // turned OFF here whenever consent is no longer granted (declined / turned off
+  // / per-call reset). disableOtherParty is idempotent, so this is safe to fire
+  // on every consent change, including the double reset on save + start.
+  const canRecordOther = consent.canRecord
+  useEffect(() => {
+    if (!canRecordOther) void disableOtherParty()
+  }, [canRecordOther, disableOtherParty])
+
+  // "They said yes": record consent, then — still inside the click gesture —
+  // open buyer capture (getDisplayMedia requires a user gesture).
+  const handleEnableOtherParty = (method: ConsentMethod): void => {
+    consent.markConsented(method)
+    void enableOtherParty()
+  }
 
   const hasTranscript = segments.length > 0
 
@@ -98,13 +119,13 @@ export function LiveView(): React.JSX.Element {
 
   return (
     <div className="relative flex h-full flex-col gap-4">
-      {/* Persistent, honest recording state. otherPartyCaptureLive stays false
-          until M12 wires real buyer capture — until then it always says "your mic". */}
+      {/* Persistent, honest recording state — "you + the other party" only when
+          buyer audio is actually streaming. */}
       <RecordingIndicator
         recording={recording}
         paused={status === 'paused'}
         otherPartyConsented={consent.canRecord}
-        otherPartyCaptureLive={false}
+        otherPartyCaptureLive={otherPartyLive}
       />
 
       {/* Control bar */}
@@ -169,6 +190,17 @@ export function LiveView(): React.JSX.Element {
       </div>
 
       {/* Inline banners — keep the transcript visible underneath. */}
+      {otherPartyError && (
+        <InlineBanner tone={otherPartyError === 'interrupted' ? 'amber' : 'rose'}>
+          <span>
+            {otherPartyError === 'denied'
+              ? "Couldn't record the other party — macOS blocked screen & system-audio recording."
+              : otherPartyError === 'no-audio'
+                ? "Couldn't record the other party — no system audio came through."
+                : 'The other party’s audio stopped — continuing with your mic only.'}
+          </span>
+        </InlineBanner>
+      )}
       {status === 'idle' && savedNotice && (
         <InlineBanner tone="emerald">
           <span>Call saved to Past Calls.</span>
@@ -245,7 +277,13 @@ export function LiveView(): React.JSX.Element {
 
       <AskCoach segments={segments} interimText={interimText} />
 
-      {consentOpen && <ConsentModal consent={consent} onClose={() => setConsentOpen(false)} />}
+      {consentOpen && (
+        <ConsentModal
+          consent={consent}
+          onEnable={handleEnableOtherParty}
+          onClose={() => setConsentOpen(false)}
+        />
+      )}
     </div>
   )
 }

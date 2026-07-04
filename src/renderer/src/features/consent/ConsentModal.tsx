@@ -17,12 +17,15 @@ const METHODS: { value: ConsentMethod; label: string }[] = [
 
 interface ConsentModalProps {
   consent: ConsentController
+  /** "They said yes": records consent AND opens buyer capture (a user gesture,
+   *  required by getDisplayMedia). The parent wires this to useTranscription. */
+  onEnable: (method: ConsentMethod) => void
   onClose: () => void
 }
 
 /** The consent gate + disclosure helper. Recording the other party can only be
  *  enabled from here, by recording an explicit "they said yes". */
-export function ConsentModal({ consent, onClose }: ConsentModalProps): React.JSX.Element {
+export function ConsentModal({ consent, onEnable, onClose }: ConsentModalProps): React.JSX.Element {
   const { record } = consent
   const [method, setMethod] = useState<ConsentMethod>(record.method ?? 'verbal-on-call')
 
@@ -163,7 +166,8 @@ export function ConsentModal({ consent, onClose }: ConsentModalProps): React.JSX
               <button
                 type="button"
                 onClick={() => {
-                  consent.markConsented(method)
+                  // Synchronous in the click → getDisplayMedia stays a user gesture.
+                  onEnable(method)
                   onClose()
                 }}
                 className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-500/15 px-4 py-2.5 text-sm font-semibold text-emerald-300 ring-1 ring-inset ring-emerald-500/30 transition hover:bg-emerald-500/25"

@@ -359,6 +359,14 @@ export interface AuthApi {
   onChange: (cb: (user: AuthUser | null) => void) => () => void
 }
 
+export interface LoopbackApi {
+  /** Arm exactly one system-audio capture grant (synchronous; call right before
+   *  getDisplayMedia, only after consent is recorded). */
+  arm: () => void
+  /** Clear a pending arm (e.g. if capture was cancelled). */
+  disarm: () => void
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -368,6 +376,7 @@ declare global {
       tasks: TasksApi
       events: EventsApi
       auth: AuthApi
+      loopback: LoopbackApi
     }
   }
 }

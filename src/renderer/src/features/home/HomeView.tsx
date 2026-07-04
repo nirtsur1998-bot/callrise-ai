@@ -1,5 +1,6 @@
 import { PhoneCall, Sparkles } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
+import { AudioSourcesCard } from '@renderer/features/audio/AudioSourcesCard'
 
 const STATS = [
   { label: 'Calls today', value: '—' },
@@ -14,10 +15,13 @@ export function HomeView(): React.JSX.Element {
       <header className="mb-7">
         <h2 className="text-2xl font-semibold tracking-tight">Welcome to Sales OS</h2>
         <p className="mt-1.5 text-sm text-muted">
-          Your AI assistant for sales calls. This is an early shell — features
-          will land here step by step.
+          Your AI assistant for sales calls. This is an early shell — features will land here step
+          by step.
         </p>
       </header>
+
+      {/* Audio sources — pick your mic, see where the call plays */}
+      <AudioSourcesCard />
 
       {/* Primary action (placeholder, disabled) */}
       <Card className="mb-5 flex items-center justify-between gap-4 bg-elevated">
@@ -59,9 +63,7 @@ export function HomeView(): React.JSX.Element {
         </div>
         <div className="rounded-xl border border-dashed border-line py-10 text-center">
           <p className="text-sm text-muted">No calls yet</p>
-          <p className="mt-1 text-[13px] text-faint">
-            Your call history will show up here.
-          </p>
+          <p className="mt-1 text-[13px] text-faint">Your call history will show up here.</p>
         </div>
       </Card>
     </div>

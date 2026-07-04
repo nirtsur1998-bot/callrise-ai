@@ -70,6 +70,15 @@ const api = {
     resendCode: (email: string) => ipcRenderer.invoke('auth:resendCode', { email }),
     signOut: () => ipcRenderer.invoke('auth:signOut'),
     onChange: (cb: (user: unknown) => void) => subscribe('auth:changed', cb)
+  },
+  loopback: {
+    // Synchronous so it can run in the same click tick as getDisplayMedia.
+    arm: (): void => {
+      ipcRenderer.sendSync('loopback:arm')
+    },
+    disarm: (): void => {
+      ipcRenderer.sendSync('loopback:disarm')
+    }
   }
 }
 

@@ -57,11 +57,10 @@ export function RecordingIndicator({
         <span className="text-[13px] font-semibold text-rose-200">{label}</span>
       </div>
 
-      {/* Honest M11 note: consent is on record, but buyer audio isn't captured yet. */}
+      {/* Consent is recorded, but buyer audio isn't streaming this instant
+          (e.g. during the permission prompt, or after it stopped). */}
       {otherPartyConsented && !capturingBoth && (
-        <span className="text-[11px] text-faint">
-          consent recorded · buyer capture arrives in M12
-        </span>
+        <span className="text-[11px] text-faint">consent recorded</span>
       )}
       {capturingBoth && (
         <span className="text-[11px] font-medium text-emerald-300">with consent</span>

@@ -1,6 +1,7 @@
 // `?url` makes Vite emit the worklet as a standalone asset (not bundled),
 // which is required for audioWorklet.addModule().
 import pcmProcessorUrl from './pcm-processor.js?url'
+import { getMicConstraints } from '@renderer/features/audio/devices'
 
 export interface Recorder {
   /** Analyser node for drawing the live waveform (mic only). */
@@ -12,13 +13,20 @@ export interface Recorder {
   /** Stop capture and release the microphone (and any loopback). */
   stop: () => void
   /**
-   * Add the other party's audio (system loopback) as channel 1 → the worklet
-   * switches to interleaved stereo output. `onEnded` fires if the loopback
-   * source stops on its own (e.g. the OS revokes screen recording).
+   * Add the other party's audio (system loopback) as channel 1 of the merger.
+   * This only wires the audio graph — it does NOT change the output layout;
+   * call `setStereo(true)` once the multichannel socket is ready. `onEnded`
+   * fires if the loopback source stops on its own (e.g. the OS revokes it).
    */
   attachLoopback: (stream: MediaStream, onEnded?: () => void) => void
-  /** Remove the loopback source → back to mono mic-only output. */
+  /** Remove the loopback source (graph + tracks). Does not change the layout. */
   detachLoopback: () => void
+  /**
+   * Switch the emitted PCM layout: true = interleaved stereo [you, buyer],
+   * false = mono (mic only). Kept separate from attach/detach so the layout
+   * flips only AFTER the Deepgram socket has switched channel count to match.
+   */
+  setStereo: (stereo: boolean) => void
   /** Whether a loopback source is currently attached. */
   isLoopbackAttached: () => boolean
 }
@@ -37,14 +45,9 @@ export async function startRecorder(
   onChunk: (chunk: ArrayBuffer) => void,
   onDeviceLost: () => void
 ): Promise<Recorder> {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true
-    }
-  })
+  // Honor the mic chosen in the Home "Audio sources" section (falls back to
+  // the system default when none is set or the chosen device is gone).
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: getMicConstraints() })
 
   const context = new AudioContext()
   await context.resume()
@@ -83,6 +86,10 @@ export async function startRecorder(
   let loopTrack: MediaStreamTrack | null = null
   let loopEndedHandler: (() => void) | null = null
 
+  const setStereo = (stereo: boolean): void => {
+    worklet.port.postMessage({ type: 'mode', stereo })
+  }
+
   const detachLoopback = (): void => {
     if (loopTrack && loopEndedHandler) loopTrack.removeEventListener('ended', loopEndedHandler)
     loopEndedHandler = null
@@ -95,7 +102,6 @@ export async function startRecorder(
     loopSource = null
     loopStream?.getTracks().forEach((t) => t.stop())
     loopStream = null
-    worklet.port.postMessage({ type: 'mode', stereo: false })
   }
 
   const attachLoopback = (s: MediaStream, onEnded?: () => void): void => {
@@ -103,8 +109,8 @@ export async function startRecorder(
     loopStream = s
     loopSource = context.createMediaStreamSource(s)
     // A merger input is mono, so a stereo loopback is downmixed to channel 1.
+    // The worklet keeps emitting mono (ignoring ch1) until setStereo(true).
     loopSource.connect(merger, 0, 1)
-    worklet.port.postMessage({ type: 'mode', stereo: true })
     loopTrack = s.getAudioTracks()[0] ?? null
     if (loopTrack && onEnded) {
       loopEndedHandler = (): void => onEnded()
@@ -121,6 +127,7 @@ export async function startRecorder(
     },
     attachLoopback,
     detachLoopback,
+    setStereo,
     isLoopbackAttached: (): boolean => loopSource !== null,
     stop: (): void => {
       if (stopped) return
