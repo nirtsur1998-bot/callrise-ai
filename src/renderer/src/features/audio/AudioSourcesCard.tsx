@@ -2,6 +2,7 @@ import { Mic, Volume2, RefreshCw, Headphones, AlertTriangle } from 'lucide-react
 import { Card } from '@renderer/components/Card'
 import { cn } from '@renderer/lib/cn'
 import { useAudioDevices } from './useAudioDevices'
+import { isMac, isWindows } from '@renderer/lib/platform'
 
 function looksLikeHeadphones(label: string): boolean {
   return /head(phone|set)|airpod|buds|earphone/i.test(label)
@@ -70,7 +71,8 @@ export function AudioSourcesCard(): React.JSX.Element {
             : 'Use headphones on calls, or your mic picks up the other person and both sides get double-transcribed.'}
         </p>
         <p className="mt-1.5 text-[11px] text-faint">
-          Sales OS can&rsquo;t change this — set your output in macOS (menu bar → Sound).
+          Sales OS can&rsquo;t change this — set your output in{' '}
+          {isMac ? 'macOS (menu bar → Sound)' : isWindows ? 'Windows (Settings → Sound)' : 'your system sound settings'}.
         </p>
       </div>
     </Card>

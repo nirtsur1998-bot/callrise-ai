@@ -135,6 +135,13 @@ function broadcast(): void {
 }
 
 async function startHelper(): Promise<{ ok: boolean; error?: string }> {
+  // The Core Audio HAL driver + systemPreferences mic-access API this relies
+  // on are both macOS-only. DRIVER_PATH never exists on other platforms, so
+  // this is already unreachable there in practice — this guard just makes
+  // that explicit instead of relying on a hardcoded path never resolving.
+  if (process.platform !== 'darwin') {
+    return { ok: false, error: 'noise cancellation is only available on macOS' }
+  }
   if (child) return { ok: true } // already running
   if (starting) return { ok: false, error: 'already starting' }
   starting = true

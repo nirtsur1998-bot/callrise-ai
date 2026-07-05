@@ -14,9 +14,14 @@ import { ipcMain, session, desktopCapturer, shell } from 'electron'
 let armed = false
 
 export function registerLoopbackCapture(): void {
-  // Deep-link to the macOS "Screen & System Audio Recording" pane so the rep can
-  // grant the permission buyer capture needs (mirrors the mic settings helper).
+  // Deep-link to the OS's screen/system-audio recording permission pane so the
+  // rep can grant the permission buyer capture needs (mirrors the mic settings
+  // helper). Only macOS gates this behind a permission prompt; Windows has no
+  // equivalent per-app screen-recording toggle, so there's nothing to open.
   ipcMain.handle('loopback:openScreenSettings', async () => {
+    if (process.platform !== 'darwin') {
+      return { ok: false as const, error: 'not applicable on this platform' }
+    }
     await shell.openExternal(
       'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
     )

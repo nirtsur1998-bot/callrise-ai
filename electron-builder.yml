@@ -13,11 +13,21 @@ asarUnpack:
   - resources/**
 win:
   executableName: sales-os-scaffold
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+        - arm64
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
+  # Show the installer's directory-choice screen instead of a silent one-click
+  # install — clearer for a first-time Windows user installing an unsigned app.
+  oneClick: false
+  allowToChangeInstallationDirectory: true
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Mic, Square, Pause, Play, AlertTriangle, MicOff, Loader2 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { isMac } from '@renderer/lib/platform'
 import type { ConsentMethod } from '@renderer/features/calls/types'
 import { useTranscription } from './useTranscription'
 import { useLiveCues } from './useLiveCues'
@@ -201,13 +202,15 @@ export function LiveView(): React.JSX.Element {
         <InlineBanner tone={otherPartyError === 'interrupted' ? 'amber' : 'rose'}>
           <span>
             {otherPartyError === 'denied'
-              ? "Couldn't record the other party — macOS blocked screen & system-audio recording."
+              ? isMac
+                ? "Couldn't record the other party — macOS blocked screen & system-audio recording."
+                : "Couldn't record the other party — screen & system-audio recording was blocked."
               : otherPartyError === 'no-audio'
                 ? "Couldn't record the other party — no system audio came through."
                 : 'The other party’s audio stopped — continuing with your mic only.'}
           </span>
           <span className="flex shrink-0 gap-2">
-            {otherPartyError === 'denied' && (
+            {otherPartyError === 'denied' && isMac && (
               <button
                 type="button"
                 onClick={() => void window.api.loopback.openScreenSettings()}
