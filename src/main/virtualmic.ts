@@ -15,7 +15,7 @@
 // Fail-safe posture: everything here degrades gracefully. If the helper binary
 // or driver is missing, we report that in the status and simply can't start —
 // no crash. If the helper dies, we notice via its 'exit' event and reset state.
-import { ipcMain, BrowserWindow, app } from 'electron'
+import { ipcMain, BrowserWindow, app, systemPreferences } from 'electron'
 import { spawn, execFileSync, type ChildProcess } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
@@ -46,6 +46,13 @@ export interface VirtualMicStatus {
 
 let child: ChildProcess | null = null
 let denoiseActive = false
+// Re-entrancy guard: startHelper() now awaits the mic-permission prompt
+// (which can take a human seconds or minutes to answer) BEFORE `child` gets
+// set. Without this flag, two overlapping calls (a double-click, or two
+// windows) could both pass the `if (child) return` check before either
+// finishes and spawn two michelpers. Set synchronously at entry -- before
+// any await -- so it closes the window the permission-check await opens.
+let starting = false
 
 // Escape a string so it is matched LITERALLY by an extended regex (pkill -f).
 function escapeRegex(s: string): string {
@@ -90,98 +97,129 @@ function broadcast(): void {
   }
 }
 
-function startHelper(): { ok: boolean; error?: string } {
+async function startHelper(): Promise<{ ok: boolean; error?: string }> {
   if (child) return { ok: true } // already running
-  const helperPath = resolveHelperPath()
-  if (!helperPath) {
-    return { ok: false, error: 'noise-cancellation helper not found' }
-  }
-  if (!existsSync(DRIVER_PATH)) {
-    return { ok: false, error: 'driver not installed' }
-  }
-
-  // Guard against the multi-writer case: if a previous helper was orphaned (an
-  // app crash, or one the user launched by hand), a second writer to the same
-  // shared-memory ring produces corrupted/static audio. Kill any stray helper
-  // BEFORE we spawn ours — synchronously, so pkill can't race and match the
-  // process we're about to start (which doesn't exist yet). The pattern is
-  // regex-ESCAPED and ANCHORED (^…$): since we launch michelper with no args,
-  // its command line is exactly this path, so the anchored exact-match hits
-  // only stray michelpers and never an unrelated process (a plain unescaped
-  // `pkill -f <path>` would treat metacharacters in the path as regex and
-  // could match far too broadly). Best-effort: execFileSync throws when pkill
-  // finds nothing (the normal case), which we ignore.
+  if (starting) return { ok: false, error: 'already starting' }
+  starting = true
   try {
-    execFileSync('/usr/bin/pkill', ['-f', `^${escapeRegex(helperPath)}$`])
-  } catch {
-    /* no stray to kill (or pkill unavailable) — proceed */
-  }
-
-  let proc: ChildProcess
-  try {
-    // stderr is 'ignore' (not 'pipe'): we never read it, and an un-drained
-    // stderr pipe could fill its kernel buffer and BLOCK the helper mid-call.
-    // stdout stays piped because we scan its startup banner below (and reading
-    // it keeps that pipe drained — the helper prints a periodic level meter).
-    proc = spawn(helperPath, [], { stdio: ['ignore', 'pipe', 'ignore'] })
-  } catch {
-    return { ok: false, error: 'could not launch helper' }
-  }
-
-  child = proc
-  denoiseActive = false
-  let sawBanner = false
-  let acc = ''
-
-  // michelper prints a one-line startup banner: "…(ENABLED)" when the denoiser
-  // loaded, or "Denoiser: DISABLED …" when it fell back to raw passthrough.
-  // We accumulate stdout until we see one of those markers so a banner split
-  // across chunk boundaries is still matched (a single-chunk `includes` check
-  // would miss "…(ENA" + "BLED)…").
-  const watchdog = setTimeout(() => {
-    if (child === proc && !sawBanner) {
-      // Never confirmed startup (most likely wedged on a mic-permission prompt).
-      // Kill it so it can't hold the mic; the exit handler resets our state.
-      proc.kill('SIGKILL')
+    const helperPath = resolveHelperPath()
+    if (!helperPath) {
+      return { ok: false, error: 'noise-cancellation helper not found' }
     }
-  }, STARTUP_CONFIRM_MS)
+    if (!existsSync(DRIVER_PATH)) {
+      return { ok: false, error: 'driver not installed' }
+    }
 
-  proc.stdout?.on('data', (chunk: Buffer) => {
-    if (!sawBanner) {
-      acc += chunk.toString()
-      if (acc.includes('(ENABLED)')) {
-        denoiseActive = true
-        sawBanner = true
-        broadcast()
-      } else if (acc.includes('Denoiser: DISABLED')) {
-        sawBanner = true // running, but in raw passthrough — leave denoiseActive false
-        broadcast()
-      } else if (acc.length > 16384) {
-        acc = '' // banner appears at startup; stop growing if it never came
+    // Ask for microphone permission BEFORE spawning michelper, not after.
+    // michelper itself blocks indefinitely on this exact same system prompt
+    // at its own startup. If we spawned first, a first-run user taking more
+    // than STARTUP_CONFIRM_MS to click "Allow" would get their helper
+    // silently SIGKILLed by our own startup watchdog mid-prompt — the toggle
+    // would just flip back off with no explanation. Checking here means the
+    // watchdog's clock only starts once permission is already settled, and a
+    // denial surfaces as a clear error instead of a silent, unexplained one.
+    const micStatus = systemPreferences.getMediaAccessStatus('microphone')
+    if (micStatus !== 'granted') {
+      const granted = await systemPreferences.askForMediaAccess('microphone')
+      if (!granted) {
+        return { ok: false, error: 'microphone access denied' }
       }
     }
-    // After the banner, keep draining stdout (the level meter) by ignoring it.
-  })
 
-  proc.on('exit', () => {
-    clearTimeout(watchdog)
-    if (child === proc) {
-      child = null
-      denoiseActive = false
-      broadcast()
+    // Guard against the multi-writer case: if a previous helper was orphaned
+    // (an app crash, or one the user launched by hand), a second writer to
+    // the same shared-memory ring produces corrupted/static audio. Kill any
+    // stray helper BEFORE we spawn ours — synchronously, so pkill can't race
+    // and match the process we're about to start (which doesn't exist yet).
+    // The pattern is regex-ESCAPED and ANCHORED (^…$): since we launch
+    // michelper with no args, its command line is exactly this path, so the
+    // anchored exact-match hits only stray michelpers and never an unrelated
+    // process (a plain unescaped `pkill -f <path>` would treat metacharacters
+    // in the path as regex and could match far too broadly). Best-effort:
+    // execFileSync throws when pkill finds nothing (the normal case), which
+    // we ignore.
+    try {
+      execFileSync('/usr/bin/pkill', ['-f', `^${escapeRegex(helperPath)}$`])
+    } catch {
+      /* no stray to kill (or pkill unavailable) — proceed */
     }
-  })
-  proc.on('error', () => {
-    clearTimeout(watchdog)
-    if (child === proc) {
-      child = null
-      denoiseActive = false
-      broadcast()
-    }
-  })
 
-  broadcast()
-  return { ok: true }
+    let proc: ChildProcess
+    try {
+      // stderr is 'ignore' (not 'pipe'): we never read it, and an un-drained
+      // stderr pipe could fill its kernel buffer and BLOCK the helper
+      // mid-call. stdout stays piped because we scan its startup banner
+      // below (and reading it keeps that pipe drained — the helper prints a
+      // periodic level meter).
+      proc = spawn(helperPath, [], { stdio: ['ignore', 'pipe', 'ignore'] })
+    } catch {
+      return { ok: false, error: 'could not launch helper' }
+    }
+
+    child = proc
+    denoiseActive = false
+    let sawBanner = false
+    let acc = ''
+
+    // michelper prints a one-line startup banner: "…(ENABLED)" when the
+    // denoiser loaded, or "Denoiser: DISABLED …" when it fell back to raw
+    // passthrough. We accumulate stdout until we see one of those markers so
+    // a banner split across chunk boundaries is still matched (a
+    // single-chunk `includes` check would miss "…(ENA" + "BLED)…").
+    const watchdog = setTimeout(() => {
+      if (child === proc && !sawBanner) {
+        // Never confirmed startup (most likely wedged on a mic-permission
+        // prompt). Kill it so it can't hold the mic; the exit handler resets
+        // our state.
+        proc.kill('SIGKILL')
+      }
+    }, STARTUP_CONFIRM_MS)
+
+    proc.stdout?.on('data', (chunk: Buffer) => {
+      // Guard against stale, already-buffered data from a process we've
+      // moved on from (same idiom as the exit/error handlers below). Without
+      // this, rapid stop-then-start could have proc A's buffered "(ENABLED)"
+      // banner arrive AFTER proc B has already spawned, incorrectly setting
+      // the module-level denoiseActive to true for the wrong process.
+      if (child !== proc) return
+      if (!sawBanner) {
+        acc += chunk.toString()
+        if (acc.includes('(ENABLED)')) {
+          denoiseActive = true
+          sawBanner = true
+          broadcast()
+        } else if (acc.includes('Denoiser: DISABLED')) {
+          sawBanner = true // running, but in raw passthrough — leave denoiseActive false
+          broadcast()
+        } else if (acc.length > 16384) {
+          acc = '' // banner appears at startup; stop growing if it never came
+        }
+      }
+      // After the banner, keep draining stdout (the level meter) by ignoring it.
+    })
+
+    proc.on('exit', () => {
+      clearTimeout(watchdog)
+      if (child === proc) {
+        child = null
+        denoiseActive = false
+        broadcast()
+      }
+    })
+    proc.on('error', () => {
+      clearTimeout(watchdog)
+      if (child === proc) {
+        child = null
+        denoiseActive = false
+        broadcast()
+      }
+    })
+
+    broadcast()
+    return { ok: true }
+  } finally {
+    starting = false
+  }
 }
 
 function stopHelper(): { ok: boolean } {

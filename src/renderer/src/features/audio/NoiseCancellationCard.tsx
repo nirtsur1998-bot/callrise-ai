@@ -3,11 +3,28 @@ import { Card } from '@renderer/components/Card'
 import { cn } from '@renderer/lib/cn'
 import { useVirtualMic } from './useVirtualMic'
 
+// Plain-language text for the error codes virtualmic.ts can return from a
+// failed start attempt.
+function errorMessage(code: string): string {
+  switch (code) {
+    case 'microphone access denied':
+      return "Couldn't turn on — microphone access was denied. Check System Settings → Privacy & Security → Microphone, then try again."
+    case 'noise-cancellation helper not found':
+      return "Couldn't turn on — the noise-cancellation engine wasn't found on disk."
+    case 'driver not installed':
+      return "Couldn't turn on — the audio device isn't installed yet."
+    case 'could not launch helper':
+      return "Couldn't turn on — the noise-cancellation engine failed to start."
+    default:
+      return `Couldn't turn on (${code}). Try again in a moment.`
+  }
+}
+
 /** Home section: turn app-managed noise cancellation on/off. When on, a helper
  *  cleans the mic and publishes it as the "Sales OS Microphone" device — which
  *  the user then selects in Zoom/Meet (or here) so the buyer hears clean audio. */
 export function NoiseCancellationCard(): React.JSX.Element {
-  const { status, busy, start, stop } = useVirtualMic()
+  const { status, busy, error, start, stop } = useVirtualMic()
 
   // Loading the very first status.
   if (status === null) {
@@ -49,6 +66,15 @@ export function NoiseCancellationCard(): React.JSX.Element {
           </button>
         ) : null}
       </div>
+
+      {error && (
+        <div className="mb-3 rounded-xl border border-red-500/20 bg-red-500/5 p-3">
+          <p className="flex items-start gap-1.5 text-[13px] text-red-300">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            {errorMessage(error)}
+          </p>
+        </div>
+      )}
 
       {/* Not set up: the driver isn't installed yet. */}
       {!driverInstalled && (

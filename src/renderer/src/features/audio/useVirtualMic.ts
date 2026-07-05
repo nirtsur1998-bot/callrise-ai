@@ -7,6 +7,8 @@ export type VirtualMicStatus = Awaited<ReturnType<typeof window.api.virtualmic.g
 export interface UseVirtualMic {
   status: VirtualMicStatus | null
   busy: boolean
+  /** Why the last start attempt failed (e.g. "microphone access denied"), or null. */
+  error: string | null
   /** Start the denoiser helper. */
   start: () => Promise<void>
   /** Stop the denoiser helper. */
@@ -21,6 +23,7 @@ export interface UseVirtualMic {
 export function useVirtualMic(): UseVirtualMic {
   const [status, setStatus] = useState<VirtualMicStatus | null>(null)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(true)
 
   useEffect(() => {
@@ -44,8 +47,10 @@ export function useVirtualMic(): UseVirtualMic {
 
   const start = useCallback(async () => {
     setBusy(true)
+    setError(null)
     try {
-      await window.api.virtualmic.start()
+      const result = await window.api.virtualmic.start()
+      if (!result.ok && mountedRef.current) setError(result.error ?? 'could not start')
       await refresh()
     } finally {
       if (mountedRef.current) setBusy(false)
@@ -54,6 +59,7 @@ export function useVirtualMic(): UseVirtualMic {
 
   const stop = useCallback(async () => {
     setBusy(true)
+    setError(null)
     try {
       await window.api.virtualmic.stop()
       await refresh()
@@ -62,5 +68,5 @@ export function useVirtualMic(): UseVirtualMic {
     }
   }, [refresh])
 
-  return { status, busy, start, stop }
+  return { status, busy, error, start, stop }
 }
