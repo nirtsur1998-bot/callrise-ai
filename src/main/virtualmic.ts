@@ -14,8 +14,18 @@
 //
 // Fail-safe posture: everything here degrades gracefully. If the helper binary
 // or driver is missing, we report that in the status and simply can't start —
-// no crash. If the helper dies, we notice via its 'exit' event and reset state.
-import { ipcMain, BrowserWindow, app, systemPreferences } from 'electron'
+// no crash. If the helper dies UNEXPECTEDLY (a crash, not a user-initiated
+// stop), we don't just quietly reset state: the whole point of this feature
+// is cleaning the audio a call app is actively sending, so a silent mid-call
+// failure is the worst possible outcome (the user finds out when the other
+// person says "I think you're on mute"). So an unexpected death also (a)
+// shows a native OS notification, since the only in-app status indicator is
+// a Home-screen card nobody's looking at during a call, and (b) attempts a
+// bounded auto-restart if the helper had actually gotten up and running
+// first — never for a helper that never confirmed startup or died within
+// seconds, since that's a real, likely-repeatable problem a blind restart
+// would just loop on.
+import { ipcMain, BrowserWindow, app, systemPreferences, Notification } from 'electron'
 import { spawn, execFileSync, type ChildProcess } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
@@ -30,6 +40,18 @@ const DRIVER_PATH = '/Library/Audio/Plug-Ins/HAL/SalesOSMicrophone.driver'
 const STARTUP_CONFIRM_MS = 8000
 // Grace period after SIGTERM before we escalate to SIGKILL on stop.
 const KILL_GRACE_MS = 2000
+
+// A crash is only worth auto-restarting if the helper actually got up and
+// running first and stayed healthy a while -- a helper that dies before
+// confirming startup, or seconds after, is failing for a real, likely
+// repeatable reason (bad device, missing model file, etc.), and blindly
+// respawning it would risk a tight crash loop instead of fixing anything.
+const MIN_HEALTHY_MS = 10_000
+// Cap consecutive auto-restarts so a repeatable failure can't loop forever.
+const MAX_RESTART_ATTEMPTS = 3
+// If nothing crashes for this long after a restart, treat the helper as
+// stable again and give it a fresh set of restart attempts.
+const RESTART_ATTEMPTS_RESET_MS = 5 * 60_000
 
 export interface VirtualMicStatus {
   /** The Core Audio driver bundle is installed (the "Sales OS Microphone" device exists). */
@@ -53,6 +75,21 @@ let denoiseActive = false
 // finishes and spawn two michelpers. Set synchronously at entry -- before
 // any await -- so it closes the window the permission-check await opens.
 let starting = false
+// Consecutive-restart counter and its reset timer -- see MAX_RESTART_ATTEMPTS
+// and RESTART_ATTEMPTS_RESET_MS above.
+let restartAttempts = 0
+let restartResetTimer: NodeJS.Timeout | null = null
+
+// Shows a native macOS notification. This is the whole point of this
+// feature: if the helper dies while the user is on a call in Zoom/WhatsApp/
+// etc, the ONLY status indicator today is a card on the Home screen nobody
+// is looking at during a call -- without a notification, a mid-call crash is
+// a SILENT failure the user only discovers when the other person says
+// "I think you're on mute."
+function notifyUser(title: string, body: string): void {
+  if (!Notification.isSupported()) return
+  new Notification({ title, body }).show()
+}
 
 // Escape a string so it is matched LITERALLY by an extended regex (pkill -f).
 function escapeRegex(s: string): string {
@@ -160,6 +197,7 @@ async function startHelper(): Promise<{ ok: boolean; error?: string }> {
     denoiseActive = false
     let sawBanner = false
     let acc = ''
+    const startedAt = Date.now()
 
     // michelper prints a one-line startup banner: "…(ENABLED)" when the
     // denoiser loaded, or "Denoiser: DISABLED …" when it fell back to raw
@@ -200,10 +238,38 @@ async function startHelper(): Promise<{ ok: boolean; error?: string }> {
 
     proc.on('exit', () => {
       clearTimeout(watchdog)
+      // A user-initiated stop already nulled `child` before killing (see
+      // stopHelper), so reaching here with `child === proc` means this exit
+      // was UNEXPECTED -- a crash, or the helper quitting on its own.
       if (child === proc) {
         child = null
         denoiseActive = false
         broadcast()
+
+        const wasHealthy = sawBanner && Date.now() - startedAt >= MIN_HEALTHY_MS
+        if (wasHealthy && restartAttempts < MAX_RESTART_ATTEMPTS) {
+          // Confirmed startup, ran fine for a while, then died -- worth one
+          // more try. Cap + a reset-after-quiet-period keep a genuinely
+          // broken setup (bad device, corrupted install, etc.) from looping
+          // forever instead of just settling into a clear "it's off" state.
+          restartAttempts++
+          if (restartResetTimer) clearTimeout(restartResetTimer)
+          restartResetTimer = setTimeout(() => {
+            restartAttempts = 0
+          }, RESTART_ATTEMPTS_RESET_MS)
+          notifyUser('Noise cancellation stopped unexpectedly', 'Restarting automatically…')
+          void startHelper()
+        } else {
+          restartAttempts = 0
+          if (restartResetTimer) {
+            clearTimeout(restartResetTimer)
+            restartResetTimer = null
+          }
+          notifyUser(
+            'Noise cancellation is off',
+            'It stopped and could not restart automatically. Your call app may be sending unclean audio — check Sales OS or switch microphones.'
+          )
+        }
       }
     })
     proc.on('error', () => {
@@ -212,6 +278,10 @@ async function startHelper(): Promise<{ ok: boolean; error?: string }> {
         child = null
         denoiseActive = false
         broadcast()
+        notifyUser(
+          'Noise cancellation is off',
+          'The noise-cancellation engine hit an error and stopped.'
+        )
       }
     })
 
