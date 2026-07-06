@@ -45,6 +45,9 @@ const api = {
     summarizeAttachment: (callId: string, attachmentId: string) =>
       ipcRenderer.invoke('summary:attachment', callId, attachmentId),
     coachCall: (callId: string) => ipcRenderer.invoke('coach:call', callId),
+    mineObjectionsTest: (callId: string) => ipcRenderer.invoke('objections:mineTest', callId),
+    enqueueObjections: (callId: string, candidates: unknown) =>
+      ipcRenderer.invoke('objections:enqueue', callId, candidates),
     generateTitle: (callId: string) => ipcRenderer.invoke('calls:generateTitle', callId),
     setContact: (callId: string, contactId: string | null) =>
       ipcRenderer.invoke('calls:setContact', callId, contactId)
@@ -142,6 +145,12 @@ const api = {
     update: (id: string, patch: unknown) => ipcRenderer.invoke('knowledge:update', id, patch),
     delete: (id: string) => ipcRenderer.invoke('knowledge:delete', id),
     preview: () => ipcRenderer.invoke('knowledge:preview')
+  },
+  objectionQueue: {
+    list: () => ipcRenderer.invoke('objectionQueue:list'),
+    approve: (id: string, edits?: unknown) =>
+      ipcRenderer.invoke('objectionQueue:approve', id, edits),
+    reject: (id: string) => ipcRenderer.invoke('objectionQueue:reject', id)
   },
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),

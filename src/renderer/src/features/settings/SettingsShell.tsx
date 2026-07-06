@@ -11,6 +11,7 @@ import { AudioSection } from './AudioSection'
 import { CoachingSection } from './CoachingSection'
 import { SummaryLanguageSection } from './SummaryLanguageSection'
 import { PersonalizationSection } from './PersonalizationSection'
+import { ObjectionLibrarySection } from './ObjectionLibrarySection'
 import { CalendarSection } from './CalendarSection'
 import { CrmSection } from './CrmSection'
 import { AppSection } from './AppSection'
@@ -25,6 +26,7 @@ const PAGE_CONTENT: Record<SettingsPageId, React.ComponentType> = {
   coaching: CoachingSection,
   'summary-language': SummaryLanguageSection,
   personalization: PersonalizationSection,
+  'objection-library': ObjectionLibrarySection,
   calendar: CalendarSection,
   crm: CrmSection,
   app: AppSection,

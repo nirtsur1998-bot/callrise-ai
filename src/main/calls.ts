@@ -19,7 +19,14 @@ import {
 import { summarize, type SummarizeInput, type SummaryResult } from './summarize'
 import { coachCall, type CoachResult } from './coach'
 import { generateCallTitle, type GenerateTitleResult } from './call-title'
+import { mineObjections, type ObjectionMiningResult } from './objection-mining'
+import { addToQueue } from './objection-queue-fs'
+import { isObjectionMiningEnabled } from './app-settings'
 import { scheduleBackup } from './backup'
+
+function objectionQueueDir(): string {
+  return join(app.getPath('userData'), 'objection-queue')
+}
 
 function callsDir(): string {
   return join(app.getPath('userData'), 'calls')
@@ -193,6 +200,59 @@ export function registerCalls(): void {
       }
     }
   })
+
+  // --- Objection Library: mine a call for raw candidates --------------------
+  // Gated on the SAME toggle that will later gate new-call mining + the
+  // manual "scan past calls" trigger — nothing here runs while it's off.
+  ipcMain.handle(
+    'objections:mineTest',
+    async (_event, callId: string): Promise<ObjectionMiningResult> => {
+      if (!isObjectionMiningEnabled()) {
+        return {
+          ok: false,
+          error: 'disabled',
+          message: 'Turn on "Learn objection responses from my calls" in Settings first.'
+        }
+      }
+      try {
+        const call = await getCall(callsDir(), callId)
+        if (!call) return { ok: false, error: 'failed', message: 'Call not found.' }
+        if (!call.segments?.length) {
+          return { ok: false, error: 'failed', message: 'This call has no transcript to mine.' }
+        }
+        return await mineObjections(call.segments)
+      } catch {
+        return {
+          ok: false,
+          error: 'failed',
+          message: 'Something went wrong while mining this call. Please try again.'
+        }
+      }
+    }
+  )
+
+  // Send raw mined candidates (from objections:mineTest) into the review
+  // queue. Still gated on the toggle — the whole mining workflow is off
+  // when the setting is off, not just the first step of it.
+  ipcMain.handle(
+    'objections:enqueue',
+    async (
+      _event,
+      callId: string,
+      candidates: unknown
+    ): Promise<{ ok: boolean; added: number }> => {
+      if (!isObjectionMiningEnabled()) return { ok: false, added: 0 }
+      try {
+        const call = await getCall(callsDir(), callId)
+        if (!call) return { ok: false, added: 0 }
+        const list = Array.isArray(candidates) ? candidates : []
+        const items = await addToQueue(objectionQueueDir(), list, callId, call.title)
+        return { ok: true, added: items.length }
+      } catch {
+        return { ok: false, added: 0 }
+      }
+    }
+  )
 
   // AI Note Taker's auto-title feature: generate + save a title in one step.
   ipcMain.handle(

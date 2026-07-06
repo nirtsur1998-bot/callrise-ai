@@ -19,6 +19,7 @@ import { registerGoogle } from './google'
 import { registerBackup } from './backup'
 import { registerVirtualMic, disposeVirtualMic } from './virtualmic'
 import { registerKnowledge } from './knowledge'
+import { registerObjectionQueue } from './objection-queue'
 import { registerAppSettings } from './app-settings'
 import { registerLaunchAtLogin } from './launch-at-login'
 import { registerActiveApp } from './active-app'
@@ -111,6 +112,7 @@ app.whenReady().then(() => {
   registerBackup()
   registerVirtualMic()
   registerKnowledge()
+  registerObjectionQueue()
   registerAppSettings()
   registerLaunchAtLogin()
   registerActiveApp()

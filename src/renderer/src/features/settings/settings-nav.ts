@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   NotebookPen,
   Contact,
+  MessageSquareQuote,
   type LucideIcon
 } from 'lucide-react'
 
@@ -22,6 +23,7 @@ export type SettingsPageId =
   | 'coaching'
   | 'summary-language'
   | 'personalization'
+  | 'objection-library'
   | 'calendar'
   | 'crm'
   | 'app'
@@ -100,6 +102,13 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         label: 'Personalization',
         icon: UserCircle,
         description: 'Feeds AI-generated summaries and coaching so they understand who you are.'
+      },
+      {
+        id: 'objection-library',
+        label: 'Objection Library',
+        icon: MessageSquareQuote,
+        description:
+          'Let AI read your call transcripts to suggest reusable objection-handling scripts. Off by default; you approve every suggestion before it becomes a real script.'
       }
     ]
   },
