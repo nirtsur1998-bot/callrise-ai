@@ -11,6 +11,9 @@ interface ContactPickerProps {
   onSelect: (contactId: string | undefined) => void
   /** Quick-create from the picker; returns the new contact so it can be selected. */
   onCreate: (input: ContactFormValues) => Promise<Contact | null>
+  /** Hide the unlink (X) button — for callers where a contact is mandatory
+   *  (e.g. a deal always belongs to someone), only "Change" is offered. */
+  required?: boolean
 }
 
 /** A searchable dropdown of existing contacts, with a "create new" shortcut —
@@ -20,7 +23,8 @@ export function ContactPicker({
   value,
   contacts,
   onSelect,
-  onCreate
+  onCreate,
+  required
 }: ContactPickerProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -64,14 +68,16 @@ export function ContactPicker({
           >
             Change
           </button>
-          <button
-            type="button"
-            onClick={() => onSelect(undefined)}
-            title="Unlink contact"
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-rose-300"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+          {!required && (
+            <button
+              type="button"
+              onClick={() => onSelect(undefined)}
+              title="Unlink contact"
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-rose-300"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       ) : (
         <button

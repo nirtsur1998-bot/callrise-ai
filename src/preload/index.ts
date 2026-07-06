@@ -62,6 +62,16 @@ const api = {
     update: (id: string, patch: unknown) => ipcRenderer.invoke('contacts:update', id, patch),
     delete: (id: string) => ipcRenderer.invoke('contacts:delete', id)
   },
+  deals: {
+    list: () => ipcRenderer.invoke('deals:list'),
+    create: (input: unknown) => ipcRenderer.invoke('deals:create', input),
+    update: (id: string, patch: unknown) => ipcRenderer.invoke('deals:update', id, patch),
+    delete: (id: string) => ipcRenderer.invoke('deals:delete', id)
+  },
+  dealStages: {
+    get: () => ipcRenderer.invoke('dealStages:get'),
+    set: (stages: unknown) => ipcRenderer.invoke('dealStages:set', stages)
+  },
   events: {
     list: () => ipcRenderer.invoke('events:list'),
     create: (input: unknown) => ipcRenderer.invoke('events:create', input),

@@ -6,7 +6,7 @@ import { HomeView } from '@renderer/features/home/HomeView'
 import { LiveView } from '@renderer/features/live/LiveView'
 import { PastCallsView } from '@renderer/features/calls/PastCallsView'
 import { TasksView } from '@renderer/features/tasks/TasksView'
-import { ContactsView } from '@renderer/features/contacts/ContactsView'
+import { CrmView } from './CrmView'
 import { CalendarView } from '@renderer/features/calendar/CalendarView'
 import { CoachingView } from '@renderer/features/coaching/CoachingView'
 import { AnalyticsView } from '@renderer/features/analytics/AnalyticsView'
@@ -67,7 +67,7 @@ export function MainApp({ user }: { user: AuthUser }): React.JSX.Element {
       ) : active === 'tasks' ? (
         <TasksView />
       ) : active === 'crm' ? (
-        <ContactsView />
+        <CrmView />
       ) : active === 'calendar' ? (
         <CalendarView />
       ) : active === 'coaching' ? (

@@ -9,6 +9,8 @@ import { registerTranscription, disposeTranscription } from './transcription'
 import { registerCalls } from './calls'
 import { registerTasks } from './tasks'
 import { registerContacts } from './contacts'
+import { registerDeals } from './deals'
+import { registerDealStages } from './deal-stages'
 import { registerAuth } from './auth'
 import { registerEvents } from './events'
 import { registerLiveCue } from './live-cue'
@@ -99,6 +101,8 @@ app.whenReady().then(() => {
   registerCalls()
   registerTasks()
   registerContacts()
+  registerDeals()
+  registerDealStages()
   registerAuth()
   registerEvents()
   registerLiveCue()

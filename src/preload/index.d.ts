@@ -356,8 +356,7 @@ export interface DealStage {
 }
 
 export type SetDealStagesResult =
-  | { ok: true; stages: DealStage[] }
-  | { ok: false; error: 'empty' | 'stage-in-use' }
+  { ok: true; stages: DealStage[] } | { ok: false; error: 'empty' | 'stage-in-use' }
 
 export interface Deal {
   id: string
@@ -751,6 +750,8 @@ export interface AppSettings {
   /** CRM Phase 1 — calendar-match sensitivity/kill-switch, default country,
    *  and auto-numbered customer IDs. */
   crm: CrmSettings
+  /** Objection Library mining master switch. Defaults OFF. */
+  objectionMining: ObjectionMiningSettings
 }
 
 export interface AppSettingsPatch {
@@ -763,6 +764,8 @@ export interface AppSettingsPatch {
   googleCalendarConnected?: boolean
   /** Partial — only the keys present are changed; others are left as-is. */
   crm?: Partial<CrmSettings>
+  /** Partial — only the keys present are changed; others are left as-is. */
+  objectionMining?: Partial<ObjectionMiningSettings>
 }
 
 export interface AppSettingsApi {
