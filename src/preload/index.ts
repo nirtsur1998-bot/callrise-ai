@@ -122,6 +122,11 @@ const api = {
     update: (id: string, patch: unknown) => ipcRenderer.invoke('knowledge:update', id, patch),
     delete: (id: string) => ipcRenderer.invoke('knowledge:delete', id),
     preview: () => ipcRenderer.invoke('knowledge:preview')
+  },
+  settings: {
+    get: () => ipcRenderer.invoke('settings:get'),
+    update: (patch: unknown) => ipcRenderer.invoke('settings:update', patch),
+    previewPersonalization: () => ipcRenderer.invoke('settings:previewPersonalization')
   }
 }
 

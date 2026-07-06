@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Mic, Square, Pause, Play, AlertTriangle, MicOff, Loader2 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { isMac } from '@renderer/lib/platform'
@@ -7,6 +7,8 @@ import { useTranscription } from './useTranscription'
 import { useLiveCues } from './useLiveCues'
 import { useCueSettings } from './useCueSettings'
 import { useConsent } from '@renderer/features/consent/useConsent'
+import { useAutoStartListening } from '@renderer/features/settings/useAutoStartListening'
+import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import { OtherPartyControl } from '@renderer/features/consent/OtherPartyControl'
 import { ConsentModal } from '@renderer/features/consent/ConsentModal'
 import { RecordingIndicator } from '@renderer/features/consent/RecordingIndicator'
@@ -71,6 +73,35 @@ export function LiveView(): React.JSX.Element {
   useEffect(() => {
     if (!canRecordOther) void disableOtherParty()
   }, [canRecordOther, disableOtherParty])
+
+  // Settings master switch: when off, the whole other-party recording feature
+  // is unavailable — no control to open the modal, the modal itself never
+  // renders, and any capture already running is stopped. This can only ever
+  // remove capability (see useAppSettings' safe default + app-settings.ts);
+  // the per-call consent checks above are unchanged and still fully apply
+  // whenever the switch is on.
+  const allowOtherPartyRecording = useAppSettings().settings.allowOtherPartyRecording
+  useEffect(() => {
+    if (!allowOtherPartyRecording) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- force-close the modal/consent when the master switch flips off mid-session
+      setConsentOpen(false)
+      consent.turnOff()
+      void disableOtherParty()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allowOtherPartyRecording, disableOtherParty])
+
+  // Auto-start listening (Settings → Audio), so the rep needn't click Start.
+  // Guarded with a ref so it only ever fires once per mount — start() moves
+  // status away from 'idle' on success, so this isn't a retry loop.
+  const [autoStartListening] = useAutoStartListening()
+  const autoStartedRef = useRef(false)
+  useEffect(() => {
+    if (autoStartListening && status === 'idle' && !autoStartedRef.current) {
+      autoStartedRef.current = true
+      start()
+    }
+  }, [autoStartListening, status, start])
 
   // "They said yes": record consent, then — still inside the click gesture —
   // open buyer capture (getDisplayMedia requires a user gesture).
@@ -172,7 +203,9 @@ export function LiveView(): React.JSX.Element {
         </div>
 
         <div className="flex items-center gap-3">
-          <OtherPartyControl consent={consent} onOpen={() => setConsentOpen(true)} />
+          {allowOtherPartyRecording && (
+            <OtherPartyControl consent={consent} onOpen={() => setConsentOpen(true)} />
+          )}
           <CueControls
             enabled={enabled}
             onToggle={setEnabled}
@@ -310,7 +343,7 @@ export function LiveView(): React.JSX.Element {
 
       <AskCoach segments={segments} interimText={interimText} />
 
-      {consentOpen && (
+      {consentOpen && allowOtherPartyRecording && (
         <ConsentModal
           consent={consent}
           onEnable={handleEnableOtherParty}

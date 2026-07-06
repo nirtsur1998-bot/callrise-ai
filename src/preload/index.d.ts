@@ -550,6 +550,37 @@ export interface KnowledgeApi {
   preview: () => Promise<KnowledgeContextPreview>
 }
 
+export type Pronoun = 'he' | 'she' | 'they' | ''
+
+export interface PersonalizationSettings {
+  name: string
+  role: string
+  pronoun: Pronoun
+  about: string
+}
+
+export interface AppSettings {
+  /** Master switch: OFF removes all buyer/other-party recording capability.
+   *  Can only remove capability, never grant it — per-call consent still
+   *  fully governs actual recording. Defaults to true. */
+  allowOtherPartyRecording: boolean
+  /** Who the rep is — fed into summary/coaching prompts. Empty by default. */
+  personalization: PersonalizationSettings
+}
+
+export interface AppSettingsPatch {
+  allowOtherPartyRecording?: boolean
+  /** Partial — only the keys present are changed; others are left as-is. */
+  personalization?: Partial<PersonalizationSettings>
+}
+
+export interface AppSettingsApi {
+  get: () => Promise<AppSettings>
+  update: (patch: AppSettingsPatch) => Promise<AppSettings>
+  /** The exact text block Claude would be given about the rep. */
+  previewPersonalization: () => Promise<{ text: string; charCount: number }>
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -564,6 +595,7 @@ declare global {
       backup: BackupApi
       virtualmic: VirtualMicApi
       knowledge: KnowledgeApi
+      settings: AppSettingsApi
     }
   }
 }

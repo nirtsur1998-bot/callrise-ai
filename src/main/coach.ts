@@ -12,6 +12,8 @@ import type {
 } from './calls-fs'
 import { listEntries } from './knowledge-fs'
 import { assembleKnowledgeContext } from './knowledge-context'
+import { loadAppSettings } from './app-settings'
+import { assemblePersonalizationContext } from './personalization-context'
 
 const MODEL = 'claude-sonnet-4-6'
 const MAX_TEXT_CHARS = 200_000
@@ -45,6 +47,21 @@ This is the rep's own material: their objection-handling scripts, product info, 
 - value dimension / improvements: if the buyer asked about a feature, check PRODUCT INFO — flag if the rep overpromised (implied something not listed) or missed a chance to mention something they DO offer.
 - discovery / control dimensions: reference SALES PLAYBOOK positioning and discovery questions where relevant.
 ${knowledge}`
+}
+
+/** Best-effort: a settings read failure should never block coaching. */
+function loadCoachPersonalization(): string {
+  try {
+    return assemblePersonalizationContext(loadAppSettings().personalization)
+  } catch {
+    return ''
+  }
+}
+
+function personalizationSection(personalization: string): string {
+  if (!personalization) return ''
+  return `\n\n${personalization}
+Use this to tailor tone/phrasing (e.g. the preferred pronoun when referring to the rep) — it is background about the rep, never evidence from the call.`
 }
 
 const DIMENSION_KEYS = new Set<CoachDimensionKey>([
@@ -460,6 +477,7 @@ export async function coachCall(segments: CallSegment[], durationMs: number): Pr
     .slice(0, MAX_TEXT_CHARS)
 
   const knowledge = await loadCoachKnowledgeContext()
+  const personalization = loadCoachPersonalization()
 
   try {
     const response = await anthropic.messages.create(
@@ -474,7 +492,7 @@ export async function coachCall(segments: CallSegment[], durationMs: number): Pr
             content: [
               {
                 type: 'text',
-                text: `${PROMPT}${knowledgeSection(knowledge)}\n\n--- TRANSCRIPT ---\n${transcript}`
+                text: `${PROMPT}${knowledgeSection(knowledge)}${personalizationSection(personalization)}\n\n--- TRANSCRIPT ---\n${transcript}`
               }
             ]
           }

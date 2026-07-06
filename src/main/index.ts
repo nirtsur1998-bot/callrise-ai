@@ -16,6 +16,7 @@ import { registerGoogle } from './google'
 import { registerBackup } from './backup'
 import { registerVirtualMic, disposeVirtualMic } from './virtualmic'
 import { registerKnowledge } from './knowledge'
+import { registerAppSettings } from './app-settings'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -102,6 +103,7 @@ app.whenReady().then(() => {
   registerBackup()
   registerVirtualMic()
   registerKnowledge()
+  registerAppSettings()
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
