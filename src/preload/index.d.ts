@@ -347,6 +347,60 @@ export interface ContactsApi {
   delete: (id: string) => Promise<{ ok: boolean }>
 }
 
+export type DealStageKind = 'open' | 'won' | 'lost'
+
+export interface DealStage {
+  id: string
+  label: string
+  kind: DealStageKind
+}
+
+export type SetDealStagesResult =
+  | { ok: true; stages: DealStage[] }
+  | { ok: false; error: 'empty' | 'stage-in-use' }
+
+export interface Deal {
+  id: string
+  title: string
+  contactId: string
+  stageId: string
+  value?: number
+  expectedCloseDate?: string
+  notes?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DealCreateInput {
+  title: string
+  contactId: string
+  stageId?: string
+  value?: number | null
+  expectedCloseDate?: string | null
+  notes?: string | null
+}
+
+export interface DealUpdateInput {
+  title?: string
+  contactId?: string
+  stageId?: string
+  value?: number | null
+  expectedCloseDate?: string | null
+  notes?: string | null
+}
+
+export interface DealsApi {
+  list: () => Promise<Deal[]>
+  create: (input: DealCreateInput) => Promise<Deal | null>
+  update: (id: string, patch: DealUpdateInput) => Promise<Deal | null>
+  delete: (id: string) => Promise<{ ok: boolean }>
+}
+
+export interface DealStagesApi {
+  get: () => Promise<DealStage[]>
+  set: (stages: DealStage[]) => Promise<SetDealStagesResult>
+}
+
 export type EventSyncState = 'local-only' | 'synced' | 'dirty' | 'deleted' | 'error'
 
 export interface EventSync {
@@ -654,6 +708,30 @@ export interface BackupSyncScope {
   settingsPersonalization: boolean
 }
 
+/** Objection Library mining master switch. OFF by default — the only gate
+ *  for whether any call transcript is ever read for objection mining. */
+export interface ObjectionMiningSettings {
+  enabled: boolean
+}
+
+export type MatchSensitivity = 'tight' | 'normal' | 'loose'
+
+export interface CrmSettings {
+  /** Master kill switch for the calendar-match suggestion banner. */
+  calendarMatchEnabled: boolean
+  /** How wide the time window is when matching a call to a calendar event. */
+  matchSensitivity: MatchSensitivity
+  /** Opt-in: auto-link when there's exactly one unambiguous match to an
+   *  EXISTING contact. Never auto-creates a contact. */
+  autoLinkUnambiguous: boolean
+  /** ISO 3166-1 alpha-2, or '' for none — pre-fills new contacts' country. */
+  defaultCountry: string
+  autoNumberCid: boolean
+  cidPrefix: string
+  /** The next sequential number to assign (incremented on each auto-assign). */
+  cidNextNumber: number
+}
+
 export interface AppSettings {
   /** Master switch: OFF removes all buyer/other-party recording capability.
    *  Can only remove capability, never grant it — per-call consent still
@@ -670,6 +748,9 @@ export interface AppSettings {
   /** Non-secret marker: has Google Calendar been connected on any device for
    *  this account? Never the OAuth token itself. */
   googleCalendarConnected: boolean
+  /** CRM Phase 1 — calendar-match sensitivity/kill-switch, default country,
+   *  and auto-numbered customer IDs. */
+  crm: CrmSettings
 }
 
 export interface AppSettingsPatch {
@@ -680,6 +761,8 @@ export interface AppSettingsPatch {
   /** Partial — only the keys present are changed; others are left as-is. */
   syncScope?: Partial<BackupSyncScope>
   googleCalendarConnected?: boolean
+  /** Partial — only the keys present are changed; others are left as-is. */
+  crm?: Partial<CrmSettings>
 }
 
 export interface AppSettingsApi {
@@ -709,6 +792,8 @@ declare global {
       calls: CallsApi
       tasks: TasksApi
       contacts: ContactsApi
+      deals: DealsApi
+      dealStages: DealStagesApi
       events: EventsApi
       auth: AuthApi
       loopback: LoopbackApi

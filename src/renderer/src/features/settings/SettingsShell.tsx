@@ -12,6 +12,7 @@ import { CoachingSection } from './CoachingSection'
 import { SummaryLanguageSection } from './SummaryLanguageSection'
 import { PersonalizationSection } from './PersonalizationSection'
 import { CalendarSection } from './CalendarSection'
+import { CrmSection } from './CrmSection'
 import { AppSection } from './AppSection'
 import { AppearanceSection } from './AppearanceSection'
 import { PrivacyDataPage } from './PrivacyDataPage'
@@ -25,6 +26,7 @@ const PAGE_CONTENT: Record<SettingsPageId, React.ComponentType> = {
   'summary-language': SummaryLanguageSection,
   personalization: PersonalizationSection,
   calendar: CalendarSection,
+  crm: CrmSection,
   app: AppSection,
   appearance: AppearanceSection,
   'privacy-data': PrivacyDataPage

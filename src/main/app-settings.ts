@@ -16,6 +16,41 @@ import {
   type PersonalizationSettings
 } from './personalization-context'
 import { sanitizeSummaryLanguage, type SummaryLanguage } from './summary-language'
+import {
+  EMPTY_CRM_SETTINGS,
+  sanitizeCrmSettings,
+  mergeCrmSettings,
+  type CrmSettings
+} from './crm-settings'
+
+/**
+ * Objection Library mining — reads call transcripts to suggest reusable
+ * objection→response scripts for review. HARD RULE: `enabled` is the ONLY
+ * gate. OFF (default) means no call is ever read for this — not new calls
+ * as they're saved, not the manual "scan past calls" trigger. Nothing
+ * mined ever becomes a real script or live-coaching cue without separate,
+ * explicit approval in the review queue (a later step) — this switch only
+ * controls whether mining runs at all.
+ */
+export interface ObjectionMiningSettings {
+  enabled: boolean
+}
+
+const EMPTY_OBJECTION_MINING: ObjectionMiningSettings = { enabled: false }
+
+function sanitizeObjectionMining(value: unknown): ObjectionMiningSettings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return { enabled: v.enabled === true }
+}
+
+function mergeObjectionMining(
+  current: ObjectionMiningSettings,
+  patch: unknown
+): ObjectionMiningSettings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return { enabled: 'enabled' in p ? p.enabled === true : current.enabled }
+}
 
 /** Which optional categories back up to the cloud, on top of the always-on
  *  Tasks/Calendar events/Call metadata. All default OFF — opt-in only. */
@@ -59,6 +94,11 @@ export interface AppSettings {
    *  Google Calendar" nudge on a fresh device instead of syncing the actual
    *  OAuth refresh token to the cloud. */
   googleCalendarConnected: boolean
+  /** CRM Phase 1 — calendar-match sensitivity/kill-switch, default country,
+   *  and auto-numbered customer IDs. */
+  crm: CrmSettings
+  /** Objection Library mining master switch. Defaults OFF. */
+  objectionMining: ObjectionMiningSettings
 }
 
 const EPOCH = new Date(0).toISOString()
@@ -69,7 +109,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   summaryLanguage: 'auto',
   syncScope: EMPTY_SYNC_SCOPE,
   settingsUpdatedAt: EPOCH,
-  googleCalendarConnected: false
+  googleCalendarConnected: false,
+  crm: EMPTY_CRM_SETTINGS,
+  objectionMining: EMPTY_OBJECTION_MINING
 }
 
 function settingsPath(): string {
@@ -123,10 +165,17 @@ export function loadAppSettings(): AppSettings {
         !Number.isNaN(Date.parse(parsed.settingsUpdatedAt))
           ? parsed.settingsUpdatedAt
           : EPOCH,
-      googleCalendarConnected: parsed.googleCalendarConnected === true
+      googleCalendarConnected: parsed.googleCalendarConnected === true,
+      crm: sanitizeCrmSettings(parsed.crm),
+      objectionMining: sanitizeObjectionMining(parsed.objectionMining)
     }
   } catch {
-    return { ...DEFAULT_SETTINGS, personalization: { ...EMPTY_PERSONALIZATION } }
+    return {
+      ...DEFAULT_SETTINGS,
+      personalization: { ...EMPTY_PERSONALIZATION },
+      crm: { ...EMPTY_CRM_SETTINGS },
+      objectionMining: { ...EMPTY_OBJECTION_MINING }
+    }
   }
 }
 
@@ -146,11 +195,22 @@ export function saveAppSettings(patch: unknown): AppSettings {
     googleCalendarConnected:
       'googleCalendarConnected' in p
         ? p.googleCalendarConnected === true
-        : current.googleCalendarConnected
+        : current.googleCalendarConnected,
+    crm: mergeCrmSettings(current.crm, p.crm),
+    objectionMining: mergeObjectionMining(current.objectionMining, p.objectionMining)
   }
   mkdirSync(app.getPath('userData'), { recursive: true })
   writeFileSync(settingsPath(), JSON.stringify(next), 'utf8')
   return next
+}
+
+/**
+ * The single gate future mining code (new-call hook, "scan past calls")
+ * must check before reading any transcript. Synchronous, like the rest of
+ * this file's settings — a missing/corrupt file collapses to OFF, never ON.
+ */
+export function isObjectionMiningEnabled(): boolean {
+  return loadAppSettings().objectionMining.enabled
 }
 
 let registered = false

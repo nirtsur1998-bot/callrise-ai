@@ -24,8 +24,10 @@ import {
   findCalendarMatches,
   isMatchDismissed,
   dismissMatch,
+  matchSensitivityMs,
   type CalendarMatch
 } from '@renderer/features/contacts/calendarMatch'
+import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import type { CalendarEvent } from '@renderer/features/calendar/types'
 import { formatDate, formatDuration, formatBytes } from './format'
 import type { Attachment, Call } from './types'
@@ -61,6 +63,7 @@ export function CallDetail({
   const { contacts, create: createContact } = useContacts()
   const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([])
   const [matchDismissed, setMatchDismissed] = useState(() => isMatchDismissed(callId))
+  const { settings } = useAppSettings()
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mountedRef = useRef(true)
@@ -220,7 +223,9 @@ export function CallDetail({
 
   const attachments = call.attachments ?? []
   const calendarMatches =
-    !call.contactId && !matchDismissed ? findCalendarMatches(call, googleEvents) : []
+    !call.contactId && !matchDismissed && settings.crm.calendarMatchEnabled
+      ? findCalendarMatches(call, googleEvents, matchSensitivityMs(settings.crm.matchSensitivity))
+      : []
 
   return (
     <div className="flex h-full flex-col">

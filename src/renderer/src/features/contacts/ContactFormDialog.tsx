@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import { ContactEditor } from './ContactEditor'
 import { emptyDraft, type ContactDraft } from './draft'
 import type { Contact } from './types'
+import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 
 export interface ContactFormValues {
   name: string
@@ -42,8 +43,9 @@ export function ContactFormDialog({
   onClose,
   onSubmit
 }: ContactFormDialogProps): React.JSX.Element {
+  const { settings } = useAppSettings()
   const [draft, setDraft] = useState<ContactDraft>(() =>
-    contact ? draftFromContact(contact) : emptyDraft()
+    contact ? draftFromContact(contact) : emptyDraft(settings.crm.defaultCountry)
   )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)

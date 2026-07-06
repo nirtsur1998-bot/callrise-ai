@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 export type AppSettings = Awaited<ReturnType<typeof window.api.settings.get>>
 export type AppSettingsPatch = Parameters<typeof window.api.settings.update>[0]
 export type SummaryLanguage = AppSettings['summaryLanguage']
+export type CrmSettings = AppSettings['crm']
 
 // The safe default (matches main's own fallback) shown until the real value
 // loads — never more permissive than what loadAppSettings() would return.
@@ -17,7 +18,16 @@ const DEFAULT_SETTINGS: AppSettings = {
     settingsPersonalization: false
   },
   settingsUpdatedAt: new Date(0).toISOString(),
-  googleCalendarConnected: false
+  googleCalendarConnected: false,
+  crm: {
+    calendarMatchEnabled: true,
+    matchSensitivity: 'normal',
+    autoLinkUnambiguous: false,
+    defaultCountry: '',
+    autoNumberCid: false,
+    cidPrefix: 'CUST-',
+    cidNextNumber: 1
+  }
 }
 
 export interface UseAppSettings {

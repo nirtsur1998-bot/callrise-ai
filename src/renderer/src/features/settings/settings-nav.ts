@@ -10,6 +10,7 @@ import {
   SunMoon,
   ShieldCheck,
   NotebookPen,
+  Contact,
   type LucideIcon
 } from 'lucide-react'
 
@@ -22,6 +23,7 @@ export type SettingsPageId =
   | 'summary-language'
   | 'personalization'
   | 'calendar'
+  | 'crm'
   | 'app'
   | 'appearance'
   | 'privacy-data'
@@ -109,6 +111,18 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         label: 'Calendar',
         icon: CalendarDays,
         description: 'Connect Google Calendar and manage two-way sync.'
+      }
+    ]
+  },
+  {
+    label: 'CRM',
+    items: [
+      {
+        id: 'crm',
+        label: 'Contacts & matching',
+        icon: Contact,
+        description:
+          'Calendar-match suggestions, default country, and auto-numbered customer IDs for Contacts.'
       }
     ]
   },

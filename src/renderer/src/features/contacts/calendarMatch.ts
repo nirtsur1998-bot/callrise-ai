@@ -13,11 +13,25 @@ export interface CalendarMatch {
 // How close a calendar event must be to the call's actual start/end to count
 // as "the same meeting" — calls rarely start/end exactly on the invite time
 // (a few minutes of chit-chat, joining late, running over), so we allow some
-// wiggle room rather than requiring an exact match.
-const BUFFER_MS = 15 * 60 * 1000
+// wiggle room rather than requiring an exact match. Configurable via Settings
+// → CRM's "match sensitivity"; this default only applies if a caller omits it.
+const DEFAULT_BUFFER_MS = 15 * 60 * 1000
 
 function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
   return aStart < bEnd && aEnd > bStart
+}
+
+/** Mirrors src/main/crm-settings.ts's matchSensitivityMs — the renderer-side
+ *  copy, since Settings' "match sensitivity" is a renderer-facing choice. */
+export function matchSensitivityMs(sensitivity: 'tight' | 'normal' | 'loose'): number {
+  switch (sensitivity) {
+    case 'tight':
+      return 5 * 60 * 1000
+    case 'loose':
+      return 30 * 60 * 1000
+    default:
+      return DEFAULT_BUFFER_MS
+  }
 }
 
 /**
@@ -29,7 +43,8 @@ function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): b
  */
 export function findCalendarMatches(
   call: { createdAt: string; durationMs: number },
-  googleEvents: CalendarEvent[]
+  googleEvents: CalendarEvent[],
+  bufferMs: number = DEFAULT_BUFFER_MS
 ): CalendarMatch[] {
   const callStart = new Date(call.createdAt).getTime()
   const callEnd = callStart + Math.max(call.durationMs, 0)
@@ -40,7 +55,7 @@ export function findCalendarMatches(
     .filter((e) => {
       const eStart = new Date(e.start).getTime()
       const eEnd = new Date(e.end).getTime()
-      return overlaps(callStart - BUFFER_MS, callEnd + BUFFER_MS, eStart, eEnd)
+      return overlaps(callStart - bufferMs, callEnd + bufferMs, eStart, eEnd)
     })
     .sort(
       (a, b) =>
@@ -86,5 +101,14 @@ export function dismissMatch(callId: string): void {
     localStorage.setItem(DISMISSED_KEY, JSON.stringify([...current, callId]))
   } catch {
     /* localStorage unavailable — the suggestion just reappears next visit */
+  }
+}
+
+/** Settings → CRM's "show dismissed calendar suggestions again" reset. */
+export function clearAllDismissedMatches(): void {
+  try {
+    localStorage.removeItem(DISMISSED_KEY)
+  } catch {
+    /* best-effort */
   }
 }

@@ -13,13 +13,15 @@ export interface ContactDraft {
   notes: string
 }
 
-export function emptyDraft(): ContactDraft {
+/** @param defaultCountry Settings → CRM's "default country for new contacts"
+ *  (ISO 3166-1 alpha-2), or '' for none. */
+export function emptyDraft(defaultCountry?: string): ContactDraft {
   return {
     name: '',
     company: '',
     cid: '',
     registeredAt: '',
-    country: undefined,
+    country: defaultCountry || undefined,
     email: '',
     phoneCountry: undefined,
     phone: '',
