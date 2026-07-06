@@ -184,6 +184,8 @@ export interface CallSummary extends CallBase {
   attachmentCount: number
   hasCoaching: boolean
   coachScore?: number
+  /** True once this call has been read for Objection Library mining. */
+  objectionsMined: boolean
 }
 
 export interface Call extends CallBase {
@@ -192,6 +194,7 @@ export interface Call extends CallBase {
   attachments?: Attachment[]
   coaching?: CoachingReport
   consent?: ConsentRecord
+  objectionsMinedAt?: string
 }
 
 export interface CallSaveInput {
@@ -343,6 +346,16 @@ export interface CallsApi {
     callId: string,
     candidates: MinedObjectionCandidate[]
   ) => Promise<{ ok: boolean; added: number }>
+  /** How many past calls have a transcript but haven't been mined yet — shown
+   *  before the user confirms the manual "scan past calls" batch run. */
+  objectionScanEstimate: () => Promise<{ eligibleCount: number }>
+  /** Mine every not-yet-mined call with a transcript, one at a time. Gated on
+   *  the toggle; only ever run when the user explicitly clicks the button. */
+  scanPastCallsForObjections: () => Promise<{
+    ok: boolean
+    scanned: number
+    candidatesAdded: number
+  }>
   /** AI Note Taker's auto-title feature: generate + save a title in one step. */
   generateTitle: (callId: string) => Promise<{ ok: true; title: string } | { ok: false }>
   /** Link (contactId) or clear (null) the contact this call belongs to. */

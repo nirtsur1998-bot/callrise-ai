@@ -183,6 +183,10 @@ export interface CallSummary extends CallBase {
   attachmentCount: number
   hasCoaching: boolean
   coachScore?: number // 0–100 overall, when coached
+  /** True once this call has been read for Objection Library mining (auto on
+   *  save, or via the manual "scan past calls" trigger) — lets both skip
+   *  calls they've already processed. */
+  objectionsMined: boolean
 }
 
 /** The full saved call (what's stored on disk). */
@@ -193,6 +197,8 @@ export interface Call extends CallBase {
   coaching?: CoachingReport
   /** Recording-consent record. Always present on calls saved from M11 on. */
   consent?: ConsentRecord
+  /** When this call was last read for Objection Library mining, if ever. */
+  objectionsMinedAt?: string
   /** Tombstone: a deleted call is kept as a minimal record (transcript dropped)
    *  so the deletion can propagate to a future cloud backup. Hidden everywhere. */
   deleted?: boolean
@@ -287,7 +293,8 @@ function toSummary(call: Call): CallSummary {
     attachmentCount: Array.isArray(call.attachments) ? call.attachments.length : 0,
     hasCoaching: Boolean(call.coaching),
     coachScore:
-      typeof call.coaching?.overallScore === 'number' ? call.coaching.overallScore : undefined
+      typeof call.coaching?.overallScore === 'number' ? call.coaching.overallScore : undefined,
+    objectionsMined: typeof call.objectionsMinedAt === 'string'
   }
 }
 
@@ -797,6 +804,18 @@ export async function setAttachmentSummary(
     if (!clean) return null // nothing usable to save — signal failure to the caller
     att.summary = clean
     call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+/** Mark a call as read for Objection Library mining (auto-mine on save, or
+ *  the manual "scan past calls" trigger) — so a future scan can skip it. */
+export async function setCallObjectionsMined(dir: string, callId: string): Promise<Call | null> {
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    call.objectionsMinedAt = new Date().toISOString()
     await writeCall(dir, call)
     return call
   })

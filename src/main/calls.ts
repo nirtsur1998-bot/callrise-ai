@@ -14,7 +14,9 @@ import {
   setCallCoaching,
   setCallTitle,
   setCallContact,
-  type CallSaveInput
+  setCallObjectionsMined,
+  type CallSaveInput,
+  type CallSummary
 } from './calls-fs'
 import { summarize, type SummarizeInput, type SummaryResult } from './summarize'
 import { coachCall, type CoachResult } from './coach'
@@ -30,6 +32,27 @@ function objectionQueueDir(): string {
 
 function callsDir(): string {
   return join(app.getPath('userData'), 'calls')
+}
+
+/** Mine one call and stage any grounded candidates in the review queue, then
+ *  mark the call as mined — shared by the new-call auto-mine hook and the
+ *  manual "scan past calls" trigger. Only marks the call mined on SUCCESS, so
+ *  a transient failure (e.g. a rate limit) leaves it eligible for a retry. */
+async function mineCallIntoQueue(callId: string): Promise<{ ok: boolean; added: number }> {
+  const call = await getCall(callsDir(), callId)
+  if (!call?.segments?.length) return { ok: false, added: 0 }
+  const result = await mineObjections(call.segments)
+  if (!result.ok) return { ok: false, added: 0 }
+  const items = await addToQueue(objectionQueueDir(), result.candidates, callId, call.title)
+  await setCallObjectionsMined(callsDir(), callId)
+  return { ok: true, added: items.length }
+}
+
+/** A call is "eligible" for mining once it has a transcript and hasn't been
+ *  mined yet — shared by the scan estimate and the scan itself so the count
+ *  shown before confirming always matches what the scan will actually do. */
+function eligibleForMining(calls: CallSummary[]): CallSummary[] {
+  return calls.filter((c) => !c.objectionsMined && c.preview.trim().length > 0)
 }
 
 /** Extract text from a .docx. Returns null when the file can't be parsed at all. */
@@ -72,6 +95,12 @@ export function registerCalls(): void {
   ipcMain.handle('calls:save', async (_event, input: CallSaveInput) => {
     const summary = await saveCall(callsDir(), input)
     scheduleBackup() // metadata only reaches the cloud (segments never included)
+    // Fire-and-forget: never block the save on an AI call. Only runs when the
+    // Objection Library toggle is on — this is the "new calls going forward"
+    // half of the mining scope (the other half is the manual scan below).
+    if (isObjectionMiningEnabled()) {
+      void mineCallIntoQueue(summary.id).catch(() => {})
+    }
     return summary
   })
   ipcMain.handle('calls:delete', async (_event, id: string) => {
@@ -251,6 +280,39 @@ export function registerCalls(): void {
       } catch {
         return { ok: false, added: 0 }
       }
+    }
+  )
+
+  // How many past calls are eligible (have a transcript, not yet mined) —
+  // shown before the user confirms the manual scan below.
+  ipcMain.handle(
+    'objections:scanEstimate',
+    async (): Promise<{ eligibleCount: number }> => {
+      if (!isObjectionMiningEnabled()) return { eligibleCount: 0 }
+      const calls = await listCalls(callsDir())
+      return { eligibleCount: eligibleForMining(calls).length }
+    }
+  )
+
+  // The manual "scan my past calls" trigger — only ever runs when the user
+  // clicks it (never automatically), one call at a time so a slow or rate-
+  // limited request can't pile up concurrent API calls.
+  ipcMain.handle(
+    'objections:scanPastCalls',
+    async (): Promise<{ ok: boolean; scanned: number; candidatesAdded: number }> => {
+      if (!isObjectionMiningEnabled()) return { ok: false, scanned: 0, candidatesAdded: 0 }
+      const calls = await listCalls(callsDir())
+      const eligible = eligibleForMining(calls)
+      let scanned = 0
+      let candidatesAdded = 0
+      for (const c of eligible) {
+        const res = await mineCallIntoQueue(c.id)
+        if (res.ok) {
+          scanned++
+          candidatesAdded += res.added
+        }
+      }
+      return { ok: true, scanned, candidatesAdded }
     }
   )
 

@@ -1,15 +1,17 @@
 import { Card } from '@renderer/components/Card'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
 import { ReviewQueueView } from '@renderer/features/objection-library/ReviewQueueView'
+import { ScanPastCallsCard } from '@renderer/features/objection-library/ScanPastCallsCard'
 import { useAppSettings } from './useAppSettings'
 import { SettingRow } from './SettingRow'
 
 /**
- * Step 1 of the Objection Library milestone: the master switch, off by
- * default. This is the ONLY gate — while off, no call transcript is ever
- * read for objection mining (not new calls, not a future manual "scan past
- * calls" trigger). Step 3 adds the review queue below — the human-in-the-loop
- * gate every mined candidate must pass before it becomes a real script.
+ * Step 1: the master switch, off by default — the ONLY gate for whether any
+ * call transcript is ever read for objection mining. Step 4 adds automatic
+ * mining of NEW calls (wired into calls:save, gated on this same toggle) and
+ * the manual "scan past calls" trigger below, for calls saved before the
+ * toggle was turned on. Step 3's review queue is still the only path from a
+ * mined suggestion to a real script.
  */
 export function ObjectionLibrarySection(): React.JSX.Element {
   const { settings, update } = useAppSettings()
@@ -33,6 +35,15 @@ export function ObjectionLibrarySection(): React.JSX.Element {
           Off by default. While off, this feature does nothing in the background — it only runs
           when you turn it on, and even then only proposes suggestions for you to review.
         </p>
+      </Card>
+
+      <Card className="mb-5">
+        <h3 className="mb-1 text-sm font-semibold">Scan my past calls</h3>
+        <p className="mb-4 text-[12px] text-muted">
+          Calls saved while this was off were never mined. This is a one-time, manual catch-up —
+          it only runs when you click the button, never automatically.
+        </p>
+        <ScanPastCallsCard enabled={enabled} />
       </Card>
 
       <Card className="mb-5">
