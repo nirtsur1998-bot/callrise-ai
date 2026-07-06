@@ -7,7 +7,9 @@ import {
   Pencil,
   Trash2,
   Settings2,
-  PhoneCall
+  PhoneCall,
+  LayoutGrid,
+  List
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { useContacts } from '@renderer/features/contacts/useContacts'
@@ -22,10 +24,12 @@ import { useDeals } from './useDeals'
 import { useDealStages } from './useDealStages'
 import { DealFormDialog, type DealFormValues } from './DealFormDialog'
 import { StageEditorDialog } from './StageEditorDialog'
+import { PipelineBoard } from './PipelineBoard'
 import { formatValue, formatCloseDate } from './format'
 import type { Deal } from './types'
 
 const ALL_STAGES = 'all'
+type ViewMode = 'board' | 'list'
 
 export function DealsView(): React.JSX.Element {
   const { deals, loading, create, update, remove } = useDeals()
@@ -33,6 +37,7 @@ export function DealsView(): React.JSX.Element {
   const { contacts } = useContacts()
   const [calls, setCalls] = useState<CallSummary[]>([])
   const [stageFilter, setStageFilter] = useState(ALL_STAGES)
+  const [view, setView] = useState<ViewMode>('board')
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Deal | null>(null)
   const [managingStages, setManagingStages] = useState(false)
@@ -59,14 +64,42 @@ export function DealsView(): React.JSX.Element {
 
   const busy = loading || stagesLoading
 
+  const moveStage = (dealId: string, stageId: string): void => {
+    void update(dealId, { stageId })
+  }
+
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className={view === 'board' ? '' : 'mx-auto max-w-3xl'}>
       <div className="mb-1 flex items-center justify-between">
         <div className="flex items-baseline gap-2.5">
           <h2 className="text-lg font-semibold tracking-tight">Deals</h2>
           <span className="text-[13px] text-faint">{deals.length} total</span>
         </div>
         <div className="flex items-center gap-2">
+          <div className="flex items-center gap-0.5 rounded-lg border border-line p-0.5">
+            <button
+              type="button"
+              onClick={() => setView('board')}
+              title="Board view"
+              className={cn(
+                'grid h-8 w-8 place-items-center rounded-md transition',
+                view === 'board' ? 'bg-accent-soft text-ink' : 'text-muted hover:text-ink'
+              )}
+            >
+              <LayoutGrid className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setView('list')}
+              title="List view"
+              className={cn(
+                'grid h-8 w-8 place-items-center rounded-md transition',
+                view === 'list' ? 'bg-accent-soft text-ink' : 'text-muted hover:text-ink'
+              )}
+            >
+              <List className="h-4 w-4" />
+            </button>
+          </div>
           <button
             type="button"
             onClick={() => setManagingStages(true)}
@@ -90,7 +123,7 @@ export function DealsView(): React.JSX.Element {
         Opportunities you&apos;re tracking through the pipeline, one per contact.
       </p>
 
-      {deals.length > 0 && stages.length > 0 && (
+      {view === 'list' && deals.length > 0 && stages.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-1.5">
           <FilterChip
             active={stageFilter === ALL_STAGES}
@@ -116,6 +149,15 @@ export function DealsView(): React.JSX.Element {
         </p>
       ) : deals.length === 0 ? (
         <EmptyAll onAdd={() => setAdding(true)} />
+      ) : view === 'board' ? (
+        <PipelineBoard
+          deals={deals}
+          stages={stages}
+          contactById={contactById}
+          contactStats={contactStats}
+          onMoveStage={moveStage}
+          onEdit={setEditing}
+        />
       ) : visible.length === 0 ? (
         <p className="rounded-xl border border-line-soft bg-surface px-4 py-8 text-center text-sm text-muted">
           No deals in this stage.
