@@ -15,7 +15,8 @@ const DEFAULT_SETTINGS: AppSettings = {
     transcripts: false,
     attachments: false,
     knowledgeBase: false,
-    settingsPersonalization: false
+    settingsPersonalization: false,
+    contacts: false
   },
   settingsUpdatedAt: new Date(0).toISOString(),
   googleCalendarConnected: false,
@@ -26,8 +27,11 @@ const DEFAULT_SETTINGS: AppSettings = {
     defaultCountry: '',
     autoNumberCid: false,
     cidPrefix: 'CUST-',
-    cidNextNumber: 1
-  }
+    cidNextNumber: 1,
+    staleFollowUpEnabled: true,
+    staleAfterDays: 14
+  },
+  objectionMining: { enabled: false }
 }
 
 export interface UseAppSettings {

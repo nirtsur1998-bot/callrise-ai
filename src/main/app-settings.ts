@@ -61,13 +61,15 @@ export interface BackupSyncScope {
   attachments: boolean
   knowledgeBase: boolean
   settingsPersonalization: boolean
+  contacts: boolean
 }
 
 const EMPTY_SYNC_SCOPE: BackupSyncScope = {
   transcripts: false,
   attachments: false,
   knowledgeBase: false,
-  settingsPersonalization: false
+  settingsPersonalization: false,
+  contacts: false
 }
 
 export interface AppSettings {
@@ -124,7 +126,8 @@ function sanitizeSyncScope(value: unknown): BackupSyncScope {
     transcripts: v.transcripts === true,
     attachments: v.attachments === true,
     knowledgeBase: v.knowledgeBase === true,
-    settingsPersonalization: v.settingsPersonalization === true
+    settingsPersonalization: v.settingsPersonalization === true,
+    contacts: v.contacts === true
   }
 }
 
@@ -138,7 +141,8 @@ function mergeSyncScope(current: BackupSyncScope, patch: unknown): BackupSyncSco
     settingsPersonalization:
       'settingsPersonalization' in p
         ? p.settingsPersonalization === true
-        : current.settingsPersonalization
+        : current.settingsPersonalization,
+    contacts: 'contacts' in p ? p.contacts === true : current.contacts
   }
 }
 

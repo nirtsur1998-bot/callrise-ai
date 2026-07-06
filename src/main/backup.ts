@@ -25,6 +25,7 @@ import {
   type Call
 } from './calls-fs'
 import { listEntries, importEntry, type KnowledgeEntry } from './knowledge-fs'
+import { listContacts, importContact, type Contact } from './contacts-fs'
 import { loadAppSettings, saveAppSettings } from './app-settings'
 import { reconcileStore, ts, type CloudRow } from './backup-core'
 
@@ -39,6 +40,9 @@ function callsDir(): string {
 }
 function knowledgeDir(): string {
   return join(app.getPath('userData'), 'knowledge')
+}
+function contactsDir(): string {
+  return join(app.getPath('userData'), 'contacts')
 }
 function statePath(): string {
   return join(app.getPath('userData'), 'backup-state.json')
@@ -319,6 +323,21 @@ export async function pushAll(): Promise<BackupResult> {
         console.error('[backup] attachment upload failed:', err)
       }
     }
+    if (syncScope.contacts) {
+      try {
+        const people = await listContacts(contactsDir(), { includeDeleted: true })
+        const contactRows: BackupRow[] = people.map((c: Contact) => ({
+          id: c.id,
+          user_id: userId,
+          updated_at: c.updatedAt,
+          deleted: c.deleted === true,
+          payload: c
+        }))
+        await upsertRows(client, 'backup_contacts', contactRows)
+      } catch (err) {
+        console.error('[backup] contacts push failed:', err)
+      }
+    }
 
     await writeState({
       lastPushAt: new Date().toISOString(),
@@ -420,6 +439,8 @@ export async function pullAll(): Promise<RestoreResult> {
       importCall(dir, p, { onlyIfNewer: true })
     const guardedImportEntry = (dir: string, p: unknown): ReturnType<typeof importEntry> =>
       importEntry(dir, p, { onlyIfNewer: true })
+    const guardedImportContact = (dir: string, p: unknown): ReturnType<typeof importContact> =>
+      importContact(dir, p, { onlyIfNewer: true })
 
     const taskRows = await fetchAllRows(client, 'backup_tasks', userId)
     const taskMap = new Map(
@@ -504,6 +525,24 @@ export async function pullAll(): Promise<RestoreResult> {
         await downloadMissingAttachments(client, userId, currentCalls)
       } catch (err) {
         console.error('[backup] attachment download failed:', err)
+      }
+    }
+    if (syncScope.contacts) {
+      try {
+        const contactRows = await fetchAllRows(client, 'backup_contacts', userId)
+        const contactMap = new Map(
+          (await listContacts(contactsDir(), { includeDeleted: true })).map((c) => [c.id, c])
+        )
+        const contactsChanged = await reconcileStore(
+          contactsDir(),
+          contactRows,
+          contactMap,
+          guardedImportContact,
+          lastSyncAt
+        )
+        if (contactsChanged > 0) notifyDataChanged() // Contacts refresh
+      } catch (err) {
+        console.error('[backup] contacts pull failed:', err)
       }
     }
 

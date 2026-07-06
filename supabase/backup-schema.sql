@@ -242,3 +242,35 @@ create policy "own attachment update" on storage.objects
   for update using (
     bucket_id = 'attachments' and (storage.foldername(name))[1] = auth.uid()::text
   );
+
+-- backup_contacts: same shape/rules as backup_tasks/events/calls/knowledge above.
+create table if not exists public.backup_contacts (
+  id                text        not null,
+  user_id           uuid        not null references auth.users (id) on delete cascade,
+  updated_at        timestamptz not null,
+  server_updated_at timestamptz not null default now(),
+  deleted           boolean     not null default false,
+  payload           jsonb       not null,
+  primary key (user_id, id)
+);
+
+create index if not exists backup_contacts_user_server_updated
+  on public.backup_contacts (user_id, server_updated_at);
+
+drop trigger if exists trg_server_updated_at on public.backup_contacts;
+create trigger trg_server_updated_at before insert or update on public.backup_contacts
+  for each row execute function public.set_server_updated_at();
+
+alter table public.backup_contacts enable row level security;
+
+drop policy if exists "own rows select" on public.backup_contacts;
+create policy "own rows select" on public.backup_contacts
+  for select using (user_id = auth.uid());
+drop policy if exists "own rows insert" on public.backup_contacts;
+create policy "own rows insert" on public.backup_contacts
+  for insert with check (user_id = auth.uid());
+drop policy if exists "own rows update" on public.backup_contacts;
+create policy "own rows update" on public.backup_contacts
+  for update using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+grant select, insert, update on public.backup_contacts to authenticated;

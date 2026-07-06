@@ -49,6 +49,12 @@ export function useContacts(): UseContacts {
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    // A cloud restore can add/update/delete contacts in the background (when
+    // Contacts sync is opted into) — re-read so the list reflects it.
+    return window.api.backup.onChanged(() => void refresh())
+  }, [refresh])
+
   const create = useCallback(
     async (input: ContactCreateInput) => {
       const contact = await window.api.contacts.create(input)

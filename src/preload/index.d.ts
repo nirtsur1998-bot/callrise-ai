@@ -267,6 +267,61 @@ export interface TaskUpdateInput {
 export type GenerateTasksResult =
   { ok: true; tasks: ProposedTask[] } | { ok: false; error: 'no-key' | 'failed'; message?: string }
 
+// --- Objection Library (mining step) ----------------------------------------
+
+export type MinedObjectionType = 'price' | 'timing' | 'competitor' | 'approval' | 'trust' | 'other'
+
+/** One mined objection→response pair. A SUGGESTION for human review, not a
+ *  fact — recoveredWell/judgmentNote are the model's best read of the
+ *  surrounding conversation. */
+export interface MinedObjectionCandidate {
+  type: MinedObjectionType
+  objectionQuote: string
+  objectionSpeaker: number
+  objectionVerified: boolean
+  responseQuote: string
+  responseSpeaker: number
+  responseVerified: boolean
+  recoveredWell: boolean
+  judgmentNote: string
+}
+
+export type ObjectionMiningResult =
+  | { ok: true; candidates: MinedObjectionCandidate[] }
+  | { ok: false; error: 'no-key' | 'disabled' | 'failed'; message?: string }
+
+// --- Objection Library (review queue, step 3) -------------------------------
+
+/** A mined candidate staged for human review — not yet a real script. */
+export interface ObjectionQueueItem {
+  id: string
+  type: MinedObjectionType
+  objectionQuote: string
+  objectionSpeaker: number
+  responseQuote: string
+  responseSpeaker: number
+  recoveredWell: boolean
+  judgmentNote: string
+  callId: string
+  callTitle: string
+  createdAt: string
+}
+
+export interface ObjectionApproveEdits {
+  trigger?: string
+  response?: string
+}
+
+export type ObjectionApproveResult = { ok: true; entry: KnowledgeEntry } | { ok: false }
+
+export interface ObjectionQueueApi {
+  list: () => Promise<ObjectionQueueItem[]>
+  /** Approve as-is (omit edits) or edit-then-approve (edits override the
+   *  mined quotes) — the only path that creates a real objection script. */
+  approve: (id: string, edits?: ObjectionApproveEdits) => Promise<ObjectionApproveResult>
+  reject: (id: string) => Promise<{ ok: boolean }>
+}
+
 export interface CallsApi {
   list: () => Promise<CallSummary[]>
   get: (id: string) => Promise<Call | null>
@@ -280,6 +335,14 @@ export interface CallsApi {
   summarizeCall: (callId: string) => Promise<SummaryResult>
   summarizeAttachment: (callId: string, attachmentId: string) => Promise<SummaryResult>
   coachCall: (callId: string) => Promise<CoachResult>
+  /** Objection Library: mine a single call for raw candidates, for the rep to
+   *  judge quality — gated on the settings toggle. */
+  mineObjectionsTest: (callId: string) => Promise<ObjectionMiningResult>
+  /** Send mined candidates into the review queue (still gated on the toggle). */
+  enqueueObjections: (
+    callId: string,
+    candidates: MinedObjectionCandidate[]
+  ) => Promise<{ ok: boolean; added: number }>
   /** AI Note Taker's auto-title feature: generate + save a title in one step. */
   generateTitle: (callId: string) => Promise<{ ok: true; title: string } | { ok: false }>
   /** Link (contactId) or clear (null) the contact this call belongs to. */
@@ -705,6 +768,7 @@ export interface BackupSyncScope {
   attachments: boolean
   knowledgeBase: boolean
   settingsPersonalization: boolean
+  contacts: boolean
 }
 
 /** Objection Library mining master switch. OFF by default — the only gate
@@ -729,6 +793,11 @@ export interface CrmSettings {
   cidPrefix: string
   /** The next sequential number to assign (incremented on each auto-assign). */
   cidNextNumber: number
+  /** Master kill switch for "needs follow-up" flagging on deals. */
+  staleFollowUpEnabled: boolean
+  /** A deal is flagged once its contact's last call is older than this many
+   *  days (or there's never been a call at all). */
+  staleAfterDays: number
 }
 
 export interface AppSettings {
@@ -804,6 +873,7 @@ declare global {
       backup: BackupApi
       virtualmic: VirtualMicApi
       knowledge: KnowledgeApi
+      objectionQueue: ObjectionQueueApi
       settings: AppSettingsApi
       app: AppControlApi
     }

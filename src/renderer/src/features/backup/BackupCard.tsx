@@ -11,7 +11,8 @@ import {
   MessagesSquare,
   Paperclip,
   BookOpen,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Contact
 } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { cn } from '@renderer/lib/cn'
@@ -53,7 +54,8 @@ const ALWAYS_SYNCED: { icon: typeof ListChecks; label: string }[] = [
   { icon: PhoneCall, label: 'Call titles, summaries & coaching scores' }
 ]
 
-type SyncScopeKey = 'transcripts' | 'attachments' | 'knowledgeBase' | 'settingsPersonalization'
+type SyncScopeKey =
+  'transcripts' | 'attachments' | 'knowledgeBase' | 'settingsPersonalization' | 'contacts'
 
 const OPTIONAL_ITEMS: { key: SyncScopeKey; icon: typeof ListChecks; label: string }[] = [
   { key: 'transcripts', icon: MessagesSquare, label: 'Call recordings & transcripts' },
@@ -63,7 +65,8 @@ const OPTIONAL_ITEMS: { key: SyncScopeKey; icon: typeof ListChecks; label: strin
     key: 'settingsPersonalization',
     icon: SlidersHorizontal,
     label: 'App settings & personalization'
-  }
+  },
+  { key: 'contacts', icon: Contact, label: 'Contacts' }
 ]
 
 /**
