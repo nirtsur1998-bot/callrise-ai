@@ -559,6 +559,26 @@ export interface PersonalizationSettings {
   about: string
 }
 
+export type SummaryLanguage =
+  | 'auto'
+  | 'english'
+  | 'spanish'
+  | 'french'
+  | 'german'
+  | 'portuguese'
+  | 'italian'
+  | 'dutch'
+  | 'polish'
+  | 'turkish'
+  | 'russian'
+  | 'arabic'
+  | 'hindi'
+  | 'chinese'
+  | 'japanese'
+  | 'korean'
+  | 'vietnamese'
+  | 'indonesian'
+
 export interface AppSettings {
   /** Master switch: OFF removes all buyer/other-party recording capability.
    *  Can only remove capability, never grant it — per-call consent still
@@ -566,12 +586,15 @@ export interface AppSettings {
   allowOtherPartyRecording: boolean
   /** Who the rep is — fed into summary/coaching prompts. Empty by default. */
   personalization: PersonalizationSettings
+  /** Language for AI summaries. 'auto' = same language as the source content. */
+  summaryLanguage: SummaryLanguage
 }
 
 export interface AppSettingsPatch {
   allowOtherPartyRecording?: boolean
   /** Partial — only the keys present are changed; others are left as-is. */
   personalization?: Partial<PersonalizationSettings>
+  summaryLanguage?: SummaryLanguage
 }
 
 export interface AppSettingsApi {

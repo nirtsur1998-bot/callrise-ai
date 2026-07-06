@@ -6,6 +6,8 @@ import { AudioSection } from './AudioSection'
 import { CoachingSection } from './CoachingSection'
 import { RecordingConsentSection } from './RecordingConsentSection'
 import { PersonalizationSection } from './PersonalizationSection'
+import { SummaryLanguageSection } from './SummaryLanguageSection'
+import { PrivacyNoticeCard } from './PrivacyNoticeCard'
 
 export function SettingsView(): React.JSX.Element {
   return (
@@ -26,6 +28,7 @@ export function SettingsView(): React.JSX.Element {
 
       <SectionHeading icon={Sparkles} title="AI & coaching" />
       <CoachingSection />
+      <SummaryLanguageSection />
 
       <SectionHeading
         icon={UserCircle}
@@ -35,6 +38,7 @@ export function SettingsView(): React.JSX.Element {
       <PersonalizationSection />
 
       <SectionHeading icon={ShieldCheck} title="Privacy & data" />
+      <PrivacyNoticeCard />
       <BackupCard />
     </div>
   )

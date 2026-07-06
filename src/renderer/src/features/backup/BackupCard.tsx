@@ -50,7 +50,9 @@ const SYNCS: { icon: typeof ListChecks; label: string }[] = [
 const STAYS_LOCAL: string[] = [
   'Call recordings & transcripts',
   'Attached files',
-  'Your Google Calendar connection'
+  'Your Google Calendar connection',
+  'Knowledge Base entries',
+  'App settings & personalization'
 ]
 
 /**

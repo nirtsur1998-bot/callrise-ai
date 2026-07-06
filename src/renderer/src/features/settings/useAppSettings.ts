@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 export type AppSettings = Awaited<ReturnType<typeof window.api.settings.get>>
 export type AppSettingsPatch = Parameters<typeof window.api.settings.update>[0]
+export type SummaryLanguage = AppSettings['summaryLanguage']
 
 // The safe default (matches main's own fallback) shown until the real value
 // loads — never more permissive than what loadAppSettings() would return.
 const DEFAULT_SETTINGS: AppSettings = {
   allowOtherPartyRecording: true,
-  personalization: { name: '', role: '', pronoun: '', about: '' }
+  personalization: { name: '', role: '', pronoun: '', about: '' },
+  summaryLanguage: 'auto'
 }
 
 export interface UseAppSettings {

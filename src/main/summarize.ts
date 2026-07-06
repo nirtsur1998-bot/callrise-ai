@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import type { Summary } from './calls-fs'
 import { loadAppSettings } from './app-settings'
 import { assemblePersonalizationContext } from './personalization-context'
+import { summaryLanguageInstruction } from './summary-language'
 
 const MODEL = 'claude-sonnet-4-6'
 const MAX_TEXT_CHARS = 200_000 // keep requests bounded
@@ -64,6 +65,16 @@ function loadSummaryPersonalization(): string {
   }
 }
 
+/** Best-effort: a settings read failure should never block summarizing.
+ *  Empty for 'auto' (Claude already matches the source language on its own). */
+function loadSummaryLanguageInstruction(): string {
+  try {
+    return summaryLanguageInstruction(loadAppSettings().summaryLanguage)
+  } catch {
+    return ''
+  }
+}
+
 function personalizationSection(personalization: string): string {
   if (!personalization) return ''
   return `\n\n${personalization}\nUse this to tailor tone/phrasing (e.g. the preferred pronoun when referring to the rep) — it is background about the rep, never content to summarize.`
@@ -107,7 +118,8 @@ export async function summarize(input: SummarizeInput): Promise<SummaryResult> {
   if (!anthropic) return { ok: false, error: 'no-key' }
 
   const personalization = loadSummaryPersonalization()
-  const promptWithPersonalization = `${PROMPT}${personalizationSection(personalization)}`
+  const language = loadSummaryLanguageInstruction()
+  const promptWithPersonalization = `${PROMPT}${language ? ` ${language}` : ''}${personalizationSection(personalization)}`
 
   const content: Anthropic.ContentBlockParam[] = []
   if (input.kind === 'pdf') {

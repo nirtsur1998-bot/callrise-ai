@@ -15,6 +15,7 @@ import {
   assemblePersonalizationContext,
   type PersonalizationSettings
 } from './personalization-context'
+import { sanitizeSummaryLanguage, type SummaryLanguage } from './summary-language'
 
 export interface AppSettings {
   /**
@@ -27,11 +28,14 @@ export interface AppSettings {
   allowOtherPartyRecording: boolean
   /** Who the rep is — fed into summary/coaching prompts. Empty by default. */
   personalization: PersonalizationSettings
+  /** Language for AI summaries. 'auto' = same language as the source content. */
+  summaryLanguage: SummaryLanguage
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
   allowOtherPartyRecording: true,
-  personalization: EMPTY_PERSONALIZATION
+  personalization: EMPTY_PERSONALIZATION,
+  summaryLanguage: 'auto'
 }
 
 function settingsPath(): string {
@@ -53,10 +57,15 @@ export function loadAppSettings(): AppSettings {
         typeof parsed.allowOtherPartyRecording === 'boolean'
           ? parsed.allowOtherPartyRecording
           : DEFAULT_SETTINGS.allowOtherPartyRecording,
-      personalization: sanitizePersonalization(parsed.personalization)
+      personalization: sanitizePersonalization(parsed.personalization),
+      summaryLanguage: sanitizeSummaryLanguage(parsed.summaryLanguage)
     }
   } catch {
-    return { allowOtherPartyRecording: true, personalization: { ...EMPTY_PERSONALIZATION } }
+    return {
+      allowOtherPartyRecording: true,
+      personalization: { ...EMPTY_PERSONALIZATION },
+      summaryLanguage: 'auto'
+    }
   }
 }
 
@@ -68,7 +77,9 @@ export function saveAppSettings(patch: unknown): AppSettings {
       typeof p.allowOtherPartyRecording === 'boolean'
         ? p.allowOtherPartyRecording
         : current.allowOtherPartyRecording,
-    personalization: mergePersonalization(current.personalization, p.personalization)
+    personalization: mergePersonalization(current.personalization, p.personalization),
+    summaryLanguage:
+      'summaryLanguage' in p ? sanitizeSummaryLanguage(p.summaryLanguage) : current.summaryLanguage
   }
   mkdirSync(app.getPath('userData'), { recursive: true })
   writeFileSync(settingsPath(), JSON.stringify(next), 'utf8')
