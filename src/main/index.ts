@@ -8,6 +8,7 @@ import icon from '../../resources/icon.png?asset'
 import { registerTranscription, disposeTranscription } from './transcription'
 import { registerCalls } from './calls'
 import { registerTasks } from './tasks'
+import { registerContacts } from './contacts'
 import { registerAuth } from './auth'
 import { registerEvents } from './events'
 import { registerLiveCue } from './live-cue'
@@ -17,6 +18,8 @@ import { registerBackup } from './backup'
 import { registerVirtualMic, disposeVirtualMic } from './virtualmic'
 import { registerKnowledge } from './knowledge'
 import { registerAppSettings } from './app-settings'
+import { registerLaunchAtLogin } from './launch-at-login'
+import { registerActiveApp } from './active-app'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -95,6 +98,7 @@ app.whenReady().then(() => {
   registerTranscription()
   registerCalls()
   registerTasks()
+  registerContacts()
   registerAuth()
   registerEvents()
   registerLiveCue()
@@ -104,6 +108,8 @@ app.whenReady().then(() => {
   registerVirtualMic()
   registerKnowledge()
   registerAppSettings()
+  registerLaunchAtLogin()
+  registerActiveApp()
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

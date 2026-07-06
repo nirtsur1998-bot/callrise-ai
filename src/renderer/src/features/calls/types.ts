@@ -47,6 +47,8 @@ interface CallBase {
   durationMs: number
   speakerCount: number
   preview: string
+  /** The contact this call is linked to, if any. */
+  contactId?: string
 }
 
 export interface CallSummary extends CallBase {

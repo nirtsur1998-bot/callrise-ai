@@ -44,7 +44,10 @@ const api = {
     summarizeCall: (callId: string) => ipcRenderer.invoke('summary:call', callId),
     summarizeAttachment: (callId: string, attachmentId: string) =>
       ipcRenderer.invoke('summary:attachment', callId, attachmentId),
-    coachCall: (callId: string) => ipcRenderer.invoke('coach:call', callId)
+    coachCall: (callId: string) => ipcRenderer.invoke('coach:call', callId),
+    generateTitle: (callId: string) => ipcRenderer.invoke('calls:generateTitle', callId),
+    setContact: (callId: string, contactId: string | null) =>
+      ipcRenderer.invoke('calls:setContact', callId, contactId)
   },
   tasks: {
     list: () => ipcRenderer.invoke('tasks:list'),
@@ -52,6 +55,12 @@ const api = {
     update: (id: string, patch: unknown) => ipcRenderer.invoke('tasks:update', id, patch),
     delete: (id: string) => ipcRenderer.invoke('tasks:delete', id),
     generateFromCall: (callId: string) => ipcRenderer.invoke('tasks:generateFromCall', callId)
+  },
+  contacts: {
+    list: () => ipcRenderer.invoke('contacts:list'),
+    create: (input: unknown) => ipcRenderer.invoke('contacts:create', input),
+    update: (id: string, patch: unknown) => ipcRenderer.invoke('contacts:update', id, patch),
+    delete: (id: string) => ipcRenderer.invoke('contacts:delete', id)
   },
   events: {
     list: () => ipcRenderer.invoke('events:list'),
@@ -76,6 +85,7 @@ const api = {
     signIn: (email: string, password: string) =>
       ipcRenderer.invoke('auth:signIn', { email, password }),
     resendCode: (email: string) => ipcRenderer.invoke('auth:resendCode', { email }),
+    updateName: (name: string) => ipcRenderer.invoke('auth:updateName', { name }),
     signOut: () => ipcRenderer.invoke('auth:signOut'),
     onChange: (cb: (user: unknown) => void) => subscribe('auth:changed', cb)
   },
@@ -127,6 +137,12 @@ const api = {
     get: () => ipcRenderer.invoke('settings:get'),
     update: (patch: unknown) => ipcRenderer.invoke('settings:update', patch),
     previewPersonalization: () => ipcRenderer.invoke('settings:previewPersonalization')
+  },
+  app: {
+    getLaunchAtLogin: () => ipcRenderer.invoke('app:getLaunchAtLogin'),
+    setLaunchAtLogin: (value: boolean) => ipcRenderer.invoke('app:setLaunchAtLogin', value),
+    getActiveApp: () => ipcRenderer.invoke('app:getActiveApp'),
+    openAccessibilitySettings: () => ipcRenderer.invoke('app:openAccessibilitySettings')
   }
 }
 

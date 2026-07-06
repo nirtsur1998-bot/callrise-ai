@@ -17,6 +17,9 @@ export interface CalendarEvent {
   htmlLink?: string
   /** Google-only: true when the event's calendar allows writes (owner/writer). */
   writable?: boolean
+  /** Google-only: other invitees (the connected account itself is excluded) —
+   *  the CRM's calendar-match signal for suggesting who a call was with. */
+  attendees?: { email: string; name?: string }[]
   googleUpdatedAt?: string
   sync?: { state: EventSyncState; lastPushedAt?: string; lastError?: string }
   createdAt: string

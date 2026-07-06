@@ -172,6 +172,9 @@ interface CallBase {
   durationMs: number
   speakerCount: number
   preview: string
+  /** The contact this call is linked to (manual, or confirmed from a calendar
+   *  match) — the CRM foundation's call-history link. */
+  contactId?: string
 }
 
 /** Lightweight item for the Past Calls list. */
@@ -279,6 +282,7 @@ function toSummary(call: Call): CallSummary {
     durationMs: call.durationMs,
     speakerCount: call.speakerCount,
     preview: call.preview,
+    contactId: isSafeId(call.contactId) ? call.contactId : undefined,
     hasSummary: Boolean(call.summary),
     attachmentCount: Array.isArray(call.attachments) ? call.attachments.length : 0,
     hasCoaching: Boolean(call.coaching),
@@ -293,6 +297,13 @@ async function ensureDir(dir: string): Promise<void> {
 
 function filesDir(dir: string): string {
   return join(dir, 'files')
+}
+
+/** Where a given attachment's blob lives on disk — exported for the (opt-in)
+ *  attachment-sync path in backup.ts, which needs the local path to upload
+ *  from and to write a downloaded blob back to. */
+export function attachmentBlobPath(dir: string, attachmentId: string, ext: string): string {
+  return join(filesDir(dir), `${attachmentId}.${ext}`)
 }
 
 async function writeCall(dir: string, call: Call): Promise<void> {
@@ -509,6 +520,23 @@ export function callBackupPayload(call: Call): Record<string, unknown> {
   }
 }
 
+/**
+ * FULL payload — used ONLY when the user has explicitly opted into syncing
+ * call recordings & transcripts (Settings → Privacy & data's sync-scope
+ * toggle, off by default). Same shape as callBackupPayload but restores the
+ * transcript and the coaching evidence quotes it strips. Attachment file
+ * BYTES still never travel in this JSON payload — those go through Storage
+ * separately, gated by their own toggle.
+ */
+export function callFullBackupPayload(call: Call): Record<string, unknown> {
+  return {
+    ...callBackupPayload(call),
+    preview: call.preview,
+    segments: call.segments,
+    coaching: call.coaching
+  }
+}
+
 /** All calls for the backup push — full records INCLUDING tombstones (so
  *  deletions propagate). Consent is normalized + unconsented buyer turns
  *  stripped on read (defense in depth); the payload builder then removes ALL
@@ -707,6 +735,46 @@ export async function setCallSummary(
     const clean = sanitizeSummary(summary)
     if (!clean) return null // nothing usable to save — signal failure to the caller
     call.summary = clean
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+/** Set a call's title (manual rename, or the AI Note Taker auto-title feature). */
+export async function setCallTitle(
+  dir: string,
+  callId: string,
+  title: unknown
+): Promise<Call | null> {
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    const trimmed = typeof title === 'string' ? title.trim().slice(0, 300) : ''
+    if (!trimmed) return call // never blank out the title
+    call.title = trimmed
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+/** Link (or clear, with `null`) the contact this call belongs to. */
+export async function setCallContact(
+  dir: string,
+  callId: string,
+  contactId: unknown
+): Promise<Call | null> {
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    if (contactId === null) {
+      delete call.contactId
+    } else if (isSafeId(contactId)) {
+      call.contactId = contactId
+    } else {
+      return call // not a recognizable id and not an explicit clear — leave as-is
+    }
     call.updatedAt = new Date().toISOString()
     await writeCall(dir, call)
     return call

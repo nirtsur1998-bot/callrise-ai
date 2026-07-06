@@ -23,6 +23,7 @@ import {
   type PushResult,
   type DeleteResult
 } from './google-sync'
+import { saveAppSettings } from './app-settings'
 
 // M13 read-only scope. M14 adds a SEPARATE write flow (calendar.events) so the
 // read-only path is never silently widened — the user explicitly opts into it.
@@ -188,6 +189,9 @@ function connect(scopes: string[], mode: SyncMode): Promise<ConnectResult> {
           if (!tokens.refresh_token) return finish({ ok: false, error: 'no-refresh-token' })
           await saveRefreshToken(tokens.refresh_token)
           await saveMode(mode)
+          // Non-secret marker only (never the token) — lets a NEW device offer
+          // "reconnect Google Calendar" instead of syncing the actual credential.
+          saveAppSettings({ googleCalendarConnected: true })
           finish({ ok: true })
         })
         .catch(() => finish({ ok: false, error: 'token-exchange-failed' }))
@@ -250,6 +254,7 @@ async function disconnect(): Promise<{ ok: boolean }> {
   await clearMode() // back to read-only on the next connect
   await clearCache() // pulled events are meaningless once disconnected
   cachedPrimaryId = null
+  saveAppSettings({ googleCalendarConnected: false }) // explicit disconnect — no more reconnect nudge
   return { ok: true }
 }
 
@@ -298,6 +303,10 @@ export interface GoogleEvent {
    *  calendars (holidays, subscribed, freeBusy) can't be edited/deleted. */
   writable: boolean
   htmlLink?: string
+  /** Other attendees (the connected account's own entry is excluded) — the CRM's
+   *  calendar-match signal for suggesting who a call was with. Read-only data,
+   *  never written back to Google. */
+  attendees?: { email: string; name?: string }[]
   createdAt: string
   updatedAt: string
 }
@@ -353,6 +362,13 @@ function parseLocalDate(d: string): Date {
   return new Date(y ?? 1970, (m ?? 1) - 1, day ?? 1)
 }
 
+interface RawAttendee {
+  email?: string
+  displayName?: string
+  self?: boolean
+  resource?: boolean // e.g. a meeting-room calendar resource, not a person
+}
+
 interface RawEvent {
   id?: string
   status?: string
@@ -362,6 +378,25 @@ interface RawEvent {
   updated?: string
   start?: { date?: string; dateTime?: string }
   end?: { date?: string; dateTime?: string }
+  attendees?: RawAttendee[]
+}
+
+const MAX_ATTENDEES = 10
+
+/** The other people on the invite — excludes the connected account itself
+ *  (Google's `self` flag) and non-person resources (rooms). */
+function mapAttendees(
+  raw: RawAttendee[] | undefined
+): { email: string; name?: string }[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const people = raw
+    .filter((a) => a.email && !a.self && !a.resource)
+    .slice(0, MAX_ATTENDEES)
+    .map((a) => ({
+      email: (a.email as string).toLowerCase(),
+      name: a.displayName?.trim() || undefined
+    }))
+  return people.length ? people : undefined
 }
 
 /** Map a Google API event to a GoogleEvent, or null to drop it (cancelled/invalid). */
@@ -397,6 +432,7 @@ function mapEvent(raw: RawEvent, calendarId: string, writable: boolean): GoogleE
     externalId: raw.id,
     writable,
     htmlLink: raw.htmlLink,
+    attendees: mapAttendees(raw.attendees),
     createdAt: raw.created ?? now,
     updatedAt: raw.updated ?? now
   }

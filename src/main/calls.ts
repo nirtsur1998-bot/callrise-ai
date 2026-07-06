@@ -12,10 +12,13 @@ import {
   setCallSummary,
   setAttachmentSummary,
   setCallCoaching,
+  setCallTitle,
+  setCallContact,
   type CallSaveInput
 } from './calls-fs'
 import { summarize, type SummarizeInput, type SummaryResult } from './summarize'
 import { coachCall, type CoachResult } from './coach'
+import { generateCallTitle, type GenerateTitleResult } from './call-title'
 import { scheduleBackup } from './backup'
 
 function callsDir(): string {
@@ -81,6 +84,13 @@ export function registerCalls(): void {
   ipcMain.handle('calls:removeAttachment', (_event, callId: string, attachmentId: string) =>
     removeAttachment(callsDir(), callId, attachmentId)
   )
+
+  // --- CRM: link this call to a contact -------------------------------------
+  ipcMain.handle('calls:setContact', async (_event, callId: string, contactId: string | null) => {
+    const call = await setCallContact(callsDir(), callId, contactId)
+    scheduleBackup() // the link is metadata like a title edit
+    return call
+  })
 
   // --- AI summaries --------------------------------------------------------
   ipcMain.handle('summary:call', async (_event, callId: string): Promise<SummaryResult> => {
@@ -183,4 +193,23 @@ export function registerCalls(): void {
       }
     }
   })
+
+  // AI Note Taker's auto-title feature: generate + save a title in one step.
+  ipcMain.handle(
+    'calls:generateTitle',
+    async (_event, callId: string): Promise<GenerateTitleResult> => {
+      try {
+        const call = await getCall(callsDir(), callId)
+        if (!call?.segments?.length) return { ok: false }
+        const result = await generateCallTitle(call.segments)
+        if (!result.ok) return result
+        const saved = await setCallTitle(callsDir(), callId, result.title)
+        if (!saved) return { ok: false }
+        scheduleBackup() // the new title reaches the cloud like any other metadata edit
+        return { ok: true, title: saved.title }
+      } catch {
+        return { ok: false }
+      }
+    }
+  )
 }

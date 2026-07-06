@@ -10,12 +10,23 @@ import {
   FileText,
   RotateCw,
   ListChecks,
-  GraduationCap
+  GraduationCap,
+  Contact as ContactIcon
 } from 'lucide-react'
 import { SpeakerTranscript } from '@renderer/components/SpeakerTranscript'
 import { SummaryView, SummaryLoading } from '@renderer/components/SummaryView'
 import { GenerateTasksDialog } from '@renderer/features/tasks/GenerateTasksDialog'
 import { CoachReportView, CoachLoading } from '@renderer/features/coaching/CoachReportView'
+import { useContacts } from '@renderer/features/contacts/useContacts'
+import { ContactPicker } from '@renderer/features/contacts/ContactPicker'
+import { CalendarMatchSuggestion } from '@renderer/features/contacts/CalendarMatchSuggestion'
+import {
+  findCalendarMatches,
+  isMatchDismissed,
+  dismissMatch,
+  type CalendarMatch
+} from '@renderer/features/contacts/calendarMatch'
+import type { CalendarEvent } from '@renderer/features/calendar/types'
 import { formatDate, formatDuration, formatBytes } from './format'
 import type { Attachment, Call } from './types'
 
@@ -47,6 +58,9 @@ export function CallDetail({
   const [tasksAdded, setTasksAdded] = useState(0)
   const [coaching, setCoaching] = useState(false)
   const [coachError, setCoachError] = useState<string | null>(null)
+  const { contacts, create: createContact } = useContacts()
+  const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([])
+  const [matchDismissed, setMatchDismissed] = useState(() => isMatchDismissed(callId))
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mountedRef = useRef(true)
@@ -63,6 +77,7 @@ export function CallDetail({
   useEffect(() => {
     let active = true
     setCall(null)
+    setMatchDismissed(isMatchDismissed(callId))
     void window.api.calls.get(callId).then((c) => {
       if (!active) return
       if (c) setCall(c)
@@ -72,6 +87,18 @@ export function CallDetail({
       active = false
     }
   }, [callId])
+
+  useEffect(() => {
+    // Read-only cache, no network pull — the calendar screen already keeps it
+    // fresh; this just needs "what's already known" for the match suggestion.
+    let active = true
+    void window.api.google.cachedEvents().then((events) => {
+      if (active) setGoogleEvents(events)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
 
   const reload = useCallback(async () => {
     const c = await window.api.calls.get(callId)
@@ -161,6 +188,30 @@ export function CallDetail({
     onDeleted()
   }, [callId, onChanged, onDeleted])
 
+  const linkContact = useCallback(
+    async (contactId: string | undefined) => {
+      await window.api.calls.setContact(callId, contactId ?? null)
+      await notifyChanged()
+    },
+    [callId, notifyChanged]
+  )
+
+  const createAndLinkAttendee = useCallback(
+    async (attendee: CalendarMatch['attendee']) => {
+      const contact = await createContact({
+        name: attendee.name || attendee.email,
+        email: attendee.email
+      })
+      if (contact) await linkContact(contact.id)
+    },
+    [createContact, linkContact]
+  )
+
+  const dismissMatchSuggestion = useCallback(() => {
+    dismissMatch(callId)
+    setMatchDismissed(true)
+  }, [callId])
+
   if (!call) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-faint">Loading…</div>
@@ -168,6 +219,8 @@ export function CallDetail({
   }
 
   const attachments = call.attachments ?? []
+  const calendarMatches =
+    !call.contactId && !matchDismissed ? findCalendarMatches(call, googleEvents) : []
 
   return (
     <div className="flex h-full flex-col">
@@ -226,6 +279,31 @@ export function CallDetail({
       {/* Scrollable body */}
       <div className="flex-1 space-y-4 overflow-y-auto pb-2">
         {noKey && <NoKeyBanner />}
+
+        {/* Linked contact */}
+        <section className="rounded-2xl border border-line-soft bg-surface p-6">
+          <div className="mb-3 flex items-center gap-2">
+            <ContactIcon className="h-4 w-4 text-accent" />
+            <h3 className="text-sm font-semibold">Contact</h3>
+          </div>
+          {calendarMatches.length > 0 && (
+            <div className="mb-3">
+              <CalendarMatchSuggestion
+                matches={calendarMatches}
+                contacts={contacts}
+                onLink={(contactId) => void linkContact(contactId)}
+                onCreateAndLink={(attendee) => void createAndLinkAttendee(attendee)}
+                onDismiss={dismissMatchSuggestion}
+              />
+            </div>
+          )}
+          <ContactPicker
+            value={call.contactId}
+            contacts={contacts}
+            onSelect={(contactId) => void linkContact(contactId)}
+            onCreate={createContact}
+          />
+        </section>
 
         {/* AI summary */}
         <section className="rounded-2xl border border-line-soft bg-surface p-6">

@@ -174,6 +174,9 @@ interface CallBase {
   durationMs: number
   speakerCount: number
   preview: string
+  /** The contact this call is linked to (manual, or confirmed from a calendar
+   *  match) — the CRM foundation's call-history link. */
+  contactId?: string
 }
 
 export interface CallSummary extends CallBase {
@@ -277,6 +280,10 @@ export interface CallsApi {
   summarizeCall: (callId: string) => Promise<SummaryResult>
   summarizeAttachment: (callId: string, attachmentId: string) => Promise<SummaryResult>
   coachCall: (callId: string) => Promise<CoachResult>
+  /** AI Note Taker's auto-title feature: generate + save a title in one step. */
+  generateTitle: (callId: string) => Promise<{ ok: true; title: string } | { ok: false }>
+  /** Link (contactId) or clear (null) the contact this call belongs to. */
+  setContact: (callId: string, contactId: string | null) => Promise<Call | null>
 }
 
 export interface TasksApi {
@@ -285,6 +292,59 @@ export interface TasksApi {
   update: (id: string, patch: TaskUpdateInput) => Promise<Task | null>
   delete: (id: string) => Promise<{ ok: boolean }>
   generateFromCall: (callId: string) => Promise<GenerateTasksResult>
+}
+
+export interface Contact {
+  id: string
+  name: string
+  /** Free-text company name — not a separate entity yet (a later CRM phase). */
+  company?: string
+  /** The rep's own customer/account number for this person (free text). */
+  cid?: string
+  /** When this person became a customer (date-only ISO string, yyyy-mm-dd). */
+  registeredAt?: string
+  /** ISO 3166-1 alpha-2 country of the client, e.g. "US". */
+  country?: string
+  email?: string
+  /** ISO 3166-1 alpha-2 country the phone number's dial code belongs to. */
+  phoneCountry?: string
+  /** National number only (no dial code — that's phoneCountry). */
+  phone?: string
+  notes?: string
+  createdAt: string
+  /** Last modification (create or edit); a future backup's "newest wins" key. */
+  updatedAt: string
+}
+
+export interface ContactCreateInput {
+  name: string
+  company?: string | null
+  cid?: string | null
+  registeredAt?: string | null
+  country?: string | null
+  email?: string | null
+  phoneCountry?: string | null
+  phone?: string | null
+  notes?: string | null
+}
+
+export interface ContactUpdateInput {
+  name?: string
+  company?: string | null
+  cid?: string | null
+  registeredAt?: string | null
+  country?: string | null
+  email?: string | null
+  phoneCountry?: string | null
+  phone?: string | null
+  notes?: string | null
+}
+
+export interface ContactsApi {
+  list: () => Promise<Contact[]>
+  create: (input: ContactCreateInput) => Promise<Contact | null>
+  update: (id: string, patch: ContactUpdateInput) => Promise<Contact | null>
+  delete: (id: string) => Promise<{ ok: boolean }>
 }
 
 export type EventSyncState = 'local-only' | 'synced' | 'dirty' | 'deleted' | 'error'
@@ -309,6 +369,9 @@ export interface CalendarEvent {
   htmlLink?: string
   /** Google-only: true when the event's calendar allows writes (owner/writer). */
   writable?: boolean
+  /** Google-only: other invitees (the connected account itself is excluded) —
+   *  the CRM's calendar-match signal for suggesting who a call was with. */
+  attendees?: { email: string; name?: string }[]
   /** Google's `updated` at last sync — the echo-loop watermark (M14). */
   googleUpdatedAt?: string
   /** Google mirror lifecycle for local events (M14 two-way sync). */
@@ -394,6 +457,7 @@ export interface AuthApi {
   verifyOtp: (email: string, token: string) => Promise<VerifyResult>
   signIn: (email: string, password: string) => Promise<SignInResult>
   resendCode: (email: string) => Promise<SimpleAuthResult>
+  updateName: (name: string) => Promise<SimpleAuthResult>
   signOut: () => Promise<SimpleAuthResult>
   onChange: (cb: (user: AuthUser | null) => void) => () => void
 }
@@ -579,6 +643,17 @@ export type SummaryLanguage =
   | 'vietnamese'
   | 'indonesian'
 
+/** Which optional categories back up to the cloud, on top of the always-on
+ *  Tasks/Calendar events/Call metadata. All default OFF — opt-in only. */
+export interface BackupSyncScope {
+  /** Buyer transcripts + coaching evidence quotes (normally stripped before backup). */
+  transcripts: boolean
+  /** Attached document blobs (Supabase Storage), not just their metadata. */
+  attachments: boolean
+  knowledgeBase: boolean
+  settingsPersonalization: boolean
+}
+
 export interface AppSettings {
   /** Master switch: OFF removes all buyer/other-party recording capability.
    *  Can only remove capability, never grant it — per-call consent still
@@ -588,6 +663,13 @@ export interface AppSettings {
   personalization: PersonalizationSettings
   /** Language for AI summaries. 'auto' = same language as the source content. */
   summaryLanguage: SummaryLanguage
+  /** Optional cloud-backup categories (Privacy & data), all off by default. */
+  syncScope: BackupSyncScope
+  /** "Newest wins" cursor for when this whole object is synced to the cloud. */
+  settingsUpdatedAt: string
+  /** Non-secret marker: has Google Calendar been connected on any device for
+   *  this account? Never the OAuth token itself. */
+  googleCalendarConnected: boolean
 }
 
 export interface AppSettingsPatch {
@@ -595,6 +677,9 @@ export interface AppSettingsPatch {
   /** Partial — only the keys present are changed; others are left as-is. */
   personalization?: Partial<PersonalizationSettings>
   summaryLanguage?: SummaryLanguage
+  /** Partial — only the keys present are changed; others are left as-is. */
+  syncScope?: Partial<BackupSyncScope>
+  googleCalendarConnected?: boolean
 }
 
 export interface AppSettingsApi {
@@ -604,6 +689,18 @@ export interface AppSettingsApi {
   previewPersonalization: () => Promise<{ text: string; charCount: number }>
 }
 
+/** OS-level "launch at login" — no separate storage, the OS is the source of truth. */
+export interface AppControlApi {
+  getLaunchAtLogin: () => Promise<boolean>
+  setLaunchAtLogin: (value: boolean) => Promise<boolean>
+  /** The frontmost app's name right now, or null if detection is unavailable
+   *  (permission not granted, unsupported platform, or a detection failure —
+   *  always fail-open, never block auto-start on this being null). */
+  getActiveApp: () => Promise<string | null>
+  /** Deep-link to the macOS Accessibility settings pane active-win needs. */
+  openAccessibilitySettings: () => Promise<{ ok: boolean }>
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -611,6 +708,7 @@ declare global {
       transcription: TranscriptionApi
       calls: CallsApi
       tasks: TasksApi
+      contacts: ContactsApi
       events: EventsApi
       auth: AuthApi
       loopback: LoopbackApi
@@ -619,6 +717,7 @@ declare global {
       virtualmic: VirtualMicApi
       knowledge: KnowledgeApi
       settings: AppSettingsApi
+      app: AppControlApi
     }
   }
 }
