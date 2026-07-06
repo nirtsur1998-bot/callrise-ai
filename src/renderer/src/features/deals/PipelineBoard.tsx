@@ -16,7 +16,7 @@ interface PipelineBoardProps {
   contactById: Map<string, Contact>
   contactStats: Map<string, ContactStats>
   onMoveStage: (dealId: string, stageId: string) => void
-  onEdit: (deal: Deal) => void
+  onOpen: (deal: Deal) => void
 }
 
 const KIND_HEADER_TEXT: Record<DealStage['kind'], string> = {
@@ -28,15 +28,15 @@ const KIND_HEADER_TEXT: Record<DealStage['kind'], string> = {
 /** A simple kanban: columns = stages (in configured order), cards = deals.
  *  Moving a deal uses prev/next chevrons rather than drag-and-drop — see the
  *  Step 1 tradeoff note: keyboard-accessible, no new dependency, and just as
- *  fast for the common "move it one stage over" case. Click a card for the
- *  full edit dialog (which can jump to any stage, not just adjacent ones). */
+ *  fast for the common "move it one stage over" case. Click a card to open
+ *  its detail view (full edit — including jumping to any stage — lives there). */
 export function PipelineBoard({
   deals,
   stages,
   contactById,
   contactStats,
   onMoveStage,
-  onEdit
+  onOpen
 }: PipelineBoardProps): React.JSX.Element {
   const dealsByStage = new Map<string, Deal[]>()
   for (const deal of deals) {
@@ -77,7 +77,7 @@ export function PipelineBoard({
                     canMoveNext={stageIndex < stages.length - 1}
                     onMovePrev={() => onMoveStage(deal.id, stages[stageIndex - 1].id)}
                     onMoveNext={() => onMoveStage(deal.id, stages[stageIndex + 1].id)}
-                    onEdit={() => onEdit(deal)}
+                    onEdit={() => onOpen(deal)}
                   />
                 ))
               )}

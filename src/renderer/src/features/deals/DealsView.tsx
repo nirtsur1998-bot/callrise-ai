@@ -25,6 +25,7 @@ import { useDealStages } from './useDealStages'
 import { DealFormDialog, type DealFormValues } from './DealFormDialog'
 import { StageEditorDialog } from './StageEditorDialog'
 import { PipelineBoard } from './PipelineBoard'
+import { DealDetail } from './DealDetail'
 import { formatValue, formatCloseDate } from './format'
 import type { Deal } from './types'
 
@@ -41,6 +42,7 @@ export function DealsView(): React.JSX.Element {
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Deal | null>(null)
   const [managingStages, setManagingStages] = useState(false)
+  const [viewingId, setViewingId] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
@@ -66,6 +68,33 @@ export function DealsView(): React.JSX.Element {
 
   const moveStage = (dealId: string, stageId: string): void => {
     void update(dealId, { stageId })
+  }
+
+  const viewing = viewingId ? deals.find((d) => d.id === viewingId) : undefined
+
+  if (viewing) {
+    return (
+      <>
+        <DealDetail
+          deal={viewing}
+          contact={contactById.get(viewing.contactId)}
+          stage={stageLabel.get(viewing.stageId)}
+          onBack={() => setViewingId(null)}
+          onEdit={() => setEditing(viewing)}
+        />
+        {editing && (
+          <DealFormDialog
+            deal={editing}
+            stages={stages}
+            onClose={() => setEditing(null)}
+            onSubmit={async (values: DealFormValues) => {
+              await update(editing.id, values)
+              setEditing(null)
+            }}
+          />
+        )}
+      </>
+    )
   }
 
   return (
@@ -156,7 +185,7 @@ export function DealsView(): React.JSX.Element {
           contactById={contactById}
           contactStats={contactStats}
           onMoveStage={moveStage}
-          onEdit={setEditing}
+          onOpen={(deal) => setViewingId(deal.id)}
         />
       ) : visible.length === 0 ? (
         <p className="rounded-xl border border-line-soft bg-surface px-4 py-8 text-center text-sm text-muted">
@@ -175,6 +204,7 @@ export function DealsView(): React.JSX.Element {
                 contactCompany={contact?.company}
                 stageLabel={stageLabel.get(deal.stageId)?.label ?? '—'}
                 lastCallAt={stats?.lastCallAt}
+                onView={() => setViewingId(deal.id)}
                 onEdit={() => setEditing(deal)}
                 onDelete={() => void remove(deal.id)}
               />
@@ -248,6 +278,7 @@ interface DealRowProps {
   contactCompany: string | undefined
   stageLabel: string
   lastCallAt: string | undefined
+  onView: () => void
   onEdit: () => void
   onDelete: () => void
 }
@@ -258,6 +289,7 @@ function DealRow({
   contactCompany,
   stageLabel,
   lastCallAt,
+  onView,
   onEdit,
   onDelete
 }: DealRowProps): React.JSX.Element {
@@ -269,7 +301,7 @@ function DealRow({
   return (
     <li>
       <div className="group flex items-start gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3.5 transition hover:border-line hover:bg-elevated">
-        <div className="min-w-0 flex-1">
+        <button type="button" onClick={onView} className="min-w-0 flex-1 text-left">
           <div className="flex items-baseline justify-between gap-3">
             <p className="truncate text-sm font-medium">{deal.title}</p>
             <span className="shrink-0 rounded-full border border-line-soft bg-canvas px-2 py-0.5 text-[11px] font-medium text-muted">
@@ -293,7 +325,7 @@ function DealRow({
             </span>
           </div>
           {deal.notes && <p className="mt-1.5 text-[12px] text-muted">{deal.notes}</p>}
-        </div>
+        </button>
 
         <div className="flex shrink-0 items-center gap-1">
           {confirm ? (
