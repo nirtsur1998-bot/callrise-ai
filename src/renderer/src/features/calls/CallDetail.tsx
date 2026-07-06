@@ -17,9 +17,13 @@ import { SpeakerTranscript } from '@renderer/components/SpeakerTranscript'
 import { SummaryView, SummaryLoading } from '@renderer/components/SummaryView'
 import { GenerateTasksDialog } from '@renderer/features/tasks/GenerateTasksDialog'
 import { CoachReportView, CoachLoading } from '@renderer/features/coaching/CoachReportView'
+import { MineTestPanel } from '@renderer/features/objection-library/MineTestPanel'
 import { useContacts } from '@renderer/features/contacts/useContacts'
 import { ContactPicker } from '@renderer/features/contacts/ContactPicker'
-import { CalendarMatchSuggestion } from '@renderer/features/contacts/CalendarMatchSuggestion'
+import {
+  CalendarMatchSuggestion,
+  AutoLinkedNotice
+} from '@renderer/features/contacts/CalendarMatchSuggestion'
 import {
   findCalendarMatches,
   isMatchDismissed,
@@ -64,6 +68,15 @@ export function CallDetail({
   const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([])
   const [matchDismissed, setMatchDismissed] = useState(() => isMatchDismissed(callId))
   const { settings } = useAppSettings()
+  const [autoLinkNotice, setAutoLinkNotice] = useState<{
+    contactId: string
+    contactName: string
+  } | null>(null)
+  // Which call id we've already attempted to auto-link, so the effect below
+  // fires at most once per call (linkContact clearing call.contactId as it
+  // resolves must not re-trigger it). State, not a ref, since the render body
+  // below also needs to read it (to skip the manual banner while pending).
+  const [autoLinkAttemptedFor, setAutoLinkAttemptedFor] = useState<string | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mountedRef = useRef(true)
@@ -81,6 +94,8 @@ export function CallDetail({
     let active = true
     setCall(null)
     setMatchDismissed(isMatchDismissed(callId))
+    setAutoLinkNotice(null)
+    setAutoLinkAttemptedFor(null)
     void window.api.calls.get(callId).then((c) => {
       if (!active) return
       if (c) setCall(c)
@@ -215,6 +230,52 @@ export function CallDetail({
     setMatchDismissed(true)
   }, [callId])
 
+  // Auto-link (Settings → CRM, opt-in, default off): when there's exactly one
+  // calendar match AND it points to a contact that already exists, link it
+  // without asking — but never silently: a visible, undoable notice replaces
+  // the manual banner. Never auto-creates a new contact.
+  useEffect(() => {
+    if (!call) return
+    if (call.contactId || matchDismissed || !settings.crm.calendarMatchEnabled) return
+    if (!settings.crm.autoLinkUnambiguous) return
+    if (autoLinkAttemptedFor === callId) return
+
+    const matches = findCalendarMatches(
+      call,
+      googleEvents,
+      matchSensitivityMs(settings.crm.matchSensitivity)
+    )
+    if (matches.length !== 1) return // ambiguous (or no) match — leave it to the manual banner
+    const existing = contacts.find((c) => c.email?.toLowerCase() === matches[0].attendee.email)
+    if (!existing) return // never auto-CREATE a contact, only auto-link to one that exists
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mark this call as attempted BEFORE the async link starts, so a fast re-render can't fire it twice
+    setAutoLinkAttemptedFor(callId)
+    void linkContact(existing.id).then(() => {
+      setAutoLinkNotice({ contactId: existing.id, contactName: existing.name })
+    })
+  }, [
+    call,
+    callId,
+    matchDismissed,
+    autoLinkAttemptedFor,
+    settings.crm.calendarMatchEnabled,
+    settings.crm.autoLinkUnambiguous,
+    settings.crm.matchSensitivity,
+    googleEvents,
+    contacts,
+    linkContact
+  ])
+
+  // "Undo" on the auto-link notice — same as declining the suggestion: unlink
+  // and treat it as dismissed, so it doesn't just auto-link right back.
+  const undoAutoLink = useCallback(() => {
+    dismissMatch(callId)
+    setMatchDismissed(true)
+    setAutoLinkNotice(null)
+    void linkContact(undefined)
+  }, [callId, linkContact])
+
   if (!call) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-faint">Loading…</div>
@@ -226,6 +287,13 @@ export function CallDetail({
     !call.contactId && !matchDismissed && settings.crm.calendarMatchEnabled
       ? findCalendarMatches(call, googleEvents, matchSensitivityMs(settings.crm.matchSensitivity))
       : []
+  // While the auto-link effect is about to fire for this exact case, skip the
+  // manual banner entirely instead of flashing it just before it's replaced.
+  const autoLinkWillFire =
+    settings.crm.autoLinkUnambiguous &&
+    autoLinkAttemptedFor !== callId &&
+    calendarMatches.length === 1 &&
+    contacts.some((c) => c.email?.toLowerCase() === calendarMatches[0].attendee.email)
 
   return (
     <div className="flex h-full flex-col">
@@ -291,16 +359,23 @@ export function CallDetail({
             <ContactIcon className="h-4 w-4 text-accent" />
             <h3 className="text-sm font-semibold">Contact</h3>
           </div>
-          {calendarMatches.length > 0 && (
+          {autoLinkNotice ? (
             <div className="mb-3">
-              <CalendarMatchSuggestion
-                matches={calendarMatches}
-                contacts={contacts}
-                onLink={(contactId) => void linkContact(contactId)}
-                onCreateAndLink={(attendee) => void createAndLinkAttendee(attendee)}
-                onDismiss={dismissMatchSuggestion}
-              />
+              <AutoLinkedNotice contactName={autoLinkNotice.contactName} onUndo={undoAutoLink} />
             </div>
+          ) : (
+            calendarMatches.length > 0 &&
+            !autoLinkWillFire && (
+              <div className="mb-3">
+                <CalendarMatchSuggestion
+                  matches={calendarMatches}
+                  contacts={contacts}
+                  onLink={(contactId) => void linkContact(contactId)}
+                  onCreateAndLink={(attendee) => void createAndLinkAttendee(attendee)}
+                  onDismiss={dismissMatchSuggestion}
+                />
+              </div>
+            )
           )}
           <ContactPicker
             value={call.contactId}
@@ -388,6 +463,8 @@ export function CallDetail({
             </div>
           )}
         </section>
+
+        <MineTestPanel callId={callId} enabled={settings.objectionMining.enabled} />
 
         {/* Tasks */}
         <section className="rounded-2xl border border-line-soft bg-surface p-6">

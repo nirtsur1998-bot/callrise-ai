@@ -99,3 +99,35 @@ export function CalendarMatchSuggestion({
     </div>
   )
 }
+
+interface AutoLinkedNoticeProps {
+  contactName: string
+  onUndo: () => void
+}
+
+/** Shown instead of the manual banner when Settings → CRM's "auto-link
+ *  unambiguous matches" already linked this call — non-blocking, undoable
+ *  (never a silent/irreversible action, per the "always confirm" spirit). */
+export function AutoLinkedNotice({
+  contactName,
+  onUndo
+}: AutoLinkedNoticeProps): React.JSX.Element {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-4 py-3">
+      <div className="flex items-center gap-2.5">
+        <Link2 className="h-4 w-4 shrink-0 text-emerald-300" />
+        <p className="text-[13px] text-ink">
+          Automatically linked to <span className="font-medium">{contactName}</span> — matched by
+          calendar time.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onUndo}
+        className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
+      >
+        Undo
+      </button>
+    </div>
+  )
+}
