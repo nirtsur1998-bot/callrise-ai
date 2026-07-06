@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus,
   Contact as ContactIcon,
@@ -15,6 +15,11 @@ import {
 import { cn } from '@renderer/lib/cn'
 import { flagEmoji, countryDial } from '@renderer/lib/countries'
 import { TONE_TEXT } from '@renderer/features/coaching/meta'
+import { useAppSettings } from '@renderer/features/settings/useAppSettings'
+import { useDeals } from '@renderer/features/deals/useDeals'
+import { useDealStages } from '@renderer/features/deals/useDealStages'
+import { contactsWithOpenDeals, isContactStale } from '@renderer/features/deals/staleness'
+import { StaleBadge } from '@renderer/features/deals/StaleBadge'
 import type { CallSummary } from '@renderer/features/calls/types'
 import { useContacts } from './useContacts'
 import { ContactFormDialog, type ContactFormValues } from './ContactFormDialog'
@@ -31,14 +36,37 @@ function formatRegisteredDate(value: string | undefined): string | null {
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-export function ContactsView(): React.JSX.Element {
+interface ContactsViewProps {
+  /** Deep-link from the follow-up digest: open this contact on mount. */
+  initialViewId?: string | null
+  /** Called once the initial selection above has been applied, so the parent
+   *  can clear it (otherwise a later plain visit would reopen the same contact). */
+  onInitialViewConsumed?: () => void
+}
+
+export function ContactsView({
+  initialViewId = null,
+  onInitialViewConsumed
+}: ContactsViewProps = {}): React.JSX.Element {
   const { contacts, loading, create, update, remove } = useContacts()
+  const { deals } = useDeals()
+  const { stages } = useDealStages()
+  const { settings } = useAppSettings()
+  const { staleFollowUpEnabled, staleAfterDays } = settings.crm
   const [calls, setCalls] = useState<CallSummary[]>([])
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortMode>('recent')
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Contact | null>(null)
-  const [viewingId, setViewingId] = useState<string | null>(null)
+  const [viewingId, setViewingId] = useState<string | null>(initialViewId)
+
+  const consumedRef = useRef(false)
+  useEffect(() => {
+    if (initialViewId && !consumedRef.current) {
+      consumedRef.current = true
+      onInitialViewConsumed?.()
+    }
+  }, [initialViewId, onInitialViewConsumed])
 
   useEffect(() => {
     // Read-only glance data for the list ("3 calls · last week") — reuses the
@@ -53,6 +81,7 @@ export function ContactsView(): React.JSX.Element {
   }, [])
 
   const stats = useMemo(() => buildContactStats(calls), [calls])
+  const openDealContactIds = useMemo(() => contactsWithOpenDeals(deals, stages), [deals, stages])
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -79,6 +108,9 @@ export function ContactsView(): React.JSX.Element {
       <>
         <ContactDetail
           contact={viewing}
+          hasOpenDeal={openDealContactIds.has(viewing.id)}
+          staleFollowUpEnabled={staleFollowUpEnabled}
+          staleAfterDays={staleAfterDays}
           onBack={() => setViewingId(null)}
           onEdit={() => setEditing(viewing)}
         />
@@ -161,6 +193,12 @@ export function ContactsView(): React.JSX.Element {
               key={contact.id}
               contact={contact}
               stats={stats.get(contact.id)}
+              stale={isContactStale(
+                openDealContactIds.has(contact.id),
+                stats.get(contact.id)?.lastCallAt,
+                staleFollowUpEnabled,
+                staleAfterDays
+              )}
               onView={() => setViewingId(contact.id)}
               onEdit={() => setEditing(contact)}
               onDelete={() => void remove(contact.id)}
@@ -195,6 +233,7 @@ export function ContactsView(): React.JSX.Element {
 interface ContactRowProps {
   contact: Contact
   stats: ContactStats | undefined
+  stale: boolean
   onView: () => void
   onEdit: () => void
   onDelete: () => void
@@ -203,6 +242,7 @@ interface ContactRowProps {
 function ContactRow({
   contact,
   stats,
+  stale,
   onView,
   onEdit,
   onDelete
@@ -229,17 +269,17 @@ function ContactRow({
               )}
               {contact.name}
             </p>
-            <span
-              className={cn(
-                'flex shrink-0 items-center gap-1 text-[11px] font-medium',
-                TONE_TEXT[tone]
-              )}
-            >
-              <PhoneCall className="h-3 w-3" />
-              {stats
-                ? `${stats.callCount} call${stats.callCount === 1 ? '' : 's'} · ${formatRelative(stats.lastCallAt as string)}`
-                : 'No calls yet'}
-            </span>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {stale && <StaleBadge />}
+              <span
+                className={cn('flex items-center gap-1 text-[11px] font-medium', TONE_TEXT[tone])}
+              >
+                <PhoneCall className="h-3 w-3" />
+                {stats
+                  ? `${stats.callCount} call${stats.callCount === 1 ? '' : 's'} · ${formatRelative(stats.lastCallAt as string)}`
+                  : 'No calls yet'}
+              </span>
+            </div>
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-faint">
             {contact.company && (

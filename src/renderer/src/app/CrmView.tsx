@@ -19,6 +19,7 @@ const TABS: { id: CrmTab; label: string }[] = [
 export function CrmView(): React.JSX.Element {
   const [tab, setTab] = useState<CrmTab>('contacts')
   const [openDealId, setOpenDealId] = useState<string | null>(null)
+  const [openContactId, setOpenContactId] = useState<string | null>(null)
   const { settings } = useAppSettings()
 
   // The Follow-ups tab is fully hidden when the feature is off in Settings —
@@ -28,6 +29,11 @@ export function CrmView(): React.JSX.Element {
   const openDealFromDigest = (dealId: string): void => {
     setOpenDealId(dealId)
     setTab('deals')
+  }
+
+  const openContactFromDigest = (contactId: string): void => {
+    setOpenContactId(contactId)
+    setTab('contacts')
   }
 
   return (
@@ -50,14 +56,17 @@ export function CrmView(): React.JSX.Element {
         ))}
       </div>
       {tab === 'contacts' ? (
-        <ContactsView />
+        <ContactsView
+          initialViewId={openContactId}
+          onInitialViewConsumed={() => setOpenContactId(null)}
+        />
       ) : tab === 'deals' ? (
         <DealsView
           initialViewDealId={openDealId}
           onInitialViewConsumed={() => setOpenDealId(null)}
         />
       ) : (
-        <FollowUpDigest onOpenDeal={openDealFromDigest} />
+        <FollowUpDigest onOpenDeal={openDealFromDigest} onOpenContact={openContactFromDigest} />
       )}
     </div>
   )

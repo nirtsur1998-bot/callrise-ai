@@ -7,26 +7,42 @@ import type { CallSummary } from '@renderer/features/calls/types'
 import type { Contact } from '@renderer/features/contacts/types'
 import { useDeals } from './useDeals'
 import { useDealStages } from './useDealStages'
-import { isDealStale, createFollowUpTask } from './staleness'
+import {
+  isDealStale,
+  isContactStale,
+  contactsWithOpenDeals,
+  createFollowUpTask,
+  createContactFollowUpTask
+} from './staleness'
 import { formatValue } from './format'
 import type { Deal } from './types'
 
 interface FollowUpDigestProps {
   onOpenDeal: (dealId: string) => void
+  onOpenContact: (contactId: string) => void
 }
 
-interface FlaggedDeal {
-  deal: Deal
+/** One flagged item — either a deal gone quiet, or (Phase 4 Step 3) a
+ *  contact with no open deal at all who's gone quiet. Shown together, most
+ *  overdue first, so nothing is missed just because it isn't a "deal" yet. */
+interface FlaggedItem {
+  key: string
+  title: string
   contact: Contact | undefined
   days: number // Infinity = never called
+  deal?: Deal
 }
 
-/** Every flagged deal across the whole pipeline, in one place, most overdue
- *  first — so nothing goes stale just because it's buried in a board column. */
-export function FollowUpDigest({ onOpenDeal }: FollowUpDigestProps): React.JSX.Element {
+/** Every flagged deal AND deal-less contact across the whole CRM, in one
+ *  place, most overdue first — so nothing goes stale just because it's
+ *  buried in a board column or doesn't have a deal yet. */
+export function FollowUpDigest({
+  onOpenDeal,
+  onOpenContact
+}: FollowUpDigestProps): React.JSX.Element {
   const { deals, loading: dealsLoading } = useDeals()
   const { stages, loading: stagesLoading } = useDealStages()
-  const { contacts } = useContacts()
+  const { contacts, loading: contactsLoading } = useContacts()
   const { settings } = useAppSettings()
   const { staleFollowUpEnabled, staleAfterDays } = settings.crm
   const [calls, setCalls] = useState<CallSummary[]>([])
@@ -41,14 +57,15 @@ export function FollowUpDigest({ onOpenDeal }: FollowUpDigestProps): React.JSX.E
     }
   }, [])
 
-  const loading = dealsLoading || stagesLoading
+  const loading = dealsLoading || stagesLoading || contactsLoading
 
-  const flagged = useMemo<FlaggedDeal[]>(() => {
+  const flagged = useMemo<FlaggedItem[]>(() => {
     const contactStats = buildContactStats(calls)
     const stageById = new Map(stages.map((s) => [s.id, s]))
     const contactById = new Map(contacts.map((c) => [c.id, c]))
+    const openDealContactIds = contactsWithOpenDeals(deals, stages)
 
-    return deals
+    const dealItems: FlaggedItem[] = deals
       .filter((d) =>
         isDealStale(
           stageById.get(d.stageId),
@@ -58,11 +75,31 @@ export function FollowUpDigest({ onOpenDeal }: FollowUpDigestProps): React.JSX.E
         )
       )
       .map((deal) => ({
-        deal,
+        key: `deal-${deal.id}`,
+        title: deal.title,
         contact: contactById.get(deal.contactId),
-        days: daysSinceLastCall(contactStats.get(deal.contactId)?.lastCallAt)
+        days: daysSinceLastCall(contactStats.get(deal.contactId)?.lastCallAt),
+        deal
       }))
-      .sort((a, b) => b.days - a.days)
+
+    // Deal-less contacts: never double-flagged with a deal they already own.
+    const contactItems: FlaggedItem[] = contacts
+      .filter((c) =>
+        isContactStale(
+          openDealContactIds.has(c.id),
+          contactStats.get(c.id)?.lastCallAt,
+          staleFollowUpEnabled,
+          staleAfterDays
+        )
+      )
+      .map((contact) => ({
+        key: `contact-${contact.id}`,
+        title: contact.name,
+        contact,
+        days: daysSinceLastCall(contactStats.get(contact.id)?.lastCallAt)
+      }))
+
+    return [...dealItems, ...contactItems].sort((a, b) => b.days - a.days)
   }, [deals, stages, contacts, calls, staleFollowUpEnabled, staleAfterDays])
 
   return (
@@ -70,12 +107,12 @@ export function FollowUpDigest({ onOpenDeal }: FollowUpDigestProps): React.JSX.E
       <div className="mb-1 flex items-baseline gap-2.5">
         <h2 className="text-lg font-semibold tracking-tight">Needs follow-up</h2>
         <span className="text-[13px] text-faint">
-          {flagged.length} deal{flagged.length === 1 ? '' : 's'}
+          {flagged.length} {flagged.length === 1 ? 'item' : 'items'}
         </span>
       </div>
       <p className="mb-5 text-[13px] text-faint">
-        Every open deal whose contact has gone quiet longer than your Settings → CRM threshold, most
-        overdue first.
+        Open deals and deal-less contacts whose last call is older than your Settings → CRM
+        threshold, most overdue first.
       </p>
 
       {loading ? (
@@ -91,18 +128,21 @@ export function FollowUpDigest({ onOpenDeal }: FollowUpDigestProps): React.JSX.E
           </div>
           <h3 className="text-lg font-semibold">Nothing needs a follow-up</h3>
           <p className="mt-1.5 max-w-xs text-sm text-muted">
-            Every open deal has had a call within your threshold. Nice work staying in touch.
+            Every open deal and contact has had a call within your threshold. Nice work staying in
+            touch.
           </p>
         </div>
       ) : (
         <ul className="space-y-2.5">
-          {flagged.map(({ deal, contact, days }) => (
+          {flagged.map((item) => (
             <FollowUpRow
-              key={deal.id}
-              deal={deal}
-              contact={contact}
-              days={days}
-              onOpen={() => onOpenDeal(deal.id)}
+              key={item.key}
+              item={item}
+              onOpen={() =>
+                item.deal
+                  ? onOpenDeal(item.deal.id)
+                  : item.contact && onOpenContact(item.contact.id)
+              }
             />
           ))}
         </ul>
@@ -118,21 +158,21 @@ function formatOverdue(days: number): string {
 }
 
 interface FollowUpRowProps {
-  deal: Deal
-  contact: Contact | undefined
-  days: number
+  item: FlaggedItem
   onOpen: () => void
 }
 
-function FollowUpRow({ deal, contact, days, onOpen }: FollowUpRowProps): React.JSX.Element {
+function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState(false)
-  const value = formatValue(deal.value)
+  const { deal, contact, title, days } = item
+  const value = deal ? formatValue(deal.value) : null
 
   const handleCreate = async (): Promise<void> => {
     setCreating(true)
     try {
-      await createFollowUpTask(deal, contact?.name)
+      if (deal) await createFollowUpTask(deal, contact?.name)
+      else if (contact) await createContactFollowUpTask(contact.name)
       setCreated(true)
     } finally {
       setCreating(false)
@@ -142,13 +182,25 @@ function FollowUpRow({ deal, contact, days, onOpen }: FollowUpRowProps): React.J
   return (
     <li className="flex items-start gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3.5">
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
-        <p className="truncate text-sm font-medium">{deal.title}</p>
+        <p className="truncate text-sm font-medium">{title}</p>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-faint">
-          <span className="flex items-center gap-1">
-            <Building2 className="h-3 w-3" /> {contact?.name ?? 'Unknown contact'}
-            {contact?.company ? ` · ${contact.company}` : ''}
-          </span>
+          {deal && (
+            <span className="flex items-center gap-1">
+              <Building2 className="h-3 w-3" /> {contact?.name ?? 'Unknown contact'}
+              {contact?.company ? ` · ${contact.company}` : ''}
+            </span>
+          )}
+          {!deal && contact?.company && (
+            <span className="flex items-center gap-1">
+              <Building2 className="h-3 w-3" /> {contact.company}
+            </span>
+          )}
           {value && <span className="font-medium text-ink">{value}</span>}
+          {!deal && (
+            <span className="rounded-full border border-line-soft bg-canvas px-1.5 py-0.5 text-faint">
+              No open deal
+            </span>
+          )}
           <span className="flex items-center gap-1 font-medium text-amber-300">
             <AlertTriangle className="h-3 w-3" /> {formatOverdue(days)}
           </span>
