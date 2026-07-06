@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
   Building2,
@@ -9,12 +9,15 @@ import {
   PhoneCall,
   ListChecks,
   ShieldAlert,
-  Pencil
+  Pencil,
+  GraduationCap
 } from 'lucide-react'
 import { flagEmoji, countryDial, countryName } from '@renderer/lib/countries'
 import { formatDate, formatDuration } from '@renderer/features/calls/format'
+import { TONE_TEXT, overallTier } from '@renderer/features/coaching/meta'
 import type { Call } from '@renderer/features/calls/types'
 import type { Task } from '@renderer/features/tasks/types'
+import { formatRelative } from './contactStats'
 import type { Contact } from './types'
 
 interface LinkedCall {
@@ -62,6 +65,14 @@ export function ContactDetail({ contact, onBack, onEdit }: ContactDetailProps): 
 
   const registered = formatRegisteredDate(contact.registeredAt)
   const dial = countryDial(contact.phoneCountry)
+
+  const avgScore = useMemo(() => {
+    const scores = linked
+      .map((l) => l.call.coaching?.overallScore)
+      .filter((s): s is number => typeof s === 'number')
+    if (!scores.length) return null
+    return Math.round(scores.reduce((sum, s) => sum + s, 0) / scores.length)
+  }, [linked])
 
   return (
     <div className="flex h-full flex-col">
@@ -126,6 +137,25 @@ export function ContactDetail({ contact, onBack, onEdit }: ContactDetailProps): 
         </div>
       </div>
 
+      {/* Quick stats — the "so what" glance before diving into individual calls */}
+      {!loading && linked.length > 0 && (
+        <div className="mb-4 grid grid-cols-3 gap-3">
+          <StatCard icon={PhoneCall} label="Calls" value={String(linked.length)} tone="text-ink" />
+          <StatCard
+            icon={CalendarClock}
+            label="Last contact"
+            value={formatRelative(linked[0].call.createdAt)}
+            tone="text-ink"
+          />
+          <StatCard
+            icon={GraduationCap}
+            label="Avg. coach score"
+            value={avgScore !== null ? String(avgScore) : '—'}
+            tone={avgScore !== null ? TONE_TEXT[overallTier(avgScore).tone] : 'text-faint'}
+          />
+        </div>
+      )}
+
       {/* Call history */}
       <div className="flex-1 overflow-y-auto pb-2">
         <div className="mb-3 flex items-center gap-2">
@@ -135,7 +165,7 @@ export function ContactDetail({ contact, onBack, onEdit }: ContactDetailProps): 
         </div>
 
         {loading ? (
-          <div className="flex h-32 items-center justify-center text-sm text-faint">Loading…</div>
+          <HistorySkeleton />
         ) : linked.length === 0 ? (
           <p className="rounded-xl border border-line-soft bg-surface px-4 py-8 text-center text-sm text-muted">
             No calls linked to {contact.name} yet. Open a saved call and link it here.
@@ -149,6 +179,41 @@ export function ContactDetail({ contact, onBack, onEdit }: ContactDetailProps): 
         )}
       </div>
     </div>
+  )
+}
+
+interface StatCardProps {
+  icon: typeof PhoneCall
+  label: string
+  value: string
+  tone: string
+}
+
+function StatCard({ icon: Icon, label, value, tone }: StatCardProps): React.JSX.Element {
+  return (
+    <div className="rounded-xl border border-line-soft bg-surface px-4 py-3">
+      <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-faint">
+        <Icon className="h-3 w-3" /> {label}
+      </p>
+      <p className={`mt-1 text-lg font-semibold ${tone}`}>{value}</p>
+    </div>
+  )
+}
+
+function HistorySkeleton(): React.JSX.Element {
+  return (
+    <ul className="space-y-3">
+      {[0, 1].map((i) => (
+        <li key={i} className="rounded-xl border border-line-soft bg-surface p-5">
+          <div className="flex items-center justify-between">
+            <div className="h-4 w-40 animate-pulse rounded bg-elevated" />
+            <div className="h-3 w-24 animate-pulse rounded bg-elevated" />
+          </div>
+          <div className="mt-3 h-3 w-full animate-pulse rounded bg-elevated" />
+          <div className="mt-2 h-3 w-2/3 animate-pulse rounded bg-elevated" />
+        </li>
+      ))}
+    </ul>
   )
 }
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Plus,
   Contact as ContactIcon,
@@ -9,14 +9,20 @@ import {
   Trash2,
   Search,
   Hash,
-  CalendarClock
+  CalendarClock,
+  PhoneCall
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { flagEmoji, countryDial } from '@renderer/lib/countries'
+import { TONE_TEXT } from '@renderer/features/coaching/meta'
+import type { CallSummary } from '@renderer/features/calls/types'
 import { useContacts } from './useContacts'
 import { ContactFormDialog, type ContactFormValues } from './ContactFormDialog'
 import { ContactDetail } from './ContactDetail'
+import { buildContactStats, recencyTone, formatRelative, type ContactStats } from './contactStats'
 import type { Contact } from './types'
+
+type SortMode = 'recent' | 'name'
 
 function formatRegisteredDate(value: string | undefined): string | null {
   if (!value) return null
@@ -27,18 +33,44 @@ function formatRegisteredDate(value: string | undefined): string | null {
 
 export function ContactsView(): React.JSX.Element {
   const { contacts, loading, create, update, remove } = useContacts()
+  const [calls, setCalls] = useState<CallSummary[]>([])
   const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<SortMode>('recent')
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Contact | null>(null)
   const [viewingId, setViewingId] = useState<string | null>(null)
 
+  useEffect(() => {
+    // Read-only glance data for the list ("3 calls · last week") — reuses the
+    // same call summaries the Contact detail view fetches in full.
+    let active = true
+    void window.api.calls.list().then((list) => {
+      if (active) setCalls(list)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const stats = useMemo(() => buildContactStats(calls), [calls])
+
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return contacts
-    return contacts.filter((c) =>
-      [c.name, c.company, c.email, c.phone, c.cid].some((f) => f?.toLowerCase().includes(q))
-    )
-  }, [contacts, query])
+    const filtered = q
+      ? contacts.filter((c) =>
+          [c.name, c.company, c.email, c.phone, c.cid].some((f) => f?.toLowerCase().includes(q))
+        )
+      : contacts
+    return [...filtered].sort((a, b) => {
+      if (sort === 'name') return a.name.localeCompare(b.name)
+      const aLast = stats.get(a.id)?.lastCallAt
+      const bLast = stats.get(b.id)?.lastCallAt
+      if (aLast && bLast) return bLast.localeCompare(aLast)
+      if (aLast) return -1 // contacts with call history surface first
+      if (bLast) return 1
+      return a.name.localeCompare(b.name) // no history on either side — fall back to A–Z
+    })
+  }, [contacts, query, sort, stats])
 
   const viewing = viewingId ? contacts.find((c) => c.id === viewingId) : undefined
 
@@ -85,20 +117,37 @@ export function ContactsView(): React.JSX.Element {
       </p>
 
       {contacts.length > 0 && (
-        <div className="relative mb-4">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search by name, company, email, or phone"
-            className="w-full rounded-lg border border-line bg-surface py-2 pl-9 pr-3 text-sm text-ink placeholder:text-faint transition focus:border-accent focus:outline-none"
-          />
+        <div className="mb-4 flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by name, company, email, or phone"
+              className="w-full rounded-lg border border-line bg-surface py-2 pl-9 pr-3 text-sm text-ink placeholder:text-faint transition focus:border-accent focus:outline-none"
+            />
+          </div>
+          <div className="flex shrink-0 items-center gap-0.5 rounded-lg border border-line p-0.5">
+            {(['recent', 'name'] as SortMode[]).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setSort(s)}
+                className={cn(
+                  'rounded-md px-2.5 py-1.5 text-xs font-medium transition',
+                  sort === s ? 'bg-accent-soft text-ink' : 'text-muted hover:text-ink'
+                )}
+              >
+                {s === 'recent' ? 'Recent' : 'A–Z'}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
       {loading ? (
-        <div className="flex h-40 items-center justify-center text-sm text-faint">Loading…</div>
+        <ListSkeleton />
       ) : contacts.length === 0 ? (
         <EmptyAll onAdd={() => setAdding(true)} />
       ) : visible.length === 0 ? (
@@ -111,6 +160,7 @@ export function ContactsView(): React.JSX.Element {
             <ContactRow
               key={contact.id}
               contact={contact}
+              stats={stats.get(contact.id)}
               onView={() => setViewingId(contact.id)}
               onEdit={() => setEditing(contact)}
               onDelete={() => void remove(contact.id)}
@@ -144,15 +194,23 @@ export function ContactsView(): React.JSX.Element {
 
 interface ContactRowProps {
   contact: Contact
+  stats: ContactStats | undefined
   onView: () => void
   onEdit: () => void
   onDelete: () => void
 }
 
-function ContactRow({ contact, onView, onEdit, onDelete }: ContactRowProps): React.JSX.Element {
+function ContactRow({
+  contact,
+  stats,
+  onView,
+  onEdit,
+  onDelete
+}: ContactRowProps): React.JSX.Element {
   const [confirm, setConfirm] = useState(false)
   const registered = formatRegisteredDate(contact.registeredAt)
   const dial = countryDial(contact.phoneCountry)
+  const tone = recencyTone(stats?.lastCallAt)
 
   return (
     <li>
@@ -162,14 +220,27 @@ function ContactRow({ contact, onView, onEdit, onDelete }: ContactRowProps): Rea
         </div>
 
         <button type="button" onClick={onView} className="min-w-0 flex-1 text-left">
-          <p className="truncate text-sm font-medium">
-            {contact.country && (
-              <span className="mr-1.5" title={contact.country}>
-                {flagEmoji(contact.country)}
-              </span>
-            )}
-            {contact.name}
-          </p>
+          <div className="flex items-baseline justify-between gap-3">
+            <p className="truncate text-sm font-medium">
+              {contact.country && (
+                <span className="mr-1.5" title={contact.country}>
+                  {flagEmoji(contact.country)}
+                </span>
+              )}
+              {contact.name}
+            </p>
+            <span
+              className={cn(
+                'flex shrink-0 items-center gap-1 text-[11px] font-medium',
+                TONE_TEXT[tone]
+              )}
+            >
+              <PhoneCall className="h-3 w-3" />
+              {stats
+                ? `${stats.callCount} call${stats.callCount === 1 ? '' : 's'} · ${formatRelative(stats.lastCallAt as string)}`
+                : 'No calls yet'}
+            </span>
+          </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-faint">
             {contact.company && (
               <span className="flex items-center gap-1">
@@ -244,6 +315,25 @@ function ContactRow({ contact, onView, onEdit, onDelete }: ContactRowProps): Rea
         </div>
       </div>
     </li>
+  )
+}
+
+function ListSkeleton(): React.JSX.Element {
+  return (
+    <ul className="space-y-2.5">
+      {[0, 1, 2].map((i) => (
+        <li
+          key={i}
+          className="flex items-center gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3.5"
+        >
+          <div className="h-9 w-9 shrink-0 animate-pulse rounded-full bg-elevated" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="h-3.5 w-32 animate-pulse rounded bg-elevated" />
+            <div className="h-2.5 w-48 animate-pulse rounded bg-elevated" />
+          </div>
+        </li>
+      ))}
+    </ul>
   )
 }
 
