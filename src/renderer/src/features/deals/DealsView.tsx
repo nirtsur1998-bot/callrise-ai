@@ -19,6 +19,7 @@ import {
   formatRelative
 } from '@renderer/features/contacts/contactStats'
 import { TONE_TEXT } from '@renderer/features/coaching/meta'
+import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import type { CallSummary } from '@renderer/features/calls/types'
 import { useDeals } from './useDeals'
 import { useDealStages } from './useDealStages'
@@ -26,6 +27,8 @@ import { DealFormDialog, type DealFormValues } from './DealFormDialog'
 import { StageEditorDialog } from './StageEditorDialog'
 import { PipelineBoard } from './PipelineBoard'
 import { DealDetail } from './DealDetail'
+import { isDealStale } from './staleness'
+import { StaleBadge } from './StaleBadge'
 import { formatValue, formatCloseDate } from './format'
 import type { Deal } from './types'
 
@@ -36,6 +39,8 @@ export function DealsView(): React.JSX.Element {
   const { deals, loading, create, update, remove } = useDeals()
   const { stages, loading: stagesLoading, save: saveStages } = useDealStages()
   const { contacts } = useContacts()
+  const { settings } = useAppSettings()
+  const { staleFollowUpEnabled, staleAfterDays } = settings.crm
   const [calls, setCalls] = useState<CallSummary[]>([])
   const [stageFilter, setStageFilter] = useState(ALL_STAGES)
   const [view, setView] = useState<ViewMode>('board')
@@ -79,6 +84,8 @@ export function DealsView(): React.JSX.Element {
           deal={viewing}
           contact={contactById.get(viewing.contactId)}
           stage={stageLabel.get(viewing.stageId)}
+          staleFollowUpEnabled={staleFollowUpEnabled}
+          staleAfterDays={staleAfterDays}
           onBack={() => setViewingId(null)}
           onEdit={() => setEditing(viewing)}
         />
@@ -184,6 +191,8 @@ export function DealsView(): React.JSX.Element {
           stages={stages}
           contactById={contactById}
           contactStats={contactStats}
+          staleFollowUpEnabled={staleFollowUpEnabled}
+          staleAfterDays={staleAfterDays}
           onMoveStage={moveStage}
           onOpen={(deal) => setViewingId(deal.id)}
         />
@@ -196,6 +205,12 @@ export function DealsView(): React.JSX.Element {
           {visible.map((deal) => {
             const contact = contactById.get(deal.contactId)
             const stats = contactStats.get(deal.contactId)
+            const stale = isDealStale(
+              stageLabel.get(deal.stageId),
+              stats?.lastCallAt,
+              staleFollowUpEnabled,
+              staleAfterDays
+            )
             return (
               <DealRow
                 key={deal.id}
@@ -204,6 +219,7 @@ export function DealsView(): React.JSX.Element {
                 contactCompany={contact?.company}
                 stageLabel={stageLabel.get(deal.stageId)?.label ?? '—'}
                 lastCallAt={stats?.lastCallAt}
+                stale={stale}
                 onView={() => setViewingId(deal.id)}
                 onEdit={() => setEditing(deal)}
                 onDelete={() => void remove(deal.id)}
@@ -278,6 +294,7 @@ interface DealRowProps {
   contactCompany: string | undefined
   stageLabel: string
   lastCallAt: string | undefined
+  stale: boolean
   onView: () => void
   onEdit: () => void
   onDelete: () => void
@@ -289,6 +306,7 @@ function DealRow({
   contactCompany,
   stageLabel,
   lastCallAt,
+  stale,
   onView,
   onEdit,
   onDelete
@@ -304,9 +322,12 @@ function DealRow({
         <button type="button" onClick={onView} className="min-w-0 flex-1 text-left">
           <div className="flex items-baseline justify-between gap-3">
             <p className="truncate text-sm font-medium">{deal.title}</p>
-            <span className="shrink-0 rounded-full border border-line-soft bg-canvas px-2 py-0.5 text-[11px] font-medium text-muted">
-              {stageLabel}
-            </span>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {stale && <StaleBadge />}
+              <span className="rounded-full border border-line-soft bg-canvas px-2 py-0.5 text-[11px] font-medium text-muted">
+                {stageLabel}
+              </span>
+            </div>
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-faint">
             <span className="flex items-center gap-1">

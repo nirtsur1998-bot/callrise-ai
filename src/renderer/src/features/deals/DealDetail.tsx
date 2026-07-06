@@ -1,17 +1,29 @@
-import { useMemo } from 'react'
-import { ArrowLeft, Building2, CalendarClock, PhoneCall, Pencil, GraduationCap } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import {
+  ArrowLeft,
+  Building2,
+  CalendarClock,
+  PhoneCall,
+  Pencil,
+  GraduationCap,
+  AlertTriangle,
+  ListPlus
+} from 'lucide-react'
 import { TONE_TEXT, overallTier } from '@renderer/features/coaching/meta'
 import { useContactCallHistory } from '@renderer/features/contacts/useContactCallHistory'
 import { CallHistoryList } from '@renderer/features/contacts/CallHistoryList'
 import { formatRelative } from '@renderer/features/contacts/contactStats'
 import type { Contact } from '@renderer/features/contacts/types'
 import { formatValue, formatCloseDate } from './format'
+import { isDealStale } from './staleness'
 import type { Deal, DealStage } from './types'
 
 interface DealDetailProps {
   deal: Deal
   contact: Contact | undefined
   stage: DealStage | undefined
+  staleFollowUpEnabled: boolean
+  staleAfterDays: number
   onBack: () => void
   onEdit: () => void
 }
@@ -23,13 +35,36 @@ export function DealDetail({
   deal,
   contact,
   stage,
+  staleFollowUpEnabled,
+  staleAfterDays,
   onBack,
   onEdit
 }: DealDetailProps): React.JSX.Element {
   const { loading, linked } = useContactCallHistory(deal.contactId)
+  const [creatingTask, setCreatingTask] = useState(false)
+  const [taskCreated, setTaskCreated] = useState(false)
 
   const value = formatValue(deal.value)
   const closeDate = formatCloseDate(deal.expectedCloseDate)
+  const stale =
+    !loading && isDealStale(stage, linked[0]?.call.createdAt, staleFollowUpEnabled, staleAfterDays)
+
+  const createFollowUpTask = async (): Promise<void> => {
+    setCreatingTask(true)
+    try {
+      await window.api.tasks.create({
+        title: `Follow up with ${contact?.name ?? 'contact'} — ${deal.title}`,
+        type: 'follow-up',
+        priority: 'medium',
+        clientName: contact?.name ?? null,
+        note: `Deal: ${deal.title}`,
+        source: 'manual'
+      })
+      setTaskCreated(true)
+    } finally {
+      setCreatingTask(false)
+    }
+  }
 
   const avgScore = useMemo(() => {
     const scores = linked
@@ -82,6 +117,33 @@ export function DealDetail({
         </div>
         {deal.notes && <p className="mt-3 text-sm text-muted">{deal.notes}</p>}
       </div>
+
+      {stale && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-300" />
+            <p className="text-[13px] text-ink">
+              No calls with {contact?.name ?? 'this contact'} in over {staleAfterDays} days — this
+              deal may need a follow-up.
+            </p>
+          </div>
+          {taskCreated ? (
+            <span className="shrink-0 text-[13px] font-medium text-emerald-300">
+              Task created — see Tasks.
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void createFollowUpTask()}
+              disabled={creatingTask}
+              className="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:brightness-110 disabled:opacity-50"
+            >
+              <ListPlus className="h-3.5 w-3.5" />
+              {creatingTask ? 'Creating…' : 'Create follow-up task'}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Quick stats — the same "so what" glance the Contact detail view shows */}
       {!loading && linked.length > 0 && (

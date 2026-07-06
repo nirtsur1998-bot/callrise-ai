@@ -157,6 +157,45 @@ export function CrmSection(): React.JSX.Element {
           </p>
         </div>
       </Card>
+
+      <Card className="mb-5">
+        <SettingRow
+          title="Needs-follow-up flagging"
+          description="Flag an open deal once its contact hasn't had a call in a while, and offer a one-tap button to create a follow-up task. Turn this off to hide the flag entirely — it won't just be muted."
+          control={
+            <ToggleSwitch
+              checked={crm.staleFollowUpEnabled}
+              disabled={loading}
+              onChange={(v) => setCrm({ staleFollowUpEnabled: v })}
+              label="Needs-follow-up flagging"
+            />
+          }
+        />
+        <div
+          className={cn(
+            'mt-4 border-t border-line-soft pt-4',
+            !crm.staleFollowUpEnabled && 'opacity-50'
+          )}
+        >
+          <label className="mb-1.5 block text-[13px] font-medium text-muted">
+            Flag after this many days without a call
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={365}
+            value={crm.staleAfterDays}
+            disabled={!crm.staleFollowUpEnabled || loading}
+            onChange={(e) => setCrm({ staleAfterDays: Number(e.target.value) })}
+            onBlur={(e) => {
+              const n = Math.min(Math.max(Math.round(Number(e.target.value) || 14), 1), 365)
+              setCrm({ staleAfterDays: n })
+            }}
+            className="w-24 rounded-lg border border-line-soft bg-canvas px-3 py-2 text-sm outline-none transition focus:border-line disabled:cursor-default"
+          />
+          <p className="mt-2 text-[11px] text-faint">Only applies to open (not Won/Lost) deals.</p>
+        </div>
+      </Card>
     </>
   )
 }

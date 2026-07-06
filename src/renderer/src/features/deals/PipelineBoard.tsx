@@ -8,6 +8,8 @@ import {
 } from '@renderer/features/contacts/contactStats'
 import { TONE_TEXT } from '@renderer/features/coaching/meta'
 import { formatValue } from './format'
+import { isDealStale } from './staleness'
+import { StaleBadge } from './StaleBadge'
 import type { Deal, DealStage } from './types'
 
 interface PipelineBoardProps {
@@ -15,6 +17,8 @@ interface PipelineBoardProps {
   stages: DealStage[]
   contactById: Map<string, Contact>
   contactStats: Map<string, ContactStats>
+  staleFollowUpEnabled: boolean
+  staleAfterDays: number
   onMoveStage: (dealId: string, stageId: string) => void
   onOpen: (deal: Deal) => void
 }
@@ -35,6 +39,8 @@ export function PipelineBoard({
   stages,
   contactById,
   contactStats,
+  staleFollowUpEnabled,
+  staleAfterDays,
   onMoveStage,
   onOpen
 }: PipelineBoardProps): React.JSX.Element {
@@ -73,6 +79,12 @@ export function PipelineBoard({
                     deal={deal}
                     contact={contactById.get(deal.contactId)}
                     stats={contactStats.get(deal.contactId)}
+                    stale={isDealStale(
+                      stage,
+                      contactStats.get(deal.contactId)?.lastCallAt,
+                      staleFollowUpEnabled,
+                      staleAfterDays
+                    )}
                     canMovePrev={stageIndex > 0}
                     canMoveNext={stageIndex < stages.length - 1}
                     onMovePrev={() => onMoveStage(deal.id, stages[stageIndex - 1].id)}
@@ -93,6 +105,7 @@ interface DealCardProps {
   deal: Deal
   contact: Contact | undefined
   stats: ContactStats | undefined
+  stale: boolean
   canMovePrev: boolean
   canMoveNext: boolean
   onMovePrev: () => void
@@ -104,6 +117,7 @@ function DealCard({
   deal,
   contact,
   stats,
+  stale,
   canMovePrev,
   canMoveNext,
   onMovePrev,
@@ -123,7 +137,10 @@ function DealCard({
       }}
       className="cursor-pointer rounded-xl border border-line-soft bg-surface p-3.5 transition hover:border-line hover:bg-elevated"
     >
-      <p className="truncate text-sm font-medium">{deal.title}</p>
+      <div className="flex items-start justify-between gap-2">
+        <p className="min-w-0 truncate text-sm font-medium">{deal.title}</p>
+        {stale && <StaleBadge />}
+      </div>
       <p className="mt-1 flex items-center gap-1 truncate text-[11px] text-faint">
         <Building2 className="h-3 w-3 shrink-0" />
         {contact?.name ?? 'Unknown contact'}

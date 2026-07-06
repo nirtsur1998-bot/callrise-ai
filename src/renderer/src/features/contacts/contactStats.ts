@@ -34,6 +34,14 @@ export function recencyTone(lastCallAt: string | undefined): Tone {
   return 'low'
 }
 
+/** True once a contact hasn't had a call in more than `thresholdDays` — or
+ *  never has (Phase 4 Step 1's "needs follow-up" flag reads this). */
+export function isStale(lastCallAt: string | undefined, thresholdDays: number): boolean {
+  if (!lastCallAt) return true
+  const days = (Date.now() - new Date(lastCallAt).getTime()) / DAY_MS
+  return days > thresholdDays
+}
+
 /** Compact "3d ago" / "2mo ago" — glanceable, not a full date. */
 export function formatRelative(iso: string): string {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / DAY_MS)

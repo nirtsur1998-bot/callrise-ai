@@ -18,6 +18,13 @@ export interface CrmSettings {
   cidPrefix: string
   /** The next sequential number to assign (incremented on each auto-assign). */
   cidNextNumber: number
+  /** Master kill switch for "needs follow-up" flagging on deals (Phase 4
+   *  Step 1) — the badge, and the "Create follow-up task" button. Off means
+   *  the feature is fully invisible, not just visually muted. */
+  staleFollowUpEnabled: boolean
+  /** A deal is flagged once its contact's last call is older than this many
+   *  days (or there's never been a call at all). */
+  staleAfterDays: number
 }
 
 export const EMPTY_CRM_SETTINGS: CrmSettings = {
@@ -27,7 +34,9 @@ export const EMPTY_CRM_SETTINGS: CrmSettings = {
   defaultCountry: '',
   autoNumberCid: false,
   cidPrefix: 'CUST-',
-  cidNextNumber: 1
+  cidNextNumber: 1,
+  staleFollowUpEnabled: true,
+  staleAfterDays: 14
 }
 
 const SENSITIVITIES = new Set<MatchSensitivity>(['tight', 'normal', 'loose'])
@@ -53,6 +62,15 @@ function sanitizeNextNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 1 ? Math.floor(value) : 1
 }
 
+const MIN_STALE_DAYS = 1
+const MAX_STALE_DAYS = 365
+
+function sanitizeStaleDays(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(Math.max(Math.floor(value), MIN_STALE_DAYS), MAX_STALE_DAYS)
+    : 14
+}
+
 /** Full sanitize — used when reading the settings file from disk. */
 export function sanitizeCrmSettings(value: unknown): CrmSettings {
   const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
@@ -63,7 +81,9 @@ export function sanitizeCrmSettings(value: unknown): CrmSettings {
     defaultCountry: sanitizeCountry(v.defaultCountry),
     autoNumberCid: v.autoNumberCid === true,
     cidPrefix: sanitizePrefix(v.cidPrefix),
-    cidNextNumber: sanitizeNextNumber(v.cidNextNumber)
+    cidNextNumber: sanitizeNextNumber(v.cidNextNumber),
+    staleFollowUpEnabled: v.staleFollowUpEnabled !== false, // default true
+    staleAfterDays: sanitizeStaleDays(v.staleAfterDays)
   }
 }
 
@@ -83,7 +103,11 @@ export function mergeCrmSettings(current: CrmSettings, patch: unknown): CrmSetti
     autoNumberCid: 'autoNumberCid' in p ? p.autoNumberCid === true : current.autoNumberCid,
     cidPrefix: 'cidPrefix' in p ? sanitizePrefix(p.cidPrefix) : current.cidPrefix,
     cidNextNumber:
-      'cidNextNumber' in p ? sanitizeNextNumber(p.cidNextNumber) : current.cidNextNumber
+      'cidNextNumber' in p ? sanitizeNextNumber(p.cidNextNumber) : current.cidNextNumber,
+    staleFollowUpEnabled:
+      'staleFollowUpEnabled' in p ? p.staleFollowUpEnabled !== false : current.staleFollowUpEnabled,
+    staleAfterDays:
+      'staleAfterDays' in p ? sanitizeStaleDays(p.staleAfterDays) : current.staleAfterDays
   }
 }
 
