@@ -42,6 +42,13 @@ export function isStale(lastCallAt: string | undefined, thresholdDays: number): 
   return days > thresholdDays
 }
 
+/** Days since the last call, or Infinity if there's never been one — the
+ *  sort key for "most overdue first" digests (Phase 4 Step 2). */
+export function daysSinceLastCall(lastCallAt: string | undefined): number {
+  if (!lastCallAt) return Infinity
+  return (Date.now() - new Date(lastCallAt).getTime()) / DAY_MS
+}
+
 /** Compact "3d ago" / "2mo ago" — glanceable, not a full date. */
 export function formatRelative(iso: string): string {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / DAY_MS)

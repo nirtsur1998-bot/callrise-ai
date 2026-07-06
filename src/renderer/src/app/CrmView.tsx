@@ -2,23 +2,38 @@ import { useState } from 'react'
 import { cn } from '@renderer/lib/cn'
 import { ContactsView } from '@renderer/features/contacts/ContactsView'
 import { DealsView } from '@renderer/features/deals/DealsView'
+import { FollowUpDigest } from '@renderer/features/deals/FollowUpDigest'
+import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 
-type CrmTab = 'contacts' | 'deals'
+type CrmTab = 'contacts' | 'deals' | 'followups'
 
 const TABS: { id: CrmTab; label: string }[] = [
   { id: 'contacts', label: 'Contacts' },
-  { id: 'deals', label: 'Deals' }
+  { id: 'deals', label: 'Deals' },
+  { id: 'followups', label: 'Follow-ups' }
 ]
 
-/** The CRM hub: Contacts (Phase 1) and Deals (Phase 3) as tabs of one screen,
- *  rather than separate sidebar items — they're one feature area. */
+/** The CRM hub: Contacts (Phase 1), Deals (Phase 3), and Follow-ups
+ *  (Phase 4) as tabs of one screen, rather than separate sidebar items —
+ *  they're one feature area. */
 export function CrmView(): React.JSX.Element {
   const [tab, setTab] = useState<CrmTab>('contacts')
+  const [openDealId, setOpenDealId] = useState<string | null>(null)
+  const { settings } = useAppSettings()
+
+  // The Follow-ups tab is fully hidden when the feature is off in Settings —
+  // not just grayed out, per the "off means invisible" rule from Phase 4 Step 1.
+  const tabs = settings.crm.staleFollowUpEnabled ? TABS : TABS.filter((t) => t.id !== 'followups')
+
+  const openDealFromDigest = (dealId: string): void => {
+    setOpenDealId(dealId)
+    setTab('deals')
+  }
 
   return (
     <div>
       <div className="mb-5 flex items-center gap-1">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.id}
             type="button"
@@ -34,7 +49,16 @@ export function CrmView(): React.JSX.Element {
           </button>
         ))}
       </div>
-      {tab === 'contacts' ? <ContactsView /> : <DealsView />}
+      {tab === 'contacts' ? (
+        <ContactsView />
+      ) : tab === 'deals' ? (
+        <DealsView
+          initialViewDealId={openDealId}
+          onInitialViewConsumed={() => setOpenDealId(null)}
+        />
+      ) : (
+        <FollowUpDigest onOpenDeal={openDealFromDigest} />
+      )}
     </div>
   )
 }

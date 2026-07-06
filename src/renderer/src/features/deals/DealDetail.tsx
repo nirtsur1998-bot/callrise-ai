@@ -15,7 +15,7 @@ import { CallHistoryList } from '@renderer/features/contacts/CallHistoryList'
 import { formatRelative } from '@renderer/features/contacts/contactStats'
 import type { Contact } from '@renderer/features/contacts/types'
 import { formatValue, formatCloseDate } from './format'
-import { isDealStale } from './staleness'
+import { isDealStale, createFollowUpTask } from './staleness'
 import type { Deal, DealStage } from './types'
 
 interface DealDetailProps {
@@ -49,17 +49,10 @@ export function DealDetail({
   const stale =
     !loading && isDealStale(stage, linked[0]?.call.createdAt, staleFollowUpEnabled, staleAfterDays)
 
-  const createFollowUpTask = async (): Promise<void> => {
+  const handleCreateFollowUpTask = async (): Promise<void> => {
     setCreatingTask(true)
     try {
-      await window.api.tasks.create({
-        title: `Follow up with ${contact?.name ?? 'contact'} — ${deal.title}`,
-        type: 'follow-up',
-        priority: 'medium',
-        clientName: contact?.name ?? null,
-        note: `Deal: ${deal.title}`,
-        source: 'manual'
-      })
+      await createFollowUpTask(deal, contact?.name)
       setTaskCreated(true)
     } finally {
       setCreatingTask(false)
@@ -134,7 +127,7 @@ export function DealDetail({
           ) : (
             <button
               type="button"
-              onClick={() => void createFollowUpTask()}
+              onClick={() => void handleCreateFollowUpTask()}
               disabled={creatingTask}
               className="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:brightness-110 disabled:opacity-50"
             >

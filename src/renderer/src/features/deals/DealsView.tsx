@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus,
   Handshake,
@@ -35,7 +35,18 @@ import type { Deal } from './types'
 const ALL_STAGES = 'all'
 type ViewMode = 'board' | 'list'
 
-export function DealsView(): React.JSX.Element {
+interface DealsViewProps {
+  /** Deep-link from the follow-up digest (or elsewhere): open this deal on mount. */
+  initialViewDealId?: string | null
+  /** Called once the initial selection above has been applied, so the parent
+   *  can clear it (otherwise a later plain visit would reopen the same deal). */
+  onInitialViewConsumed?: () => void
+}
+
+export function DealsView({
+  initialViewDealId = null,
+  onInitialViewConsumed
+}: DealsViewProps = {}): React.JSX.Element {
   const { deals, loading, create, update, remove } = useDeals()
   const { stages, loading: stagesLoading, save: saveStages } = useDealStages()
   const { contacts } = useContacts()
@@ -47,7 +58,15 @@ export function DealsView(): React.JSX.Element {
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Deal | null>(null)
   const [managingStages, setManagingStages] = useState(false)
-  const [viewingId, setViewingId] = useState<string | null>(null)
+  const [viewingId, setViewingId] = useState<string | null>(initialViewDealId)
+
+  const consumedRef = useRef(false)
+  useEffect(() => {
+    if (initialViewDealId && !consumedRef.current) {
+      consumedRef.current = true
+      onInitialViewConsumed?.()
+    }
+  }, [initialViewDealId, onInitialViewConsumed])
 
   useEffect(() => {
     let active = true
