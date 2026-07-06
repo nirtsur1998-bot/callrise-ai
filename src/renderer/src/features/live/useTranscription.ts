@@ -53,6 +53,9 @@ export function useTranscription(
   // Re-entrancy guard: a rapid double-click on Try again/Resume must not run
   // two arm-then-getDisplayMedia sequences concurrently.
   const enablingOtherPartyRef = useRef(false)
+  // Same guard, mirrored for the disable path — defense in depth alongside
+  // the natural isLoopbackAttached() idempotency check below.
+  const disablingOtherPartyRef = useRef(false)
   const latencySamples = useRef<number[]>([])
   // Synchronous mirror of `segments` so the save (on close) sees the latest.
   const segmentsRef = useRef<CallSegment[]>([])
@@ -283,30 +286,38 @@ export function useTranscription(
   // a no-op when no loopback is attached, so the consent-off effect can fire
   // freely (including the double reset on save + start).
   const disableOtherParty = useCallback(async () => {
-    const recorder = recorderRef.current
-    if (!recorder || !recorder.isLoopbackAttached()) return
-    setOtherPartyLive(false)
-    setOtherPartyError(null)
-    recorder.detachLoopback() // stop capturing the buyer immediately
-    speakerBoundaryRef.current = true
+    // Re-entrancy guard, mirroring enableOtherParty: a rapid double-call must
+    // not run two mono-switch sequences concurrently.
+    if (disablingOtherPartyRef.current) return
+    disablingOtherPartyRef.current = true
     try {
-      // Switch the socket back to mono FIRST, then flip the worklet layout — so
-      // the worklet never emits mono into the still-open multichannel socket.
-      // expectedSessionId makes this a no-op in main if it lands after a newer
-      // call already replaced the session (never clobber the new call).
-      const res = await window.api.transcription.start({
-        sampleRate: recorder.sampleRate,
-        multichannel: false,
-        expectedSessionId: sessionIdRef.current ?? undefined
-      })
-      if (res.ok && typeof res.sessionId === 'number') sessionIdRef.current = res.sessionId
-    } catch {
-      /* socket failures surface via the state/error handlers */
+      const recorder = recorderRef.current
+      if (!recorder || !recorder.isLoopbackAttached()) return
+      setOtherPartyLive(false)
+      setOtherPartyError(null)
+      recorder.detachLoopback() // stop capturing the buyer immediately
+      speakerBoundaryRef.current = true
+      try {
+        // Switch the socket back to mono FIRST, then flip the worklet layout — so
+        // the worklet never emits mono into the still-open multichannel socket.
+        // expectedSessionId makes this a no-op in main if it lands after a newer
+        // call already replaced the session (never clobber the new call).
+        const res = await window.api.transcription.start({
+          sampleRate: recorder.sampleRate,
+          multichannel: false,
+          expectedSessionId: sessionIdRef.current ?? undefined
+        })
+        if (res.ok && typeof res.sessionId === 'number') sessionIdRef.current = res.sessionId
+      } catch {
+        /* socket failures surface via the state/error handlers */
+      }
+      // The call may have stopped (or restarted) during the await — this recorder
+      // is then already torn down and mustn't be touched.
+      if (recorderRef.current !== recorder) return
+      recorder.setStereo(false)
+    } finally {
+      disablingOtherPartyRef.current = false
     }
-    // The call may have stopped (or restarted) during the await — this recorder
-    // is then already torn down and mustn't be touched.
-    if (recorderRef.current !== recorder) return
-    recorder.setStereo(false)
   }, [])
 
   // Begin capturing the other party. MUST be called from a user gesture (it

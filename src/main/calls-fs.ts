@@ -785,18 +785,46 @@ function makeFreeTextScrubber(transcript: string): (text: string) => string {
   }
 }
 
-function sanitizeEvidence(value: unknown, transcript: string): CoachEvidence | undefined {
+interface VerifyTurn {
+  speaker: number
+  text: string // normalized
+}
+
+/** Merge consecutive same-speaker segments into turns (same shape as
+ *  coach.ts's makeVerifier), so quote verification below checks a single
+ *  speaker's continuous utterance rather than a flattened whole-transcript
+ *  string — a quote stitched from the tail of one turn plus the head of
+ *  another (regardless of speaker) can no longer verify. */
+function buildVerifyTurns(segments: CallSegment[]): VerifyTurn[] {
+  const turns: { speaker: number; text: string }[] = []
+  for (const s of Array.isArray(segments) ? segments : []) {
+    if (!s || typeof s.text !== 'string') continue
+    const last = turns[turns.length - 1]
+    if (last && last.speaker === s.speaker) last.text += ` ${s.text}`
+    else turns.push({ speaker: s.speaker, text: s.text })
+  }
+  return turns.map((t) => ({ speaker: t.speaker, text: normalizeForMatch(t.text) }))
+}
+
+function sanitizeEvidence(value: unknown, turns: VerifyTurn[]): CoachEvidence | undefined {
   if (!value || typeof value !== 'object') return undefined
   const v = value as Record<string, unknown>
   const quote = str(v.quote, 500).trim()
   if (!quote) return undefined
+  const claimedSpeaker = clampInt(v.speaker, 0, 1000, 0)
+  const nq = normalizeForMatch(quote)
+  // `verified` is RE-DERIVED from the call's actual transcript, never trusted
+  // from the stored/cloud flag — and only true when a SINGLE turn spoken by
+  // the claimed speaker contains the quote (never a flattened whole-
+  // transcript string), so a restored/cloud payload can't claim a stitched
+  // or misattributed quote is verified. `speaker` comes from the matched
+  // turn's actual speaker, not the unchecked claim, so a misattribution
+  // can't survive even if the text happens to match some other speaker.
+  const match = turns.find((t) => t.speaker === claimedSpeaker && t.text.includes(nq))
   return {
     quote,
-    speaker: clampInt(v.speaker, 0, 1000, 0),
-    // `verified` is RE-DERIVED from the call's actual transcript, never trusted
-    // from the stored/cloud flag (a restored payload could claim verified: true
-    // for a quote this machine's transcript doesn't contain).
-    verified: transcript.includes(normalizeForMatch(quote))
+    speaker: match ? match.speaker : claimedSpeaker,
+    verified: !!match
   }
 }
 
@@ -812,6 +840,7 @@ export function sanitizeCoaching(value: unknown, segments: CallSegment[]): Coach
       .map((s) => (s && typeof s.text === 'string' ? s.text : ''))
       .join(' ')
   )
+  const turns = buildVerifyTurns(segments)
 
   const scrub = makeFreeTextScrubber(transcript)
 
@@ -828,7 +857,7 @@ export function sanitizeCoaching(value: unknown, segments: CallSegment[]): Coach
       key,
       score: clampInt(dd.score, 1, 5, 3),
       comment: scrub(str(dd.comment, 1000)),
-      evidence: sanitizeEvidence(dd.evidence, transcript)
+      evidence: sanitizeEvidence(dd.evidence, turns)
     })
   }
   // A partial rubric (hand-edited or legacy file) must not pass as a complete report.
@@ -842,7 +871,7 @@ export function sanitizeCoaching(value: unknown, segments: CallSegment[]): Coach
       kind: ii.kind === 'strategic' ? 'strategic' : 'mechanical',
       title: scrub(str(ii.title, 300)),
       detail: scrub(str(ii.detail, 1500)),
-      evidence: sanitizeEvidence(ii.evidence, transcript)
+      evidence: sanitizeEvidence(ii.evidence, turns)
     })
   }
 
@@ -859,7 +888,7 @@ export function sanitizeCoaching(value: unknown, segments: CallSegment[]): Coach
     },
     strength: {
       text: scrub(str(strength.text, 600)),
-      evidence: sanitizeEvidence(strength.evidence, transcript)
+      evidence: sanitizeEvidence(strength.evidence, turns)
     },
     dimensions,
     improvements,
