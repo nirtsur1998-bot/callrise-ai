@@ -434,6 +434,28 @@ export interface DealStage {
 export type SetDealStagesResult =
   { ok: true; stages: DealStage[] } | { ok: false; error: 'empty' | 'stage-in-use' }
 
+export type DealRiskLevel = 'low' | 'medium' | 'high'
+
+export interface DealRiskReason {
+  text: string
+  /** Which linked call this reason is based on, if any. */
+  callId?: string
+  callTitle?: string
+}
+
+export interface DealRiskAssessment {
+  level: DealRiskLevel
+  summary: string
+  reasons: DealRiskReason[]
+  suggestedAction: string
+  model: string
+  createdAt: string
+}
+
+export type AssessDealRiskResult =
+  | { ok: true; assessment: DealRiskAssessment }
+  | { ok: false; error: 'no-key' | 'failed'; message?: string }
+
 export interface Deal {
   id: string
   title: string
@@ -444,6 +466,9 @@ export interface Deal {
   notes?: string
   createdAt: string
   updatedAt: string
+  /** Phase 5 Step 1 — the last AI risk assessment run on this deal, if any.
+   *  Manually triggered, cached until re-run. */
+  riskAssessment?: DealRiskAssessment
 }
 
 export interface DealCreateInput {
@@ -469,6 +494,8 @@ export interface DealsApi {
   create: (input: DealCreateInput) => Promise<Deal | null>
   update: (id: string, patch: DealUpdateInput) => Promise<Deal | null>
   delete: (id: string) => Promise<{ ok: boolean }>
+  /** Manual, per-deal AI risk assessment (Phase 5 Step 1) — never automatic. */
+  assessRisk: (id: string) => Promise<AssessDealRiskResult>
 }
 
 export interface DealStagesApi {

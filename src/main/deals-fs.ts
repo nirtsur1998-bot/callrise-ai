@@ -2,6 +2,7 @@ import { promises as fs, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from './atomic-write'
+import type { DealRiskAssessment, DealRiskLevel, DealRiskReason } from './deal-risk'
 
 /** A saved deal (what's stored on disk: one JSON file per deal). Company is
  *  deliberately NOT stored here — it's derived from the linked contact at
@@ -21,6 +22,9 @@ export interface Deal {
   createdAt: string
   /** Last modification (create or edit); a future backup's "newest wins" key. */
   updatedAt: string
+  /** Phase 5 Step 1 — the last AI risk assessment run on this deal, if any.
+   *  Manually triggered, cached until re-run (never auto-computed). */
+  riskAssessment?: DealRiskAssessment
   /** Tombstone: a deleted deal is kept (not erased) so the deletion can
    *  propagate to a future cloud backup. Hidden from every normal listing. */
   deleted?: boolean
@@ -83,6 +87,50 @@ function sanitizeDateOnly(value: unknown): string | undefined {
   return new Date(t).toISOString().slice(0, 10)
 }
 
+const RISK_LEVELS = new Set<DealRiskLevel>(['low', 'medium', 'high'])
+const MAX_REASONS = 4
+
+function sanitizeRiskReasons(value: unknown): DealRiskReason[] {
+  if (!Array.isArray(value)) return []
+  const reasons: DealRiskReason[] = []
+  for (const r of value.slice(0, MAX_REASONS)) {
+    if (!r || typeof r !== 'object') continue
+    const rr = r as Record<string, unknown>
+    const text = sanitizeOptionalText(rr.text, 300)
+    if (!text) continue
+    const callId = isSafeId(rr.callId) ? rr.callId : undefined
+    const callTitle = callId ? sanitizeOptionalText(rr.callTitle, 300) : undefined
+    reasons.push({ text, callId, callTitle })
+  }
+  return reasons
+}
+
+/** Coerce an untrusted parsed object into a clean assessment, or undefined —
+ *  re-run when the deal changes, this just guards against a corrupted file. */
+function sanitizeRiskAssessment(value: unknown): DealRiskAssessment | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const v = value as Record<string, unknown>
+  const level =
+    typeof v.level === 'string' && RISK_LEVELS.has(v.level as DealRiskLevel)
+      ? (v.level as DealRiskLevel)
+      : undefined
+  const summary = sanitizeOptionalText(v.summary, 300)
+  const suggestedAction = sanitizeOptionalText(v.suggestedAction, 300)
+  if (!level || !summary || !suggestedAction) return undefined
+  const createdAt =
+    typeof v.createdAt === 'string' && !Number.isNaN(Date.parse(v.createdAt))
+      ? v.createdAt
+      : new Date().toISOString()
+  return {
+    level,
+    summary,
+    reasons: sanitizeRiskReasons(v.reasons),
+    suggestedAction,
+    model: sanitizeOptionalText(v.model, 100) ?? 'unknown',
+    createdAt
+  }
+}
+
 async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true })
 }
@@ -118,6 +166,7 @@ function sanitizeDealRecord(value: unknown): Deal | null {
     notes: sanitizeOptionalText(v.notes, MAX_NOTES),
     createdAt,
     updatedAt,
+    riskAssessment: sanitizeRiskAssessment(v.riskAssessment),
     deleted: v.deleted === true ? true : undefined
   }
 }
@@ -279,4 +328,33 @@ async function deleteDealUnlocked(dir: string, id: string): Promise<{ ok: boolea
     return { ok: false }
   }
   return { ok: true }
+}
+
+/** Save a fresh AI risk assessment onto a deal (Phase 5 Step 1) — replaces
+ *  any previous one; cached until the next manual re-run. */
+export function setDealRiskAssessment(
+  dir: string,
+  id: string,
+  assessment: DealRiskAssessment
+): Promise<Deal | null> {
+  return withDealLock(id, () => setDealRiskAssessmentUnlocked(dir, id, assessment))
+}
+
+async function setDealRiskAssessmentUnlocked(
+  dir: string,
+  id: string,
+  assessment: DealRiskAssessment
+): Promise<Deal | null> {
+  const deal = await getDeal(dir, id)
+  if (!deal) return null
+  const clean = sanitizeRiskAssessment(assessment)
+  if (!clean) return null
+  deal.riskAssessment = clean
+  deal.updatedAt = new Date().toISOString()
+  try {
+    await writeDeal(dir, deal)
+  } catch {
+    return null
+  }
+  return deal
 }

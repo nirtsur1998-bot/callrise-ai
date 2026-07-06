@@ -71,7 +71,8 @@ const api = {
     list: () => ipcRenderer.invoke('deals:list'),
     create: (input: unknown) => ipcRenderer.invoke('deals:create', input),
     update: (id: string, patch: unknown) => ipcRenderer.invoke('deals:update', id, patch),
-    delete: (id: string) => ipcRenderer.invoke('deals:delete', id)
+    delete: (id: string) => ipcRenderer.invoke('deals:delete', id),
+    assessRisk: (id: string) => ipcRenderer.invoke('deals:assessRisk', id)
   },
   dealStages: {
     get: () => ipcRenderer.invoke('dealStages:get'),

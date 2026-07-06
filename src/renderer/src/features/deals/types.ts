@@ -13,6 +13,27 @@ export interface DealStage {
 export type SetDealStagesResult =
   { ok: true; stages: DealStage[] } | { ok: false; error: 'empty' | 'stage-in-use' }
 
+export type DealRiskLevel = 'low' | 'medium' | 'high'
+
+export interface DealRiskReason {
+  text: string
+  callId?: string
+  callTitle?: string
+}
+
+export interface DealRiskAssessment {
+  level: DealRiskLevel
+  summary: string
+  reasons: DealRiskReason[]
+  suggestedAction: string
+  model: string
+  createdAt: string
+}
+
+export type AssessDealRiskResult =
+  | { ok: true; assessment: DealRiskAssessment }
+  | { ok: false; error: 'no-key' | 'failed'; message?: string }
+
 export interface Deal {
   id: string
   title: string
@@ -23,4 +44,5 @@ export interface Deal {
   notes?: string
   createdAt: string
   updatedAt: string
+  riskAssessment?: DealRiskAssessment
 }

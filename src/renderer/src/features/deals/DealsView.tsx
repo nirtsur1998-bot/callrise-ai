@@ -47,7 +47,7 @@ export function DealsView({
   initialViewDealId = null,
   onInitialViewConsumed
 }: DealsViewProps = {}): React.JSX.Element {
-  const { deals, loading, create, update, remove } = useDeals()
+  const { deals, loading, create, update, remove, refresh } = useDeals()
   const { stages, loading: stagesLoading, save: saveStages } = useDealStages()
   const { contacts } = useContacts()
   const { settings } = useAppSettings()
@@ -107,6 +107,7 @@ export function DealsView({
           staleAfterDays={staleAfterDays}
           onBack={() => setViewingId(null)}
           onEdit={() => setEditing(viewing)}
+          onChanged={() => void refresh()}
         />
         {editing && (
           <DealFormDialog

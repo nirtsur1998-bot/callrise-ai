@@ -16,6 +16,7 @@ import { formatRelative } from '@renderer/features/contacts/contactStats'
 import type { Contact } from '@renderer/features/contacts/types'
 import { formatValue, formatCloseDate } from './format'
 import { isDealStale, createFollowUpTask } from './staleness'
+import { RiskAssessmentCard } from './RiskAssessmentCard'
 import type { Deal, DealStage } from './types'
 
 interface DealDetailProps {
@@ -26,6 +27,8 @@ interface DealDetailProps {
   staleAfterDays: number
   onBack: () => void
   onEdit: () => void
+  /** Called after the risk assessment runs, so the parent can refetch the deal. */
+  onChanged: () => void
 }
 
 /** A deal's full context in one place: its own info plus the linked
@@ -38,7 +41,8 @@ export function DealDetail({
   staleFollowUpEnabled,
   staleAfterDays,
   onBack,
-  onEdit
+  onEdit,
+  onChanged
 }: DealDetailProps): React.JSX.Element {
   const { loading, linked } = useContactCallHistory(deal.contactId)
   const [creatingTask, setCreatingTask] = useState(false)
@@ -137,6 +141,10 @@ export function DealDetail({
           )}
         </div>
       )}
+
+      <div className="mb-4">
+        <RiskAssessmentCard deal={deal} onAssessed={onChanged} />
+      </div>
 
       {/* Quick stats — the same "so what" glance the Contact detail view shows */}
       {!loading && linked.length > 0 && (
