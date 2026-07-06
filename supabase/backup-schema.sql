@@ -145,3 +145,100 @@ create policy "own rows update" on public.backup_calls
 grant select, insert, update on public.backup_tasks  to authenticated;
 grant select, insert, update on public.backup_events to authenticated;
 grant select, insert, update on public.backup_calls  to authenticated;
+
+-- ============================================================================
+-- Optional-sync extensions — Knowledge Base, App settings & personalization,
+-- and attached-file blobs. Each is gated by its own per-item toggle in
+-- Settings → Privacy & data, OFF by default. Run this section once too (same
+-- safe-to-re-run discipline).
+--
+-- IMPORTANT: syncing "call recordings & transcripts" (a toggle on the SAME
+-- Privacy & data screen) does NOT add a new table — it just changes what the
+-- app puts in the existing backup_calls.payload column (the app strips the
+-- transcript by default; the toggle tells it not to). No SQL change needed
+-- for that one.
+-- ============================================================================
+
+-- backup_knowledge: same shape/rules as backup_tasks/events/calls above.
+create table if not exists public.backup_knowledge (
+  id                text        not null,
+  user_id           uuid        not null references auth.users (id) on delete cascade,
+  updated_at        timestamptz not null,
+  server_updated_at timestamptz not null default now(),
+  deleted           boolean     not null default false,
+  payload           jsonb       not null,
+  primary key (user_id, id)
+);
+
+create index if not exists backup_knowledge_user_server_updated
+  on public.backup_knowledge (user_id, server_updated_at);
+
+drop trigger if exists trg_server_updated_at on public.backup_knowledge;
+create trigger trg_server_updated_at before insert or update on public.backup_knowledge
+  for each row execute function public.set_server_updated_at();
+
+alter table public.backup_knowledge enable row level security;
+
+drop policy if exists "own rows select" on public.backup_knowledge;
+create policy "own rows select" on public.backup_knowledge
+  for select using (user_id = auth.uid());
+drop policy if exists "own rows insert" on public.backup_knowledge;
+create policy "own rows insert" on public.backup_knowledge
+  for insert with check (user_id = auth.uid());
+drop policy if exists "own rows update" on public.backup_knowledge;
+create policy "own rows update" on public.backup_knowledge
+  for update using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+grant select, insert, update on public.backup_knowledge to authenticated;
+
+-- backup_settings: exactly ONE row per user (app settings + personalization) —
+-- user_id IS the primary key, no separate `id` column needed.
+create table if not exists public.backup_settings (
+  user_id           uuid        not null references auth.users (id) on delete cascade,
+  updated_at        timestamptz not null,
+  server_updated_at timestamptz not null default now(),
+  payload           jsonb       not null,
+  primary key (user_id)
+);
+
+drop trigger if exists trg_server_updated_at on public.backup_settings;
+create trigger trg_server_updated_at before insert or update on public.backup_settings
+  for each row execute function public.set_server_updated_at();
+
+alter table public.backup_settings enable row level security;
+
+drop policy if exists "own row select" on public.backup_settings;
+create policy "own row select" on public.backup_settings
+  for select using (user_id = auth.uid());
+drop policy if exists "own row insert" on public.backup_settings;
+create policy "own row insert" on public.backup_settings
+  for insert with check (user_id = auth.uid());
+drop policy if exists "own row update" on public.backup_settings;
+create policy "own row update" on public.backup_settings
+  for update using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+grant select, insert, update on public.backup_settings to authenticated;
+
+-- Attached-file blobs: a private Storage bucket, one object per attachment,
+-- path "<user_id>/<attachment_id>.<ext>" — RLS below scopes access by the
+-- first path segment (the folder name), same idea as the row-level policies
+-- above but for Storage's own object table.
+insert into storage.buckets (id, name, public)
+values ('attachments', 'attachments', false)
+on conflict (id) do nothing;
+
+drop policy if exists "own attachment select" on storage.objects;
+create policy "own attachment select" on storage.objects
+  for select using (
+    bucket_id = 'attachments' and (storage.foldername(name))[1] = auth.uid()::text
+  );
+drop policy if exists "own attachment insert" on storage.objects;
+create policy "own attachment insert" on storage.objects
+  for insert with check (
+    bucket_id = 'attachments' and (storage.foldername(name))[1] = auth.uid()::text
+  );
+drop policy if exists "own attachment update" on storage.objects;
+create policy "own attachment update" on storage.objects
+  for update using (
+    bucket_id = 'attachments' and (storage.foldername(name))[1] = auth.uid()::text
+  );

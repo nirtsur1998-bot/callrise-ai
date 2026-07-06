@@ -1,6 +1,7 @@
 import { AudioLines } from 'lucide-react'
 import { useAuth } from '@renderer/features/auth/useAuth'
 import { AuthScreen } from '@renderer/features/auth/AuthScreen'
+import { useTheme } from '@renderer/features/settings/useTheme'
 import { MainApp } from './MainApp'
 
 /** A brief splash while we check whether someone is already signed in. */
@@ -19,6 +20,7 @@ function Splash(): React.JSX.Element {
  * and the full app once a user is signed in.
  */
 function App(): React.JSX.Element {
+  useTheme() // applies the saved dark/light/system preference to <html>, app-wide
   const { loading, configured, user } = useAuth()
 
   if (loading) return <Splash />

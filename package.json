@@ -25,6 +25,7 @@
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "@supabase/supabase-js": "^2.110.0",
+    "active-win": "^8.2.1",
     "date-fns": "^4.4.0",
     "dotenv": "^17.4.2",
     "google-auth-library": "^10.9.0",

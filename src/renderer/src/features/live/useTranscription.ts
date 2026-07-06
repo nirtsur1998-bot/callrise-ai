@@ -3,6 +3,11 @@ import { startRecorder, type Recorder } from './audio/recorder'
 import { groupWords, mergeSegments } from './segments'
 import type { LiveStatus } from './types'
 import type { CallSegment, ConsentRecord } from '@renderer/features/calls/types'
+import {
+  getAutoSummarize,
+  getAutoGenerateTitle,
+  addSeenApp
+} from '@renderer/features/settings/prefs'
 
 type LivePhase = Exclude<LiveStatus, 'paused'>
 
@@ -32,8 +37,17 @@ interface UseTranscription {
 
 export function useTranscription(
   consentRef?: { current: ConsentRecord },
-  onStartReset?: () => void
+  onStartReset?: () => void,
+  /** AI Note Taker's "auto-open meeting page" — fired with the saved call's
+   *  id after every successful save. Kept in a ref so it's always current
+   *  without forcing flushPendingSave to be recreated on every render. */
+  onSaved?: (callId: string) => void
 ): UseTranscription {
+  const onSavedRef = useRef(onSaved)
+  useEffect(() => {
+    onSavedRef.current = onSaved
+  }, [onSaved])
+
   const [phase, setPhase] = useState<LivePhase>('idle')
   const [paused, setPaused] = useState(false)
   const [segments, setSegments] = useState<CallSegment[]>([])
@@ -92,7 +106,14 @@ export function useTranscription(
         // and enforces the "no consent = no capture" invariant on save.
         consent: consentRef?.current
       })
-      .then(() => setSavedNotice(true))
+      .then((saved) => {
+        setSavedNotice(true)
+        // AI Note Taker: fire-and-forget the opted-in auto-behaviors. Each is
+        // independent — one failing (or being off) never affects the others.
+        if (getAutoSummarize()) void window.api.calls.summarizeCall(saved.id).catch(() => {})
+        if (getAutoGenerateTitle()) void window.api.calls.generateTitle(saved.id).catch(() => {})
+        onSavedRef.current?.(saved.id)
+      })
       .catch(() => {
         /* non-fatal: the transcript is still on screen */
       })
@@ -180,6 +201,15 @@ export function useTranscription(
     flushPendingSave()
     // Each new call starts with consent reset to off — it never carries over.
     onStartReset?.()
+
+    // AI Note Taker's exclude-apps list learns from every session (not just
+    // auto-started ones) — best-effort, never blocks starting.
+    void window.api.app
+      .getActiveApp()
+      .then((name) => {
+        if (name) addSeenApp(name)
+      })
+      .catch(() => {})
 
     setErrorMessage(null)
     setSegments([])

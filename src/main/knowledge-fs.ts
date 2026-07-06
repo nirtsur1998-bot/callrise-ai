@@ -263,3 +263,35 @@ async function deleteEntryUnlocked(dir: string, id: string): Promise<{ ok: boole
   }
   return { ok: true }
 }
+
+/**
+ * ID-PRESERVING importer for cloud-backup restore, mirroring importTask in
+ * tasks-fs.ts. Keeps the original id (idempotent re-pulls), re-sanitizes
+ * fully (a tampered cloud payload can't plant an unsafe id/path or malformed
+ * fields), and — with `onlyIfNewer` — re-reads the CURRENT on-disk record at
+ * write time so a local edit/delete landing mid-restore can't be clobbered.
+ */
+export async function importEntry(
+  dir: string,
+  payload: unknown,
+  opts?: { onlyIfNewer?: boolean }
+): Promise<KnowledgeEntry | null> {
+  const entry = sanitizeEntryRecord(payload)
+  if (!entry) return null
+  if (opts?.onlyIfNewer) {
+    try {
+      const raw = await fs.readFile(join(dir, `${entry.id}.json`), 'utf8')
+      const current = sanitizeEntryRecord(JSON.parse(raw))
+      if (current && Date.parse(current.updatedAt) >= Date.parse(entry.updatedAt)) return null
+    } catch {
+      /* no current record (or unreadable) — proceed with the import */
+    }
+  }
+  await ensureDir(dir)
+  try {
+    await writeEntry(dir, entry)
+  } catch {
+    return null
+  }
+  return entry
+}

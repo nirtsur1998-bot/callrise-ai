@@ -378,6 +378,22 @@ async function resendCode(p: unknown): Promise<SimpleResult> {
   }
 }
 
+async function updateName(p: unknown): Promise<SimpleResult> {
+  const c = getClient()
+  if (!c) return NOT_CONFIGURED
+  const { name } = readBody(p)
+  if (!name) return { ok: false, error: 'failed', message: 'Enter a name first.' }
+  try {
+    const { error } = await c.auth.updateUser({ data: { full_name: name } })
+    if (error) return mapError(error)
+    // onAuthStateChange (USER_UPDATED) fires and broadcasts the new name —
+    // no separate broadcast needed here.
+    return { ok: true }
+  } catch (err) {
+    return mapError(err)
+  }
+}
+
 async function signOut(): Promise<SimpleResult> {
   const c = getClient()
   if (!c) return { ok: true }
@@ -414,5 +430,6 @@ export function registerAuth(): void {
   ipcMain.handle('auth:verifyOtp', (_e, p: unknown) => verifyOtp(p))
   ipcMain.handle('auth:signIn', (_e, p: unknown) => signIn(p))
   ipcMain.handle('auth:resendCode', (_e, p: unknown) => resendCode(p))
+  ipcMain.handle('auth:updateName', (_e, p: unknown) => updateName(p))
   ipcMain.handle('auth:signOut', () => signOut())
 }

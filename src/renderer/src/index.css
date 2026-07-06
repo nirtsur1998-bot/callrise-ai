@@ -25,6 +25,28 @@
 @layer base {
   :root {
     color-scheme: dark;
+    --scrollbar-thumb: #2a313b;
+    --scrollbar-thumb-hover: #353d49;
+  }
+
+  /* Light theme: same token names, light values — applied via a `.light`
+   * class on <html> (see useTheme.ts). Every `bg-surface`/`text-ink`/etc.
+   * utility re-themes automatically since Tailwind's generated utilities
+   * reference these custom properties, not literal colors. */
+  :root.light {
+    color-scheme: light;
+    --color-canvas: #ffffff;
+    --color-surface: #f7f7f8;
+    --color-elevated: #eef0f2;
+    --color-line: #e3e5e9;
+    --color-line-soft: #edeef1;
+    --color-ink: #16181d;
+    --color-muted: #5b6270;
+    --color-faint: #8a8f99;
+    --color-accent: #6e7bf2;
+    --color-accent-soft: #6e7bf21a;
+    --scrollbar-thumb: #d6d8dd;
+    --scrollbar-thumb-hover: #c3c6cc;
   }
 
   html,
@@ -48,12 +70,12 @@
     height: 10px;
   }
   ::-webkit-scrollbar-thumb {
-    background: #2a313b;
+    background: var(--scrollbar-thumb);
     border-radius: 9999px;
     border: 3px solid var(--color-canvas);
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #353d49;
+    background: var(--scrollbar-thumb-hover);
   }
 }
 

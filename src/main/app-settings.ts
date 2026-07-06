@@ -17,6 +17,24 @@ import {
 } from './personalization-context'
 import { sanitizeSummaryLanguage, type SummaryLanguage } from './summary-language'
 
+/** Which optional categories back up to the cloud, on top of the always-on
+ *  Tasks/Calendar events/Call metadata. All default OFF — opt-in only. */
+export interface BackupSyncScope {
+  /** Buyer transcripts + coaching evidence quotes (normally stripped before backup). */
+  transcripts: boolean
+  /** Attached document blobs (Supabase Storage), not just their metadata. */
+  attachments: boolean
+  knowledgeBase: boolean
+  settingsPersonalization: boolean
+}
+
+const EMPTY_SYNC_SCOPE: BackupSyncScope = {
+  transcripts: false,
+  attachments: false,
+  knowledgeBase: false,
+  settingsPersonalization: false
+}
+
 export interface AppSettings {
   /**
    * Master switch for buyer/other-party recording. HARD RULE: this can only
@@ -30,16 +48,56 @@ export interface AppSettings {
   personalization: PersonalizationSettings
   /** Language for AI summaries. 'auto' = same language as the source content. */
   summaryLanguage: SummaryLanguage
+  /** Optional cloud-backup categories (Privacy & data), all off by default. */
+  syncScope: BackupSyncScope
+  /** Bumped on every save — the "newest wins" cursor when this whole object
+   *  itself is synced to the cloud (backup_settings), same discipline as
+   *  every other record's updatedAt. */
+  settingsUpdatedAt: string
+  /** Non-secret marker: has Google Calendar been connected on ANY device for
+   *  this account? Never the token itself — just enough to show a "reconnect
+   *  Google Calendar" nudge on a fresh device instead of syncing the actual
+   *  OAuth refresh token to the cloud. */
+  googleCalendarConnected: boolean
 }
+
+const EPOCH = new Date(0).toISOString()
 
 const DEFAULT_SETTINGS: AppSettings = {
   allowOtherPartyRecording: true,
   personalization: EMPTY_PERSONALIZATION,
-  summaryLanguage: 'auto'
+  summaryLanguage: 'auto',
+  syncScope: EMPTY_SYNC_SCOPE,
+  settingsUpdatedAt: EPOCH,
+  googleCalendarConnected: false
 }
 
 function settingsPath(): string {
   return join(app.getPath('userData'), 'app-settings.json')
+}
+
+function sanitizeSyncScope(value: unknown): BackupSyncScope {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return {
+    transcripts: v.transcripts === true,
+    attachments: v.attachments === true,
+    knowledgeBase: v.knowledgeBase === true,
+    settingsPersonalization: v.settingsPersonalization === true
+  }
+}
+
+function mergeSyncScope(current: BackupSyncScope, patch: unknown): BackupSyncScope {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return {
+    transcripts: 'transcripts' in p ? p.transcripts === true : current.transcripts,
+    attachments: 'attachments' in p ? p.attachments === true : current.attachments,
+    knowledgeBase: 'knowledgeBase' in p ? p.knowledgeBase === true : current.knowledgeBase,
+    settingsPersonalization:
+      'settingsPersonalization' in p
+        ? p.settingsPersonalization === true
+        : current.settingsPersonalization
+  }
 }
 
 /**
@@ -58,14 +116,17 @@ export function loadAppSettings(): AppSettings {
           ? parsed.allowOtherPartyRecording
           : DEFAULT_SETTINGS.allowOtherPartyRecording,
       personalization: sanitizePersonalization(parsed.personalization),
-      summaryLanguage: sanitizeSummaryLanguage(parsed.summaryLanguage)
+      summaryLanguage: sanitizeSummaryLanguage(parsed.summaryLanguage),
+      syncScope: sanitizeSyncScope(parsed.syncScope),
+      settingsUpdatedAt:
+        typeof parsed.settingsUpdatedAt === 'string' &&
+        !Number.isNaN(Date.parse(parsed.settingsUpdatedAt))
+          ? parsed.settingsUpdatedAt
+          : EPOCH,
+      googleCalendarConnected: parsed.googleCalendarConnected === true
     }
   } catch {
-    return {
-      allowOtherPartyRecording: true,
-      personalization: { ...EMPTY_PERSONALIZATION },
-      summaryLanguage: 'auto'
-    }
+    return { ...DEFAULT_SETTINGS, personalization: { ...EMPTY_PERSONALIZATION } }
   }
 }
 
@@ -79,7 +140,13 @@ export function saveAppSettings(patch: unknown): AppSettings {
         : current.allowOtherPartyRecording,
     personalization: mergePersonalization(current.personalization, p.personalization),
     summaryLanguage:
-      'summaryLanguage' in p ? sanitizeSummaryLanguage(p.summaryLanguage) : current.summaryLanguage
+      'summaryLanguage' in p ? sanitizeSummaryLanguage(p.summaryLanguage) : current.summaryLanguage,
+    syncScope: mergeSyncScope(current.syncScope, p.syncScope),
+    settingsUpdatedAt: new Date().toISOString(), // bump on every save
+    googleCalendarConnected:
+      'googleCalendarConnected' in p
+        ? p.googleCalendarConnected === true
+        : current.googleCalendarConnected
   }
   mkdirSync(app.getPath('userData'), { recursive: true })
   writeFileSync(settingsPath(), JSON.stringify(next), 'utf8')

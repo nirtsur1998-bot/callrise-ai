@@ -9,6 +9,7 @@ import { useCueSettings } from './useCueSettings'
 import { useConsent } from '@renderer/features/consent/useConsent'
 import { useAutoStartListening } from '@renderer/features/settings/useAutoStartListening'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
+import { getExcludedApps, addSeenApp } from '@renderer/features/settings/prefs'
 import { OtherPartyControl } from '@renderer/features/consent/OtherPartyControl'
 import { ConsentModal } from '@renderer/features/consent/ConsentModal'
 import { RecordingIndicator } from '@renderer/features/consent/RecordingIndicator'
@@ -26,7 +27,14 @@ import {
   InlineBanner
 } from './components/LiveStates'
 
-export function LiveView(): React.JSX.Element {
+interface LiveViewProps {
+  /** AI Note Taker's "auto-open meeting page" — called with the saved call's
+   *  id right after a successful save. Optional so LiveView still works
+   *  standalone (e.g. in tests) without a parent wiring navigation. */
+  onSaved?: (callId: string) => void
+}
+
+export function LiveView({ onSaved }: LiveViewProps): React.JSX.Element {
   // Recording consent for the current call (gates future other-party capture).
   const consent = useConsent()
   const [consentOpen, setConsentOpen] = useState(false)
@@ -46,7 +54,7 @@ export function LiveView(): React.JSX.Element {
     togglePause,
     enableOtherParty,
     disableOtherParty
-  } = useTranscription(consent.recordRef, consent.reset)
+  } = useTranscription(consent.recordRef, consent.reset, onSaved)
 
   // Live coaching cues (hooks must run before any early return).
   const { enabled, setEnabled, sensitivity, setSensitivity } = useCueSettings()
@@ -91,16 +99,23 @@ export function LiveView(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allowOtherPartyRecording, disableOtherParty])
 
-  // Auto-start listening (Settings → Audio), so the rep needn't click Start.
-  // Guarded with a ref so it only ever fires once per mount — start() moves
-  // status away from 'idle' on success, so this isn't a retry loop.
+  // Auto-start listening (Settings → AI Note Taker), so the rep needn't click
+  // Start. Guarded with a ref so it only ever fires once per mount — start()
+  // moves status away from 'idle' on success, so this isn't a retry loop.
   const [autoStartListening] = useAutoStartListening()
   const autoStartedRef = useRef(false)
   useEffect(() => {
-    if (autoStartListening && status === 'idle' && !autoStartedRef.current) {
-      autoStartedRef.current = true
+    if (!autoStartListening || status !== 'idle' || autoStartedRef.current) return
+    autoStartedRef.current = true
+    void (async () => {
+      // Foreground-app exclusion check is best-effort: any detection failure
+      // (permission not granted, unsupported platform) fails OPEN — auto-start
+      // proceeds rather than silently never starting.
+      const activeApp = await window.api.app.getActiveApp().catch(() => null)
+      if (activeApp) addSeenApp(activeApp)
+      if (activeApp && getExcludedApps().includes(activeApp)) return
       start()
-    }
+    })()
   }, [autoStartListening, status, start])
 
   // "They said yes": record consent, then — still inside the click gesture —

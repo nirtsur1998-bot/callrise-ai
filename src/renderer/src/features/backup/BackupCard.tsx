@@ -7,10 +7,16 @@ import {
   ListChecks,
   CalendarDays,
   PhoneCall,
-  Lock
+  Lock,
+  MessagesSquare,
+  Paperclip,
+  BookOpen,
+  SlidersHorizontal
 } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { cn } from '@renderer/lib/cn'
+import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
+import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import { useBackupStatus } from './useBackupStatus'
 
 function agoLabel(iso: string): string {
@@ -41,27 +47,37 @@ function friendlyError(code: string, direction: 'backup' | 'restore'): string {
   }
 }
 
-const SYNCS: { icon: typeof ListChecks; label: string }[] = [
+const ALWAYS_SYNCED: { icon: typeof ListChecks; label: string }[] = [
   { icon: ListChecks, label: 'Tasks' },
   { icon: CalendarDays, label: 'Calendar events' },
   { icon: PhoneCall, label: 'Call titles, summaries & coaching scores' }
 ]
 
-const STAYS_LOCAL: string[] = [
-  'Call recordings & transcripts',
-  'Attached files',
-  'Your Google Calendar connection',
-  'Knowledge Base entries',
-  'App settings & personalization'
+type SyncScopeKey = 'transcripts' | 'attachments' | 'knowledgeBase' | 'settingsPersonalization'
+
+const OPTIONAL_ITEMS: { key: SyncScopeKey; icon: typeof ListChecks; label: string }[] = [
+  { key: 'transcripts', icon: MessagesSquare, label: 'Call recordings & transcripts' },
+  { key: 'attachments', icon: Paperclip, label: 'Attached files' },
+  { key: 'knowledgeBase', icon: BookOpen, label: 'Knowledge Base entries' },
+  {
+    key: 'settingsPersonalization',
+    icon: SlidersHorizontal,
+    label: 'App settings & personalization'
+  }
 ]
 
 /**
- * The backup/restore trust surface (M16 step 7): status, a manual "Sync now",
- * and a plain-language account of what does and doesn't leave this device.
- * Nothing here is a settings toggle — v1 backup is always on once signed in.
+ * The backup/restore trust surface: status, a manual "Sync now", and a
+ * plain-language, LIVE account of what does and doesn't leave this device —
+ * Tasks/Calendar events/Call metadata always sync; four more categories are
+ * opt-in toggles here, off by default. Google Calendar's connection is
+ * deliberately NOT one of them — the OAuth token stays local always; a new
+ * device gets a "reconnect" prompt instead (see CalendarSection.tsx).
  */
 export function BackupCard(): React.JSX.Element {
   const { status, syncing, loading, syncNow } = useBackupStatus()
+  const { settings, update: updateSettings } = useAppSettings()
+  const syncScope = settings.syncScope
 
   const lastSyncedAt = status?.lastSyncAt ?? status?.lastPushAt
   // Push and pull failures are tracked independently in the main process (a
@@ -78,6 +94,13 @@ export function BackupCard(): React.JSX.Element {
     : pushError
       ? friendlyError(pushError, 'backup')
       : null
+
+  const setScope = (key: SyncScopeKey, value: boolean): void => {
+    void updateSettings({ syncScope: { [key]: value } })
+  }
+
+  const syncedOptional = OPTIONAL_ITEMS.filter((i) => syncScope[i.key])
+  const localOptional = OPTIONAL_ITEMS.filter((i) => !syncScope[i.key])
 
   return (
     <Card>
@@ -136,10 +159,23 @@ export function BackupCard(): React.JSX.Element {
             <CloudCheck className="h-3.5 w-3.5" /> Synced to your account
           </p>
           <ul className="space-y-1.5">
-            {SYNCS.map(({ icon: Icon, label }) => (
+            {ALWAYS_SYNCED.map(({ icon: Icon, label }) => (
               <li key={label} className="flex items-center gap-2 text-[13px] text-muted">
                 <Icon className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
                 {label}
+              </li>
+            ))}
+            {syncedOptional.map(({ key, icon: Icon, label }) => (
+              <li key={key} className="flex items-center justify-between gap-2 text-[13px]">
+                <span className="flex items-center gap-2 text-muted">
+                  <Icon className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
+                  {label}
+                </span>
+                <ToggleSwitch
+                  checked
+                  onChange={(v) => setScope(key, v)}
+                  label={`Sync ${label} to the cloud`}
+                />
               </li>
             ))}
           </ul>
@@ -149,19 +185,42 @@ export function BackupCard(): React.JSX.Element {
             <CloudOff className="h-3.5 w-3.5" /> Stays only on this device
           </p>
           <ul className="space-y-1.5">
-            {STAYS_LOCAL.map((label) => (
-              <li key={label} className="flex items-center gap-2 text-[13px] text-muted">
-                <Lock className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
-                {label}
+            {localOptional.map(({ key, icon: Icon, label }) => (
+              <li key={key} className="flex items-center justify-between gap-2 text-[13px]">
+                <span className="flex items-center gap-2 text-muted">
+                  <Icon className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
+                  {label}
+                </span>
+                <ToggleSwitch
+                  checked={false}
+                  onChange={(v) => setScope(key, v)}
+                  label={`Sync ${label} to the cloud`}
+                />
               </li>
             ))}
+            <li className="flex items-center gap-2 text-[13px] text-muted">
+              <Lock className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
+              Your Google Calendar connection
+            </li>
           </ul>
         </div>
       </div>
 
+      {syncScope.transcripts && (
+        <p className="mt-4 flex items-start gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[12px] text-amber-300">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          Call recordings & transcripts sync is ON — your buyer conversations are stored in your
+          cloud account, not just this device.
+        </p>
+      )}
+
       <p className="mt-4 border-t border-line-soft pt-3 text-[12px] text-faint">
-        Backups happen automatically in the background and restore on a new device when you sign in
-        — your call recordings and transcripts never leave this Mac.
+        Backups happen automatically in the background and restore on a new device when you sign in.{' '}
+        {syncScope.transcripts
+          ? 'Call recordings and transcripts sync too, since you turned that on above.'
+          : 'Your call recordings and transcripts never leave this Mac unless you turn that on above.'}{' '}
+        Your Google Calendar connection is never synced — reconnect it in one click on a new device
+        instead.
       </p>
     </Card>
   )

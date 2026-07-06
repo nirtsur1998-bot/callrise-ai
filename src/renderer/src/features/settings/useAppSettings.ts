@@ -9,7 +9,15 @@ export type SummaryLanguage = AppSettings['summaryLanguage']
 const DEFAULT_SETTINGS: AppSettings = {
   allowOtherPartyRecording: true,
   personalization: { name: '', role: '', pronoun: '', about: '' },
-  summaryLanguage: 'auto'
+  summaryLanguage: 'auto',
+  syncScope: {
+    transcripts: false,
+    attachments: false,
+    knowledgeBase: false,
+    settingsPersonalization: false
+  },
+  settingsUpdatedAt: new Date(0).toISOString(),
+  googleCalendarConnected: false
 }
 
 export interface UseAppSettings {

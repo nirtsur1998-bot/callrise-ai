@@ -1,13 +1,32 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Trash2, Clock, Users, PhoneCall, Sparkles, Paperclip } from 'lucide-react'
 import { useCalls } from './useCalls'
 import { CallDetail } from './CallDetail'
 import { formatDate, formatDuration } from './format'
 
-export function PastCallsView(): React.JSX.Element {
+interface PastCallsViewProps {
+  /** AI Note Taker's "auto-open meeting page" — preselects this call on mount. */
+  initialSelectedId?: string | null
+  /** Called once the initial selection above has been applied, so the parent
+   *  can clear it (otherwise a later plain visit would reopen the same call). */
+  onInitialSelectionConsumed?: () => void
+}
+
+export function PastCallsView({
+  initialSelectedId = null,
+  onInitialSelectionConsumed
+}: PastCallsViewProps = {}): React.JSX.Element {
   const { calls, loading, remove, refresh } = useCalls()
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId)
   const [confirmId, setConfirmId] = useState<string | null>(null)
+
+  const consumedRef = useRef(false)
+  useEffect(() => {
+    if (initialSelectedId && !consumedRef.current) {
+      consumedRef.current = true
+      onInitialSelectionConsumed?.()
+    }
+  }, [initialSelectedId, onInitialSelectionConsumed])
 
   // --- Detail view ---------------------------------------------------------
   if (selectedId) {
@@ -23,7 +42,9 @@ export function PastCallsView(): React.JSX.Element {
 
   // --- List view -----------------------------------------------------------
   if (loading) {
-    return <div className="flex h-full items-center justify-center text-sm text-faint">Loading…</div>
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-faint">Loading…</div>
+    )
   }
 
   if (calls.length === 0) {

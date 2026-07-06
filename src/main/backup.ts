@@ -11,13 +11,22 @@
 // wins" are enforced by the DB (primary key (user_id, id) + the server-side
 // trigger), so re-pushing an unchanged or older record is a harmless no-op.
 import { app, ipcMain, BrowserWindow } from 'electron'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { promises as fs } from 'node:fs'
 import { getSupabaseClient, getSignedInUserId } from './auth'
 import { listTasks, importTask, type Task } from './tasks-fs'
 import { listEvents, importEvent, type CalendarEvent } from './events-fs'
-import { listCallsForBackup, callBackupPayload, importCall, type Call } from './calls-fs'
-import { reconcileStore, type CloudRow } from './backup-core'
+import {
+  listCallsForBackup,
+  callBackupPayload,
+  callFullBackupPayload,
+  importCall,
+  attachmentBlobPath,
+  type Call
+} from './calls-fs'
+import { listEntries, importEntry, type KnowledgeEntry } from './knowledge-fs'
+import { loadAppSettings, saveAppSettings } from './app-settings'
+import { reconcileStore, ts, type CloudRow } from './backup-core'
 
 function tasksDir(): string {
   return join(app.getPath('userData'), 'tasks')
@@ -28,11 +37,21 @@ function eventsDir(): string {
 function callsDir(): string {
   return join(app.getPath('userData'), 'calls')
 }
+function knowledgeDir(): string {
+  return join(app.getPath('userData'), 'knowledge')
+}
 function statePath(): string {
   return join(app.getPath('userData'), 'backup-state.json')
 }
 function ownerPath(): string {
   return join(app.getPath('userData'), 'backup-owner.json')
+}
+
+const ATTACHMENT_MIME: Record<string, string> = {
+  pdf: 'application/pdf',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 }
 
 // This device's local data belongs to exactly ONE account (the app is
@@ -131,6 +150,67 @@ async function upsertRows(
   }
 }
 
+/** Upload every attachment blob referenced by `calls` to the private
+ *  "attachments" Storage bucket (path "<user_id>/<attachment_id>.<ext>").
+ *  Re-uploads every push (upsert) rather than diffing — attachments are
+ *  immutable once added, so this is a simple, always-correct v1; it does mean
+ *  re-sending unchanged bytes on every periodic sync, a bandwidth tradeoff
+ *  accepted for now (same "simple architecture first" spirit as the rest of
+ *  the app). One attachment's failure is skipped, not fatal to the others. */
+async function uploadAttachments(
+  client: NonNullable<ReturnType<typeof getSupabaseClient>>,
+  userId: string,
+  calls: Call[]
+): Promise<void> {
+  const bucket = client.storage.from('attachments')
+  for (const call of calls) {
+    for (const att of call.attachments ?? []) {
+      try {
+        const data = await fs.readFile(attachmentBlobPath(callsDir(), att.id, att.ext))
+        const path = `${userId}/${att.id}.${att.ext}`
+        const { error } = await bucket.upload(path, data, {
+          upsert: true,
+          contentType: ATTACHMENT_MIME[att.ext] ?? 'application/octet-stream'
+        })
+        if (error) console.error(`[backup] attachment ${att.id} upload failed:`, error.message)
+      } catch {
+        /* local blob missing/unreadable — skip just this one attachment */
+      }
+    }
+  }
+}
+
+/** Download any attachment blob `calls` reference that's missing locally —
+ *  the counterpart to uploadAttachments, used after a restore pulls in call
+ *  metadata that references attachments this (new) device doesn't have yet. */
+async function downloadMissingAttachments(
+  client: NonNullable<ReturnType<typeof getSupabaseClient>>,
+  userId: string,
+  calls: Call[]
+): Promise<void> {
+  const bucket = client.storage.from('attachments')
+  for (const call of calls) {
+    for (const att of call.attachments ?? []) {
+      const localPath = attachmentBlobPath(callsDir(), att.id, att.ext)
+      try {
+        await fs.access(localPath)
+        continue // already have it
+      } catch {
+        /* missing locally — try to fetch it */
+      }
+      try {
+        const { data, error } = await bucket.download(`${userId}/${att.id}.${att.ext}`)
+        if (error || !data) continue
+        const buf = Buffer.from(await data.arrayBuffer())
+        await fs.mkdir(dirname(localPath), { recursive: true })
+        await fs.writeFile(localPath, buf)
+      } catch {
+        /* best-effort — a missing attachment blob just means it won't open yet */
+      }
+    }
+  }
+}
+
 export type BackupResult =
   | { ok: true; pushed: { tasks: number; events: number; calls: number } }
   | { ok: false; error: string }
@@ -180,21 +260,66 @@ export async function pushAll(): Promise<BackupResult> {
       return { id: e.id, user_id: userId, updated_at: e.updatedAt, deleted, payload }
     })
 
-    // Calls: metadata + summary + quote-free coaching ONLY. callBackupPayload is
-    // the privacy guarantee — it strips segments (transcript), preview, coaching
-    // evidence quotes, and attachment contents. Tombstones carry `deleted`.
+    // Calls: metadata + summary + quote-free coaching by default. callBackupPayload
+    // is the privacy guarantee — it strips segments (transcript), preview, coaching
+    // evidence quotes, and attachment contents. Only the explicit, off-by-default
+    // "sync transcripts" toggle (Settings → Privacy & data) switches to the FULL
+    // payload. Tombstones carry `deleted` either way.
+    const syncScope = loadAppSettings().syncScope
+    const buildCallPayload = syncScope.transcripts ? callFullBackupPayload : callBackupPayload
     const calls = await listCallsForBackup(callsDir())
     const callRows: BackupRow[] = calls.map((c: Call) => ({
       id: c.id,
       user_id: userId,
       updated_at: c.updatedAt,
       deleted: c.deleted === true,
-      payload: callBackupPayload(c)
+      payload: buildCallPayload(c)
     }))
 
     await upsertRows(client, 'backup_tasks', taskRows)
     await upsertRows(client, 'backup_events', eventRows)
     await upsertRows(client, 'backup_calls', callRows)
+
+    // Optional categories (Settings → Privacy & data toggles). Each is best-effort
+    // and isolated from the core sync above and from each other — a missing table
+    // or bucket (not yet set up in Supabase) must never fail the core backup.
+    if (syncScope.knowledgeBase) {
+      try {
+        const entries = await listEntries(knowledgeDir(), { includeDeleted: true })
+        const knowledgeRows: BackupRow[] = entries.map((e: KnowledgeEntry) => ({
+          id: e.id,
+          user_id: userId,
+          updated_at: e.updatedAt,
+          deleted: e.deleted === true,
+          payload: e
+        }))
+        await upsertRows(client, 'backup_knowledge', knowledgeRows)
+      } catch (err) {
+        console.error('[backup] knowledge-base push failed:', err)
+      }
+    }
+    if (syncScope.settingsPersonalization) {
+      try {
+        const settings = loadAppSettings()
+        const { error } = await client
+          .from('backup_settings')
+          .upsert(
+            { user_id: userId, updated_at: settings.settingsUpdatedAt, payload: settings },
+            { onConflict: 'user_id' }
+          )
+        if (error) throw new Error(error.message)
+      } catch (err) {
+        console.error('[backup] settings push failed:', err)
+      }
+    }
+    if (syncScope.attachments) {
+      try {
+        await uploadAttachments(client, userId, calls)
+      } catch (err) {
+        console.error('[backup] attachment upload failed:', err)
+      }
+    }
+
     await writeState({
       lastPushAt: new Date().toISOString(),
       lastPushError: undefined,
@@ -293,6 +418,8 @@ export async function pullAll(): Promise<RestoreResult> {
       importEvent(dir, p, { onlyIfNewer: true })
     const guardedImportCall = (dir: string, p: unknown): ReturnType<typeof importCall> =>
       importCall(dir, p, { onlyIfNewer: true })
+    const guardedImportEntry = (dir: string, p: unknown): ReturnType<typeof importEntry> =>
+      importEntry(dir, p, { onlyIfNewer: true })
 
     const taskRows = await fetchAllRows(client, 'backup_tasks', userId)
     const taskMap = new Map(
@@ -332,6 +459,53 @@ export async function pullAll(): Promise<RestoreResult> {
       lastSyncAt
     )
     if (callsChanged > 0) notifyDataChanged() // Past Calls refresh
+
+    // Optional categories (Settings → Privacy & data toggles) — same isolation
+    // discipline as the push side: a missing table/bucket must never fail the
+    // core restore above.
+    const syncScope = loadAppSettings().syncScope
+    if (syncScope.knowledgeBase) {
+      try {
+        const knowledgeRows = await fetchAllRows(client, 'backup_knowledge', userId)
+        const knowledgeMap = new Map(
+          (await listEntries(knowledgeDir(), { includeDeleted: true })).map((e) => [e.id, e])
+        )
+        const knowledgeChanged = await reconcileStore(
+          knowledgeDir(),
+          knowledgeRows,
+          knowledgeMap,
+          guardedImportEntry,
+          lastSyncAt
+        )
+        if (knowledgeChanged > 0) notifyDataChanged() // Knowledge Base refresh
+      } catch (err) {
+        console.error('[backup] knowledge-base pull failed:', err)
+      }
+    }
+    if (syncScope.settingsPersonalization) {
+      try {
+        const { data, error } = await client
+          .from('backup_settings')
+          .select('updated_at,payload')
+          .eq('user_id', userId)
+          .maybeSingle()
+        if (error) throw new Error(error.message)
+        const local = loadAppSettings()
+        if (data && ts(data.updated_at) > ts(local.settingsUpdatedAt)) {
+          saveAppSettings(data.payload) // cloud is newer — full overwrite
+        }
+      } catch (err) {
+        console.error('[backup] settings pull failed:', err)
+      }
+    }
+    if (syncScope.attachments) {
+      try {
+        const currentCalls = await listCallsForBackup(callsDir())
+        await downloadMissingAttachments(client, userId, currentCalls)
+      } catch (err) {
+        console.error('[backup] attachment download failed:', err)
+      }
+    }
 
     await writeState({ lastPullError: undefined, lastPullErrorAt: undefined })
     return {

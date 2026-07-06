@@ -44,6 +44,12 @@ export function useKnowledge(): UseKnowledge {
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    // A cloud restore can add/update/delete entries in the background (when
+    // Knowledge Base sync is opted into) — re-read so the list reflects it.
+    return window.api.backup.onChanged(() => void refresh())
+  }, [refresh])
+
   const create = useCallback(
     async (input: KnowledgeCreateInput) => {
       await window.api.knowledge.create(input)
