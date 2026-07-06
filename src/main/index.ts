@@ -15,6 +15,7 @@ import { registerLoopbackCapture } from './loopback'
 import { registerGoogle } from './google'
 import { registerBackup } from './backup'
 import { registerVirtualMic, disposeVirtualMic } from './virtualmic'
+import { registerKnowledge } from './knowledge'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -100,6 +101,7 @@ app.whenReady().then(() => {
   registerGoogle()
   registerBackup()
   registerVirtualMic()
+  registerKnowledge()
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

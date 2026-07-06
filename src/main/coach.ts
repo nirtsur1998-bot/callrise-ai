@@ -1,3 +1,5 @@
+import { app } from 'electron'
+import { join } from 'node:path'
 import Anthropic from '@anthropic-ai/sdk'
 import type {
   CallSegment,
@@ -8,11 +10,42 @@ import type {
   CoachImprovement,
   CoachMetrics
 } from './calls-fs'
+import { listEntries } from './knowledge-fs'
+import { assembleKnowledgeContext } from './knowledge-context'
 
 const MODEL = 'claude-sonnet-4-6'
 const MAX_TEXT_CHARS = 200_000
 const MIN_QUOTE_CHARS = 8 // too-short quotes can't be meaningfully verified
 const REQUEST_TIMEOUT_MS = 60_000 // fail fast instead of spinning on a stalled connection
+
+// Coaching runs once per call (not per turn like live cues), so the knowledge
+// base can afford a far more generous cap here — this is just a defensive
+// ceiling in case the Knowledge Base screen's own size warning gets ignored.
+const COACH_KNOWLEDGE_MAX_CHARS = 20_000
+
+function knowledgeDir(): string {
+  return join(app.getPath('userData'), 'knowledge')
+}
+
+/** Best-effort: a knowledge-base read failure should never block coaching. */
+async function loadCoachKnowledgeContext(): Promise<string> {
+  try {
+    const entries = await listEntries(knowledgeDir())
+    return assembleKnowledgeContext(entries).slice(0, COACH_KNOWLEDGE_MAX_CHARS)
+  } catch {
+    return ''
+  }
+}
+
+function knowledgeSection(knowledge: string): string {
+  if (!knowledge) return ''
+  return `\n\n--- REP'S OWN KNOWLEDGE BASE (context only, NOT evidence) ---
+This is the rep's own material: their objection-handling scripts, product info, and sales playbook. Use it to sharpen the coaching — but the CRITICAL EVIDENCE RULE above still applies ONLY to the TRANSCRIPT; never treat anything in this section as something said on the call, and never quote it as evidence.
+- objection dimension / improvements: if the buyer raised something matching one of these scripts, note (in the comment/detail, paraphrased) whether the rep's actual response tracked their own script or missed it.
+- value dimension / improvements: if the buyer asked about a feature, check PRODUCT INFO — flag if the rep overpromised (implied something not listed) or missed a chance to mention something they DO offer.
+- discovery / control dimensions: reference SALES PLAYBOOK positioning and discovery questions where relevant.
+${knowledge}`
+}
 
 const DIMENSION_KEYS = new Set<CoachDimensionKey>([
   'discovery',
@@ -426,6 +459,8 @@ export async function coachCall(segments: CallSegment[], durationMs: number): Pr
     .join('\n')
     .slice(0, MAX_TEXT_CHARS)
 
+  const knowledge = await loadCoachKnowledgeContext()
+
   try {
     const response = await anthropic.messages.create(
       {
@@ -436,7 +471,12 @@ export async function coachCall(segments: CallSegment[], durationMs: number): Pr
         messages: [
           {
             role: 'user',
-            content: [{ type: 'text', text: `${PROMPT}\n\n--- TRANSCRIPT ---\n${transcript}` }]
+            content: [
+              {
+                type: 'text',
+                text: `${PROMPT}${knowledgeSection(knowledge)}\n\n--- TRANSCRIPT ---\n${transcript}`
+              }
+            ]
           }
         ]
       },

@@ -10,6 +10,7 @@ import { CalendarView } from '@renderer/features/calendar/CalendarView'
 import { CoachingView } from '@renderer/features/coaching/CoachingView'
 import { AnalyticsView } from '@renderer/features/analytics/AnalyticsView'
 import { SettingsView } from '@renderer/features/settings/SettingsView'
+import { KnowledgeView } from '@renderer/features/knowledge/KnowledgeView'
 import { PlaceholderView } from '@renderer/components/PlaceholderView'
 import { NAV_ITEMS, type NavId } from '@renderer/features/navigation/nav-items'
 import type { AuthUser } from '@renderer/features/auth/types'
@@ -45,6 +46,8 @@ export function MainApp({ user }: { user: AuthUser }): React.JSX.Element {
         <AnalyticsView />
       ) : active === 'settings' ? (
         <SettingsView />
+      ) : active === 'knowledge' ? (
+        <KnowledgeView />
       ) : (
         <PlaceholderView title={activeItem.label} icon={activeItem.icon} />
       )}

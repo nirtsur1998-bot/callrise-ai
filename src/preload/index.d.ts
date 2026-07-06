@@ -491,6 +491,65 @@ export interface VirtualMicApi {
   onChanged: (cb: (status: VirtualMicStatus) => void) => () => void
 }
 
+export type KnowledgeCategory = 'objection' | 'product' | 'playbook'
+
+interface KnowledgeEntryBase {
+  id: string
+  category: KnowledgeCategory
+  createdAt: string
+  /** Last modification (create or edit); a future backup's "newest wins" key. */
+  updatedAt: string
+}
+
+/** Objection-handling script: what the buyer says, and how I respond. */
+export interface ObjectionEntry extends KnowledgeEntryBase {
+  category: 'objection'
+  trigger: string
+  response: string
+}
+
+/** A free-text section: product info or a playbook section. */
+export interface TextEntry extends KnowledgeEntryBase {
+  category: 'product' | 'playbook'
+  title: string
+  body: string
+}
+
+export type KnowledgeEntry = ObjectionEntry | TextEntry
+
+export interface KnowledgeCreateInput {
+  category: KnowledgeCategory
+  trigger?: string
+  response?: string
+  title?: string
+  body?: string
+}
+
+export interface KnowledgeUpdateInput {
+  trigger?: string
+  response?: string
+  title?: string
+  body?: string
+}
+
+export type KnowledgeSizeLevel = 'ok' | 'large' | 'over'
+
+export interface KnowledgeContextPreview {
+  text: string
+  charCount: number
+  estimatedTokens: number
+  level: KnowledgeSizeLevel
+}
+
+export interface KnowledgeApi {
+  list: () => Promise<KnowledgeEntry[]>
+  create: (input: KnowledgeCreateInput) => Promise<KnowledgeEntry | null>
+  update: (id: string, patch: KnowledgeUpdateInput) => Promise<KnowledgeEntry | null>
+  delete: (id: string) => Promise<{ ok: boolean }>
+  /** The exact text block Claude would be given as context, plus a size estimate. */
+  preview: () => Promise<KnowledgeContextPreview>
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -504,6 +563,7 @@ declare global {
       google: GoogleApi
       backup: BackupApi
       virtualmic: VirtualMicApi
+      knowledge: KnowledgeApi
     }
   }
 }

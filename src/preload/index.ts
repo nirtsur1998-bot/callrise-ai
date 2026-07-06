@@ -115,6 +115,13 @@ const api = {
     stop: () => ipcRenderer.invoke('virtualmic:stop'),
     // Fires when the helper's running/denoise state changes (started, stopped, crashed).
     onChanged: (cb: (status: unknown) => void) => subscribe('virtualmic:changed', cb)
+  },
+  knowledge: {
+    list: () => ipcRenderer.invoke('knowledge:list'),
+    create: (input: unknown) => ipcRenderer.invoke('knowledge:create', input),
+    update: (id: string, patch: unknown) => ipcRenderer.invoke('knowledge:update', id, patch),
+    delete: (id: string) => ipcRenderer.invoke('knowledge:delete', id),
+    preview: () => ipcRenderer.invoke('knowledge:preview')
   }
 }
 
