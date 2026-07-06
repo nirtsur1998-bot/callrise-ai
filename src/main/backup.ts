@@ -305,6 +305,7 @@ export async function pullAll(): Promise<RestoreResult> {
       guardedImportTask,
       lastSyncAt
     )
+    if (tasksChanged > 0) notifyDataChanged() // Tasks refresh (fire per stage, so a later failure never hides done work)
 
     const eventRows = await fetchAllRows(client, 'backup_events', userId)
     const eventMap = new Map(
@@ -319,6 +320,7 @@ export async function pullAll(): Promise<RestoreResult> {
       guardedImportEvent,
       lastSyncAt
     )
+    if (eventsChanged > 0) notifyEventsChanged() // the calendar re-reads live
 
     const callRows = await fetchAllRows(client, 'backup_calls', userId)
     const callMap = new Map((await listCallsForBackup(callsDir())).map((c) => [c.id, c]))
@@ -329,9 +331,8 @@ export async function pullAll(): Promise<RestoreResult> {
       guardedImportCall,
       lastSyncAt
     )
+    if (callsChanged > 0) notifyDataChanged() // Past Calls refresh
 
-    if (eventsChanged > 0) notifyEventsChanged() // the calendar re-reads live
-    if (tasksChanged > 0 || callsChanged > 0) notifyDataChanged() // Tasks / Past Calls refresh
     await writeState({ lastPullError: undefined, lastPullErrorAt: undefined })
     return {
       ok: true,

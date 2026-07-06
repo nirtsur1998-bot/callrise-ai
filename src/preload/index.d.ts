@@ -35,7 +35,10 @@ export interface TranscriptionApi {
   start: (options: {
     sampleRate: number
     multichannel?: boolean
-  }) => Promise<{ ok: boolean; error?: 'no-key' }>
+    /** Only restart if the current main-process session has this id (guards
+     *  against a stale restart from an older call clobbering a newer one). */
+    expectedSessionId?: number
+  }) => Promise<{ ok: boolean; error?: 'no-key' | 'stale'; sessionId?: number }>
   sendAudio: (chunk: ArrayBuffer) => void
   stop: () => Promise<{ ok: boolean }>
   onState: (cb: (payload: TranscriptionStateEvent) => void) => () => void

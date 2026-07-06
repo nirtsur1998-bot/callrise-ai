@@ -88,6 +88,9 @@ export function useLiveCues(
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
+  // Bumped on every reset/fresh-start so an in-flight brain response from a
+  // previous listening session is discarded instead of leaking into this one.
+  const generationRef = useRef(0)
 
   useEffect(() => {
     mountedRef.current = true
@@ -116,6 +119,7 @@ export function useLiveCues(
 
   useEffect(() => {
     if (!active || !enabled) {
+      generationRef.current++
       turnsRef.current = []
       lastSpeakerRef.current = null
       repSpeakerRef.current = knownRepRef.current
@@ -129,6 +133,7 @@ export function useLiveCues(
     }
 
     // Fresh start for this listening session.
+    generationRef.current++
     turnsRef.current = []
     lastSpeakerRef.current = null
     repSpeakerRef.current = knownRepRef.current
@@ -185,11 +190,12 @@ export function useLiveCues(
       lastCallAtRef.current = now
       inFlightRef.current = true
       const startedAt = now
+      const generation = generationRef.current // discard the response if the session resets
       console.log(`[live-cue] → request (${turnsRef.current.length} turns buffered)`)
       void window.api.transcription
         .liveCue(transcript, repSpeakerRef.current)
         .then((res) => {
-          if (!mountedRef.current || !res.ok) return
+          if (!mountedRef.current || generation !== generationRef.current || !res.ok) return
           if (repSpeakerRef.current === null && res.repSpeaker !== null) {
             repSpeakerRef.current = res.repSpeaker // lock the rep for the call
           }

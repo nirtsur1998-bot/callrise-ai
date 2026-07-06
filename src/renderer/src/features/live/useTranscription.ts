@@ -46,6 +46,13 @@ export function useTranscription(
   const [otherPartyError, setOtherPartyError] = useState<OtherPartyError>(null)
 
   const recorderRef = useRef<Recorder | null>(null)
+  // Id of the main-process session THIS call owns. Passed as expectedSessionId
+  // on the mono<->multichannel restarts so a stale in-flight toggle from an
+  // already-stopped call can never tear down a newer call's session.
+  const sessionIdRef = useRef<number | null>(null)
+  // Re-entrancy guard: a rapid double-click on Try again/Resume must not run
+  // two arm-then-getDisplayMedia sequences concurrently.
+  const enablingOtherPartyRef = useRef(false)
   const latencySamples = useRef<number[]>([])
   // Synchronous mirror of `segments` so the save (on close) sees the latest.
   const segmentsRef = useRef<CallSegment[]>([])
@@ -182,6 +189,7 @@ export function useTranscription(
     segmentsRef.current = []
     latencySamples.current = []
     savePendingRef.current = false
+    sessionIdRef.current = null
     setPhase('requesting')
 
     const access = await window.api.transcription.ensureMicAccess()
@@ -233,6 +241,8 @@ export function useTranscription(
         recorderRef.current = null
         setAnalyser(null)
         setPhase(result.error === 'no-key' ? 'no-key' : 'error')
+      } else {
+        sessionIdRef.current = typeof result.sessionId === 'number' ? result.sessionId : null
       }
     } catch {
       recorder.stop()
@@ -282,10 +292,20 @@ export function useTranscription(
     try {
       // Switch the socket back to mono FIRST, then flip the worklet layout — so
       // the worklet never emits mono into the still-open multichannel socket.
-      await window.api.transcription.start({ sampleRate: recorder.sampleRate, multichannel: false })
+      // expectedSessionId makes this a no-op in main if it lands after a newer
+      // call already replaced the session (never clobber the new call).
+      const res = await window.api.transcription.start({
+        sampleRate: recorder.sampleRate,
+        multichannel: false,
+        expectedSessionId: sessionIdRef.current ?? undefined
+      })
+      if (res.ok && typeof res.sessionId === 'number') sessionIdRef.current = res.sessionId
     } catch {
       /* socket failures surface via the state/error handlers */
     }
+    // The call may have stopped (or restarted) during the await — this recorder
+    // is then already torn down and mustn't be touched.
+    if (recorderRef.current !== recorder) return
     recorder.setStereo(false)
   }, [])
 
@@ -293,70 +313,82 @@ export function useTranscription(
   // opens getDisplayMedia). Consent is re-checked AFTER the async permission
   // prompt, so a revoke during the prompt can't slip capture through.
   const enableOtherParty = useCallback(async () => {
-    const recorder = recorderRef.current
-    if (!recorder) return // no active mic session to attach to
-    // Never even arm capture unless consent is already recorded for this call.
-    const before = consentRef?.current
-    if (!before || before.status !== 'consented' || before.recordOtherParty !== true) return
-    setOtherPartyError(null)
-
-    let audio: MediaStream
+    // Re-entrancy guard: ignore a second click while a previous enable is
+    // still mid-flight (two concurrent arm-then-getDisplayMedia runs race).
+    if (enablingOtherPartyRef.current) return
+    enablingOtherPartyRef.current = true
     try {
-      // Arm the main-process one-shot grant synchronously — no await before
-      // getDisplayMedia, so it stays a user gesture.
-      window.api.loopback.arm()
-      const display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
-      display.getVideoTracks().forEach((t) => t.stop()) // we only want the audio
-      if (display.getAudioTracks().length === 0) {
-        display.getTracks().forEach((t) => t.stop())
-        setOtherPartyError('no-audio')
+      const recorder = recorderRef.current
+      if (!recorder) return // no active mic session to attach to
+      // Never even arm capture unless consent is already recorded for this call.
+      const before = consentRef?.current
+      if (!before || before.status !== 'consented' || before.recordOtherParty !== true) return
+      setOtherPartyError(null)
+
+      let audio: MediaStream
+      try {
+        // Arm the main-process one-shot grant synchronously — no await before
+        // getDisplayMedia, so it stays a user gesture.
+        window.api.loopback.arm()
+        const display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+        display.getVideoTracks().forEach((t) => t.stop()) // we only want the audio
+        if (display.getAudioTracks().length === 0) {
+          display.getTracks().forEach((t) => t.stop())
+          setOtherPartyError('no-audio')
+          return
+        }
+        audio = new MediaStream(display.getAudioTracks())
+      } catch {
+        window.api.loopback.disarm()
+        setOtherPartyError('denied')
         return
       }
-      audio = new MediaStream(display.getAudioTracks())
-    } catch {
-      window.api.loopback.disarm()
-      setOtherPartyError('denied')
-      return
-    }
 
-    // Consent may have been revoked, or the call stopped, during the prompt.
-    const c = consentRef?.current
-    const stillConsented = c?.status === 'consented' && c.recordOtherParty === true
-    if (!stillConsented || recorderRef.current !== recorder) {
-      window.api.loopback.disarm()
-      audio.getTracks().forEach((t) => t.stop())
-      return
-    }
+      // Consent may have been revoked, or the call stopped, during the prompt.
+      const c = consentRef?.current
+      const stillConsented = c?.status === 'consented' && c.recordOtherParty === true
+      if (!stillConsented || recorderRef.current !== recorder) {
+        window.api.loopback.disarm()
+        audio.getTracks().forEach((t) => t.stop())
+        return
+      }
 
-    // Wire the loopback into the audio graph (worklet stays mono — ch1 ignored
-    // — so nothing is captured until the socket is multichannel and we flip).
-    recorder.attachLoopback(audio, () => {
-      // Loopback ended on its own (OS revoked screen recording / stopped sharing).
-      void disableOtherParty()
-      setOtherPartyError('interrupted')
-    })
-
-    // Switch the socket to multichannel FIRST, then flip the worklet to stereo —
-    // so interleaved PCM never reaches the still-open mono socket.
-    let ok = false
-    try {
-      const res = await window.api.transcription.start({
-        sampleRate: recorder.sampleRate,
-        multichannel: true
+      // Wire the loopback into the audio graph (worklet stays mono — ch1 ignored
+      // — so nothing is captured until the socket is multichannel and we flip).
+      recorder.attachLoopback(audio, () => {
+        // Loopback ended on its own (OS revoked screen recording / stopped sharing).
+        void disableOtherParty()
+        setOtherPartyError('interrupted')
       })
-      ok = res?.ok === true
-    } catch {
-      ok = false
+
+      // Switch the socket to multichannel FIRST, then flip the worklet to stereo —
+      // so interleaved PCM never reaches the still-open mono socket.
+      // expectedSessionId makes this a no-op in main if it lands after a newer
+      // call already replaced the session (never clobber the new call).
+      let ok = false
+      try {
+        const res = await window.api.transcription.start({
+          sampleRate: recorder.sampleRate,
+          multichannel: true,
+          expectedSessionId: sessionIdRef.current ?? undefined
+        })
+        ok = res?.ok === true
+        if (ok && typeof res.sessionId === 'number') sessionIdRef.current = res.sessionId
+      } catch {
+        ok = false
+      }
+      if (!ok || recorderRef.current !== recorder) {
+        // Roll back cleanly so the worklet and socket never disagree.
+        recorder.detachLoopback()
+        setOtherPartyError('denied')
+        return
+      }
+      speakerBoundaryRef.current = true
+      recorder.setStereo(true)
+      setOtherPartyLive(true)
+    } finally {
+      enablingOtherPartyRef.current = false
     }
-    if (!ok || recorderRef.current !== recorder) {
-      // Roll back cleanly so the worklet and socket never disagree.
-      recorder.detachLoopback()
-      setOtherPartyError('denied')
-      return
-    }
-    speakerBoundaryRef.current = true
-    recorder.setStereo(true)
-    setOtherPartyLive(true)
   }, [consentRef, disableOtherParty])
 
   useEffect(() => {

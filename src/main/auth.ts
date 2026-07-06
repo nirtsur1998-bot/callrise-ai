@@ -1,6 +1,6 @@
-import { app, ipcMain, BrowserWindow } from 'electron'
+import { app, ipcMain, BrowserWindow, safeStorage } from 'electron'
 import { join } from 'node:path'
-import { readFileSync, writeFile } from 'node:fs'
+import { chmodSync, readFileSync, writeFile } from 'node:fs'
 import {
   createClient,
   AuthError,
@@ -51,17 +51,35 @@ let initialized = false
 /**
  * A tiny file-backed storage so the session survives restarts. The Node main
  * process has no localStorage, so we persist Supabase's auth token to a small
- * JSON file in the app's user-data folder.
+ * file in the app's user-data folder — encrypted via Electron safeStorage
+ * (macOS Keychain) and written owner-only (0600), mirroring google.ts's
+ * refresh-token storage.
  */
 function makeFileStorage(path: string): SupportedStorage {
+  const canEncrypt = safeStorage.isEncryptionAvailable()
   let memory: Record<string, string> = {}
   try {
-    memory = JSON.parse(readFileSync(path, 'utf8')) as Record<string, string>
+    const raw = readFileSync(path)
+    // Harden pre-existing files: `mode` below only applies when a file is
+    // CREATED, so a session file written world-readable before this fix would
+    // otherwise keep its loose permissions forever.
+    try {
+      chmodSync(path, 0o600)
+    } catch {
+      /* best effort */
+    }
+    memory = JSON.parse(safeStorage.decryptString(raw)) as Record<string, string>
   } catch {
-    memory = {} // first run, or unreadable — start empty
+    // First run, unreadable, or undecryptable (old plaintext file / keychain
+    // reset) — treat as no session; the user simply logs in again.
+    memory = {}
   }
   const persist = (): void => {
-    writeFile(path, JSON.stringify(memory), () => {}) // best-effort async write
+    // Never write tokens we can't encrypt — the session just won't survive
+    // a restart, which is safer than a plaintext token on disk.
+    if (!canEncrypt) return
+    // 0600: owner-only, defense-in-depth on top of the encryption.
+    writeFile(path, safeStorage.encryptString(JSON.stringify(memory)), { mode: 0o600 }, () => {}) // best-effort async write
   }
   return {
     getItem: (key) => (key in memory ? memory[key] : null),

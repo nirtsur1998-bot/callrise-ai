@@ -3,6 +3,7 @@ import type { TaskPriority, TaskType } from './tasks-fs'
 
 const MODEL = 'claude-sonnet-4-6'
 const MAX_TEXT_CHARS = 200_000 // keep requests bounded
+const REQUEST_TIMEOUT_MS = 60_000 // fail fast instead of spinning on a stalled connection
 const MAX_TASKS = 25 // cap how many proposals we surface at once
 const MAX_DUE_DAYS = 365
 // The model returns -1 to mean "no deadline"; dueAtFromDays() drops anything < 0.
@@ -165,15 +166,21 @@ export async function generateTasks(text: string): Promise<GenerateTasksResult> 
 
   const trimmed = text.slice(0, MAX_TEXT_CHARS)
   try {
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 4096,
-      tools: [TASKS_TOOL],
-      tool_choice: { type: 'tool', name: 'record_tasks' },
-      messages: [
-        { role: 'user', content: [{ type: 'text', text: `${PROMPT}\n\n--- CALL ---\n${trimmed}` }] }
-      ]
-    })
+    const response = await anthropic.messages.create(
+      {
+        model: MODEL,
+        max_tokens: 4096,
+        tools: [TASKS_TOOL],
+        tool_choice: { type: 'tool', name: 'record_tasks' },
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: `${PROMPT}\n\n--- CALL ---\n${trimmed}` }]
+          }
+        ]
+      },
+      { timeout: REQUEST_TIMEOUT_MS }
+    )
 
     if (response.stop_reason === 'max_tokens') {
       return {

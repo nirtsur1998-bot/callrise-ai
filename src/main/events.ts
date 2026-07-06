@@ -63,7 +63,7 @@ function serialize<T>(
   return result
 }
 
-const enqueuePush = (id: string, fn: () => Promise<boolean>): Promise<boolean> =>
+const enqueuePush = <T>(id: string, fn: () => Promise<T>): Promise<T> =>
   serialize(pushChains, id, fn)
 const withState = <T>(id: string, fn: () => Promise<T>): Promise<T> => serialize(stateLocks, id, fn)
 
@@ -75,7 +75,20 @@ async function recordPushResult(
 ): Promise<boolean> {
   return withState(id, async () => {
     const cur = await getEvent(eventsDir(), id)
-    if (!cur || cur.sync?.state === 'deleted') return false // a pending delete wins
+    if (!cur || cur.sync?.state === 'deleted') {
+      // Defense in depth: the record vanished (deleted/tombstoned) while the
+      // push was in flight. If the push CREATED an event on Google, no local
+      // record references it anymore and no tombstone can ever find it —
+      // best-effort delete the stray so it isn't orphaned on Google forever.
+      // (A tombstone that still carries the link delivers its own delete via
+      // the push queue, so the cleanup only fires when the record is gone.)
+      if (!cur && res.ok) {
+        void pushDeleteEvent(res.externalId, res.provider)
+          .then((del) => (del.ok ? dropCachedEvent(res.externalId, res.provider) : undefined))
+          .catch(() => {})
+      }
+      return false // a pending delete wins
+    }
     if (res.ok) {
       await setEventSync(eventsDir(), id, {
         provider: res.provider,
@@ -181,6 +194,12 @@ async function reconcile(): Promise<void> {
     const all = await listEvents(eventsDir(), { includeDeleted: true })
     for (const e of all) {
       const state = e.sync?.state
+      // A confirmed 403 permission denial ('forbidden', from classifyPushError)
+      // is TERMINAL — the calendar's access was revoked/downgraded on Google's
+      // side, so retrying can never succeed until the user changes something.
+      // Skip it (mirroring how syncPush special-cases the delete-path 403)
+      // instead of silently retrying forever.
+      if (state === 'error' && e.sync?.lastError === 'forbidden') continue
       if (state === 'deleted' || state === 'dirty' || state === 'error') {
         if (await enqueuePush(e.id, () => syncPush(e.id))) changed = true
       }
@@ -215,10 +234,39 @@ export function registerEvents(): void {
   ipcMain.handle('events:delete', async (_e, id: string) => {
     const event = await getEvent(eventsDir(), id)
     if (!event) return { ok: false }
-    // Unlinked, or sync off → nothing in Google to remove; backup-tombstone now
+    // Sync off → nothing in Google to remove; backup-tombstone now
     // (kept, not erased, so the deletion propagates to the cloud mirror).
-    if (!event.externalId || !(await isGoogleSyncEnabled())) {
+    if (!(await isGoogleSyncEnabled())) {
       const res = await withState(id, () => markEventDeleted(eventsDir(), id))
+      scheduleBackup()
+      return res
+    }
+    if (!event.externalId) {
+      // Not linked YET — but the create's push may still be in flight
+      // (events:create fires schedulePush without awaiting it). Serialize on the
+      // SAME push chain so this runs strictly after that push's recordPushResult:
+      // by then the event IS linked and we tombstone-with-link (a real Google
+      // delete follows), instead of erasing the link and orphaning the copy the
+      // create just made on Google.
+      const res = await enqueuePush(id, async (): Promise<{ ok: boolean }> => {
+        const cur = await getEvent(eventsDir(), id)
+        if (!cur) return { ok: false }
+        if (!cur.externalId) {
+          // Truly never linked — nothing in Google to remove; backup-tombstone.
+          return withState(id, () => markEventDeleted(eventsDir(), id))
+        }
+        // Linked meanwhile: Google-tombstone, same as the linked path below.
+        await withState(id, () =>
+          setEventSync(eventsDir(), id, {
+            provider: cur.provider,
+            externalId: cur.externalId,
+            sync: { state: 'deleted' },
+            bumpUpdatedAt: true
+          })
+        )
+        return { ok: true }
+      })
+      if (res.ok) schedulePush(id) // no-op if backup-tombstoned; pushes the Google delete if linked
       scheduleBackup()
       return res
     }

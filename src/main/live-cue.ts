@@ -235,6 +235,15 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
       : null
   if (transcript.trim().length < 30) return { ok: false } // not enough yet
 
+  // Speaker ids actually present in this window ("Speaker N:" labels). Like
+  // coach.ts's observed-speakers guard, a repSpeaker the model hallucinates
+  // outside this set is rejected — the renderer would otherwise lock it in
+  // for the rest of the call.
+  const observedSpeakers = new Set<number>()
+  for (const m of transcript.matchAll(/^Speaker (\d+):/gm)) {
+    observedSpeakers.add(Number(m[1]))
+  }
+
   try {
     const response = await anthropic.messages.create(
       {
@@ -261,10 +270,11 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
     const block = response.content.find((b) => b.type === 'tool_use')
     if (!block || block.type !== 'tool_use') return { ok: false }
     const raw = block.input as { repSpeaker?: unknown; cue?: unknown; text?: unknown }
-    const repSpeaker =
+    const modelRep =
       typeof raw.repSpeaker === 'number' && Number.isFinite(raw.repSpeaker)
         ? Math.trunc(raw.repSpeaker)
-        : repHint
+        : null
+    const repSpeaker = modelRep !== null && observedSpeakers.has(modelRep) ? modelRep : repHint
     const cue: LiveCueType =
       typeof raw.cue === 'string' && LIVE_TYPES.has(raw.cue as LiveCueType)
         ? (raw.cue as LiveCueType)

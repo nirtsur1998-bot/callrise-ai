@@ -224,7 +224,34 @@ export async function getTask(dir: string, id: string): Promise<Task | null> {
   }
 }
 
-export async function updateTask(
+// ── Per-task write lock ───────────────────────────────────────────────────────
+// updateTask/deleteTask are read-then-write (getTask → mutate → writeTask), so
+// two concurrent IPC calls for the SAME task id could each read the old record
+// and the second write would silently drop the first's changes. This chains all
+// mutations for a given id so each one runs after the previous settles.
+// (Deliberately duplicated from events.ts to keep this file self-contained.)
+const taskLocks = new Map<string, Promise<unknown>>()
+
+function withTaskLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const prev = taskLocks.get(id) ?? Promise.resolve()
+  const result = prev.then(fn, fn) // run after prev settles, regardless of its outcome
+  const gate = result.then(
+    () => {},
+    () => {}
+  )
+  taskLocks.set(id, gate)
+  void gate.finally(() => {
+    if (taskLocks.get(id) === gate) taskLocks.delete(id) // drop only if we're still the tail
+  })
+  return result
+}
+
+export function updateTask(dir: string, id: string, patch: TaskUpdateInput): Promise<Task | null> {
+  if (!isSafeId(id)) return Promise.resolve(null)
+  return withTaskLock(id, () => updateTaskUnlocked(dir, id, patch))
+}
+
+async function updateTaskUnlocked(
   dir: string,
   id: string,
   patch: TaskUpdateInput
@@ -260,7 +287,12 @@ export async function updateTask(
   return task
 }
 
-export async function deleteTask(dir: string, id: string): Promise<{ ok: boolean }> {
+export function deleteTask(dir: string, id: string): Promise<{ ok: boolean }> {
+  if (!isSafeId(id)) return Promise.resolve({ ok: false })
+  return withTaskLock(id, () => deleteTaskUnlocked(dir, id))
+}
+
+async function deleteTaskUnlocked(dir: string, id: string): Promise<{ ok: boolean }> {
   const task = await getTask(dir, id)
   if (!task) return { ok: false } // missing or already a tombstone
   // Tombstone instead of erase, so the deletion can propagate to a future backup.

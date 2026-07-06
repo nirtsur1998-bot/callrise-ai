@@ -14,11 +14,18 @@ interface StartOptions {
   /** When true, stream 2 interleaved channels (0=rep, 1=buyer) via Deepgram
    *  multichannel. Defaults to false (mono + diarize) for mic-only calls. */
   multichannel?: boolean
+  /** When set, the start only proceeds if the CURRENT session has this id —
+   *  so a stale in-flight restart (from an already-stopped call) can never
+   *  tear down a newer call's session. Omitted for a brand-new call. */
+  expectedSessionId?: number
 }
 
 // Everything about one live session lives here, so restarts/reconnects can't
 // cross-contaminate (stale timers, stale counters, stale sockets).
 interface Session {
+  /** Monotonically increasing id — lets restarts prove they target the
+   *  session they think they do (see StartOptions.expectedSessionId). */
+  id: number
   window: BrowserWindow
   apiKey: string
   sampleRate: number
@@ -36,6 +43,7 @@ interface Session {
 }
 
 let session: Session | null = null
+let nextSessionId = 1
 
 function emit(s: Session, channel: string, payload: unknown): void {
   if (!s.window.isDestroyed()) {
@@ -265,10 +273,19 @@ export function registerTranscription(): void {
       return { ok: false }
     }
 
+    // A restart that names an expected session must match the CURRENT one —
+    // otherwise it's a stale request from an older call and must not clobber
+    // the newer session. Return without disposing anything.
+    const expected = options?.expectedSessionId
+    if (typeof expected === 'number' && session?.id !== expected) {
+      return { ok: false, error: 'stale' as const }
+    }
+
     // Replace any previous session entirely.
     disposeTranscription()
     const multichannel = options?.multichannel === true
     const s: Session = {
+      id: nextSessionId++,
       window,
       apiKey: key,
       sampleRate: Number(options?.sampleRate) > 0 ? Number(options.sampleRate) : 16000,
@@ -285,7 +302,7 @@ export function registerTranscription(): void {
     session = s
     emit(s, 'transcription:state', { state: 'connecting' })
     connect(s)
-    return { ok: true as const }
+    return { ok: true as const, sessionId: s.id }
   })
 
   ipcMain.on('transcription:audio', (event, chunk: ArrayBuffer) => {

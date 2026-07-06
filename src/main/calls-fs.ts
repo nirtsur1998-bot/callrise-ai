@@ -304,17 +304,18 @@ const BUYER_SPEAKER = 1
 
 /**
  * Recording-consent RETENTION guard (M12 Step 6). Buyer capture only ever runs
- * after consent (status becomes 'consented'); if the rep then withdrew it
- * (recordOtherParty !== true — e.g. "turn recording off", or a file tampered to
- * drop the flag), the other party's captured turns are removed. Runs on save
- * AND read AND list, so a revoked/hand-edited call can never surface the other
- * party's words. Calls that never consented (mic-only / declined,
- * status !== 'consented') are left untouched, so ordinary diarized transcripts
- * keep any speaker-1 turns.
+ * after consent (status becomes 'consented'); if recording the other party
+ * isn't (still) permitted (recordOtherParty !== true — e.g. "turn recording
+ * off", a mid-call decline, or a file tampered to drop the flag), the other
+ * party's captured turns are removed. Runs on save AND read AND list, so a
+ * revoked/hand-edited call can never surface the other party's words.
  */
 function applyConsentRetention(call: Call): void {
   const c = call.consent
-  if (!c || c.status !== 'consented' || c.recordOtherParty === true) return
+  // Keyed purely on the sanitized recordOtherParty flag, NOT on status: a call
+  // can go consented → revoked/declined within one session AFTER buyer turns
+  // were captured, so the current status must never short-circuit the strip.
+  if (!c || c.recordOtherParty === true) return
   if (!Array.isArray(call.segments)) return
   const kept = call.segments.filter((s) => s.speaker !== BUYER_SPEAKER)
   if (kept.length === call.segments.length) return
@@ -414,36 +415,41 @@ export async function getCall(dir: string, id: string): Promise<Call | null> {
 }
 
 export async function deleteCall(dir: string, id: string): Promise<{ ok: boolean }> {
-  const call = await getCall(dir, id)
-  if (!call) return { ok: false } // missing or already a tombstone
-  // Best-effort remove the attachment blobs (local-only, never backed up — free
-  // the disk; the call is gone from the UI regardless).
-  for (const att of call.attachments ?? []) {
-    await fs.unlink(join(filesDir(dir), `${att.id}.${att.ext}`)).catch(() => {})
-  }
-  // Tombstone instead of erase: keep an id + timestamp so the deletion can
-  // propagate to a future cloud backup, but DROP the transcript, coaching, and
-  // attachment metadata (privacy — a deleted call must not retain buyer words —
-  // and space). The record reads as "gone" everywhere (getCall/listCalls).
-  const tombstone: Call = {
-    id: call.id,
-    title: call.title,
-    createdAt: call.createdAt,
-    updatedAt: new Date().toISOString(),
-    durationMs: call.durationMs,
-    speakerCount: 0,
-    preview: '',
-    segments: [],
-    attachments: [],
-    consent: call.consent,
-    deleted: true
-  }
-  try {
-    await writeCall(dir, tombstone)
-  } catch {
-    return { ok: false }
-  }
-  return { ok: true }
+  // Same read-tombstone-write shape as the mutators below (getCall -> build a
+  // new record -> writeCall), so it races with them the same way; serialize
+  // it through the same per-call lock.
+  return withCallLock(id, async () => {
+    const call = await getCall(dir, id)
+    if (!call) return { ok: false } // missing or already a tombstone
+    // Best-effort remove the attachment blobs (local-only, never backed up — free
+    // the disk; the call is gone from the UI regardless).
+    for (const att of call.attachments ?? []) {
+      await fs.unlink(join(filesDir(dir), `${att.id}.${att.ext}`)).catch(() => {})
+    }
+    // Tombstone instead of erase: keep an id + timestamp so the deletion can
+    // propagate to a future cloud backup, but DROP the transcript, coaching, and
+    // attachment metadata (privacy — a deleted call must not retain buyer words —
+    // and space). The record reads as "gone" everywhere (getCall/listCalls).
+    const tombstone: Call = {
+      id: call.id,
+      title: call.title,
+      createdAt: call.createdAt,
+      updatedAt: new Date().toISOString(),
+      durationMs: call.durationMs,
+      speakerCount: 0,
+      preview: '',
+      segments: [],
+      attachments: [],
+      consent: call.consent,
+      deleted: true
+    }
+    try {
+      await writeCall(dir, tombstone)
+    } catch {
+      return { ok: false }
+    }
+    return { ok: true }
+  })
 }
 
 // --- Cloud backup (M16): privacy-stripped payload + id-preserving restore -----
@@ -580,75 +586,112 @@ export async function importCall(
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
   const v = payload as Record<string, unknown>
   if (!isSafeId(v.id)) return null
-  const createdAt = isoOrUndefined(v.createdAt) ?? new Date().toISOString()
-  const updatedAt = isoOrUndefined(v.updatedAt) ?? createdAt
+  const id = v.id // narrowed to string by isSafeId; captured so it survives the closure below
 
-  // Always read the current on-disk record (raw — a tombstone included) so a
-  // genuine import can MERGE onto it rather than replace it wholesale.
-  let current: Call | null = null
-  try {
-    const parsed = JSON.parse(await fs.readFile(join(dir, `${v.id}.json`), 'utf8')) as Call
-    if (parsed && typeof parsed.id === 'string') current = parsed
-  } catch {
-    /* no current record — this is a genuinely new call being restored */
-  }
+  // Same read-merge-write shape as the mutators below; serialize per call id so
+  // a restore pass can't race a concurrent setCallSummary/addAttachment/etc.
+  // (or another restore) for the same call.
+  return withCallLock(id, async () => {
+    const createdAt = isoOrUndefined(v.createdAt) ?? new Date().toISOString()
+    const updatedAt = isoOrUndefined(v.updatedAt) ?? createdAt
 
-  if (opts?.onlyIfNewer && current) {
-    const curU = isoOrUndefined(current.updatedAt) ?? current.createdAt
-    if (Date.parse(curU) >= Date.parse(updatedAt)) return null // local is same-or-newer
-  }
+    // Always read the current on-disk record (raw — a tombstone included) so a
+    // genuine import can MERGE onto it rather than replace it wholesale.
+    let current: Call | null = null
+    try {
+      const parsed = JSON.parse(await fs.readFile(join(dir, `${id}.json`), 'utf8')) as Call
+      if (parsed && typeof parsed.id === 'string') current = parsed
+    } catch {
+      /* no current record — this is a genuinely new call being restored */
+    }
 
-  const deleted = v.deleted === true
-  const title = typeof v.title === 'string' && v.title.trim() ? v.title.slice(0, 300) : 'Call'
+    if (opts?.onlyIfNewer && current) {
+      const curU = isoOrUndefined(current.updatedAt) ?? current.createdAt
+      if (Date.parse(curU) >= Date.parse(updatedAt)) return null // local is same-or-newer
+    }
 
-  // A cloud tombstone becomes a REAL local tombstone (no transcript/
-  // attachments) — never resurrect local data into a "deleted" record.
-  let attachments: Attachment[] = []
-  if (!deleted) {
-    const incoming: Attachment[] = Array.isArray(v.attachments)
-      ? v.attachments
-          .slice(0, MAX_LIST_ITEMS)
-          .map(sanitizeBackupAttachment)
-          .filter((a): a is Attachment => a !== null)
-      : []
-    // Merge: an attachment's `summary` (an AI document summary — costs a
-    // Claude API call, and never leaves the device) is preserved from the
-    // matching LOCAL attachment id; the cloud's metadata otherwise wins.
-    const currentAttById = new Map((current?.attachments ?? []).map((a) => [a.id, a]))
-    attachments = incoming.map((a) => {
-      const localMatch = currentAttById.get(a.id)
-      return localMatch?.summary ? { ...a, summary: localMatch.summary } : a
-    })
-  }
+    const deleted = v.deleted === true
+    const title = typeof v.title === 'string' && v.title.trim() ? v.title.slice(0, 300) : 'Call'
 
-  const call: Call = {
-    id: v.id,
-    title,
-    createdAt,
-    updatedAt,
-    durationMs: Number.isFinite(v.durationMs) ? Math.max(0, Math.trunc(v.durationMs as number)) : 0,
-    speakerCount: deleted
-      ? 0
-      : Number.isFinite(v.speakerCount)
-        ? Math.max(0, Math.trunc(v.speakerCount as number))
+    // A cloud tombstone becomes a REAL local tombstone (no transcript/
+    // attachments) — never resurrect local data into a "deleted" record.
+    let attachments: Attachment[] = []
+    if (!deleted) {
+      const incoming: Attachment[] = Array.isArray(v.attachments)
+        ? v.attachments
+            .slice(0, MAX_LIST_ITEMS)
+            .map(sanitizeBackupAttachment)
+            .filter((a): a is Attachment => a !== null)
+        : []
+      // Merge: an attachment's `summary` (an AI document summary — costs a
+      // Claude API call, and never leaves the device) is preserved from the
+      // matching LOCAL attachment id; the cloud's metadata otherwise wins.
+      const currentAttById = new Map((current?.attachments ?? []).map((a) => [a.id, a]))
+      attachments = incoming.map((a) => {
+        const localMatch = currentAttById.get(a.id)
+        return localMatch?.summary ? { ...a, summary: localMatch.summary } : a
+      })
+    }
+
+    const call: Call = {
+      id,
+      title,
+      createdAt,
+      updatedAt,
+      durationMs: Number.isFinite(v.durationMs)
+        ? Math.max(0, Math.trunc(v.durationMs as number))
         : 0,
-    // The transcript and its derived preview NEVER come from the cloud (the
-    // payload never carries them) — preserve THIS machine's copy, if any.
-    preview: deleted ? '' : (current?.preview ?? ''),
-    segments: deleted ? [] : (current?.segments ?? []),
-    summary: deleted ? undefined : (sanitizeSummary(v.summary) ?? undefined),
-    coaching: deleted ? undefined : (sanitizeCoaching(v.coaching) ?? undefined),
-    attachments,
-    consent: sanitizeConsent(v.consent),
-    ...(deleted ? { deleted: true } : {})
-  }
-  await ensureDir(dir)
-  try {
-    await writeCall(dir, call)
-  } catch {
-    return null
-  }
-  return call
+      speakerCount: deleted
+        ? 0
+        : Number.isFinite(v.speakerCount)
+          ? Math.max(0, Math.trunc(v.speakerCount as number))
+          : 0,
+      // The transcript and its derived preview NEVER come from the cloud (the
+      // payload never carries them) — preserve THIS machine's copy, if any.
+      preview: deleted ? '' : (current?.preview ?? ''),
+      segments: deleted ? [] : (current?.segments ?? []),
+      summary: deleted ? undefined : (sanitizeSummary(v.summary) ?? undefined),
+      coaching: deleted
+        ? undefined
+        : (sanitizeCoaching(v.coaching, current?.segments ?? []) ?? undefined),
+      attachments,
+      consent: sanitizeConsent(v.consent),
+      ...(deleted ? { deleted: true } : {})
+    }
+    // Mirror every other persister (saveCall/getCall/listCalls): strip buyer
+    // turns the merged consent no longer permits before the record hits disk.
+    applyConsentRetention(call)
+    await ensureDir(dir)
+    try {
+      await writeCall(dir, call)
+    } catch {
+      return null
+    }
+    return call
+  })
+}
+
+// --- Per-call write serialization --------------------------------------------
+
+// Every mutator below is a getCall → mutate → writeCall sequence; two of them
+// running concurrently for the SAME call (e.g. Summarize + Coach clicked
+// back-to-back) would silently clobber each other's write. withCallLock chains
+// work per callId so same-call mutations run one at a time, while different
+// calls stay fully concurrent.
+const callLocks = new Map<string, Promise<unknown>>()
+
+async function withCallLock<T>(callId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = callLocks.get(callId) ?? Promise.resolve()
+  // Chain after the previous task for this id; a prior failure must not block
+  // the queue, and each caller sees only its own result/error.
+  const next = prev.catch(() => {}).then(fn)
+  const settled = next.catch(() => {}) // settled = "done, success or failure"
+  callLocks.set(callId, settled)
+  settled.then(() => {
+    // Clean up only if no newer work chained onto this entry in the meantime.
+    if (callLocks.get(callId) === settled) callLocks.delete(callId)
+  })
+  return next
 }
 
 // --- AI summaries -----------------------------------------------------------
@@ -658,14 +701,16 @@ export async function setCallSummary(
   callId: string,
   summary: Summary
 ): Promise<Call | null> {
-  const call = await getCall(dir, callId)
-  if (!call) return null
-  const clean = sanitizeSummary(summary)
-  if (!clean) return null // nothing usable to save — signal failure to the caller
-  call.summary = clean
-  call.updatedAt = new Date().toISOString()
-  await writeCall(dir, call)
-  return call
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    const clean = sanitizeSummary(summary)
+    if (!clean) return null // nothing usable to save — signal failure to the caller
+    call.summary = clean
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
 }
 
 export async function setAttachmentSummary(
@@ -675,16 +720,18 @@ export async function setAttachmentSummary(
   summary: Summary
 ): Promise<Call | null> {
   if (!isSafeId(attachmentId)) return null
-  const call = await getCall(dir, callId)
-  if (!call) return null
-  const att = (call.attachments ?? []).find((a) => a.id === attachmentId)
-  if (!att) return null
-  const clean = sanitizeSummary(summary)
-  if (!clean) return null // nothing usable to save — signal failure to the caller
-  att.summary = clean
-  call.updatedAt = new Date().toISOString()
-  await writeCall(dir, call)
-  return call
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    const att = (call.attachments ?? []).find((a) => a.id === attachmentId)
+    if (!att) return null
+    const clean = sanitizeSummary(summary)
+    if (!clean) return null // nothing usable to save — signal failure to the caller
+    att.summary = clean
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
 }
 
 // --- Coaching ---------------------------------------------------------------
@@ -711,32 +758,81 @@ function str(value: unknown, max: number): string {
   return typeof value === 'string' ? value.slice(0, max) : ''
 }
 
-function sanitizeEvidence(value: unknown): CoachEvidence | undefined {
+/** Lowercase + collapse whitespace, for tolerant quote-in-transcript matching. */
+function normalizeForMatch(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, ' ').trim()
+}
+
+const FREE_TEXT_OVERLAP_WORDS = 8
+
+/** Builds a scrubber that truncates any free-text field at the point it starts
+ *  quoting the transcript verbatim (an 8+ consecutive word overlap) — defense
+ *  in depth on the persistence/restore path, mirroring coach.ts's scrubber for
+ *  freshly-generated reports. Only the dedicated evidence quote fields may
+ *  carry exact transcript wording. */
+function makeFreeTextScrubber(transcript: string): (text: string) => string {
+  return (text) => {
+    if (!text) return text
+    const words = text.split(/\s+/).filter((w) => w.length > 0)
+    for (let i = 0; i + FREE_TEXT_OVERLAP_WORDS <= words.length; i++) {
+      const window = normalizeForMatch(words.slice(i, i + FREE_TEXT_OVERLAP_WORDS).join(' '))
+      if (window && transcript.includes(window)) {
+        const kept = words.slice(0, i).join(' ')
+        return kept ? `${kept} […]` : '[Removed: this text quoted the transcript verbatim.]'
+      }
+    }
+    return text
+  }
+}
+
+function sanitizeEvidence(value: unknown, transcript: string): CoachEvidence | undefined {
   if (!value || typeof value !== 'object') return undefined
   const v = value as Record<string, unknown>
   const quote = str(v.quote, 500).trim()
   if (!quote) return undefined
-  return { quote, speaker: clampInt(v.speaker, 0, 1000, 0), verified: v.verified === true }
+  return {
+    quote,
+    speaker: clampInt(v.speaker, 0, 1000, 0),
+    // `verified` is RE-DERIVED from the call's actual transcript, never trusted
+    // from the stored/cloud flag (a restored payload could claim verified: true
+    // for a quote this machine's transcript doesn't contain).
+    verified: transcript.includes(normalizeForMatch(quote))
+  }
 }
 
-/** Coerce an untrusted object (an AI-built report) into a clean CoachingReport. */
-export function sanitizeCoaching(value: unknown): CoachingReport | null {
+/** Coerce an untrusted object (an AI-built report) into a clean CoachingReport.
+ *  `segments` is the call's transcript, used to recompute every evidence
+ *  quote's `verified` flag rather than trusting the input. */
+export function sanitizeCoaching(value: unknown, segments: CallSegment[]): CoachingReport | null {
   if (!value || typeof value !== 'object') return null
   const v = value as Record<string, unknown>
 
+  const transcript = normalizeForMatch(
+    (Array.isArray(segments) ? segments : [])
+      .map((s) => (s && typeof s.text === 'string' ? s.text : ''))
+      .join(' ')
+  )
+
+  const scrub = makeFreeTextScrubber(transcript)
+
   const dimensions: CoachDimension[] = []
+  const seenKeys = new Set<CoachDimensionKey>()
   for (const d of Array.isArray(v.dimensions) ? v.dimensions : []) {
     if (!d || typeof d !== 'object') continue
     const dd = d as Record<string, unknown>
     if (typeof dd.key !== 'string' || !DIMENSION_KEYS.has(dd.key as CoachDimensionKey)) continue
+    const key = dd.key as CoachDimensionKey
+    if (seenKeys.has(key)) continue // keep the first occurrence of each dimension
+    seenKeys.add(key)
     dimensions.push({
-      key: dd.key as CoachDimensionKey,
+      key,
       score: clampInt(dd.score, 1, 5, 3),
-      comment: str(dd.comment, 1000),
-      evidence: sanitizeEvidence(dd.evidence)
+      comment: scrub(str(dd.comment, 1000)),
+      evidence: sanitizeEvidence(dd.evidence, transcript)
     })
   }
-  if (dimensions.length === 0) return null // nothing usable to save
+  // A partial rubric (hand-edited or legacy file) must not pass as a complete report.
+  if (dimensions.length !== DIMENSION_KEYS.size) return null
 
   const improvements: CoachImprovement[] = []
   for (const i of (Array.isArray(v.improvements) ? v.improvements : []).slice(0, 5)) {
@@ -744,9 +840,9 @@ export function sanitizeCoaching(value: unknown): CoachingReport | null {
     const ii = i as Record<string, unknown>
     improvements.push({
       kind: ii.kind === 'strategic' ? 'strategic' : 'mechanical',
-      title: str(ii.title, 300),
-      detail: str(ii.detail, 1500),
-      evidence: sanitizeEvidence(ii.evidence)
+      title: scrub(str(ii.title, 300)),
+      detail: scrub(str(ii.detail, 1500)),
+      evidence: sanitizeEvidence(ii.evidence, transcript)
     })
   }
 
@@ -758,13 +854,16 @@ export function sanitizeCoaching(value: unknown): CoachingReport | null {
     overallScore: clampInt(v.overallScore, 0, 100, 0),
     dealContext: {
       type: dc.type === 'transactional' || dc.type === 'complex' ? dc.type : 'unknown',
-      summary: str(dc.summary, 500),
-      lens: str(dc.lens, 200)
+      summary: scrub(str(dc.summary, 500)),
+      lens: scrub(str(dc.lens, 200))
     },
-    strength: { text: str(strength.text, 600), evidence: sanitizeEvidence(strength.evidence) },
+    strength: {
+      text: scrub(str(strength.text, 600)),
+      evidence: sanitizeEvidence(strength.evidence, transcript)
+    },
     dimensions,
     improvements,
-    nextAction: str(v.nextAction, 500),
+    nextAction: scrub(str(v.nextAction, 500)),
     metrics: {
       repSpeaker: numOrNull(m.repSpeaker) === null ? null : clampInt(m.repSpeaker, 0, 1000, 0),
       singleSpeaker: m.singleSpeaker === true,
@@ -790,14 +889,16 @@ export async function setCallCoaching(
   callId: string,
   report: CoachingReport
 ): Promise<Call | null> {
-  const call = await getCall(dir, callId)
-  if (!call) return null
-  const clean = sanitizeCoaching(report)
-  if (!clean) return null // nothing usable to save — signal failure to the caller
-  call.coaching = clean
-  call.updatedAt = new Date().toISOString()
-  await writeCall(dir, call)
-  return call
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    const clean = sanitizeCoaching(report, call.segments)
+    if (!clean) return null // nothing usable to save — signal failure to the caller
+    call.coaching = clean
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
 }
 
 // --- Attachments ------------------------------------------------------------
@@ -817,39 +918,42 @@ export async function addAttachment(
   callId: string,
   input: AddAttachmentInput
 ): Promise<AddAttachmentResult> {
-  const call = await getCall(dir, callId)
-  if (!call) return { ok: false, error: 'not-found' }
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return { ok: false, error: 'not-found' }
 
-  const ext = typeof input?.ext === 'string' ? input.ext.toLowerCase().replace(/^\./, '') : ''
-  if (!ALLOWED_EXT.has(ext as AttachmentExt)) return { ok: false, error: 'unsupported-type' }
+    const ext = typeof input?.ext === 'string' ? input.ext.toLowerCase().replace(/^\./, '') : ''
+    if (!ALLOWED_EXT.has(ext as AttachmentExt)) return { ok: false, error: 'unsupported-type' }
 
-  const bytes = input?.bytes
-  if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) return { ok: false, error: 'empty' }
-  if (bytes.byteLength > MAX_ATTACHMENT_BYTES) return { ok: false, error: 'too-large' }
+    const bytes = input?.bytes
+    if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0)
+      return { ok: false, error: 'empty' }
+    if (bytes.byteLength > MAX_ATTACHMENT_BYTES) return { ok: false, error: 'too-large' }
 
-  const id = randomUUID()
-  await ensureDir(filesDir(dir))
-  await fs.writeFile(join(filesDir(dir), `${id}.${ext}`), Buffer.from(bytes))
+    const id = randomUUID()
+    await ensureDir(filesDir(dir))
+    await fs.writeFile(join(filesDir(dir), `${id}.${ext}`), Buffer.from(bytes))
 
-  const rawName = typeof input?.name === 'string' ? input.name : `file.${ext}`
-  const attachment: Attachment = {
-    id,
-    name: rawName.replace(/[\r\n]/g, ' ').slice(0, 200),
-    ext: ext as AttachmentExt,
-    sizeBytes: bytes.byteLength,
-    addedAt: new Date().toISOString()
-  }
-  call.attachments = Array.isArray(call.attachments) ? call.attachments : []
-  call.attachments.push(attachment)
-  call.updatedAt = new Date().toISOString()
-  try {
-    await writeCall(dir, call)
-  } catch (err) {
-    // Don't orphan the file we just wrote if recording its metadata failed.
-    await fs.unlink(join(filesDir(dir), `${id}.${ext}`)).catch(() => {})
-    throw err
-  }
-  return { ok: true, attachment }
+    const rawName = typeof input?.name === 'string' ? input.name : `file.${ext}`
+    const attachment: Attachment = {
+      id,
+      name: rawName.replace(/[\r\n]/g, ' ').slice(0, 200),
+      ext: ext as AttachmentExt,
+      sizeBytes: bytes.byteLength,
+      addedAt: new Date().toISOString()
+    }
+    call.attachments = Array.isArray(call.attachments) ? call.attachments : []
+    call.attachments.push(attachment)
+    call.updatedAt = new Date().toISOString()
+    try {
+      await writeCall(dir, call)
+    } catch (err) {
+      // Don't orphan the file we just wrote if recording its metadata failed.
+      await fs.unlink(join(filesDir(dir), `${id}.${ext}`)).catch(() => {})
+      throw err
+    }
+    return { ok: true, attachment }
+  })
 }
 
 export async function removeAttachment(
@@ -858,24 +962,26 @@ export async function removeAttachment(
   attachmentId: string
 ): Promise<{ ok: boolean }> {
   if (!isSafeId(attachmentId)) return { ok: false }
-  const call = await getCall(dir, callId)
-  if (!call) return { ok: false }
-  const att = (call.attachments ?? []).find((a) => a.id === attachmentId)
-  if (att) {
-    try {
-      await fs.unlink(join(filesDir(dir), `${att.id}.${att.ext}`))
-    } catch {
-      /* ignore missing file */
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return { ok: false }
+    const att = (call.attachments ?? []).find((a) => a.id === attachmentId)
+    if (att) {
+      try {
+        await fs.unlink(join(filesDir(dir), `${att.id}.${att.ext}`))
+      } catch {
+        /* ignore missing file */
+      }
     }
-  }
-  call.attachments = (call.attachments ?? []).filter((a) => a.id !== attachmentId)
-  call.updatedAt = new Date().toISOString()
-  try {
-    await writeCall(dir, call)
-  } catch {
-    return { ok: false }
-  }
-  return { ok: true }
+    call.attachments = (call.attachments ?? []).filter((a) => a.id !== attachmentId)
+    call.updatedAt = new Date().toISOString()
+    try {
+      await writeCall(dir, call)
+    } catch {
+      return { ok: false }
+    }
+    return { ok: true }
+  })
 }
 
 /** Read an attachment's bytes (for summarization). */

@@ -3,6 +3,7 @@ import type { Summary } from './calls-fs'
 
 const MODEL = 'claude-sonnet-4-6'
 const MAX_TEXT_CHARS = 200_000 // keep requests bounded
+const REQUEST_TIMEOUT_MS = 60_000 // fail fast instead of spinning on a stalled connection
 
 let client: Anthropic | null = null
 
@@ -55,8 +56,7 @@ const PROMPT = [
 export type SummarizeInput = { kind: 'text'; text: string } | { kind: 'pdf'; base64: string }
 
 export type SummaryResult =
-  | { ok: true; summary: Summary }
-  | { ok: false; error: 'no-key' | 'failed'; message?: string }
+  { ok: true; summary: Summary } | { ok: false; error: 'no-key' | 'failed'; message?: string }
 
 function toStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
@@ -74,7 +74,11 @@ function friendlyError(err: unknown): string {
   }
   if (err instanceof Anthropic.APIError) {
     const msg = typeof err.message === 'string' ? err.message.toLowerCase() : ''
-    if (msg.includes('credit balance') || msg.includes('plans & billing') || msg.includes('billing')) {
+    if (
+      msg.includes('credit balance') ||
+      msg.includes('plans & billing') ||
+      msg.includes('billing')
+    ) {
       return 'Your Anthropic account is out of credits. Add credits at console.anthropic.com (Plans & Billing), then try again.'
     }
     return `Anthropic returned an error (${err.status ?? 'unknown'}). Please try again.`
@@ -99,13 +103,16 @@ export async function summarize(input: SummarizeInput): Promise<SummaryResult> {
   }
 
   try {
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 4096,
-      tools: [SUMMARY_TOOL],
-      tool_choice: { type: 'tool', name: 'record_summary' },
-      messages: [{ role: 'user', content }]
-    })
+    const response = await anthropic.messages.create(
+      {
+        model: MODEL,
+        max_tokens: 4096,
+        tools: [SUMMARY_TOOL],
+        tool_choice: { type: 'tool', name: 'record_summary' },
+        messages: [{ role: 'user', content }]
+      },
+      { timeout: REQUEST_TIMEOUT_MS }
+    )
 
     if (response.stop_reason === 'max_tokens') {
       return {
@@ -129,7 +136,11 @@ export async function summarize(input: SummarizeInput): Promise<SummaryResult> {
       createdAt: new Date().toISOString()
     }
     if (!summary.executive && summary.keyPoints.length === 0) {
-      return { ok: false, error: 'failed', message: 'The summary came back empty. Please try again.' }
+      return {
+        ok: false,
+        error: 'failed',
+        message: 'The summary came back empty. Please try again.'
+      }
     }
     return { ok: true, summary }
   } catch (err) {

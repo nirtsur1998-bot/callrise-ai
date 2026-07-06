@@ -75,6 +75,12 @@ let denoiseActive = false
 // finishes and spawn two michelpers. Set synchronously at entry -- before
 // any await -- so it closes the window the permission-check await opens.
 let starting = false
+// Set when stopHelper() is called during startHelper()'s startup window
+// (starting === true but `child` is still null, e.g. while the mic-permission
+// prompt is being awaited). Without this, that stop would be a silent no-op
+// and the helper would go on to start and keep running. startHelper() checks
+// it right before declaring success and tears the fresh helper back down.
+let stopRequested = false
 // Consecutive-restart counter and its reset timer -- see MAX_RESTART_ATTEMPTS
 // and RESTART_ATTEMPTS_RESET_MS above.
 let restartAttempts = 0
@@ -292,14 +298,36 @@ async function startHelper(): Promise<{ ok: boolean; error?: string }> {
       }
     })
 
+    // A stop was requested while we were still starting up (before `child`
+    // was assigned, so stopHelper() couldn't act on it). Honor it now: tear
+    // down the helper we just spawned and report success — the net effect is
+    // "started, then immediately stopped", which is what the user asked for.
+    if (stopRequested) {
+      stopRequested = false
+      stopHelper()
+      return { ok: true }
+    }
+
     broadcast()
     return { ok: true }
   } finally {
     starting = false
+    // Any pending stop is moot once this attempt ends: either we honored it
+    // above, or the start failed and there is nothing running to stop. Clear
+    // it so it can't leak into (and silently kill) a future start.
+    stopRequested = false
   }
 }
 
 function stopHelper(): { ok: boolean } {
+  // startHelper() is mid-startup and hasn't assigned `child` yet (it's
+  // awaiting the mic-permission prompt / spawning). We can't kill what isn't
+  // there, so flag the request; startHelper() checks this right before
+  // declaring success and tears the fresh helper down.
+  if (starting && !child) {
+    stopRequested = true
+    return { ok: true }
+  }
   if (child) {
     const proc = child
     child = null
