@@ -93,6 +93,10 @@ function createWindow(): void {
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('ai.callrise.app')
 
+  // In dev, Electron shows its own default dock icon on macOS unless we set
+  // one explicitly (packaged builds pick it up automatically from build/icon.png).
+  if (process.platform === 'darwin') app.dock?.setIcon(icon)
+
   // Grant microphone capture only to our own window, nothing else.
   const isOurWindow = (wc: Electron.WebContents | null): boolean =>
     wc !== null && wc === mainWindow?.webContents
