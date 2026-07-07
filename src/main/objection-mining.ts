@@ -131,8 +131,9 @@ function normalize(s: string): string {
 
 /** Same shape as coach.ts's verifier: merge consecutive same-speaker segments
  *  into turns, then require the quote appear within a single turn spoken by
- *  the claimed speaker — anti-hallucination grounding. */
-function makeVerifier(segments: CallSegment[]): (quote: unknown, speaker: unknown) => boolean {
+ *  the claimed speaker — anti-hallucination grounding. Exported so the
+ *  enqueue IPC handler can re-verify renderer-sent candidates in main. */
+export function makeVerifier(segments: CallSegment[]): (quote: unknown, speaker: unknown) => boolean {
   const turns: { speaker: number; text: string }[] = []
   for (const s of segments) {
     const last = turns[turns.length - 1]

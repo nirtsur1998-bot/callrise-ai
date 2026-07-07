@@ -11,7 +11,11 @@ interface ViewCallModalProps {
 
 /** A read-only transcript peek — the "link to view that call" the review
  *  queue needs, without wiring cross-screen navigation out of Settings. */
-export function ViewCallModal({ callId, callTitle, onClose }: ViewCallModalProps): React.JSX.Element {
+export function ViewCallModal({
+  callId,
+  callTitle,
+  onClose
+}: ViewCallModalProps): React.JSX.Element {
   const [call, setCall] = useState<Call | null>(null)
   const [loaded, setLoaded] = useState(false)
   const mountedRef = useRef(true)

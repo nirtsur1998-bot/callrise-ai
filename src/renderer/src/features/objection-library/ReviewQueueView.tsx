@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Check, X, Pencil, Eye } from 'lucide-react'
 import { useObjectionQueue } from './useObjectionQueue'
 import { ViewCallModal } from './ViewCallModal'
@@ -10,9 +10,18 @@ import { TYPE_LABEL, type ObjectionQueueItem } from './types'
  * Reject. Only Approve ever creates a real objection script (in the
  * Knowledge Base); nothing else in this feature writes there.
  */
-export function ReviewQueueView(): React.JSX.Element {
-  const { items, loading, approve, reject } = useObjectionQueue()
+export function ReviewQueueView({
+  refreshToken = 0
+}: {
+  /** Bump to reload the queue (e.g. after a scan on the same screen adds items). */
+  refreshToken?: number
+}): React.JSX.Element {
+  const { items, loading, refresh, approve, reject } = useObjectionQueue()
   const [viewingCall, setViewingCall] = useState<{ id: string; title: string } | null>(null)
+
+  useEffect(() => {
+    if (refreshToken > 0) void refresh()
+  }, [refreshToken, refresh])
 
   if (loading) {
     return <p className="text-sm text-faint">Loading…</p>
@@ -141,7 +150,9 @@ function QueueRow({ item, onApprove, onReject, onViewCall }: QueueRowProps): Rea
             item.recoveredWell ? 'font-medium text-emerald-400' : 'font-medium text-amber-400'
           }
         >
-          {item.recoveredWell ? 'AI thinks this recovered well' : 'AI is not sure this fully recovered'}
+          {item.recoveredWell
+            ? 'AI thinks this recovered well'
+            : 'AI is not sure this fully recovered'}
         </span>{' '}
         — a suggestion, not a fact. {item.judgmentNote}
       </p>
@@ -153,7 +164,7 @@ function QueueRow({ item, onApprove, onReject, onViewCall }: QueueRowProps): Rea
           <>
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || !trigger.trim() || !response.trim()}
               onClick={saveAndApprove}
               className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:brightness-110 disabled:opacity-50"
             >

@@ -1,3 +1,4 @@
+import { useCallback, useState } from 'react'
 import { Card } from '@renderer/components/Card'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
 import { ReviewQueueView } from '@renderer/features/objection-library/ReviewQueueView'
@@ -16,6 +17,10 @@ import { SettingRow } from './SettingRow'
 export function ObjectionLibrarySection(): React.JSX.Element {
   const { settings, update } = useAppSettings()
   const enabled = settings.objectionMining.enabled
+  // Bumped when a scan adds suggestions, so the review queue below reloads
+  // instead of showing its stale mount-time list.
+  const [queueVersion, setQueueVersion] = useState(0)
+  const onQueueChanged = useCallback(() => setQueueVersion((v) => v + 1), [])
 
   return (
     <>
@@ -32,18 +37,18 @@ export function ObjectionLibrarySection(): React.JSX.Element {
           }
         />
         <p className="mt-4 border-t border-line-soft pt-4 text-[12px] text-faint">
-          Off by default. While off, this feature does nothing in the background — it only runs
-          when you turn it on, and even then only proposes suggestions for you to review.
+          Off by default. While off, this feature does nothing in the background — it only runs when
+          you turn it on, and even then only proposes suggestions for you to review.
         </p>
       </Card>
 
       <Card className="mb-5">
         <h3 className="mb-1 text-sm font-semibold">Scan my past calls</h3>
         <p className="mb-4 text-[12px] text-muted">
-          Calls saved while this was off were never mined. This is a one-time, manual catch-up —
-          it only runs when you click the button, never automatically.
+          Calls saved while this was off were never mined. This is a one-time, manual catch-up — it
+          only runs when you click the button, never automatically.
         </p>
-        <ScanPastCallsCard enabled={enabled} />
+        <ScanPastCallsCard enabled={enabled} onQueueChanged={onQueueChanged} />
       </Card>
 
       <Card className="mb-5">
@@ -52,7 +57,7 @@ export function ObjectionLibrarySection(): React.JSX.Element {
           Suggestions mined from your calls, waiting for your decision. Nothing here is a real
           script yet — approve, edit then approve, or reject each one.
         </p>
-        <ReviewQueueView />
+        <ReviewQueueView refreshToken={queueVersion} />
       </Card>
     </>
   )

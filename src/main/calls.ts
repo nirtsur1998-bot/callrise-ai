@@ -21,8 +21,8 @@ import {
 import { summarize, type SummarizeInput, type SummaryResult } from './summarize'
 import { coachCall, type CoachResult } from './coach'
 import { generateCallTitle, type GenerateTitleResult } from './call-title'
-import { mineObjections, type ObjectionMiningResult } from './objection-mining'
-import { addToQueue } from './objection-queue-fs'
+import { mineObjections, makeVerifier, type ObjectionMiningResult } from './objection-mining'
+import { addToQueue, purgeQueueForCall } from './objection-queue-fs'
 import { isObjectionMiningEnabled } from './app-settings'
 import { scheduleBackup } from './backup'
 
@@ -34,25 +34,43 @@ function callsDir(): string {
   return join(app.getPath('userData'), 'calls')
 }
 
+/** Calls with a mining request currently in flight. The mined-at flag is only
+ *  written AFTER the (slow) AI call returns, so without this set an auto-mine
+ *  racing the manual scan — or two overlapping scans — would mine the same
+ *  call twice and duplicate its candidates in the review queue. */
+const miningInFlight = new Set<string>()
+let scanInFlight = false
+
 /** Mine one call and stage any grounded candidates in the review queue, then
  *  mark the call as mined — shared by the new-call auto-mine hook and the
  *  manual "scan past calls" trigger. Only marks the call mined on SUCCESS, so
  *  a transient failure (e.g. a rate limit) leaves it eligible for a retry. */
 async function mineCallIntoQueue(callId: string): Promise<{ ok: boolean; added: number }> {
-  const call = await getCall(callsDir(), callId)
-  if (!call?.segments?.length) return { ok: false, added: 0 }
-  const result = await mineObjections(call.segments)
-  if (!result.ok) return { ok: false, added: 0 }
-  const items = await addToQueue(objectionQueueDir(), result.candidates, callId, call.title)
-  await setCallObjectionsMined(callsDir(), callId)
-  return { ok: true, added: items.length }
+  if (miningInFlight.has(callId)) return { ok: false, added: 0 }
+  miningInFlight.add(callId)
+  try {
+    const call = await getCall(callsDir(), callId)
+    if (!call?.segments?.length) return { ok: false, added: 0 }
+    // Re-check on the fresh read: another path may have finished mining this
+    // call after the caller built its eligible list.
+    if (call.objectionsMinedAt) return { ok: true, added: 0 }
+    const result = await mineObjections(call.segments)
+    if (!result.ok) return { ok: false, added: 0 }
+    const items = await addToQueue(objectionQueueDir(), result.candidates, callId, call.title)
+    await setCallObjectionsMined(callsDir(), callId)
+    return { ok: true, added: items.length }
+  } finally {
+    miningInFlight.delete(callId)
+  }
 }
 
 /** A call is "eligible" for mining once it has a transcript and hasn't been
  *  mined yet — shared by the scan estimate and the scan itself so the count
  *  shown before confirming always matches what the scan will actually do. */
 function eligibleForMining(calls: CallSummary[]): CallSummary[] {
-  return calls.filter((c) => !c.objectionsMined && c.preview.trim().length > 0)
+  return calls.filter(
+    (c) => !c.objectionsMined && typeof c.preview === 'string' && c.preview.trim().length > 0
+  )
 }
 
 /** Extract text from a .docx. Returns null when the file can't be parsed at all. */
@@ -105,6 +123,10 @@ export function registerCalls(): void {
   })
   ipcMain.handle('calls:delete', async (_event, id: string) => {
     const res = await deleteCall(callsDir(), id)
+    // The review queue stages verbatim buyer quotes mined from this call —
+    // deleting the call must take them with it, or "a deleted call keeps no
+    // buyer words" (deleteCall's guarantee) would be false one folder over.
+    await purgeQueueForCall(objectionQueueDir(), id).catch(() => 0)
     scheduleBackup() // propagate the deletion tombstone
     return res
   })
@@ -274,8 +296,24 @@ export function registerCalls(): void {
       try {
         const call = await getCall(callsDir(), callId)
         if (!call) return { ok: false, added: 0 }
-        const list = Array.isArray(candidates) ? candidates : []
+        // Never trust the renderer's "verified" booleans — re-run the same
+        // transcript check mining used, against THIS call's segments. This
+        // also catches candidates mined from one call but enqueued under
+        // another call's id.
+        const verify = makeVerifier(call.segments ?? [])
+        const list = (Array.isArray(candidates) ? candidates : []).map((raw) => {
+          if (!raw || typeof raw !== 'object') return raw
+          const c = raw as Record<string, unknown>
+          return {
+            ...c,
+            objectionVerified: verify(c.objectionQuote, c.objectionSpeaker),
+            responseVerified: verify(c.responseQuote, c.responseSpeaker)
+          }
+        })
         const items = await addToQueue(objectionQueueDir(), list, callId, call.title)
+        // The call HAS been mined (via mineTest) — mark it so the past-calls
+        // scan doesn't mine it again and duplicate these candidates.
+        await setCallObjectionsMined(callsDir(), callId)
         return { ok: true, added: items.length }
       } catch {
         return { ok: false, added: 0 }
@@ -285,34 +323,63 @@ export function registerCalls(): void {
 
   // How many past calls are eligible (have a transcript, not yet mined) —
   // shown before the user confirms the manual scan below.
-  ipcMain.handle(
-    'objections:scanEstimate',
-    async (): Promise<{ eligibleCount: number }> => {
-      if (!isObjectionMiningEnabled()) return { eligibleCount: 0 }
-      const calls = await listCalls(callsDir())
-      return { eligibleCount: eligibleForMining(calls).length }
-    }
-  )
+  ipcMain.handle('objections:scanEstimate', async (): Promise<{ eligibleCount: number }> => {
+    if (!isObjectionMiningEnabled()) return { eligibleCount: 0 }
+    const calls = await listCalls(callsDir())
+    return { eligibleCount: eligibleForMining(calls).length }
+  })
 
   // The manual "scan my past calls" trigger — only ever runs when the user
   // clicks it (never automatically), one call at a time so a slow or rate-
   // limited request can't pile up concurrent API calls.
   ipcMain.handle(
     'objections:scanPastCalls',
-    async (): Promise<{ ok: boolean; scanned: number; candidatesAdded: number }> => {
-      if (!isObjectionMiningEnabled()) return { ok: false, scanned: 0, candidatesAdded: 0 }
-      const calls = await listCalls(callsDir())
-      const eligible = eligibleForMining(calls)
-      let scanned = 0
-      let candidatesAdded = 0
-      for (const c of eligible) {
-        const res = await mineCallIntoQueue(c.id)
-        if (res.ok) {
-          scanned++
-          candidatesAdded += res.added
-        }
+    async (): Promise<{
+      ok: boolean
+      scanned: number
+      candidatesAdded: number
+      failed: number
+      stopped?: 'disabled' | 'errors'
+    }> => {
+      if (!isObjectionMiningEnabled()) {
+        return { ok: false, scanned: 0, candidatesAdded: 0, failed: 0 }
       }
-      return { ok: true, scanned, candidatesAdded }
+      // One scan at a time, enforced HERE — the renderer's disabled button
+      // resets on remount, so it can't be the only guard.
+      if (scanInFlight) return { ok: false, scanned: 0, candidatesAdded: 0, failed: 0 }
+      scanInFlight = true
+      try {
+        const calls = await listCalls(callsDir())
+        const eligible = eligibleForMining(calls)
+        let scanned = 0
+        let candidatesAdded = 0
+        let failed = 0
+        let consecutiveFailures = 0
+        for (const c of eligible) {
+          // The toggle is the HARD gate ("off means no call is ever read") —
+          // honor a mid-scan flip instead of only checking once at the start.
+          if (!isObjectionMiningEnabled()) {
+            return { ok: true, scanned, candidatesAdded, failed, stopped: 'disabled' }
+          }
+          const res = await mineCallIntoQueue(c.id)
+          if (res.ok) {
+            scanned++
+            candidatesAdded += res.added
+            consecutiveFailures = 0
+          } else {
+            failed++
+            // A run of failures means the API is down/rate-limited — stop
+            // instead of burning a doomed request per remaining call. The
+            // unmined calls stay eligible for a later retry.
+            if (++consecutiveFailures >= 3) {
+              return { ok: true, scanned, candidatesAdded, failed, stopped: 'errors' }
+            }
+          }
+        }
+        return { ok: true, scanned, candidatesAdded, failed }
+      } finally {
+        scanInFlight = false
+      }
     }
   )
 

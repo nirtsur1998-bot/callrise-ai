@@ -355,6 +355,11 @@ export interface CallsApi {
     ok: boolean
     scanned: number
     candidatesAdded: number
+    /** Calls that errored (rate limit, network) — still eligible for a retry. */
+    failed: number
+    /** Set when the scan stopped early: the toggle was turned off mid-scan,
+     *  or repeated API errors made continuing pointless. */
+    stopped?: 'disabled' | 'errors'
   }>
   /** AI Note Taker's auto-title feature: generate + save a title in one step. */
   generateTitle: (callId: string) => Promise<{ ok: true; title: string } | { ok: false }>

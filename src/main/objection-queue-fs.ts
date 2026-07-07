@@ -94,9 +94,10 @@ function sanitizeCandidate(value: unknown): MinedObjectionCandidate | null {
   const responseQuote = str(v.responseQuote, MAX_QUOTE)
   if (!objectionQuote || !responseQuote) return null
   return {
-    type: typeof v.type === 'string' && TYPES.has(v.type as MinedObjectionType)
-      ? (v.type as MinedObjectionType)
-      : 'other',
+    type:
+      typeof v.type === 'string' && TYPES.has(v.type as MinedObjectionType)
+        ? (v.type as MinedObjectionType)
+        : 'other',
     objectionQuote,
     objectionSpeaker: speakerNum(v.objectionSpeaker),
     objectionVerified: v.objectionVerified === true,
@@ -108,6 +109,12 @@ function sanitizeCandidate(value: unknown): MinedObjectionCandidate | null {
   }
 }
 
+/** Dedupe key: same source call + same objection wording (case/whitespace
+ *  insensitive) is the same suggestion, whatever id it was staged under. */
+function dedupeKey(callId: string, objectionQuote: string): string {
+  return `${callId}\n${objectionQuote.toLowerCase().replace(/\s+/g, ' ').trim()}`
+}
+
 export async function addToQueue(
   dir: string,
   candidates: unknown[],
@@ -115,6 +122,10 @@ export async function addToQueue(
   callTitle: string
 ): Promise<ObjectionQueueItem[]> {
   await ensureDir(dir)
+  // Belt-and-braces against double mining (auto-mine racing a scan, a re-run
+  // after a cloud restore wiped the mined flag, …): a candidate whose quote is
+  // already staged from the same call never lands in the queue twice.
+  const seen = new Set((await listQueue(dir)).map((i) => dedupeKey(i.callId, i.objectionQuote)))
   const now = new Date().toISOString()
   const items: ObjectionQueueItem[] = []
   for (const raw of candidates) {
@@ -122,6 +133,9 @@ export async function addToQueue(
     // Only quotes verified against the transcript at mining time may enter
     // the queue — an ungrounded suggestion is worse than none.
     if (!c || !c.objectionVerified || !c.responseVerified) continue
+    const key = dedupeKey(str(callId, 128), c.objectionQuote)
+    if (seen.has(key)) continue
+    seen.add(key)
     const item: ObjectionQueueItem = {
       id: randomUUID(),
       type: c.type,
@@ -172,6 +186,24 @@ export async function getQueueItem(dir: string, id: string): Promise<ObjectionQu
   } catch {
     return null
   }
+}
+
+/** Delete every staged item mined from one call. Mirrors deleteCall's privacy
+ *  guarantee: a deleted call must not retain buyer words anywhere on disk —
+ *  the queue stores verbatim buyer quotes, so it must be purged with the call. */
+export async function purgeQueueForCall(dir: string, callId: string): Promise<number> {
+  const items = await listQueue(dir)
+  let purged = 0
+  for (const item of items) {
+    if (item.callId !== callId) continue
+    try {
+      await fs.unlink(join(dir, `${item.id}.json`))
+      purged++
+    } catch {
+      /* best-effort: an unreadable file was already skipped by listQueue */
+    }
+  }
+  return purged
 }
 
 export async function removeFromQueue(dir: string, id: string): Promise<{ ok: boolean }> {
