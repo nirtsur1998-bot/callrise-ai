@@ -24,7 +24,7 @@ import { generateCallTitle, type GenerateTitleResult } from './call-title'
 import { mineObjections, makeVerifier, type ObjectionMiningResult } from './objection-mining'
 import { addToQueue, purgeQueueForCall } from './objection-queue-fs'
 import { isObjectionMiningEnabled } from './app-settings'
-import { scheduleBackup } from './backup'
+import { scheduleBackup, queueAttachmentBlobDeletes } from './backup'
 
 function objectionQueueDir(): string {
   return join(app.getPath('userData'), 'objection-queue')
@@ -122,7 +122,12 @@ export function registerCalls(): void {
     return summary
   })
   ipcMain.handle('calls:delete', async (_event, id: string) => {
+    // Capture the attachment list BEFORE the tombstone strips it, so any
+    // blobs uploaded to the cloud bucket can be queued for deletion too.
+    const existing = await getCall(callsDir(), id)
+    const blobs = (existing?.attachments ?? []).map((a) => ({ id: a.id, ext: a.ext }))
     const res = await deleteCall(callsDir(), id)
+    if (res.ok && blobs.length) queueAttachmentBlobDeletes(blobs)
     // The review queue stages verbatim buyer quotes mined from this call —
     // deleting the call must take them with it, or "a deleted call keeps no
     // buyer words" (deleteCall's guarantee) would be false one folder over.
@@ -139,9 +144,14 @@ export function registerCalls(): void {
       return addAttachment(callsDir(), callId, { name: file?.name, ext: file?.ext, bytes })
     }
   )
-  ipcMain.handle('calls:removeAttachment', (_event, callId: string, attachmentId: string) =>
-    removeAttachment(callsDir(), callId, attachmentId)
-  )
+  ipcMain.handle('calls:removeAttachment', async (_event, callId: string, attachmentId: string) => {
+    const call = await getCall(callsDir(), callId)
+    const att = call?.attachments?.find((a) => a.id === attachmentId)
+    const res = await removeAttachment(callsDir(), callId, attachmentId)
+    // Removing locally also removes the cloud copy (if one was ever uploaded).
+    if (res.ok && att) queueAttachmentBlobDeletes([{ id: att.id, ext: att.ext }])
+    return res
+  })
 
   // --- CRM: link this call to a contact -------------------------------------
   ipcMain.handle('calls:setContact', async (_event, callId: string, contactId: string | null) => {

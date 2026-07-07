@@ -336,3 +336,47 @@ create policy "own row update" on public.backup_deal_stages
   for update using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 grant select, insert, update on public.backup_deal_stages to authenticated;
+
+-- ============================================================================
+-- Privacy remediation (added with the scrub-on-toggle-off feature).
+--
+-- The core stores (tasks/events/calls) keep their "no hard delete" rule —
+-- deletions travel as tombstones. But the OPT-IN categories are different:
+-- turning their toggle OFF is the user saying "this category should no longer
+-- exist in the cloud", so the app needs permission to delete those rows (and
+-- attachment blobs). Local files remain the source of truth; re-enabling the
+-- toggle re-uploads everything.
+-- ============================================================================
+
+drop policy if exists "own rows delete" on public.backup_knowledge;
+create policy "own rows delete" on public.backup_knowledge
+  for delete using (user_id = auth.uid());
+grant delete on public.backup_knowledge to authenticated;
+
+drop policy if exists "own rows delete" on public.backup_contacts;
+create policy "own rows delete" on public.backup_contacts
+  for delete using (user_id = auth.uid());
+grant delete on public.backup_contacts to authenticated;
+
+drop policy if exists "own rows delete" on public.backup_deals;
+create policy "own rows delete" on public.backup_deals
+  for delete using (user_id = auth.uid());
+grant delete on public.backup_deals to authenticated;
+
+drop policy if exists "own row delete" on public.backup_deal_stages;
+create policy "own row delete" on public.backup_deal_stages
+  for delete using (user_id = auth.uid());
+grant delete on public.backup_deal_stages to authenticated;
+
+drop policy if exists "own row delete" on public.backup_settings;
+create policy "own row delete" on public.backup_settings
+  for delete using (user_id = auth.uid());
+grant delete on public.backup_settings to authenticated;
+
+-- Attachment blobs: allow deleting your own objects, so (a) deleting a call
+-- removes its uploaded files and (b) turning "Attached files" off scrubs them.
+drop policy if exists "own attachment delete" on storage.objects;
+create policy "own attachment delete" on storage.objects
+  for delete using (
+    bucket_id = 'attachments' and (storage.foldername(name))[1] = auth.uid()::text
+  );

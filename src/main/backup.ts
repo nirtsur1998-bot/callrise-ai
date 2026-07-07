@@ -22,13 +22,19 @@ import {
   callFullBackupPayload,
   importCall,
   attachmentBlobPath,
+  touchAllCallsForRepush,
   type Call
 } from './calls-fs'
 import { listEntries, importEntry, type KnowledgeEntry } from './knowledge-fs'
 import { listContacts, importContact, type Contact } from './contacts-fs'
 import { listDeals, importDeal, type Deal } from './deals-fs'
 import { loadDealStagesMeta, applyPulledDealStages } from './deal-stages'
-import { loadAppSettings, applyPulledSettings } from './app-settings'
+import {
+  loadAppSettings,
+  applyPulledSettings,
+  setSyncScopeDisabledListener,
+  type BackupSyncScope
+} from './app-settings'
 import { writeJsonAtomic } from './atomic-write'
 import { reconcileStore, ts, type CloudRow } from './backup-core'
 
@@ -55,6 +61,170 @@ function statePath(): string {
 }
 function ownerPath(): string {
   return join(app.getPath('userData'), 'backup-owner.json')
+}
+function pendingBlobDeletesPath(): string {
+  return join(app.getPath('userData'), 'backup-pending-blob-deletes.json')
+}
+
+// --- Attachment blob deletion --------------------------------------------------
+// Storage objects live outside the row reconcile, so nothing removed them:
+// deleting a call left its uploaded files in the bucket forever. Deletions are
+// QUEUED locally (durable across restarts/offline) and drained on every push.
+
+interface PendingBlobDelete {
+  id: string
+  ext: string
+}
+
+async function readPendingBlobDeletes(): Promise<PendingBlobDelete[]> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(pendingBlobDeletesPath(), 'utf8')) as {
+      items?: unknown
+    }
+    if (!Array.isArray(parsed.items)) return []
+    return parsed.items.filter(
+      (i): i is PendingBlobDelete =>
+        !!i &&
+        typeof i === 'object' &&
+        typeof (i as PendingBlobDelete).id === 'string' &&
+        typeof (i as PendingBlobDelete).ext === 'string'
+    )
+  } catch {
+    return []
+  }
+}
+
+async function writePendingBlobDeletes(items: PendingBlobDelete[]): Promise<void> {
+  await writeJsonAtomic(pendingBlobDeletesPath(), { items }).catch(() => {})
+}
+
+/** Called by calls.ts when a call (or a single attachment) is deleted —
+ *  queue its uploaded blobs for removal from the cloud bucket. Best-effort
+ *  and durable: drained on the next push, retried until it succeeds. */
+export function queueAttachmentBlobDeletes(items: PendingBlobDelete[]): void {
+  if (!items.length) return
+  void (async () => {
+    const existing = await readPendingBlobDeletes()
+    const seen = new Set(existing.map((i) => `${i.id}.${i.ext}`))
+    const fresh = items.filter((i) => !seen.has(`${i.id}.${i.ext}`))
+    if (fresh.length) await writePendingBlobDeletes([...existing, ...fresh])
+    scheduleBackup()
+  })()
+}
+
+// --- Scrub-on-toggle-off ---------------------------------------------------
+// The opt-in privacy toggles used to be upload-only: turning one OFF stopped
+// future pushes but left everything already uploaded in the cloud, while the
+// UI said "never leaves this Mac". A toggle-off now queues a durable scrub,
+// drained at the start of every push (so it survives offline/restart and is
+// retried until it succeeds). Local files are never touched — re-enabling the
+// toggle simply re-uploads from local.
+
+type ScrubKey = keyof BackupSyncScope
+
+function pendingScrubsPath(): string {
+  return join(app.getPath('userData'), 'backup-pending-scrubs.json')
+}
+
+const SCRUB_KEYS: ScrubKey[] = [
+  'transcripts',
+  'attachments',
+  'knowledgeBase',
+  'settingsPersonalization',
+  'contacts'
+]
+
+async function readPendingScrubs(): Promise<ScrubKey[]> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(pendingScrubsPath(), 'utf8')) as { keys?: unknown }
+    const keys = parsed.keys
+    if (!Array.isArray(keys)) return []
+    return SCRUB_KEYS.filter((k) => keys.includes(k))
+  } catch {
+    return []
+  }
+}
+
+async function writePendingScrubs(keys: ScrubKey[]): Promise<void> {
+  await writeJsonAtomic(pendingScrubsPath(), { keys }).catch(() => {})
+}
+
+function queuePendingScrubs(keys: ScrubKey[]): void {
+  void (async () => {
+    const existing = await readPendingScrubs()
+    const merged = SCRUB_KEYS.filter((k) => existing.includes(k) || keys.includes(k))
+    await writePendingScrubs(merged)
+    scheduleBackup(1_000) // scrub promptly — this is a privacy action, not a routine edit
+  })()
+}
+
+/** Delete every object under this user's folder in the attachments bucket. */
+async function scrubAllAttachmentBlobs(
+  client: NonNullable<ReturnType<typeof getSupabaseClient>>,
+  userId: string
+): Promise<void> {
+  const bucket = client.storage.from('attachments')
+  for (;;) {
+    const { data, error } = await bucket.list(userId, { limit: 100 })
+    if (error) throw new Error(error.message)
+    if (!data?.length) break
+    const { error: rmErr } = await bucket.remove(data.map((o) => `${userId}/${o.name}`))
+    if (rmErr) throw new Error(rmErr.message)
+    if (data.length < 100) break
+  }
+}
+
+/** Drain queued scrubs. Each key is retried independently; a key is only
+ *  removed from the queue once its scrub succeeded. Runs at the START of a
+ *  push, so e.g. the transcripts scrub (touch + re-push quote-free rows)
+ *  takes effect in the same push that follows. */
+async function drainPendingScrubs(
+  client: NonNullable<ReturnType<typeof getSupabaseClient>>,
+  userId: string
+): Promise<void> {
+  const pending = await readPendingScrubs()
+  if (!pending.length) return
+  const remaining: ScrubKey[] = []
+  for (const key of pending) {
+    try {
+      if (key === 'transcripts') {
+        // The server trigger only accepts strictly-newer rows, so the old
+        // transcript-bearing rows can only be evicted by NEWER quote-free
+        // ones — bump every call's updatedAt and let this push replace them.
+        await touchAllCallsForRepush(callsDir())
+      } else if (key === 'attachments') {
+        await scrubAllAttachmentBlobs(client, userId)
+      } else if (key === 'knowledgeBase') {
+        const { error } = await client.from('backup_knowledge').delete().eq('user_id', userId)
+        if (error) throw new Error(error.message)
+      } else if (key === 'contacts') {
+        for (const table of ['backup_contacts', 'backup_deals', 'backup_deal_stages']) {
+          const { error } = await client.from(table).delete().eq('user_id', userId)
+          if (error) throw new Error(error.message)
+        }
+      } else if (key === 'settingsPersonalization') {
+        const { error } = await client.from('backup_settings').delete().eq('user_id', userId)
+        if (error) throw new Error(error.message)
+      }
+    } catch (err) {
+      console.error(`[backup] scrub of '${key}' failed (will retry next push):`, err)
+      remaining.push(key)
+    }
+  }
+  await writePendingScrubs(remaining)
+}
+
+async function processPendingBlobDeletes(
+  client: NonNullable<ReturnType<typeof getSupabaseClient>>,
+  userId: string
+): Promise<void> {
+  const items = await readPendingBlobDeletes()
+  if (!items.length) return
+  const bucket = client.storage.from('attachments')
+  const { error } = await bucket.remove(items.map((i) => `${userId}/${i.id}.${i.ext}`))
+  // remove() succeeds for already-missing objects, so success = queue drained.
+  // On error keep the whole queue for the next push.
+  if (!error) await writePendingBlobDeletes([])
 }
 
 const ATTACHMENT_MIME: Record<string, string> = {
@@ -259,6 +429,14 @@ export async function pushAll(): Promise<BackupResult> {
     return { ok: false, error: 'ownership-mismatch' }
   }
   try {
+    // Privacy scrubs first (toggle-offs waiting to take effect in the cloud) —
+    // the transcripts scrub touches calls so THIS push replaces their rows.
+    try {
+      await drainPendingScrubs(client, userId)
+    } catch (err) {
+      console.error('[backup] scrub drain failed:', err)
+    }
+
     // Tombstones are included so DELETIONS propagate: tasks carry `deleted`;
     // events count as deleted when backup-tombstoned OR still in the transient
     // Google-delete state. The Google read-cache is a separate store, never here.
@@ -385,6 +563,15 @@ export async function pushAll(): Promise<BackupResult> {
       } catch (err) {
         console.error('[backup] deal-stages push failed:', err)
       }
+    }
+
+    // Drain queued attachment-blob deletions (deleted calls / removed
+    // attachments) — independent of the attachments toggle: removing what
+    // no longer exists locally is always right.
+    try {
+      await processPendingBlobDeletes(client, userId)
+    } catch (err) {
+      console.error('[backup] blob-delete drain failed:', err)
     }
 
     await writeState({
@@ -692,6 +879,10 @@ let registered = false
 export function registerBackup(): void {
   if (registered) return
   registered = true
+
+  // A privacy toggle turned OFF locally → queue a durable cloud scrub of that
+  // category (drained at the start of the next push, retried until done).
+  setSyncScopeDisabledListener(queuePendingScrubs)
 
   // Manual triggers (the settings UI in a later step calls these).
   ipcMain.handle('backup:pushNow', () => enqueue(pushAll))

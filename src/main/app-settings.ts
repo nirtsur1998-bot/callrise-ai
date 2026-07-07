@@ -209,10 +209,36 @@ function persistSettings(next: AppSettings): void {
   writeJsonAtomicSync(settingsPath(), next)
 }
 
+/**
+ * Called with the list of sync-scope keys a LOCAL edit just turned OFF —
+ * backup.ts registers a scrub here (delete that category's cloud rows/blobs).
+ * A callback registration instead of an import, because backup.ts already
+ * imports this module (no cycle). Deliberately NOT fired by
+ * applyPulledSettings: pulls preserve this device's scope, and a remote
+ * device must never trigger a scrub of this account's cloud data anyway —
+ * only an explicit local toggle-off does.
+ */
+type SyncScopeKey = keyof BackupSyncScope
+let onSyncScopeDisabled: ((keys: SyncScopeKey[]) => void) | null = null
+export function setSyncScopeDisabledListener(fn: (keys: SyncScopeKey[]) => void): void {
+  onSyncScopeDisabled = fn
+}
+
 export function saveAppSettings(patch: unknown): AppSettings {
-  const next = mergeSettings(loadAppSettings(), patch)
+  const current = loadAppSettings()
+  const next = mergeSettings(current, patch)
   next.settingsUpdatedAt = new Date().toISOString() // bump on every LOCAL edit
   persistSettings(next)
+  const disabled = (Object.keys(next.syncScope) as SyncScopeKey[]).filter(
+    (k) => current.syncScope[k] && !next.syncScope[k]
+  )
+  if (disabled.length && onSyncScopeDisabled) {
+    try {
+      onSyncScopeDisabled(disabled)
+    } catch {
+      /* a scrub failure must never fail the settings save */
+    }
+  }
   return next
 }
 

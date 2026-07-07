@@ -749,6 +749,32 @@ export async function importCall(
   })
 }
 
+/**
+ * Bump every non-deleted call's `updatedAt` so the next backup push REPLACES
+ * each cloud row (the server trigger only accepts strictly-newer rows). Used
+ * when the transcript-sync toggle turns OFF: the previously-uploaded rows
+ * carry the full transcript, and only a newer quote-free row can evict them.
+ */
+export async function touchAllCallsForRepush(dir: string): Promise<number> {
+  const calls = await listCallsForBackup(dir)
+  let touched = 0
+  for (const c of calls) {
+    if (c.deleted) continue // tombstone rows are already content-free
+    await withCallLock(c.id, async () => {
+      try {
+        const raw = JSON.parse(await fs.readFile(join(dir, `${c.id}.json`), 'utf8')) as Call
+        if (!raw || typeof raw.id !== 'string') return
+        raw.updatedAt = new Date().toISOString()
+        await writeCall(dir, raw)
+        touched++
+      } catch {
+        /* skip unreadable file */
+      }
+    })
+  }
+  return touched
+}
+
 // --- Per-call write serialization --------------------------------------------
 
 // Every mutator below is a getCall → mutate → writeCall sequence; two of them
