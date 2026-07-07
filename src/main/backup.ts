@@ -294,15 +294,15 @@ async function writeState(patch: BackupState): Promise<void> {
   await writeJsonAtomic(statePath(), next).catch(() => {})
 }
 
-/** Strip the machine-specific Google-link fields: a backed-up event is a clean
- *  local event; Google re-linking happens naturally on that machine's own sync
- *  (v1 decision — sidesteps the setEventSync cursor gap on restore). */
+/** Strip only the machine-specific sync STATE. The Google IDENTITY
+ *  (provider/externalId/googleUpdatedAt) is account-level — the same Google
+ *  event has the same ids on every machine — and carrying it lets a restore
+ *  re-link an adopted event instead of duplicating it (the old strip-everything
+ *  approach made the restored copy AND the pulled green chip both show, and
+ *  editing the copy inserted a duplicate into Google). */
 function eventPayload(e: CalendarEvent): Record<string, unknown> {
   const payload: Record<string, unknown> = { ...e }
-  delete payload.provider
-  delete payload.externalId
   delete payload.sync
-  delete payload.googleUpdatedAt
   return payload
 }
 

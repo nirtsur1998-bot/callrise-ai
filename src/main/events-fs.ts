@@ -384,11 +384,18 @@ export async function importEvent(
     return null
   }
   if (current) {
-    // Preserve THIS machine's Google link — the cloud payload never carries one.
+    // Preserve THIS machine's Google link — it's authoritative for the sync
+    // STATE (the cloud payload carries the Google identity but never state).
     event.provider = current.provider
     event.externalId = current.externalId
     event.googleUpdatedAt = current.googleUpdatedAt
     event.sync = current.sync
+  } else if (!event.deleted && event.externalId) {
+    // FRESH machine restoring a Google-linked event: adopt the account-level
+    // identity the payload carries and mark it 'synced', so (a) the pulled
+    // green chip dedupes away instead of the event showing twice, and (b) an
+    // edit here PATCHes the same Google event rather than inserting a copy.
+    event.sync = { state: 'synced' }
   }
   if (event.deleted) {
     // Still linked = there is a Google copy to remove — INCLUDING a record whose
@@ -396,7 +403,10 @@ export async function importEvent(
     // to a plain tombstone would abandon the pending Google delete and leave the
     // event alive on Google. (A prior backup tombstone has no externalId after
     // the merge, so it stays on the plain branch.)
-    const stillLinked = Boolean(event.externalId) && current?.deleted !== true
+    // Requires a CURRENT local record: on a fresh machine, a linked tombstone
+    // means the SOURCE machine already handled (or is handling) the Google
+    // delete — importing it as another pending Google delete would race it.
+    const stillLinked = Boolean(event.externalId) && !!current && current.deleted !== true
     if (stillLinked) {
       // Deleted elsewhere but linked HERE: route through the Google delete flow
       // (the M14 reconcile pass drains it), so the Google copy is removed too.
