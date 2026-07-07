@@ -20,6 +20,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
   settingsUpdatedAt: new Date(0).toISOString(),
   googleCalendarConnected: false,
+  outlookCalendarConnected: false,
   crm: {
     calendarMatchEnabled: true,
     matchSensitivity: 'normal',

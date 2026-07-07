@@ -24,6 +24,11 @@ export const ITEM_STYLES: Record<CalendarItemKind, { chip: string; block: string
     chip: 'bg-emerald-500/15 text-emerald-200',
     block: 'border-l-2 border-emerald-400 bg-emerald-500/15 text-emerald-100',
     dot: 'bg-emerald-400'
+  },
+  outlook: {
+    chip: 'bg-blue-600/15 text-blue-300',
+    block: 'border-l-2 border-blue-500 bg-blue-600/15 text-blue-200',
+    dot: 'bg-blue-500'
   }
 }
 
@@ -31,20 +36,24 @@ export const KIND_LABEL: Record<CalendarItemKind, string> = {
   event: 'Event',
   task: 'Task',
   call: 'Call',
-  google: 'Google'
+  google: 'Google',
+  outlook: 'Outlook'
 }
 
 const MIN_CALL_MINUTES = 15
 
-/** Merge manual events, due tasks, past calls, and Google events into one
- *  render-ready list. Google events are read-only overlays UNLESS two-way sync
- *  is on (`googleWritable`), in which case editing/deleting one adopts it. */
+/** Merge manual events, due tasks, past calls, and Google/Outlook events into
+ *  one render-ready list. Google/Outlook events are read-only overlays UNLESS
+ *  two-way sync is on for that provider, in which case editing/deleting one
+ *  adopts it. */
 export function buildItems(
   events: CalendarEvent[],
   tasks: Task[],
   calls: CallSummary[],
   googleEvents: CalendarEvent[] = [],
-  googleWritable = false
+  googleWritable = false,
+  outlookEvents: CalendarEvent[] = [],
+  outlookWritable = false
 ): CalendarItem[] {
   const items: CalendarItem[] = []
 
@@ -61,33 +70,51 @@ export function buildItems(
     })
   }
 
-  // Events we pushed to Google get pulled back by the read-only sync. Drop any
-  // pulled copy that matches a local event's Google link, so a two-way-synced
-  // event shows ONCE (as the editable local copy), never twice. A JSON-tuple key
-  // is collision-proof (structure is encoded), and keeps this file plain text.
+  // Events we pushed to Google/Outlook get pulled back by the read-only sync.
+  // Drop any pulled copy that matches a local event's remote link, so a
+  // two-way-synced event shows ONCE (as the editable local copy), never
+  // twice. A JSON-tuple key is collision-proof (structure is encoded), and
+  // keeps this file plain text.
   const linkedKeys = new Set<string>()
   for (const e of events) {
     if (e.provider && e.externalId) linkedKeys.add(JSON.stringify([e.provider, e.externalId]))
   }
 
-  for (const g of googleEvents) {
-    if (g.provider && g.externalId && linkedKeys.has(JSON.stringify([g.provider, g.externalId])))
-      continue
-    // Editable when two-way sync is on AND the event lives on a WRITABLE calendar
-    // (owner/writer). The dialog now handles all-day + multi-day, so any writable
-    // Google event can be edited; read-only calendars (holidays, subscribed) stay
-    // read-only green chips.
-    const editable = googleWritable && g.writable === true
-    items.push({
-      key: `google-${g.id}`,
-      kind: 'google',
-      title: g.title,
-      start: new Date(g.start),
-      end: new Date(g.end),
-      allDay: g.allDay,
-      event: editable ? g : undefined,
-      subtitle: 'Google Calendar'
-    })
+  const externalOverlays: {
+    list: CalendarEvent[]
+    kind: 'google' | 'outlook'
+    writable: boolean
+    subtitle: string
+  }[] = [
+    { list: googleEvents, kind: 'google', writable: googleWritable, subtitle: 'Google Calendar' },
+    {
+      list: outlookEvents,
+      kind: 'outlook',
+      writable: outlookWritable,
+      subtitle: 'Outlook Calendar'
+    }
+  ]
+
+  for (const overlay of externalOverlays) {
+    for (const g of overlay.list) {
+      if (g.provider && g.externalId && linkedKeys.has(JSON.stringify([g.provider, g.externalId])))
+        continue
+      // Editable when two-way sync is on for THIS provider AND the event lives
+      // on a WRITABLE calendar (owner/writer). The dialog handles all-day +
+      // multi-day, so any writable event can be edited; read-only calendars
+      // (holidays, subscribed) stay read-only chips.
+      const editable = overlay.writable && g.writable === true
+      items.push({
+        key: `${overlay.kind}-${g.id}`,
+        kind: overlay.kind,
+        title: g.title,
+        start: new Date(g.start),
+        end: new Date(g.end),
+        allDay: g.allDay,
+        event: editable ? g : undefined,
+        subtitle: overlay.subtitle
+      })
+    }
   }
 
   for (const t of tasks) {

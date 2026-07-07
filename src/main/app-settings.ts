@@ -96,6 +96,8 @@ export interface AppSettings {
    *  Google Calendar" nudge on a fresh device instead of syncing the actual
    *  OAuth refresh token to the cloud. */
   googleCalendarConnected: boolean
+  /** Same non-secret marker as googleCalendarConnected, for Outlook Calendar. */
+  outlookCalendarConnected: boolean
   /** CRM Phase 1 — calendar-match sensitivity/kill-switch, default country,
    *  and auto-numbered customer IDs. */
   crm: CrmSettings
@@ -112,6 +114,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   syncScope: EMPTY_SYNC_SCOPE,
   settingsUpdatedAt: EPOCH,
   googleCalendarConnected: false,
+  outlookCalendarConnected: false,
   crm: EMPTY_CRM_SETTINGS,
   objectionMining: EMPTY_OBJECTION_MINING
 }
@@ -170,6 +173,7 @@ export function loadAppSettings(): AppSettings {
           ? parsed.settingsUpdatedAt
           : EPOCH,
       googleCalendarConnected: parsed.googleCalendarConnected === true,
+      outlookCalendarConnected: parsed.outlookCalendarConnected === true,
       crm: sanitizeCrmSettings(parsed.crm),
       objectionMining: sanitizeObjectionMining(parsed.objectionMining)
     }
@@ -199,6 +203,10 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
       'googleCalendarConnected' in p
         ? p.googleCalendarConnected === true
         : current.googleCalendarConnected,
+    outlookCalendarConnected:
+      'outlookCalendarConnected' in p
+        ? p.outlookCalendarConnected === true
+        : current.outlookCalendarConnected,
     crm: mergeCrmSettings(current.crm, p.crm),
     objectionMining: mergeObjectionMining(current.objectionMining, p.objectionMining)
   }

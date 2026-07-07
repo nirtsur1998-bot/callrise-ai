@@ -136,6 +136,15 @@ const api = {
     pullEvents: () => ipcRenderer.invoke('google:pullEvents'),
     cachedEvents: () => ipcRenderer.invoke('google:cachedEvents')
   },
+  outlook: {
+    getStatus: () => ipcRenderer.invoke('outlook:getStatus'),
+    connect: () => ipcRenderer.invoke('outlook:connect'),
+    connectWrite: () => ipcRenderer.invoke('outlook:connectWrite'),
+    disconnect: () => ipcRenderer.invoke('outlook:disconnect'),
+    listCalendars: () => ipcRenderer.invoke('outlook:listCalendars'),
+    pullEvents: () => ipcRenderer.invoke('outlook:pullEvents'),
+    cachedEvents: () => ipcRenderer.invoke('outlook:cachedEvents')
+  },
   virtualmic: {
     // App-managed noise cancellation: detect + start/stop the denoiser helper.
     getStatus: () => ipcRenderer.invoke('virtualmic:getStatus'),

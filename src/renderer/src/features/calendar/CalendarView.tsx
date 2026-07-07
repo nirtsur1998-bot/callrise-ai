@@ -14,6 +14,7 @@ import { ChevronLeft, ChevronRight, Plus, CalendarDays } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { useCalendar } from './useCalendar'
 import { GoogleConnect } from '@renderer/features/google/GoogleConnect'
+import { OutlookConnect } from '@renderer/features/outlook/OutlookConnect'
 import { MonthGrid } from './MonthGrid'
 import { WeekGrid } from './WeekGrid'
 import { EventDialog } from './EventDialog'
@@ -33,7 +34,7 @@ interface DialogState {
   mode: 'new' | 'edit'
   draft: EventDraft
   eventId?: string
-  /** The source event being edited — used to route Google events to adopt. */
+  /** The source event being edited — used to route Google/Outlook events to adopt. */
   event?: CalendarEvent
 }
 
@@ -56,20 +57,34 @@ export function CalendarView(): React.JSX.Element {
     googleLastSynced,
     loading,
     googleWritable,
+    outlookEvents,
+    outlookSyncing,
+    outlookLastSynced,
+    outlookWritable,
     createEvent,
     updateEvent,
     deleteEvent,
     adoptEvent,
     deleteExternalEvent,
-    refreshGoogle
+    refreshGoogle,
+    refreshOutlook
   } = useCalendar()
   const [view, setView] = useState<View>('month')
   const [cursor, setCursor] = useState<Date>(() => new Date())
   const [dialog, setDialog] = useState<DialogState | null>(null)
 
   const items = useMemo(
-    () => buildItems(events, tasks, calls, googleEvents, googleWritable),
-    [events, tasks, calls, googleEvents, googleWritable]
+    () =>
+      buildItems(
+        events,
+        tasks,
+        calls,
+        googleEvents,
+        googleWritable,
+        outlookEvents,
+        outlookWritable
+      ),
+    [events, tasks, calls, googleEvents, googleWritable, outlookEvents, outlookWritable]
   )
 
   const goPrev = (): void => setCursor((c) => (view === 'month' ? subMonths(c, 1) : subWeeks(c, 1)))
@@ -87,16 +102,18 @@ export function CalendarView(): React.JSX.Element {
   const submitDialog = async (draft: EventDraft): Promise<void> => {
     if (!dialog) return
     const input = draftToInput(draft)
-    // A Google-origin event is adopted (a linked local copy) so the edit PATCHes
-    // the same Google event; local events edit/create normally.
-    if (dialog.event?.source === 'google') await adoptEvent(dialog.event, input)
+    // A Google/Outlook-origin event is adopted (a linked local copy) so the
+    // edit PATCHes the same remote event; local events edit/create normally.
+    if (dialog.event?.source === 'google' || dialog.event?.source === 'outlook')
+      await adoptEvent(dialog.event, input)
     else if (dialog.mode === 'edit' && dialog.eventId) await updateEvent(dialog.eventId, input)
     else await createEvent(input)
     setDialog(null)
   }
 
   const deleteDialog = async (): Promise<void> => {
-    if (dialog?.event?.source === 'google') await deleteExternalEvent(dialog.event)
+    if (dialog?.event?.source === 'google' || dialog?.event?.source === 'outlook')
+      await deleteExternalEvent(dialog.event)
     else if (dialog?.eventId) await deleteEvent(dialog.eventId)
     setDialog(null)
   }
@@ -169,6 +186,12 @@ export function CalendarView(): React.JSX.Element {
         syncing={googleSyncing}
         lastSynced={googleLastSynced}
       />
+      {/* Outlook Calendar connection (M15), same shape as Google's */}
+      <OutlookConnect
+        onChange={() => void refreshOutlook()}
+        syncing={outlookSyncing}
+        lastSynced={outlookLastSynced}
+      />
 
       {items.length === 0 && !loading && (
         <p className="mb-3 flex items-center gap-2 text-[13px] text-faint">
@@ -214,13 +237,13 @@ export function CalendarView(): React.JSX.Element {
 }
 
 function Legend(): React.JSX.Element {
-  const kinds: CalendarItemKind[] = ['event', 'task', 'call', 'google']
+  const kinds: CalendarItemKind[] = ['event', 'task', 'call', 'google', 'outlook']
   return (
     <div className="hidden items-center gap-3 text-[11px] text-faint sm:flex">
       {kinds.map((k) => (
         <span key={k} className="flex items-center gap-1.5">
           <span className={cn('h-2 w-2 rounded-full', ITEM_STYLES[k].dot)} />
-          {k === 'google' ? 'Google' : `${KIND_LABEL[k]}s`}
+          {k === 'google' || k === 'outlook' ? KIND_LABEL[k] : `${KIND_LABEL[k]}s`}
         </span>
       ))}
     </div>

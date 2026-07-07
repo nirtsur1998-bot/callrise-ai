@@ -12,12 +12,12 @@ import {
   type EventUpdateInput
 } from './events-fs'
 import {
-  isGoogleSyncEnabled,
+  isAnySyncEnabled,
   pushInsertEvent,
   pushUpdateEvent,
   pushDeleteEvent,
   dropCachedEvent
-} from './google'
+} from './calendar-sync'
 import { scheduleBackup } from './backup'
 
 function eventsDir(): string {
@@ -93,7 +93,7 @@ async function recordPushResult(
       await setEventSync(eventsDir(), id, {
         provider: res.provider,
         externalId: res.externalId,
-        googleUpdatedAt: res.googleUpdatedAt,
+        remoteUpdatedAt: res.remoteUpdatedAt,
         sync: { state: 'synced', lastPushedAt: new Date().toISOString() }
       })
     } else {
@@ -116,7 +116,7 @@ async function syncPush(id: string): Promise<boolean> {
     const event = await getEvent(eventsDir(), id)
     if (!event) return false
 
-    if (!(await isGoogleSyncEnabled())) {
+    if (!(await isAnySyncEnabled())) {
       // Sync off: only stamp a brand-new event as local-only.
       if (!event.sync)
         await withState(id, () => setEventSync(eventsDir(), id, { sync: { state: 'local-only' } }))
@@ -187,7 +187,7 @@ function schedulePush(id: string): void {
 // serialized with any concurrent user action on the same event.
 let reconciling = false
 async function reconcile(): Promise<void> {
-  if (reconciling || !(await isGoogleSyncEnabled())) return
+  if (reconciling || !(await isAnySyncEnabled())) return
   reconciling = true
   let changed = false
   try {
@@ -236,7 +236,7 @@ export function registerEvents(): void {
     if (!event) return { ok: false }
     // Sync off → nothing in Google to remove; backup-tombstone now
     // (kept, not erased, so the deletion propagates to the cloud mirror).
-    if (!(await isGoogleSyncEnabled())) {
+    if (!(await isAnySyncEnabled())) {
       const res = await withState(id, () => markEventDeleted(eventsDir(), id))
       scheduleBackup()
       return res
@@ -299,7 +299,7 @@ export function registerEvents(): void {
   // Delete a Google event from the app: materialize a tombstone linked to it,
   // then push the delete (with offline retry) — reusing the linked-delete path.
   ipcMain.handle('events:deleteExternal', async (_e, link: EventCreateInput) => {
-    if (!link?.externalId || !(await isGoogleSyncEnabled())) return { ok: false }
+    if (!link?.externalId || !(await isAnySyncEnabled())) return { ok: false }
     const event = await createEvent(eventsDir(), link)
     await withState(event.id, () =>
       setEventSync(eventsDir(), event.id, {

@@ -17,16 +17,25 @@ export interface UseCalendar {
   googleLastSynced: number | null
   /** True when two-way sync is on, so Google events can be edited/deleted. */
   googleWritable: boolean
+  outlookEvents: CalendarEvent[]
+  /** True while an Outlook network pull is in flight. */
+  outlookSyncing: boolean
+  /** When the last successful Outlook pull finished (epoch ms), or null. */
+  outlookLastSynced: number | null
+  /** True when two-way sync is on, so Outlook events can be edited/deleted. */
+  outlookWritable: boolean
   loading: boolean
   createEvent: (input: EventCreateInput) => Promise<void>
   updateEvent: (id: string, patch: EventUpdateInput) => Promise<void>
   deleteEvent: (id: string) => Promise<void>
-  /** Edit a Google event by adopting it into the local (editable) store. */
+  /** Edit a Google/Outlook event by adopting it into the local (editable) store. */
   adoptEvent: (event: CalendarEvent, patch: EventUpdateInput) => Promise<void>
-  /** Delete a Google-originated event from the app and from Google. */
+  /** Delete a Google/Outlook-originated event from the app and from the provider. */
   deleteExternalEvent: (event: CalendarEvent) => Promise<void>
   /** Re-pull Google events from the network (used on connect/refresh). */
   refreshGoogle: () => Promise<void>
+  /** Re-pull Outlook events from the network (used on connect/refresh). */
+  refreshOutlook: () => Promise<void>
 }
 
 export function useCalendar(): UseCalendar {
@@ -37,6 +46,10 @@ export function useCalendar(): UseCalendar {
   const [googleSyncing, setGoogleSyncing] = useState(false)
   const [googleLastSynced, setGoogleLastSynced] = useState<number | null>(null)
   const [googleWritable, setGoogleWritable] = useState(false)
+  const [outlookEvents, setOutlookEvents] = useState<CalendarEvent[]>([])
+  const [outlookSyncing, setOutlookSyncing] = useState(false)
+  const [outlookLastSynced, setOutlookLastSynced] = useState<number | null>(null)
+  const [outlookWritable, setOutlookWritable] = useState(false)
   const [loading, setLoading] = useState(true)
   const mountedRef = useRef(true)
 
@@ -51,19 +64,22 @@ export function useCalendar(): UseCalendar {
   // set after the awaits, so this is safe to call from an effect.
   const refresh = useCallback(async () => {
     try {
-      // Google events come from the local cache here (instant, no network) so
-      // they persist across local edits; refreshGoogle() re-pulls from Google.
-      const [e, t, c, g] = await Promise.all([
+      // Google/Outlook events come from the local cache here (instant, no
+      // network) so they persist across local edits; refreshGoogle()/
+      // refreshOutlook() re-pull from the network.
+      const [e, t, c, g, o] = await Promise.all([
         window.api.events.list(),
         window.api.tasks.list(),
         window.api.calls.list(),
-        window.api.google.cachedEvents()
+        window.api.google.cachedEvents(),
+        window.api.outlook.cachedEvents()
       ])
       if (!mountedRef.current) return
       setEvents(e)
       setTasks(t)
       setCalls(c)
       setGoogleEvents(g)
+      setOutlookEvents(o)
     } catch {
       /* keep the last known data */
     } finally {
@@ -97,12 +113,36 @@ export function useCalendar(): UseCalendar {
     }
   }, [])
 
+  // Same shape as refreshGoogle, aimed at Outlook.
+  const refreshOutlook = useCallback(async () => {
+    setOutlookSyncing(true)
+    try {
+      const status = await window.api.outlook.getStatus()
+      if (mountedRef.current) setOutlookWritable(status.connected && status.mode === 'readwrite')
+      const res = await window.api.outlook.pullEvents()
+      if (!mountedRef.current) return
+      if (res.ok) {
+        setOutlookEvents(res.events)
+        setOutlookLastSynced(Date.now())
+        void window.api.events.reconcile()
+      } else if (res.error === 'not-connected') {
+        setOutlookEvents([])
+        setOutlookLastSynced(null)
+      }
+    } catch {
+      /* keep the cached events */
+    } finally {
+      if (mountedRef.current) setOutlookSyncing(false)
+    }
+  }, [])
+
   useEffect(() => {
     // Load once on mount; a calendar fetch is exactly the intended pattern.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh()
     void refreshGoogle()
-  }, [refresh, refreshGoogle])
+    void refreshOutlook()
+  }, [refresh, refreshGoogle, refreshOutlook])
 
   // A background Google push (fire-and-forget) stamps the event's link after
   // the create returns; re-read local events then so the pulled copy dedups.
@@ -150,7 +190,7 @@ export function useCalendar(): UseCalendar {
         notes: patch.notes !== undefined ? patch.notes : (event.notes ?? null),
         provider: event.provider,
         externalId: event.externalId,
-        googleUpdatedAt: event.googleUpdatedAt
+        remoteUpdatedAt: event.remoteUpdatedAt
       })
       await refresh()
     },
@@ -181,12 +221,17 @@ export function useCalendar(): UseCalendar {
     googleSyncing,
     googleLastSynced,
     googleWritable,
+    outlookEvents,
+    outlookSyncing,
+    outlookLastSynced,
+    outlookWritable,
     loading,
     createEvent,
     updateEvent,
     deleteEvent,
     adoptEvent,
     deleteExternalEvent,
-    refreshGoogle
+    refreshGoogle,
+    refreshOutlook
   }
 }

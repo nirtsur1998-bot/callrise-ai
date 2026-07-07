@@ -530,14 +530,16 @@ export interface CalendarEvent {
   externalId?: string
   /** Deep-link back to the source (e.g. "Open in Google Calendar"). */
   htmlLink?: string
-  /** Google-only: true when the event's calendar allows writes (owner/writer). */
+  /** Google/Outlook-only: true when the event's calendar allows writes. */
   writable?: boolean
-  /** Google-only: other invitees (the connected account itself is excluded) —
-   *  the CRM's calendar-match signal for suggesting who a call was with. */
+  /** Google/Outlook-only: other invitees (the connected account itself is
+   *  excluded when the provider can tell) — the CRM's calendar-match signal
+   *  for suggesting who a call was with. */
   attendees?: { email: string; name?: string }[]
-  /** Google's `updated` at last sync — the echo-loop watermark (M14). */
-  googleUpdatedAt?: string
-  /** Google mirror lifecycle for local events (M14 two-way sync). */
+  /** The linked provider's own "last updated" at last sync — the echo-loop
+   *  watermark (M14). */
+  remoteUpdatedAt?: string
+  /** Google/Outlook mirror lifecycle for local events (M14 two-way sync). */
   sync?: EventSync
   createdAt: string
   updatedAt: string
@@ -551,12 +553,12 @@ export interface EventCreateInput {
   notes?: string | null
 }
 
-/** Editing/deleting a Google event carries its link so the change targets the
- *  same Google event (and the pulled copy dedups). */
+/** Editing/deleting a Google/Outlook event carries its link so the change
+ *  targets the same remote event (and the pulled copy dedups). */
 export interface AdoptEventInput extends EventCreateInput {
   provider?: string
   externalId?: string
-  googleUpdatedAt?: string
+  remoteUpdatedAt?: string
 }
 
 export interface EventUpdateInput {
@@ -661,6 +663,29 @@ export interface GoogleApi {
   /** Pull recent + upcoming events from Google into the local read-only cache. */
   pullEvents: () => Promise<{ ok: true; events: CalendarEvent[] } | { ok: false; error: string }>
   /** The last-pulled events from the local cache (instant, no network). */
+  cachedEvents: () => Promise<CalendarEvent[]>
+}
+
+export interface OutlookCalendarSummary {
+  id: string
+  summary: string
+  primary: boolean
+}
+
+/** Same shape as GoogleApi, aimed at Microsoft Graph instead. */
+export interface OutlookApi {
+  getStatus: () => Promise<{
+    connected: boolean
+    configured: boolean
+    mode: 'readonly' | 'readwrite'
+  }>
+  connect: () => Promise<{ ok: true } | { ok: false; error: string }>
+  connectWrite: () => Promise<{ ok: true } | { ok: false; error: string }>
+  disconnect: () => Promise<{ ok: boolean }>
+  listCalendars: () => Promise<
+    { ok: true; calendars: OutlookCalendarSummary[] } | { ok: false; error: string }
+  >
+  pullEvents: () => Promise<{ ok: true; events: CalendarEvent[] } | { ok: false; error: string }>
   cachedEvents: () => Promise<CalendarEvent[]>
 }
 
@@ -869,6 +894,8 @@ export interface AppSettings {
   /** Non-secret marker: has Google Calendar been connected on any device for
    *  this account? Never the OAuth token itself. */
   googleCalendarConnected: boolean
+  /** Same non-secret marker as googleCalendarConnected, for Outlook Calendar. */
+  outlookCalendarConnected: boolean
   /** CRM Phase 1 — calendar-match sensitivity/kill-switch, default country,
    *  and auto-numbered customer IDs. */
   crm: CrmSettings
@@ -884,6 +911,7 @@ export interface AppSettingsPatch {
   /** Partial — only the keys present are changed; others are left as-is. */
   syncScope?: Partial<BackupSyncScope>
   googleCalendarConnected?: boolean
+  outlookCalendarConnected?: boolean
   /** Partial — only the keys present are changed; others are left as-is. */
   crm?: Partial<CrmSettings>
   /** Partial — only the keys present are changed; others are left as-is. */
@@ -928,6 +956,7 @@ declare global {
       auth: AuthApi
       loopback: LoopbackApi
       google: GoogleApi
+      outlook: OutlookApi
       backup: BackupApi
       virtualmic: VirtualMicApi
       knowledge: KnowledgeApi

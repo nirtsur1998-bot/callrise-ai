@@ -22,6 +22,7 @@ import { registerEvents } from './events'
 import { registerLiveCue } from './live-cue'
 import { registerLoopbackCapture } from './loopback'
 import { registerGoogle } from './google'
+import { registerOutlook } from './outlook'
 import { registerBackup } from './backup'
 import { registerVirtualMic, disposeVirtualMic } from './virtualmic'
 import { registerKnowledge } from './knowledge'
@@ -119,6 +120,7 @@ app.whenReady().then(() => {
   registerLiveCue()
   registerLoopbackCapture()
   registerGoogle()
+  registerOutlook()
   registerBackup()
   registerVirtualMic()
   registerKnowledge()

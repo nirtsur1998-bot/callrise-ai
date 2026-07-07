@@ -578,13 +578,13 @@ export async function pushInsertEvent(ev: CalendarEvent, calId = 'primary'): Pro
       url: eventsUrl(calId),
       data: { id: externalId, ...toGoogleBody(ev) }
     })
-    return { ok: true, externalId, provider, googleUpdatedAt: res.data.updated }
+    return { ok: true, externalId, provider, remoteUpdatedAt: res.data.updated }
   } catch (e) {
     // 409 = this id already exists (a prior attempt succeeded before we recorded
     // the link). That's success — adopt the existing event, don't re-create.
     if (httpStatus(e) === 409) {
-      const googleUpdatedAt = await fetchEventUpdated(client, calId, externalId)
-      return { ok: true, externalId, provider, googleUpdatedAt }
+      const remoteUpdatedAt = await fetchEventUpdated(client, calId, externalId)
+      return { ok: true, externalId, provider, remoteUpdatedAt }
     }
     return classifyPushError(e)
   }
@@ -607,7 +607,7 @@ export async function pushUpdateEvent(ev: CalendarEvent): Promise<PushResult> {
       data: toGoogleBody(ev)
     })
     const provider = ev.provider ?? `google:${(await primaryCalendarId(client)) ?? 'primary'}`
-    return { ok: true, externalId: ev.externalId, provider, googleUpdatedAt: res.data.updated }
+    return { ok: true, externalId: ev.externalId, provider, remoteUpdatedAt: res.data.updated }
   } catch (e) {
     // Gone on Google's side → recreate on the SAME calendar (fresh deterministic id).
     if (httpStatus(e) === 404 || httpStatus(e) === 410) return pushInsertEvent(ev, calId)

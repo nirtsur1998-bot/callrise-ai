@@ -5,7 +5,7 @@
 import type { CalendarEvent } from './events-fs'
 
 export type PushResult =
-  | { ok: true; externalId: string; provider: string; googleUpdatedAt?: string }
+  | { ok: true; externalId: string; provider: string; remoteUpdatedAt?: string }
   | { ok: false; error: string; retryable: boolean }
 
 export type DeleteResult = { ok: true } | { ok: false; error: string; retryable: boolean }

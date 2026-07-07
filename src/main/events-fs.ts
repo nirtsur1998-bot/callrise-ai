@@ -32,11 +32,13 @@ export interface CalendarEvent {
   end: string // ISO datetime (always > start)
   allDay: boolean
   notes?: string
-  source: 'local' // later: 'google' | 'outlook'
-  provider?: string // linked Google calendar, e.g. 'google:you@gmail.com'
-  externalId?: string // the linked Google event id
-  /** Google's `updated` timestamp at last sync — the echo-loop watermark (M14 step D). */
-  googleUpdatedAt?: string
+  source: 'local' // stays 'local' even once mirrored — see provider/externalId below
+  provider?: string // linked calendar, e.g. 'google:you@gmail.com' or 'outlook:AAMk...'
+  externalId?: string // the linked Google/Outlook event id
+  /** The provider's own "last updated" timestamp at last sync — the echo-loop
+   *  watermark (M14 step D). Whichever ONE provider this event is linked to
+   *  (never both at once). */
+  remoteUpdatedAt?: string
   sync?: EventSync // omitted = never synced (treated as local-only)
   /** Backup tombstone: a deleted event is kept (not erased) so the deletion can
    *  propagate to the cloud mirror. Distinct from sync.state='deleted', which is
@@ -57,7 +59,7 @@ export interface EventCreateInput {
   notes?: unknown
   provider?: unknown
   externalId?: unknown
-  googleUpdatedAt?: unknown
+  remoteUpdatedAt?: unknown
 }
 
 /** Fields the renderer may change (any absent key is left untouched). */
@@ -160,7 +162,7 @@ function sanitizeEventRecord(value: unknown): CalendarEvent | null {
     source: 'local',
     provider: typeof v.provider === 'string' ? v.provider.slice(0, 200) : undefined,
     externalId: typeof v.externalId === 'string' ? v.externalId.slice(0, 200) : undefined,
-    googleUpdatedAt: toIso(v.googleUpdatedAt) ?? undefined,
+    remoteUpdatedAt: toIso(v.remoteUpdatedAt) ?? undefined,
     sync: sanitizeSync(v.sync),
     deleted: v.deleted === true ? true : undefined, // preserve the tombstone flag
     createdAt,
@@ -188,7 +190,7 @@ export async function createEvent(dir: string, input: EventCreateInput): Promise
     // PATCH the same Google event and dedups the pulled copy.
     provider: sanitizeLinkField(input?.provider),
     externalId: sanitizeLinkField(input?.externalId),
-    googleUpdatedAt: toIso(input?.googleUpdatedAt) ?? undefined,
+    remoteUpdatedAt: toIso(input?.remoteUpdatedAt) ?? undefined,
     createdAt: now,
     updatedAt: now
   }
@@ -302,7 +304,7 @@ export async function setEventSync(
   link: {
     provider?: string
     externalId?: string
-    googleUpdatedAt?: string
+    remoteUpdatedAt?: string
     sync: EventSync
     bumpUpdatedAt?: boolean
   }
@@ -311,7 +313,7 @@ export async function setEventSync(
   if (!event) return null
   if (link.provider !== undefined) event.provider = link.provider
   if (link.externalId !== undefined) event.externalId = link.externalId
-  if (link.googleUpdatedAt !== undefined) event.googleUpdatedAt = link.googleUpdatedAt
+  if (link.remoteUpdatedAt !== undefined) event.remoteUpdatedAt = link.remoteUpdatedAt
   event.sync = link.sync
   if (link.bumpUpdatedAt) event.updatedAt = new Date().toISOString()
   try {
@@ -340,7 +342,7 @@ export async function markEventDeleted(
   event.updatedAt = toIso(opts?.updatedAt) ?? new Date().toISOString()
   event.provider = undefined
   event.externalId = undefined
-  event.googleUpdatedAt = undefined
+  event.remoteUpdatedAt = undefined
   event.sync = undefined
   try {
     await writeEvent(dir, event)
@@ -388,7 +390,7 @@ export async function importEvent(
     // STATE (the cloud payload carries the Google identity but never state).
     event.provider = current.provider
     event.externalId = current.externalId
-    event.googleUpdatedAt = current.googleUpdatedAt
+    event.remoteUpdatedAt = current.remoteUpdatedAt
     event.sync = current.sync
   } else if (!event.deleted && event.externalId) {
     // FRESH machine restoring a Google-linked event: adopt the account-level
@@ -416,7 +418,7 @@ export async function importEvent(
       // Plain backup tombstone — mirror markEventDeleted's shape.
       event.provider = undefined
       event.externalId = undefined
-      event.googleUpdatedAt = undefined
+      event.remoteUpdatedAt = undefined
       event.sync = undefined
     }
   } else if (current && current.sync?.state === 'deleted') {

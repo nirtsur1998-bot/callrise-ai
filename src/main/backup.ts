@@ -310,12 +310,12 @@ async function writeState(patch: BackupState): Promise<void> {
   await writeJsonAtomic(statePath(), next).catch(() => {})
 }
 
-/** Strip only the machine-specific sync STATE. The Google IDENTITY
- *  (provider/externalId/googleUpdatedAt) is account-level — the same Google
+/** Strip only the machine-specific sync STATE. The Google/Outlook IDENTITY
+ *  (provider/externalId/remoteUpdatedAt) is account-level — the same remote
  *  event has the same ids on every machine — and carrying it lets a restore
  *  re-link an adopted event instead of duplicating it (the old strip-everything
- *  approach made the restored copy AND the pulled green chip both show, and
- *  editing the copy inserted a duplicate into Google). */
+ *  approach made the restored copy AND the pulled chip both show, and editing
+ *  the copy inserted a duplicate on the remote calendar). */
 function eventPayload(e: CalendarEvent): Record<string, unknown> {
   const payload: Record<string, unknown> = { ...e }
   delete payload.sync
@@ -455,7 +455,8 @@ export async function pushAll(): Promise<BackupResult> {
 
     // Tombstones are included so DELETIONS propagate: tasks carry `deleted`;
     // events count as deleted when backup-tombstoned OR still in the transient
-    // Google-delete state. The Google read-cache is a separate store, never here.
+    // remote-delete state. The Google/Outlook read-caches are separate stores,
+    // never here.
     const tasks = await listTasks(tasksDir(), { includeDeleted: true })
     const events = (await listEvents(eventsDir(), { includeDeleted: true })).filter(
       (e) => e.source === 'local'

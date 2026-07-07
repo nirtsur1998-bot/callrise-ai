@@ -15,19 +15,21 @@ export interface CalendarEvent {
   provider?: string
   externalId?: string
   htmlLink?: string
-  /** Google-only: true when the event's calendar allows writes (owner/writer). */
+  /** Google/Outlook-only: true when the event's calendar allows writes. */
   writable?: boolean
-  /** Google-only: other invitees (the connected account itself is excluded) —
-   *  the CRM's calendar-match signal for suggesting who a call was with. */
+  /** Google/Outlook-only: other invitees (the connected account itself is
+   *  excluded when the provider can tell) — the CRM's calendar-match signal
+   *  for suggesting who a call was with. */
   attendees?: { email: string; name?: string }[]
-  googleUpdatedAt?: string
+  remoteUpdatedAt?: string
   sync?: { state: EventSyncState; lastPushedAt?: string; lastError?: string }
   createdAt: string
   updatedAt: string
 }
 
-/** What can appear on the calendar. Google events are read-only overlays. */
-export type CalendarItemKind = 'event' | 'task' | 'call' | 'google'
+/** What can appear on the calendar. Google/Outlook events are read-only
+ *  overlays unless two-way sync makes them editable. */
+export type CalendarItemKind = 'event' | 'task' | 'call' | 'google' | 'outlook'
 
 /**
  * A unified, render-ready item. Manual events are editable; tasks (on their
