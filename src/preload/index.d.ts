@@ -899,6 +899,11 @@ export interface AppControlApi {
    *  (permission not granted, unsupported platform, or a detection failure —
    *  always fail-open, never block auto-start on this being null). */
   getActiveApp: () => Promise<string | null>
+  /** The app the rep was using BEFORE switching into this one (sampled while
+   *  our window is unfocused) — the value the auto-start exclusion check
+   *  needs, since the frontmost app at check time is always this app itself.
+   *  Null until anything was observed; same fail-open rule as getActiveApp. */
+  getLastExternalApp: () => Promise<string | null>
   /** Deep-link to the macOS Accessibility settings pane active-win needs. */
   openAccessibilitySettings: () => Promise<{ ok: boolean }>
 }

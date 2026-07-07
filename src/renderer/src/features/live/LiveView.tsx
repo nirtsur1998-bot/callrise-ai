@@ -108,12 +108,14 @@ export function LiveView({ onSaved }: LiveViewProps): React.JSX.Element {
     if (!autoStartListening || status !== 'idle' || autoStartedRef.current) return
     autoStartedRef.current = true
     void (async () => {
-      // Foreground-app exclusion check is best-effort: any detection failure
-      // (permission not granted, unsupported platform) fails OPEN — auto-start
-      // proceeds rather than silently never starting.
-      const activeApp = await window.api.app.getActiveApp().catch(() => null)
-      if (activeApp) addSeenApp(activeApp)
-      if (activeApp && getExcludedApps().includes(activeApp)) return
+      // Exclusion checks the app the rep was using BEFORE switching here —
+      // the frontmost app right now is always this app itself (the user just
+      // clicked into it), which made the excluded list match nothing. Still
+      // best-effort: any detection failure fails OPEN — auto-start proceeds
+      // rather than silently never starting.
+      const previousApp = await window.api.app.getLastExternalApp().catch(() => null)
+      if (previousApp) addSeenApp(previousApp)
+      if (previousApp && getExcludedApps().includes(previousApp)) return
       start()
     })()
   }, [autoStartListening, status, start])

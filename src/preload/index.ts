@@ -164,6 +164,7 @@ const api = {
     getLaunchAtLogin: () => ipcRenderer.invoke('app:getLaunchAtLogin'),
     setLaunchAtLogin: (value: boolean) => ipcRenderer.invoke('app:setLaunchAtLogin', value),
     getActiveApp: () => ipcRenderer.invoke('app:getActiveApp'),
+    getLastExternalApp: () => ipcRenderer.invoke('app:getLastExternalApp'),
     openAccessibilitySettings: () => ipcRenderer.invoke('app:openAccessibilitySettings')
   }
 }
