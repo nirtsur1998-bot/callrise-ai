@@ -1,15 +1,24 @@
 import { config as loadEnv } from 'dotenv'
-loadEnv()
-
 import { app, shell, BrowserWindow, session } from 'electron'
-import { join } from 'path'
+import { join, dirname } from 'path'
+import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 
 // Renamed "Sales OS" -> "CallRise AI" (rebrand), but the on-disk data folder
 // keeps its original name so existing calls/tasks/settings/consent/Google
 // tokens aren't orphaned by the rename. Must run before app is ready.
 app.setName('CallRise AI')
-app.setPath('userData', join(app.getPath('appData'), 'sales-os'))
+const userDataDir = join(app.getPath('appData'), 'sales-os')
+app.setPath('userData', userDataDir)
+
+// Dev reads the project's .env from the working directory. A packaged app has
+// no project folder (and its working directory is arbitrary), so also look
+// next to the executable and in the app's data folder — installs get their
+// keys by dropping a .env in either place.
+const envPaths = ['.env', join(dirname(process.execPath), '.env'), join(userDataDir, '.env')].filter(
+  (p) => existsSync(p)
+)
+if (envPaths.length > 0) loadEnv({ path: envPaths })
 import icon from '../../resources/icon.png?asset'
 import { registerTranscription, disposeTranscription } from './transcription'
 import { registerCalls } from './calls'
