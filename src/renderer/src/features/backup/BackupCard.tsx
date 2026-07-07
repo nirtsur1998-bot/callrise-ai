@@ -66,7 +66,7 @@ const OPTIONAL_ITEMS: { key: SyncScopeKey; icon: typeof ListChecks; label: strin
     icon: SlidersHorizontal,
     label: 'App settings & personalization'
   },
-  { key: 'contacts', icon: Contact, label: 'Contacts' }
+  { key: 'contacts', icon: Contact, label: 'Contacts & deals' }
 ]
 
 /**

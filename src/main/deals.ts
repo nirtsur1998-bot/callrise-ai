@@ -14,6 +14,7 @@ import {
 import { loadDealStages } from './deal-stages'
 import { listCalls, getCall } from './calls-fs'
 import { assessDealRisk, type DealRiskResult, type DealRiskCallInput } from './deal-risk'
+import { scheduleBackup } from './backup'
 
 function dealsDir(): string {
   return join(app.getPath('userData'), 'deals')
@@ -59,18 +60,26 @@ export function registerDeals(): void {
   registered = true
 
   ipcMain.handle('deals:list', (): Promise<Deal[]> => listDeals(dealsDir()))
-  ipcMain.handle('deals:create', (_event, input: DealCreateInput) =>
-    createDeal(dealsDir(), { ...input, stageId: resolveStageId(input?.stageId) })
-  )
-  ipcMain.handle('deals:update', (_event, id: string, patch: DealUpdateInput) => {
+  ipcMain.handle('deals:create', async (_event, input: DealCreateInput) => {
+    const deal = await createDeal(dealsDir(), { ...input, stageId: resolveStageId(input?.stageId) })
+    if (deal) scheduleBackup() // deals sync with the Contacts & deals toggle
+    return deal
+  })
+  ipcMain.handle('deals:update', async (_event, id: string, patch: DealUpdateInput) => {
     // `'stageId' in patch` throws on a null/primitive patch — return null like
     // every other malformed input instead of an internal TypeError.
     if (!patch || typeof patch !== 'object') return null
     const resolved: DealUpdateInput =
       'stageId' in patch ? { ...patch, stageId: resolveStageId(patch.stageId) } : patch
-    return updateDeal(dealsDir(), id, resolved)
+    const deal = await updateDeal(dealsDir(), id, resolved)
+    if (deal) scheduleBackup()
+    return deal
   })
-  ipcMain.handle('deals:delete', (_event, id: string) => deleteDeal(dealsDir(), id))
+  ipcMain.handle('deals:delete', async (_event, id: string) => {
+    const res = await deleteDeal(dealsDir(), id)
+    if (res.ok) scheduleBackup() // propagate the tombstone
+    return res
+  })
 
   // Phase 5 Step 1: manual, per-deal AI risk assessment — never automatic.
   ipcMain.handle('deals:assessRisk', async (_event, dealId: string): Promise<DealRiskResult> => {

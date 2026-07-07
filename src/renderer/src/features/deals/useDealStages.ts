@@ -39,6 +39,12 @@ export function useDealStages(): UseDealStages {
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    // A cloud restore can replace the stage list in the background — re-read
+    // so the pipeline columns reflect it.
+    return window.api.backup.onChanged(() => void refresh())
+  }, [refresh])
+
   const save = useCallback(
     async (next: DealStage[]) => {
       const result = await window.api.dealStages.set(next)

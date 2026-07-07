@@ -12,13 +12,7 @@ const MIN_QUOTE_CHARS = 6
 const REQUEST_TIMEOUT_MS = 60_000
 const MAX_CANDIDATES = 8
 
-export type MinedObjectionType =
-  | 'price'
-  | 'timing'
-  | 'competitor'
-  | 'approval'
-  | 'trust'
-  | 'other'
+export type MinedObjectionType = 'price' | 'timing' | 'competitor' | 'approval' | 'trust' | 'other'
 
 /** One mined objection→response pair. This is a SUGGESTION, not a fact —
  *  `recoveredWell`/`judgmentNote` are the model's best read of the
@@ -64,7 +58,7 @@ const MINE_TOOL: Anthropic.Tool = {
       candidates: {
         type: 'array',
         description:
-          'Every distinct buyer objection you can find (price, timing, competitor, needing approval, trust/skepticism, or other), each with the rep\'s response.',
+          "Every distinct buyer objection you can find (price, timing, competitor, needing approval, trust/skepticism, or other), each with the rep's response.",
         items: {
           type: 'object',
           properties: {
@@ -133,7 +127,9 @@ function normalize(s: string): string {
  *  into turns, then require the quote appear within a single turn spoken by
  *  the claimed speaker — anti-hallucination grounding. Exported so the
  *  enqueue IPC handler can re-verify renderer-sent candidates in main. */
-export function makeVerifier(segments: CallSegment[]): (quote: unknown, speaker: unknown) => boolean {
+export function makeVerifier(
+  segments: CallSegment[]
+): (quote: unknown, speaker: unknown) => boolean {
   const turns: { speaker: number; text: string }[] = []
   for (const s of segments) {
     const last = turns[turns.length - 1]
@@ -198,9 +194,10 @@ function assembleCandidates(
     if (!objectionVerified || !responseVerified) continue
 
     out.push({
-      type: typeof cc.type === 'string' && TYPES.has(cc.type as MinedObjectionType)
-        ? (cc.type as MinedObjectionType)
-        : 'other',
+      type:
+        typeof cc.type === 'string' && TYPES.has(cc.type as MinedObjectionType)
+          ? (cc.type as MinedObjectionType)
+          : 'other',
       objectionQuote,
       objectionSpeaker,
       objectionVerified,

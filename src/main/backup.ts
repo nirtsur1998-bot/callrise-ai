@@ -26,6 +26,8 @@ import {
 } from './calls-fs'
 import { listEntries, importEntry, type KnowledgeEntry } from './knowledge-fs'
 import { listContacts, importContact, type Contact } from './contacts-fs'
+import { listDeals, importDeal, type Deal } from './deals-fs'
+import { loadDealStagesMeta, applyPulledDealStages } from './deal-stages'
 import { loadAppSettings, applyPulledSettings } from './app-settings'
 import { writeJsonAtomic } from './atomic-write'
 import { reconcileStore, ts, type CloudRow } from './backup-core'
@@ -44,6 +46,9 @@ function knowledgeDir(): string {
 }
 function contactsDir(): string {
   return join(app.getPath('userData'), 'contacts')
+}
+function dealsDir(): string {
+  return join(app.getPath('userData'), 'deals')
 }
 function statePath(): string {
   return join(app.getPath('userData'), 'backup-state.json')
@@ -349,6 +354,37 @@ export async function pushAll(): Promise<BackupResult> {
       } catch (err) {
         console.error('[backup] contacts push failed:', err)
       }
+      // Deals travel with contacts (same toggle) — a restored contact list
+      // without its deals is half a CRM. Same isolation discipline: a missing
+      // backup_deals table must never fail the rest of the push.
+      try {
+        const deals = await listDeals(dealsDir(), { includeDeleted: true })
+        const dealRows: BackupRow[] = deals.map((d: Deal) => ({
+          id: d.id,
+          user_id: userId,
+          updated_at: d.updatedAt,
+          deleted: d.deleted === true,
+          payload: d
+        }))
+        await upsertRows(client, 'backup_deals', dealRows)
+      } catch (err) {
+        console.error('[backup] deals push failed:', err)
+      }
+      // The stage list the deals point into — single row per user, like
+      // backup_settings. Without it, restored deals on a new machine land in
+      // the "No stage" column whenever custom stages were used.
+      try {
+        const { stages, updatedAt } = loadDealStagesMeta()
+        const { error } = await client
+          .from('backup_deal_stages')
+          .upsert(
+            { user_id: userId, updated_at: updatedAt, payload: { stages } },
+            { onConflict: 'user_id' }
+          )
+        if (error) throw new Error(error.message)
+      } catch (err) {
+        console.error('[backup] deal-stages push failed:', err)
+      }
     }
 
     await writeState({
@@ -459,6 +495,8 @@ export async function pullAll(): Promise<RestoreResult> {
       importEntry(dir, p, { onlyIfNewer: true })
     const guardedImportContact = (dir: string, p: unknown): ReturnType<typeof importContact> =>
       importContact(dir, p, { onlyIfNewer: true })
+    const guardedImportDeal = (dir: string, p: unknown): ReturnType<typeof importDeal> =>
+      importDeal(dir, p, { onlyIfNewer: true })
 
     const taskRows = await fetchAllRows(client, 'backup_tasks', userId)
     const taskMap = new Map(
@@ -564,6 +602,39 @@ export async function pullAll(): Promise<RestoreResult> {
         if (contactsChanged > 0) notifyDataChanged() // Contacts refresh
       } catch (err) {
         console.error('[backup] contacts pull failed:', err)
+      }
+      // Stage list BEFORE deals, so restored deals point at stages that exist.
+      try {
+        const { data, error } = await client
+          .from('backup_deal_stages')
+          .select('updated_at,payload')
+          .eq('user_id', userId)
+          .maybeSingle()
+        if (error) throw new Error(error.message)
+        const local = loadDealStagesMeta()
+        if (data && ts(data.updated_at) > ts(local.updatedAt)) {
+          const payload = data.payload as { stages?: unknown } | null
+          applyPulledDealStages(payload?.stages, String(data.updated_at))
+          notifyDataChanged() // pipeline board re-reads its columns
+        }
+      } catch (err) {
+        console.error('[backup] deal-stages pull failed:', err)
+      }
+      try {
+        const dealRows = await fetchAllRows(client, 'backup_deals', userId)
+        const dealMap = new Map(
+          (await listDeals(dealsDir(), { includeDeleted: true })).map((d) => [d.id, d])
+        )
+        const dealsChanged = await reconcileStore(
+          dealsDir(),
+          dealRows,
+          dealMap,
+          guardedImportDeal,
+          lastSyncAt
+        )
+        if (dealsChanged > 0) notifyDataChanged() // Deals refresh
+      } catch (err) {
+        console.error('[backup] deals pull failed:', err)
       }
     }
 

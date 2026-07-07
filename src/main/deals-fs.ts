@@ -273,6 +273,41 @@ export async function getDeal(dir: string, id: string): Promise<Deal | null> {
   }
 }
 
+/**
+ * ID-PRESERVING importer for cloud-backup restore, mirroring importContact in
+ * contacts-fs.ts. Keeps the original id (idempotent re-pulls), re-sanitizes
+ * fully (a tampered cloud payload can't plant an unsafe id/path or malformed
+ * fields), runs under the per-deal lock, and — with `onlyIfNewer` — re-reads
+ * the CURRENT on-disk record at write time so a local edit/delete landing
+ * mid-restore can't be clobbered.
+ */
+export async function importDeal(
+  dir: string,
+  payload: unknown,
+  opts?: { onlyIfNewer?: boolean }
+): Promise<Deal | null> {
+  const deal = sanitizeDealRecord(payload)
+  if (!deal) return null
+  return withDealLock(deal.id, async () => {
+    if (opts?.onlyIfNewer) {
+      try {
+        const raw = await fs.readFile(join(dir, `${deal.id}.json`), 'utf8')
+        const current = sanitizeDealRecord(JSON.parse(raw))
+        if (current && Date.parse(current.updatedAt) >= Date.parse(deal.updatedAt)) return null
+      } catch {
+        /* no current record (or unreadable) — proceed with the import */
+      }
+    }
+    await ensureDir(dir)
+    try {
+      await writeDeal(dir, deal)
+    } catch {
+      return null
+    }
+    return deal
+  })
+}
+
 // ── Per-deal write lock ───────────────────────────────────────────────────
 const dealLocks = new Map<string, Promise<unknown>>()
 

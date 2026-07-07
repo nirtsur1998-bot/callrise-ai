@@ -42,6 +42,12 @@ export function useDeals(): UseDeals {
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    // A cloud restore can add/update/delete deals in the background (when
+    // Contacts & deals sync is opted into) — re-read so the list reflects it.
+    return window.api.backup.onChanged(() => void refresh())
+  }, [refresh])
+
   const create = useCallback(
     async (input: DealCreateInput) => {
       const deal = await window.api.deals.create(input)

@@ -8,6 +8,7 @@ import { readFileSync, mkdirSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { writeJsonAtomicSync } from './atomic-write'
 import { listDealsUsingStage } from './deals-fs'
+import { scheduleBackup } from './backup'
 
 export type DealStageKind = 'open' | 'won' | 'lost'
 
@@ -73,20 +74,57 @@ function sanitizeStageList(value: unknown): DealStage[] {
   return stages.length ? stages : DEFAULT_STAGES
 }
 
+const EPOCH = '1970-01-01T00:00:00.000Z'
+
 export function loadDealStages(): DealStage[] {
+  return loadDealStagesMeta().stages
+}
+
+/** Stage list + its last-modified stamp — the "newest wins" key for the cloud
+ *  backup's single-row stage sync. Files written before the stamp existed
+ *  read as EPOCH (any cloud copy wins over an unstamped local default). */
+export function loadDealStagesMeta(): { stages: DealStage[]; updatedAt: string } {
   try {
     const parsed = JSON.parse(readFileSync(stagesPath(), 'utf8'))
-    return sanitizeStageList(parsed?.stages)
+    const updatedAt =
+      typeof parsed?.updatedAt === 'string' && !Number.isNaN(Date.parse(parsed.updatedAt))
+        ? parsed.updatedAt
+        : EPOCH
+    return { stages: sanitizeStageList(parsed?.stages), updatedAt }
   } catch {
-    return DEFAULT_STAGES
+    return { stages: DEFAULT_STAGES, updatedAt: EPOCH }
   }
 }
 
-function writeStages(stages: DealStage[]): void {
+function writeStages(stages: DealStage[], updatedAt = new Date().toISOString()): void {
   mkdirSync(join(app.getPath('userData')), { recursive: true })
   // Atomic: a torn write here silently reset the pipeline to the default
   // stages on next launch, orphaning every deal sitting in a custom stage.
-  writeJsonAtomicSync(stagesPath(), { stages })
+  writeJsonAtomicSync(stagesPath(), { stages, updatedAt })
+}
+
+/**
+ * Apply a stage list pulled from the cloud backup. Two protections:
+ *   - Any LOCAL stage that still has deals in it is kept (appended) even if
+ *     the pulled list dropped it — a pull must never orphan local deals.
+ *   - When nothing had to be appended, the cloud row's own timestamp is kept
+ *     (same no-restamp rule as applyPulledSettings — restamping would make
+ *     every device claim "newest" after a mere pull).
+ */
+export function applyPulledDealStages(pulledStages: unknown, cloudUpdatedAt: string): void {
+  if (!Array.isArray(pulledStages)) return
+  const next = sanitizeStageList(pulledStages)
+  const nextIds = new Set(next.map((s) => s.id))
+  const current = loadDealStages()
+  const missing = current.filter((s) => !nextIds.has(s.id)).map((s) => s.id)
+  const stillInUse =
+    missing.length > 0
+      ? new Set(listDealsUsingStage(dealsDir(), missing).map((d) => d.stageId))
+      : new Set<string>()
+  const kept = current.filter((s) => stillInUse.has(s.id))
+  const merged = [...next, ...kept]
+  const validStamp = typeof cloudUpdatedAt === 'string' && !Number.isNaN(Date.parse(cloudUpdatedAt))
+  writeStages(merged, kept.length === 0 && validStamp ? cloudUpdatedAt : new Date().toISOString())
 }
 
 export type SetStagesResult =
@@ -109,6 +147,7 @@ export function setDealStages(input: unknown): SetStagesResult {
   }
 
   writeStages(next)
+  scheduleBackup() // the stage list syncs with the Contacts & deals toggle
   return { ok: true, stages: next }
 }
 
