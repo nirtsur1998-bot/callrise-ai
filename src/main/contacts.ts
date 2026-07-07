@@ -10,6 +10,7 @@ import {
   type ContactUpdateInput
 } from './contacts-fs'
 import { loadAppSettings, saveAppSettings } from './app-settings'
+import { scheduleBackup } from './backup'
 
 function contactsDir(): string {
   return join(app.getPath('userData'), 'contacts')
@@ -22,22 +23,33 @@ export function registerContacts(): void {
   registered = true
 
   ipcMain.handle('contacts:list', (): Promise<Contact[]> => listContacts(contactsDir()))
-  ipcMain.handle('contacts:create', (_event, input: ContactCreateInput) => {
+  ipcMain.handle('contacts:create', async (_event, input: ContactCreateInput) => {
     // Auto-numbered Customer No. (Settings → CRM): only fills in a CID the
     // renderer left blank — never overwrites one the user actually typed.
     const hasCid = typeof input?.cid === 'string' && input.cid.trim()
+    let effectiveInput = input
     if (!hasCid) {
       const { crm } = loadAppSettings()
       if (crm.autoNumberCid) {
         const cid = `${crm.cidPrefix}${crm.cidNextNumber}`
         saveAppSettings({ crm: { cidNextNumber: crm.cidNextNumber + 1 } })
-        return createContact(contactsDir(), { ...input, cid })
+        effectiveInput = { ...input, cid }
       }
     }
-    return createContact(contactsDir(), input)
+    const contact = await createContact(contactsDir(), effectiveInput)
+    // Like calls/tasks/events: a mutation schedules a push so an edit made
+    // just before quitting still reaches the cloud (not only the 10-min tick).
+    if (contact) scheduleBackup()
+    return contact
   })
-  ipcMain.handle('contacts:update', (_event, id: string, patch: ContactUpdateInput) =>
-    updateContact(contactsDir(), id, patch)
-  )
-  ipcMain.handle('contacts:delete', (_event, id: string) => deleteContact(contactsDir(), id))
+  ipcMain.handle('contacts:update', async (_event, id: string, patch: ContactUpdateInput) => {
+    const contact = await updateContact(contactsDir(), id, patch)
+    if (contact) scheduleBackup()
+    return contact
+  })
+  ipcMain.handle('contacts:delete', async (_event, id: string) => {
+    const res = await deleteContact(contactsDir(), id)
+    if (res.ok) scheduleBackup() // propagate the (PII-stripped) tombstone
+    return res
+  })
 }

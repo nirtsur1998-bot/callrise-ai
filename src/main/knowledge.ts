@@ -10,6 +10,7 @@ import {
   type KnowledgeUpdateInput
 } from './knowledge-fs'
 import { previewKnowledgeContext, type KnowledgeContextPreview } from './knowledge-context'
+import { scheduleBackup } from './backup'
 
 function knowledgeDir(): string {
   return join(app.getPath('userData'), 'knowledge')
@@ -22,13 +23,23 @@ export function registerKnowledge(): void {
   registered = true
 
   ipcMain.handle('knowledge:list', (): Promise<KnowledgeEntry[]> => listEntries(knowledgeDir()))
-  ipcMain.handle('knowledge:create', (_event, input: KnowledgeCreateInput) =>
-    createEntry(knowledgeDir(), input)
-  )
-  ipcMain.handle('knowledge:update', (_event, id: string, patch: KnowledgeUpdateInput) =>
-    updateEntry(knowledgeDir(), id, patch)
-  )
-  ipcMain.handle('knowledge:delete', (_event, id: string) => deleteEntry(knowledgeDir(), id))
+  // Each mutation schedules a backup push, like calls/tasks/events — the push
+  // itself only includes knowledge when its opt-in sync toggle is on.
+  ipcMain.handle('knowledge:create', async (_event, input: KnowledgeCreateInput) => {
+    const entry = await createEntry(knowledgeDir(), input)
+    if (entry) scheduleBackup()
+    return entry
+  })
+  ipcMain.handle('knowledge:update', async (_event, id: string, patch: KnowledgeUpdateInput) => {
+    const entry = await updateEntry(knowledgeDir(), id, patch)
+    if (entry) scheduleBackup()
+    return entry
+  })
+  ipcMain.handle('knowledge:delete', async (_event, id: string) => {
+    const res = await deleteEntry(knowledgeDir(), id)
+    scheduleBackup()
+    return res
+  })
 
   // Shows exactly what text Claude would be given as context, plus a rough
   // size estimate — so the user can see the assembled block and catch it

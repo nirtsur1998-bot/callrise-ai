@@ -1,4 +1,13 @@
 import { promises as fs } from 'node:fs'
+import {
+  writeFileSync,
+  readFileSync,
+  openSync,
+  fsyncSync,
+  closeSync,
+  renameSync,
+  unlinkSync
+} from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 
@@ -39,6 +48,41 @@ export async function writeJsonAtomic(path: string, value: unknown): Promise<voi
     }
   } catch (err) {
     await fs.unlink(tmp).catch(() => {}) // never leave a partial temp behind
+    throw err
+  }
+}
+
+/**
+ * Synchronous variant of writeJsonAtomic, for stores that must stay
+ * synchronous (app-settings.ts's loopback-gate check reads in the same tick).
+ * Same guarantee: a crash mid-write leaves the previous complete file, never
+ * a truncated one that readers silently replace with defaults.
+ */
+export function writeJsonAtomicSync(path: string, value: unknown): void {
+  const data = JSON.stringify(value)
+  const tmp = `${path}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(tmp, data, 'utf8')
+    JSON.parse(readFileSync(tmp, 'utf8')) // verify before it replaces the good file
+    let fd = openSync(tmp, 'r')
+    try {
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+    renameSync(tmp, path)
+    fd = openSync(dirname(path), 'r')
+    try {
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+  } catch (err) {
+    try {
+      unlinkSync(tmp)
+    } catch {
+      /* never leave a partial temp behind */
+    }
     throw err
   }
 }

@@ -2,12 +2,12 @@
 // itself enforce (not just hide in the renderer) — starting with the buyer-
 // recording master switch. Modeled on google.ts's sync-mode.json: plain JSON,
 // synchronous I/O (the file is tiny and rarely written), a safe default on
-// any read failure. Not atomic-write like calls/tasks/knowledge — a torn
-// write here just falls back to the default, which is today's current
-// behavior, never a more-permissive one.
+// any read failure. Written atomically (sync variant) — a torn write used to
+// silently reset EVERY setting (personalization, CRM, sync scope) to defaults.
 import { app, ipcMain } from 'electron'
 import { join } from 'node:path'
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, mkdirSync } from 'node:fs'
+import { writeJsonAtomicSync } from './atomic-write'
 import {
   EMPTY_PERSONALIZATION,
   sanitizePersonalization,
@@ -183,10 +183,9 @@ export function loadAppSettings(): AppSettings {
   }
 }
 
-export function saveAppSettings(patch: unknown): AppSettings {
-  const current = loadAppSettings()
+function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
   const p = (patch && typeof patch === 'object' ? patch : {}) as Record<string, unknown>
-  const next: AppSettings = {
+  return {
     allowOtherPartyRecording:
       typeof p.allowOtherPartyRecording === 'boolean'
         ? p.allowOtherPartyRecording
@@ -195,7 +194,7 @@ export function saveAppSettings(patch: unknown): AppSettings {
     summaryLanguage:
       'summaryLanguage' in p ? sanitizeSummaryLanguage(p.summaryLanguage) : current.summaryLanguage,
     syncScope: mergeSyncScope(current.syncScope, p.syncScope),
-    settingsUpdatedAt: new Date().toISOString(), // bump on every save
+    settingsUpdatedAt: current.settingsUpdatedAt,
     googleCalendarConnected:
       'googleCalendarConnected' in p
         ? p.googleCalendarConnected === true
@@ -203,8 +202,41 @@ export function saveAppSettings(patch: unknown): AppSettings {
     crm: mergeCrmSettings(current.crm, p.crm),
     objectionMining: mergeObjectionMining(current.objectionMining, p.objectionMining)
   }
+}
+
+function persistSettings(next: AppSettings): void {
   mkdirSync(app.getPath('userData'), { recursive: true })
-  writeFileSync(settingsPath(), JSON.stringify(next), 'utf8')
+  writeJsonAtomicSync(settingsPath(), next)
+}
+
+export function saveAppSettings(patch: unknown): AppSettings {
+  const next = mergeSettings(loadAppSettings(), patch)
+  next.settingsUpdatedAt = new Date().toISOString() // bump on every LOCAL edit
+  persistSettings(next)
+  return next
+}
+
+/**
+ * Apply a settings payload pulled from the cloud. Two deliberate differences
+ * from saveAppSettings:
+ *   - The cloud row's own timestamp is KEPT, not restamped — restamping made
+ *     every device claim "newest" after a mere pull, so devices ping-ponged
+ *     the settings row at each other forever (and with clock skew a real edit
+ *     could lose to a pull).
+ *   - THIS device's syncScope is preserved. What may leave this machine
+ *     (transcripts, contacts, attachments, …) is a per-device privacy
+ *     decision — another device turning a toggle on must never make this one
+ *     silently start uploading local-only data.
+ */
+export function applyPulledSettings(payload: unknown, cloudUpdatedAt: string): AppSettings {
+  const current = loadAppSettings()
+  const next = mergeSettings(current, payload)
+  next.syncScope = current.syncScope
+  next.settingsUpdatedAt =
+    typeof cloudUpdatedAt === 'string' && !Number.isNaN(Date.parse(cloudUpdatedAt))
+      ? cloudUpdatedAt
+      : current.settingsUpdatedAt
+  persistSettings(next)
   return next
 }
 

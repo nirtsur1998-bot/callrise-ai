@@ -513,6 +513,13 @@ export function callBackupPayload(call: Call): Record<string, unknown> {
     segments: [], // THE TRANSCRIPT — never leaves the device
     summary: call.summary, // AI paraphrase; synced per the privacy decision
     coaching,
+    // CRM link + mined marker are plain metadata; without them a pull that
+    // finds a newer cloud row would silently erase the call→contact link and
+    // re-mine the call (duplicate objection suggestions). `null` (vs absent)
+    // means "explicitly unlinked", so old rows without the field can't wipe
+    // a local link.
+    contactId: call.contactId ?? null,
+    objectionsMinedAt: call.objectionsMinedAt,
     // Attachment metadata only (name/size) so the list shows; NOT file contents
     // (local-only) nor the AI summary of the attached document.
     attachments: (call.attachments ?? []).map((a) => ({
@@ -668,6 +675,42 @@ export async function importCall(
       })
     }
 
+    // The transcript: the local copy is always authoritative when it exists.
+    // A cloud row only supplies segments when the user opted into transcript
+    // sync (callFullBackupPayload) AND this machine has none — the restore-on-
+    // a-new-Mac case. The quote-free default payload sends [] and never wins.
+    const cloudSegments =
+      !deleted && !current?.segments?.length && Array.isArray(v.segments) && v.segments.length
+        ? sanitizeSegments(v.segments)
+        : []
+    const segments = deleted ? [] : current?.segments?.length ? current.segments : cloudSegments
+    const preview = deleted
+      ? ''
+      : current?.segments?.length || !cloudSegments.length
+        ? (current?.preview ?? '')
+        : cloudSegments
+            .map((s) => s.text)
+            .join(' ')
+            .slice(0, 160)
+
+    // CRM link: a string links, an explicit null unlinks, an ABSENT field
+    // (row pushed before the app carried it) preserves the local link.
+    const contactId = deleted
+      ? undefined
+      : isSafeId(v.contactId)
+        ? v.contactId
+        : v.contactId === null
+          ? undefined
+          : current?.contactId
+
+    let coaching = deleted ? undefined : (sanitizeCoaching(v.coaching, segments) ?? undefined)
+    // Same report as the local one (identical creation stamp)? Keep the LOCAL
+    // copy — it still has the evidence quotes the quote-free cloud projection
+    // strips, and re-importing must not erase them.
+    if (coaching && current?.coaching && current.coaching.createdAt === coaching.createdAt) {
+      coaching = current.coaching
+    }
+
     const call: Call = {
       id,
       title,
@@ -681,16 +724,16 @@ export async function importCall(
         : Number.isFinite(v.speakerCount)
           ? Math.max(0, Math.trunc(v.speakerCount as number))
           : 0,
-      // The transcript and its derived preview NEVER come from the cloud (the
-      // payload never carries them) — preserve THIS machine's copy, if any.
-      preview: deleted ? '' : (current?.preview ?? ''),
-      segments: deleted ? [] : (current?.segments ?? []),
+      preview,
+      segments,
       summary: deleted ? undefined : (sanitizeSummary(v.summary) ?? undefined),
-      coaching: deleted
-        ? undefined
-        : (sanitizeCoaching(v.coaching, current?.segments ?? []) ?? undefined),
+      coaching,
       attachments,
       consent: sanitizeConsent(v.consent),
+      ...(contactId ? { contactId } : {}),
+      ...(!deleted && (isoOrUndefined(v.objectionsMinedAt) ?? current?.objectionsMinedAt)
+        ? { objectionsMinedAt: isoOrUndefined(v.objectionsMinedAt) ?? current?.objectionsMinedAt }
+        : {}),
       ...(deleted ? { deleted: true } : {})
     }
     // Mirror every other persister (saveCall/getCall/listCalls): strip buyer

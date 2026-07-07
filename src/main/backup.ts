@@ -26,7 +26,8 @@ import {
 } from './calls-fs'
 import { listEntries, importEntry, type KnowledgeEntry } from './knowledge-fs'
 import { listContacts, importContact, type Contact } from './contacts-fs'
-import { loadAppSettings, saveAppSettings } from './app-settings'
+import { loadAppSettings, applyPulledSettings } from './app-settings'
+import { writeJsonAtomic } from './atomic-write'
 import { reconcileStore, ts, type CloudRow } from './backup-core'
 
 function tasksDir(): string {
@@ -113,7 +114,9 @@ async function readState(): Promise<BackupState> {
 }
 async function writeState(patch: BackupState): Promise<void> {
   const next = { ...(await readState()), ...patch }
-  await fs.writeFile(statePath(), JSON.stringify(next), 'utf8').catch(() => {})
+  // Atomic like every other store: a torn write here blanks lastSyncAt, which
+  // degrades conflict detection and wipes the "Backed up X ago" status.
+  await writeJsonAtomic(statePath(), next).catch(() => {})
 }
 
 /** Strip the machine-specific Google-link fields: a backed-up event is a clean
@@ -221,10 +224,19 @@ export type BackupResult =
 
 /** Push all local tasks + events to the cloud (full upsert). Never throws. */
 export async function pushAll(): Promise<BackupResult> {
+  // Record the "can't sync at all" states like any other push failure —
+  // otherwise a signed-out user keeps seeing a green "Backed up N hours ago"
+  // while every sync silently no-ops.
   const client = getSupabaseClient()
-  if (!client) return { ok: false, error: 'not-configured' }
+  if (!client) {
+    await writeState({ lastPushError: 'not-configured', lastPushErrorAt: new Date().toISOString() })
+    return { ok: false, error: 'not-configured' }
+  }
   const userId = await getSignedInUserId()
-  if (!userId) return { ok: false, error: 'not-signed-in' }
+  if (!userId) {
+    await writeState({ lastPushError: 'not-signed-in', lastPushErrorAt: new Date().toISOString() })
+    return { ok: false, error: 'not-signed-in' }
+  }
   // Ownership guard: never upload this device's local data under a DIFFERENT
   // account than the one it belongs to (shared-machine cross-account leak).
   // If unowned, atomically claim it, then RE-READ so a lost claim race also
@@ -408,9 +420,15 @@ export type RestoreResult =
  *  never wipes: every change is per-record, and only when the cloud is newer. */
 export async function pullAll(): Promise<RestoreResult> {
   const client = getSupabaseClient()
-  if (!client) return { ok: false, error: 'not-configured' }
+  if (!client) {
+    await writeState({ lastPullError: 'not-configured', lastPullErrorAt: new Date().toISOString() })
+    return { ok: false, error: 'not-configured' }
+  }
   const userId = await getSignedInUserId()
-  if (!userId) return { ok: false, error: 'not-signed-in' }
+  if (!userId) {
+    await writeState({ lastPullError: 'not-signed-in', lastPullErrorAt: new Date().toISOString() })
+    return { ok: false, error: 'not-signed-in' }
+  }
   // Same ownership guard as the push: on a FRESH machine this claims the device
   // (that's the restore-on-new-machine path); on a mismatched machine it refuses.
   let owner = await readOwner()
@@ -513,7 +531,10 @@ export async function pullAll(): Promise<RestoreResult> {
         if (error) throw new Error(error.message)
         const local = loadAppSettings()
         if (data && ts(data.updated_at) > ts(local.settingsUpdatedAt)) {
-          saveAppSettings(data.payload) // cloud is newer — full overwrite
+          // Keeps the cloud row's timestamp (no restamp → no multi-device
+          // ping-pong) and this device's own syncScope (privacy toggles are
+          // per-device, never switched on remotely).
+          applyPulledSettings(data.payload, String(data.updated_at))
         }
       } catch (err) {
         console.error('[backup] settings pull failed:', err)

@@ -112,8 +112,6 @@ function sanitizeContactRecord(value: unknown): Contact | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const v = value as Record<string, unknown>
   if (!isSafeId(v.id)) return null
-  const name = sanitizeOptionalText(v.name, MAX_NAME)
-  if (!name) return null
   const createdAt =
     typeof v.createdAt === 'string' && !Number.isNaN(Date.parse(v.createdAt))
       ? v.createdAt
@@ -124,6 +122,15 @@ function sanitizeContactRecord(value: unknown): Contact | null {
     typeof v.updatedAt === 'string' && !Number.isNaN(Date.parse(v.updatedAt))
       ? v.updatedAt
       : createdAt
+  // A tombstone must carry NO personal data — a deleted contact's name, email,
+  // phone, and notes must not persist on disk or reach the cloud (mirrors
+  // deleteCall, which strips the transcript from call tombstones). Enforced on
+  // EVERY read so tombstones written before this rule are scrubbed too.
+  if (v.deleted === true) {
+    return { id: v.id, name: 'Deleted contact', createdAt, updatedAt, deleted: true }
+  }
+  const name = sanitizeOptionalText(v.name, MAX_NAME)
+  if (!name) return null
   return {
     id: v.id,
     name,
@@ -136,8 +143,7 @@ function sanitizeContactRecord(value: unknown): Contact | null {
     phone: sanitizeOptionalText(v.phone, MAX_PHONE),
     notes: sanitizeOptionalText(v.notes, MAX_NOTES),
     createdAt,
-    updatedAt,
-    deleted: v.deleted === true ? true : undefined // preserve the tombstone flag
+    updatedAt
   }
 }
 
@@ -278,11 +284,19 @@ export function deleteContact(dir: string, id: string): Promise<{ ok: boolean }>
 async function deleteContactUnlocked(dir: string, id: string): Promise<{ ok: boolean }> {
   const contact = await getContact(dir, id)
   if (!contact) return { ok: false } // missing or already a tombstone
-  // Tombstone instead of erase, so the deletion can propagate to a future backup.
-  contact.deleted = true
-  contact.updatedAt = new Date().toISOString()
+  // Tombstone instead of erase, so the deletion can propagate to a future
+  // backup — but stripped of ALL personal data (name, email, phone, notes):
+  // deleting a contact must not leave their PII on disk or push it to the
+  // cloud with the tombstone.
+  const tombstone: Contact = {
+    id: contact.id,
+    name: 'Deleted contact',
+    createdAt: contact.createdAt,
+    updatedAt: new Date().toISOString(),
+    deleted: true
+  }
   try {
-    await writeContact(dir, contact)
+    await writeContact(dir, tombstone)
   } catch {
     return { ok: false }
   }
@@ -303,20 +317,25 @@ export async function importContact(
 ): Promise<Contact | null> {
   const contact = sanitizeContactRecord(payload)
   if (!contact) return null
-  if (opts?.onlyIfNewer) {
-    try {
-      const raw = await fs.readFile(join(dir, `${contact.id}.json`), 'utf8')
-      const current = sanitizeContactRecord(JSON.parse(raw))
-      if (current && Date.parse(current.updatedAt) >= Date.parse(contact.updatedAt)) return null
-    } catch {
-      /* no current record (or unreadable) — proceed with the import */
+  // Serialize with the regular mutators: without the lock, the read-compare-
+  // write below races a concurrent local edit, and a stale cloud copy could
+  // overwrite the fresher record the "onlyIfNewer" check is meant to protect.
+  return withContactLock(contact.id, async () => {
+    if (opts?.onlyIfNewer) {
+      try {
+        const raw = await fs.readFile(join(dir, `${contact.id}.json`), 'utf8')
+        const current = sanitizeContactRecord(JSON.parse(raw))
+        if (current && Date.parse(current.updatedAt) >= Date.parse(contact.updatedAt)) return null
+      } catch {
+        /* no current record (or unreadable) — proceed with the import */
+      }
     }
-  }
-  await ensureDir(dir)
-  try {
-    await writeContact(dir, contact)
-  } catch {
-    return null
-  }
-  return contact
+    await ensureDir(dir)
+    try {
+      await writeContact(dir, contact)
+    } catch {
+      return null
+    }
+    return contact
+  })
 }
