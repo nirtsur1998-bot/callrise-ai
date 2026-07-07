@@ -229,7 +229,8 @@ export function DealsView({
               stageLabel.get(deal.stageId),
               stats?.lastCallAt,
               staleFollowUpEnabled,
-              staleAfterDays
+              staleAfterDays,
+              deal.createdAt
             )
             return (
               <DealRow

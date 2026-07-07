@@ -49,13 +49,21 @@ export function ContactDetail({
   const dial = countryDial(contact.phoneCountry)
   const stale =
     !loading &&
-    isContactStale(hasOpenDeal, linked[0]?.call.createdAt, staleFollowUpEnabled, staleAfterDays)
+    isContactStale(
+      hasOpenDeal,
+      linked[0]?.call.createdAt,
+      staleFollowUpEnabled,
+      staleAfterDays,
+      contact.createdAt
+    )
 
   const handleCreateFollowUpTask = async (): Promise<void> => {
     setCreatingTask(true)
     try {
       await createContactFollowUpTask(contact.name)
       setTaskCreated(true)
+    } catch {
+      /* button stays visible for a retry */
     } finally {
       setCreatingTask(false)
     }

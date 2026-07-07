@@ -425,7 +425,9 @@ export interface ContactsApi {
   list: () => Promise<Contact[]>
   create: (input: ContactCreateInput) => Promise<Contact | null>
   update: (id: string, patch: ContactUpdateInput) => Promise<Contact | null>
-  delete: (id: string) => Promise<{ ok: boolean }>
+  /** `reason: 'has-deals'` = blocked because deals still reference this
+   *  contact (delete or re-assign them first — mirrors stage removal). */
+  delete: (id: string) => Promise<{ ok: boolean; reason?: 'has-deals' }>
 }
 
 export type DealStageKind = 'open' | 'won' | 'lost'

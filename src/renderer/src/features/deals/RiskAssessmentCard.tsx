@@ -71,6 +71,13 @@ export function RiskAssessmentCard({
         </p>
       )}
 
+      {/* Hoisted above the branch: with a cached assessment, a failed
+          Re-assess used to set this and render NOTHING — the old report
+          reappeared looking like a silent success with stale data. */}
+      {error && !assessing && assessment && (
+        <p className="mb-3 text-[13px] text-rose-300">{error}</p>
+      )}
+
       {assessing ? (
         <RiskLoading />
       ) : assessment ? (

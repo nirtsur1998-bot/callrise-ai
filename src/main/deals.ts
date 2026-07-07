@@ -63,6 +63,9 @@ export function registerDeals(): void {
     createDeal(dealsDir(), { ...input, stageId: resolveStageId(input?.stageId) })
   )
   ipcMain.handle('deals:update', (_event, id: string, patch: DealUpdateInput) => {
+    // `'stageId' in patch` throws on a null/primitive patch — return null like
+    // every other malformed input instead of an internal TypeError.
+    if (!patch || typeof patch !== 'object') return null
     const resolved: DealUpdateInput =
       'stageId' in patch ? { ...patch, stageId: resolveStageId(patch.stageId) } : patch
     return updateDeal(dealsDir(), id, resolved)

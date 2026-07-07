@@ -11,9 +11,14 @@ import {
 } from './contacts-fs'
 import { loadAppSettings, saveAppSettings } from './app-settings'
 import { scheduleBackup } from './backup'
+import { listDeals } from './deals-fs'
 
 function contactsDir(): string {
   return join(app.getPath('userData'), 'contacts')
+}
+
+function dealsDir(): string {
+  return join(app.getPath('userData'), 'deals')
 }
 
 let registered = false
@@ -48,6 +53,17 @@ export function registerContacts(): void {
     return contact
   })
   ipcMain.handle('contacts:delete', async (_event, id: string) => {
+    // Referential integrity, mirroring stage removal: a contact still owning
+    // deals can't be deleted — those deals would forever show "Unknown
+    // contact" and their follow-up flags would misbehave.
+    try {
+      const deals = await listDeals(dealsDir())
+      if (deals.some((d) => d.contactId === id)) {
+        return { ok: false, reason: 'has-deals' as const }
+      }
+    } catch {
+      /* deals unreadable — don't block the delete on a broken side-store */
+    }
     const res = await deleteContact(contactsDir(), id)
     if (res.ok) scheduleBackup() // propagate the (PII-stripped) tombstone
     return res

@@ -12,7 +12,8 @@ export interface UseContacts {
   refresh: () => Promise<void>
   create: (input: ContactCreateInput) => Promise<Contact | null>
   update: (id: string, patch: ContactUpdateInput) => Promise<void>
-  remove: (id: string) => Promise<void>
+  /** False when the delete was blocked (deals still reference the contact). */
+  remove: (id: string) => Promise<boolean>
 }
 
 export function useContacts(): UseContacts {
@@ -74,8 +75,9 @@ export function useContacts(): UseContacts {
 
   const remove = useCallback(
     async (id: string) => {
-      await window.api.contacts.delete(id)
+      const res = await window.api.contacts.delete(id)
       await refresh()
+      return res.ok
     },
     [refresh]
   )

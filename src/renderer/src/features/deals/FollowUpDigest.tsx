@@ -71,7 +71,8 @@ export function FollowUpDigest({
           stageById.get(d.stageId),
           contactStats.get(d.contactId)?.lastCallAt,
           staleFollowUpEnabled,
-          staleAfterDays
+          staleAfterDays,
+          d.createdAt
         )
       )
       .map((deal) => ({
@@ -89,7 +90,8 @@ export function FollowUpDigest({
           openDealContactIds.has(c.id),
           contactStats.get(c.id)?.lastCallAt,
           staleFollowUpEnabled,
-          staleAfterDays
+          staleAfterDays,
+          c.createdAt
         )
       )
       .map((contact) => ({
@@ -99,7 +101,11 @@ export function FollowUpDigest({
         days: daysSinceLastCall(contactStats.get(contact.id)?.lastCallAt)
       }))
 
-    return [...dealItems, ...contactItems].sort((a, b) => b.days - a.days)
+    // Explicit comparison — `b.days - a.days` is NaN when both are Infinity
+    // ("no calls yet"), which makes the whole sort order unspecified.
+    return [...dealItems, ...contactItems].sort((a, b) =>
+      a.days === b.days ? 0 : b.days > a.days ? 1 : -1
+    )
   }, [deals, stages, contacts, calls, staleFollowUpEnabled, staleAfterDays])
 
   return (
@@ -164,16 +170,19 @@ interface FollowUpRowProps {
 
 function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
   const [creating, setCreating] = useState(false)
-  const [created, setCreated] = useState(false)
+  const [result, setResult] = useState<'created' | 'exists' | 'error' | null>(null)
+  const created = result === 'created' || result === 'exists'
   const { deal, contact, title, days } = item
   const value = deal ? formatValue(deal.value) : null
 
   const handleCreate = async (): Promise<void> => {
     setCreating(true)
+    setResult(null)
     try {
-      if (deal) await createFollowUpTask(deal, contact?.name)
-      else if (contact) await createContactFollowUpTask(contact.name)
-      setCreated(true)
+      if (deal) setResult(await createFollowUpTask(deal, contact?.name))
+      else if (contact) setResult(await createContactFollowUpTask(contact.name))
+    } catch {
+      setResult('error') // surfaced below — the old code swallowed this silently
     } finally {
       setCreating(false)
     }
@@ -210,17 +219,23 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
       <div className="flex shrink-0 items-center gap-2">
         {created ? (
           <span className="flex items-center gap-1 text-[12px] font-medium text-emerald-300">
-            <CheckCircle2 className="h-3.5 w-3.5" /> Task created
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            {result === 'exists' ? 'Already on Tasks' : 'Task created'}
           </span>
         ) : (
-          <button
-            type="button"
-            onClick={() => void handleCreate()}
-            disabled={creating}
-            className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink disabled:opacity-50"
-          >
-            <ListPlus className="h-3.5 w-3.5" /> {creating ? 'Creating…' : 'Create task'}
-          </button>
+          <>
+            {result === 'error' && (
+              <span className="text-[12px] text-rose-300">Couldn&apos;t create — try again</span>
+            )}
+            <button
+              type="button"
+              onClick={() => void handleCreate()}
+              disabled={creating}
+              className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink disabled:opacity-50"
+            >
+              <ListPlus className="h-3.5 w-3.5" /> {creating ? 'Creating…' : 'Create task'}
+            </button>
+          </>
         )}
         <button
           type="button"

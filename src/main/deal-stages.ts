@@ -4,8 +4,9 @@
 // written), a safe default on any read failure.
 import { app, ipcMain } from 'electron'
 import { join } from 'node:path'
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, mkdirSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { writeJsonAtomicSync } from './atomic-write'
 import { listDealsUsingStage } from './deals-fs'
 
 export type DealStageKind = 'open' | 'won' | 'lost'
@@ -20,6 +21,10 @@ export interface DealStage {
 
 const MAX_LABEL = 60
 const MAX_STAGES = 20
+// Must match deals-fs.ts's ID_RE: a stage id that deals-fs would reject on
+// createDeal/updateDeal (e.g. one with an underscore, from a hand-edited
+// file) would show in the stage picker but silently fail every save into it.
+const ID_RE = /^[A-Za-z0-9-]{1,64}$/
 
 const DEFAULT_STAGES: DealStage[] = [
   { id: 'lead', label: 'Lead', kind: 'open' },
@@ -61,7 +66,7 @@ function sanitizeStageList(value: unknown): DealStage[] {
     const v = raw as Record<string, unknown>
     const label = sanitizeLabel(v.label)
     if (!label) continue
-    const id = typeof v.id === 'string' && v.id && !seen.has(v.id) ? v.id : randomUUID()
+    const id = typeof v.id === 'string' && ID_RE.test(v.id) && !seen.has(v.id) ? v.id : randomUUID()
     seen.add(id)
     stages.push({ id, label, kind: sanitizeKind(v.kind) })
   }
@@ -79,7 +84,9 @@ export function loadDealStages(): DealStage[] {
 
 function writeStages(stages: DealStage[]): void {
   mkdirSync(join(app.getPath('userData')), { recursive: true })
-  writeFileSync(stagesPath(), JSON.stringify({ stages }), 'utf8')
+  // Atomic: a torn write here silently reset the pipeline to the default
+  // stages on next launch, orphaning every deal sitting in a custom stage.
+  writeJsonAtomicSync(stagesPath(), { stages })
 }
 
 export type SetStagesResult =

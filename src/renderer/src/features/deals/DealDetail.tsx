@@ -51,13 +51,22 @@ export function DealDetail({
   const value = formatValue(deal.value)
   const closeDate = formatCloseDate(deal.expectedCloseDate)
   const stale =
-    !loading && isDealStale(stage, linked[0]?.call.createdAt, staleFollowUpEnabled, staleAfterDays)
+    !loading &&
+    isDealStale(
+      stage,
+      linked[0]?.call.createdAt,
+      staleFollowUpEnabled,
+      staleAfterDays,
+      deal.createdAt
+    )
 
   const handleCreateFollowUpTask = async (): Promise<void> => {
     setCreatingTask(true)
     try {
       await createFollowUpTask(deal, contact?.name)
       setTaskCreated(true)
+    } catch {
+      /* button stays visible for a retry */
     } finally {
       setCreatingTask(false)
     }

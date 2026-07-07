@@ -51,8 +51,42 @@ export function PipelineBoard({
     else dealsByStage.set(deal.stageId, [deal])
   }
 
+  // Deals whose stageId matches no configured stage (a reset/hand-edited
+  // stage list). Without an extra column they'd simply VANISH from the board
+  // — the header would say "N total" while the cards were nowhere.
+  const knownStageIds = new Set(stages.map((s) => s.id))
+  const orphaned = deals.filter((d) => !knownStageIds.has(d.stageId))
+
   return (
     <div className="flex gap-4 overflow-x-auto pb-2">
+      {orphaned.length > 0 && (
+        <div className="w-64 shrink-0">
+          <div className="mb-2.5 flex items-baseline justify-between px-1">
+            <h3 className="text-sm font-semibold text-amber-300">No stage</h3>
+            <span className="text-[11px] text-faint">{orphaned.length}</span>
+          </div>
+          <p className="mb-2.5 px-1 text-[11px] text-faint">
+            These deals point at a stage that no longer exists — use the arrow to move each into a
+            real stage.
+          </p>
+          <div className="space-y-2.5">
+            {orphaned.map((deal) => (
+              <DealCard
+                key={deal.id}
+                deal={deal}
+                contact={contactById.get(deal.contactId)}
+                stats={contactStats.get(deal.contactId)}
+                stale={false}
+                canMovePrev={false}
+                canMoveNext={stages.length > 0}
+                onMovePrev={() => {}}
+                onMoveNext={() => onMoveStage(deal.id, stages[0].id)}
+                onEdit={() => onOpen(deal)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
       {stages.map((stage, stageIndex) => {
         const stageDeals = dealsByStage.get(stage.id) ?? []
         const total = stageDeals.reduce((sum, d) => sum + (d.value ?? 0), 0)
@@ -83,7 +117,8 @@ export function PipelineBoard({
                       stage,
                       contactStats.get(deal.contactId)?.lastCallAt,
                       staleFollowUpEnabled,
-                      staleAfterDays
+                      staleAfterDays,
+                      deal.createdAt
                     )}
                     canMovePrev={stageIndex > 0}
                     canMoveNext={stageIndex < stages.length - 1}

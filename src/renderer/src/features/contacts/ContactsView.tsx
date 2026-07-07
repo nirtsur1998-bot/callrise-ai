@@ -57,6 +57,12 @@ export function ContactsView({
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Contact | null>(null)
   const [viewingId, setViewingId] = useState<string | null>(initialViewId)
+  const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null)
+
+  const handleDelete = async (contact: Contact): Promise<void> => {
+    const ok = await remove(contact.id)
+    setDeleteBlocked(ok ? null : contact.name)
+  }
 
   const consumedRef = useRef(false)
   useEffect(() => {
@@ -176,6 +182,22 @@ export function ContactsView({
         </div>
       )}
 
+      {deleteBlocked && (
+        <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <p className="text-[13px] text-ink">
+            {deleteBlocked} still has deals on the Deals screen — delete or re-assign those deals
+            first, then delete the contact.
+          </p>
+          <button
+            type="button"
+            onClick={() => setDeleteBlocked(null)}
+            className="shrink-0 text-[13px] font-medium text-muted transition hover:text-ink"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <ListSkeleton />
       ) : contacts.length === 0 ? (
@@ -195,11 +217,12 @@ export function ContactsView({
                 openDealContactIds.has(contact.id),
                 stats.get(contact.id)?.lastCallAt,
                 staleFollowUpEnabled,
-                staleAfterDays
+                staleAfterDays,
+                contact.createdAt
               )}
               onView={() => setViewingId(contact.id)}
               onEdit={() => setEditing(contact)}
-              onDelete={() => void remove(contact.id)}
+              onDelete={() => void handleDelete(contact)}
             />
           ))}
         </ul>
