@@ -50,6 +50,17 @@ export function ContactFormDialog({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Settings load ASYNC — the initializer above almost always runs before the
+  // real defaultCountry arrives, so "Default country for new contacts" never
+  // pre-filled. Backfill once it loads, but only while the user hasn't picked
+  // a country themselves (and never when editing an existing contact).
+  useEffect(() => {
+    const def = settings.crm.defaultCountry
+    if (contact || !def) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing the draft with the async-loaded setting
+    setDraft((d) => (d.country ? d : { ...d, country: def }))
+  }, [settings.crm.defaultCountry, contact])
+
   const isEdit = Boolean(contact)
   const canSave = draft.name.trim().length > 0 && !saving
 

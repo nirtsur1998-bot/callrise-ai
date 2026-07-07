@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { RotateCcw } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { CountrySelect } from '@renderer/components/CountrySelect'
@@ -23,6 +23,32 @@ export function CrmSection(): React.JSX.Element {
 
   const setCrm = (patch: Partial<CrmSettings>): void => {
     void update({ crm: patch })
+  }
+
+  // Text/number inputs edit a LOCAL draft and commit on blur. Saving per
+  // keystroke through async IPC dropped characters (React reverts the DOM to
+  // the stale value until the round-trip resolves), snapped a cleared prefix
+  // back to "CUST-" mid-typing, and burned a disk write per keystroke.
+  const [prefixDraft, setPrefixDraft] = useState(crm.cidPrefix)
+  const [staleDraft, setStaleDraft] = useState(String(crm.staleAfterDays))
+  /* eslint-disable react-hooks/set-state-in-effect -- sync drafts when the async-loaded settings arrive */
+  useEffect(() => {
+    setPrefixDraft(crm.cidPrefix)
+  }, [crm.cidPrefix])
+  useEffect(() => {
+    setStaleDraft(String(crm.staleAfterDays))
+  }, [crm.staleAfterDays])
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  const commitPrefix = (): void => {
+    const next = prefixDraft.trim() || 'CUST-'
+    setPrefixDraft(next)
+    if (next !== crm.cidPrefix) setCrm({ cidPrefix: next })
+  }
+  const commitStaleDays = (): void => {
+    const next = Math.min(Math.max(Math.round(Number(staleDraft) || 14), 1), 365)
+    setStaleDraft(String(next))
+    if (next !== crm.staleAfterDays) setCrm({ staleAfterDays: next })
   }
 
   return (
@@ -144,10 +170,10 @@ export function CrmSection(): React.JSX.Element {
         >
           <label className="mb-1.5 block text-[13px] font-medium text-muted">Prefix</label>
           <input
-            value={crm.cidPrefix}
+            value={prefixDraft}
             disabled={!crm.autoNumberCid || loading}
-            onChange={(e) => setCrm({ cidPrefix: e.target.value })}
-            onBlur={(e) => setCrm({ cidPrefix: e.target.value.trim() || 'CUST-' })}
+            onChange={(e) => setPrefixDraft(e.target.value)}
+            onBlur={commitPrefix}
             placeholder="CUST-"
             className="w-full max-w-[200px] rounded-lg border border-line-soft bg-canvas px-3 py-2 text-sm outline-none transition focus:border-line disabled:cursor-default"
           />
@@ -184,13 +210,10 @@ export function CrmSection(): React.JSX.Element {
             type="number"
             min={1}
             max={365}
-            value={crm.staleAfterDays}
+            value={staleDraft}
             disabled={!crm.staleFollowUpEnabled || loading}
-            onChange={(e) => setCrm({ staleAfterDays: Number(e.target.value) })}
-            onBlur={(e) => {
-              const n = Math.min(Math.max(Math.round(Number(e.target.value) || 14), 1), 365)
-              setCrm({ staleAfterDays: n })
-            }}
+            onChange={(e) => setStaleDraft(e.target.value)}
+            onBlur={commitStaleDays}
             className="w-24 rounded-lg border border-line-soft bg-canvas px-3 py-2 text-sm outline-none transition focus:border-line disabled:cursor-default"
           />
           <p className="mt-2 text-[11px] text-faint">Only applies to open (not Won/Lost) deals.</p>

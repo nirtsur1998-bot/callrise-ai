@@ -27,13 +27,20 @@ export function PersonalizationSection(): React.JSX.Element {
   const [about, setAbout] = useState(p.about)
 
   // Keep local drafts in sync once the real saved values arrive (they start
-  // as the safe empty default until the first load resolves).
+  // as the safe empty default until the first load resolves). One effect PER
+  // FIELD — a single combined effect reset ALL drafts whenever ANY field's
+  // save resolved, wiping text the user was mid-typing in another field.
+  /* eslint-disable react-hooks/set-state-in-effect -- sync of edit drafts when the async-loaded settings arrive */
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time sync of edit drafts once the async-loaded settings arrive
     setName(p.name)
+  }, [p.name])
+  useEffect(() => {
     setRole(p.role)
+  }, [p.role])
+  useEffect(() => {
     setAbout(p.about)
-  }, [p.name, p.role, p.about])
+  }, [p.about])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const [expanded, setExpanded] = useState(false)
   const { preview } = usePersonalizationPreview(p)

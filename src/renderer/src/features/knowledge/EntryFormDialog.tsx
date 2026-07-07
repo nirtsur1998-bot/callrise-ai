@@ -100,6 +100,7 @@ export function EntryFormDialog({
                   autoFocus
                   value={trigger}
                   onChange={(e) => setTrigger(e.target.value)}
+                  maxLength={300}
                   placeholder="e.g. It's too expensive"
                   className="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm outline-none focus:border-accent"
                 />
@@ -108,6 +109,7 @@ export function EntryFormDialog({
                 <textarea
                   value={response}
                   onChange={(e) => setResponse(e.target.value)}
+                  maxLength={3000}
                   placeholder="e.g. We're priced above X, but here's the ROI argument…"
                   rows={6}
                   className="w-full resize-y rounded-lg border border-line bg-canvas px-3 py-2 text-sm outline-none focus:border-accent"
@@ -121,6 +123,7 @@ export function EntryFormDialog({
                   autoFocus
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
+                  maxLength={200}
                   placeholder={
                     category === 'product' ? 'e.g. What we offer' : 'e.g. Discovery questions'
                   }
@@ -131,6 +134,7 @@ export function EntryFormDialog({
                 <textarea
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
+                  maxLength={20000}
                   rows={10}
                   className="w-full resize-y rounded-lg border border-line bg-canvas px-3 py-2 text-sm outline-none focus:border-accent"
                 />
