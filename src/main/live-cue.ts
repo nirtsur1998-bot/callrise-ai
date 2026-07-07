@@ -21,11 +21,21 @@ function knowledgeDir(): string {
   return join(app.getPath('userData'), 'knowledge')
 }
 
+/** Cut on an entry boundary (blank line), not mid-text — a blunt slice could
+ *  end in the middle of an objection script the model is told to follow, and
+ *  a truncated `Respond:` line is worse than no entry at all. */
+function truncateAtEntryBoundary(text: string, max: number): string {
+  if (text.length <= max) return text
+  const cut = text.lastIndexOf('\n\n', max)
+  const kept = cut > 0 ? text.slice(0, cut) : text.slice(0, max)
+  return `${kept}\n\n[Note: the knowledge base is larger than fits a live cue — only the material above was included.]`
+}
+
 /** Best-effort: a knowledge-base read failure should never break a live cue. */
 async function loadLiveKnowledgeContext(): Promise<string> {
   try {
     const entries = await listEntries(knowledgeDir())
-    return assembleKnowledgeContext(entries).slice(0, LIVE_KNOWLEDGE_MAX_CHARS)
+    return truncateAtEntryBoundary(assembleKnowledgeContext(entries), LIVE_KNOWLEDGE_MAX_CHARS)
   } catch {
     return ''
   }

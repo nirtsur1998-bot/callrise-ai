@@ -67,7 +67,7 @@ export function CallDetail({
   const { contacts, create: createContact } = useContacts()
   const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([])
   const [matchDismissed, setMatchDismissed] = useState(() => isMatchDismissed(callId))
-  const { settings } = useAppSettings()
+  const { settings, loading: settingsLoading } = useAppSettings()
   const [autoLinkNotice, setAutoLinkNotice] = useState<{
     contactId: string
     contactName: string
@@ -81,7 +81,9 @@ export function CallDetail({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mountedRef = useRef(true)
   const onDeletedRef = useRef(onDeleted)
-  onDeletedRef.current = onDeleted
+  useEffect(() => {
+    onDeletedRef.current = onDeleted
+  }, [onDeleted])
 
   useEffect(() => {
     mountedRef.current = true
@@ -92,6 +94,7 @@ export function CallDetail({
 
   useEffect(() => {
     let active = true
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset per-call state when navigating between calls, then fetch
     setCall(null)
     setMatchDismissed(isMatchDismissed(callId))
     setAutoLinkNotice(null)
@@ -206,7 +209,12 @@ export function CallDetail({
     onDeleted()
   }, [callId, onChanged, onDeleted])
 
-  const linkContact = useCallback(
+  // One in-flight guard for every link/create action: a double-click on
+  // "Add as contact" used to create two contacts with the same email, and
+  // failed IPC calls surfaced as unhandled rejections.
+  const linkBusyRef = useRef(false)
+
+  const doLink = useCallback(
     async (contactId: string | undefined) => {
       await window.api.calls.setContact(callId, contactId ?? null)
       await notifyChanged()
@@ -214,15 +222,38 @@ export function CallDetail({
     [callId, notifyChanged]
   )
 
+  const linkContact = useCallback(
+    async (contactId: string | undefined) => {
+      if (linkBusyRef.current) return
+      linkBusyRef.current = true
+      try {
+        await doLink(contactId)
+      } catch {
+        /* the picker/banner stays available for a retry */
+      } finally {
+        linkBusyRef.current = false
+      }
+    },
+    [doLink]
+  )
+
   const createAndLinkAttendee = useCallback(
     async (attendee: CalendarMatch['attendee']) => {
-      const contact = await createContact({
-        name: attendee.name || attendee.email,
-        email: attendee.email
-      })
-      if (contact) await linkContact(contact.id)
+      if (linkBusyRef.current) return
+      linkBusyRef.current = true
+      try {
+        const contact = await createContact({
+          name: attendee.name || attendee.email,
+          email: attendee.email
+        })
+        if (contact) await doLink(contact.id)
+      } catch {
+        /* the banner stays available for a retry */
+      } finally {
+        linkBusyRef.current = false
+      }
     },
-    [createContact, linkContact]
+    [createContact, doLink]
   )
 
   const dismissMatchSuggestion = useCallback(() => {
@@ -235,7 +266,7 @@ export function CallDetail({
   // without asking — but never silently: a visible, undoable notice replaces
   // the manual banner. Never auto-creates a new contact.
   useEffect(() => {
-    if (!call) return
+    if (!call || settingsLoading) return
     if (call.contactId || matchDismissed || !settings.crm.calendarMatchEnabled) return
     if (!settings.crm.autoLinkUnambiguous) return
     if (autoLinkAttemptedFor === callId) return
@@ -251,30 +282,42 @@ export function CallDetail({
 
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mark this call as attempted BEFORE the async link starts, so a fast re-render can't fire it twice
     setAutoLinkAttemptedFor(callId)
-    void linkContact(existing.id).then(() => {
-      setAutoLinkNotice({ contactId: existing.id, contactName: existing.name })
-    })
+    void doLink(existing.id)
+      .then(() => {
+        setAutoLinkNotice({ contactId: existing.id, contactName: existing.name })
+      })
+      .catch(() => {
+        /* link failed — no notice; the manual picker still works */
+      })
   }, [
     call,
     callId,
     matchDismissed,
     autoLinkAttemptedFor,
+    settingsLoading,
     settings.crm.calendarMatchEnabled,
     settings.crm.autoLinkUnambiguous,
     settings.crm.matchSensitivity,
     googleEvents,
     contacts,
-    linkContact
+    doLink
   ])
 
   // "Undo" on the auto-link notice — same as declining the suggestion: unlink
   // and treat it as dismissed, so it doesn't just auto-link right back.
   const undoAutoLink = useCallback(() => {
-    dismissMatch(callId)
-    setMatchDismissed(true)
-    setAutoLinkNotice(null)
-    void linkContact(undefined)
-  }, [callId, linkContact])
+    // Unlink FIRST — only mark dismissed once it actually worked, so a failed
+    // IPC call can't leave the call linked with the notice already gone.
+    void doLink(undefined)
+      .then(() => {
+        dismissMatch(callId)
+        setMatchDismissed(true)
+        setAutoLinkNotice(null)
+      })
+      .catch(() => {
+        /* still linked; the notice (with Undo) stays visible for a retry */
+      })
+  }, [callId, doLink])
 
   if (!call) {
     return (
@@ -283,8 +326,10 @@ export function CallDetail({
   }
 
   const attachments = call.attachments ?? []
+  // settingsLoading gate: the defaults claim the feature is ON while the real
+  // settings load, which flashed the banner for users who turned it off.
   const calendarMatches =
-    !call.contactId && !matchDismissed && settings.crm.calendarMatchEnabled
+    !call.contactId && !matchDismissed && !settingsLoading && settings.crm.calendarMatchEnabled
       ? findCalendarMatches(call, googleEvents, matchSensitivityMs(settings.crm.matchSensitivity))
       : []
   // While the auto-link effect is about to fire for this exact case, skip the
@@ -616,6 +661,7 @@ function AttachmentCard({
 
   // Clear transient state when this attachment changes (e.g. after a reload).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset transient UI state when the attachment identity changes
     setError(null)
     setConfirmRemove(false)
   }, [attachment.id, attachment.summary])

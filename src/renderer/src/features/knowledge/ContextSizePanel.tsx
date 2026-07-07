@@ -9,7 +9,7 @@ const LEVEL_TONE: Record<string, Tone> = { ok: 'good', large: 'mid', over: 'low'
 const LEVEL_MESSAGE: Record<string, string> = {
   ok: 'Good size — comfortably fits the AI context on every live cue.',
   large:
-    'Getting large. Still usable, but live cues resend this on every turn — trimming keeps them fast and cheap.',
+    'Getting large. Summaries and coaching still use all of it, but live cues only include the first ~4,000 characters — entries past that are left out of in-call suggestions. Trimming keeps everything included, fast, and cheap.',
   over: 'Too large for the simple approach. Trim it down, or this is the point where a future upgrade (retrieving only the relevant bits instead of sending everything) becomes worth building.'
 }
 

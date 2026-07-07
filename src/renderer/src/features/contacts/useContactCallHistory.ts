@@ -27,18 +27,23 @@ export function useContactCallHistory(contactId: string): UseContactCallHistory 
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
     void (async () => {
-      const [summaries, tasks] = await Promise.all([
-        window.api.calls.list(),
-        window.api.tasks.list()
-      ])
-      const matches = summaries.filter((c) => c.contactId === contactId)
-      const calls = (await Promise.all(matches.map((c) => window.api.calls.get(c.id)))).filter(
-        (c): c is Call => c !== null
-      )
-      calls.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      if (!active) return
-      setLinked(calls.map((call) => ({ call, tasks: tasks.filter((t) => t.callId === call.id) })))
-      setLoading(false)
+      try {
+        const [summaries, tasks] = await Promise.all([
+          window.api.calls.list(),
+          window.api.tasks.list()
+        ])
+        const matches = summaries.filter((c) => c.contactId === contactId)
+        const calls = (await Promise.all(matches.map((c) => window.api.calls.get(c.id)))).filter(
+          (c): c is Call => c !== null
+        )
+        calls.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        if (!active) return
+        setLinked(calls.map((call) => ({ call, tasks: tasks.filter((t) => t.callId === call.id) })))
+      } catch {
+        /* show the (possibly empty) history rather than a skeleton forever */
+      } finally {
+        if (active) setLoading(false)
+      }
     })()
     return () => {
       active = false

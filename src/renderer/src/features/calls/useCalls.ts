@@ -25,6 +25,7 @@ export function useCalls(): UseCalls {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-time data fetch; state set only after the await
     void refresh()
   }, [refresh])
 
