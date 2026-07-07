@@ -1,6 +1,7 @@
 import { AudioLines, Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { cn } from '@renderer/lib/cn'
+import { isMac } from '@renderer/lib/platform'
 import { useVirtualMic } from './useVirtualMic'
 
 // Plain-language text for the error codes virtualmic.ts can return from a
@@ -23,8 +24,13 @@ function errorMessage(code: string): string {
 /** Home section: turn app-managed noise cancellation on/off. When on, a helper
  *  cleans the mic and publishes it as the "Sales OS Microphone" device — which
  *  the user then selects in Zoom/Meet (or here) so the buyer hears clean audio. */
-export function NoiseCancellationCard(): React.JSX.Element {
+export function NoiseCancellationCard(): React.JSX.Element | null {
   const { status, busy, error, start, stop } = useVirtualMic()
+
+  // The noise-cancellation engine is a macOS Core Audio driver — it doesn't
+  // exist on other platforms (a Windows version is its own future project), so
+  // showing this card there would only advertise a dead end.
+  if (!isMac) return null
 
   // Loading the very first status.
   if (status === null) {

@@ -381,9 +381,15 @@ export function registerTranscription(): void {
   })
 
   ipcMain.handle('mic:openSettings', async () => {
-    await shell.openExternal(
-      'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'
-    )
+    // Each OS has its own deep-link to the microphone privacy pane.
+    const url =
+      process.platform === 'darwin'
+        ? 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'
+        : process.platform === 'win32'
+          ? 'ms-settings:privacy-microphone'
+          : null
+    if (!url) return { ok: false as const, error: 'not applicable on this platform' }
+    await shell.openExternal(url)
     return { ok: true as const }
   })
 }

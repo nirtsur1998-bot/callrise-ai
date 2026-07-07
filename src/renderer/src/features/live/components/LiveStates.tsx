@@ -1,7 +1,14 @@
 import type { ReactNode } from 'react'
 import { Mic, Settings as SettingsIcon } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { isMac } from '@renderer/lib/platform'
 import type { LiveStatus } from '../types'
+
+// What the OS calls its settings app ("System Settings" is macOS-speak).
+const SETTINGS_NAME = isMac ? 'System Settings' : 'Settings'
+const MIC_SETTINGS_PATH = isMac
+  ? 'System Settings → Privacy & Security → Microphone → enable the app, then return here.'
+  : 'Settings → Privacy & security → Microphone → allow apps to access your microphone, then return here.'
 
 /** The big "press to start" hero shown before the first session. */
 export function IdleHero({ onStart }: { onStart: () => void }): React.JSX.Element {
@@ -69,7 +76,7 @@ export function DeniedState({ onRetry }: { onRetry: () => void }): React.JSX.Ele
     <CenteredState
       icon={<Mic className="h-6 w-6 text-faint" />}
       title="Microphone access is off"
-      subtitle="CallRise AI needs permission to use your microphone. Turn it on in System Settings, then try again."
+      subtitle={`CallRise AI needs permission to use your microphone. Turn it on in ${SETTINGS_NAME}, then try again.`}
     >
       <div className="mt-5 flex items-center gap-2.5">
         <button
@@ -77,7 +84,7 @@ export function DeniedState({ onRetry }: { onRetry: () => void }): React.JSX.Ele
           onClick={() => void window.api.transcription.openMicSettings()}
           className="no-drag flex items-center gap-2 rounded-lg border border-line bg-surface px-3.5 py-2 text-sm font-medium text-ink transition hover:bg-elevated"
         >
-          <SettingsIcon className="h-4 w-4" /> Open System Settings
+          <SettingsIcon className="h-4 w-4" /> Open {SETTINGS_NAME}
         </button>
         <button
           type="button"
@@ -87,9 +94,7 @@ export function DeniedState({ onRetry }: { onRetry: () => void }): React.JSX.Ele
           Try again
         </button>
       </div>
-      <p className="mt-4 max-w-sm text-xs text-faint">
-        System Settings → Privacy &amp; Security → Microphone → enable the app, then return here.
-      </p>
+      <p className="mt-4 max-w-sm text-xs text-faint">{MIC_SETTINGS_PATH}</p>
     </CenteredState>
   )
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { startRecorder, type Recorder } from './audio/recorder'
 import { groupWords, mergeSegments } from './segments'
+import { isMac } from '@renderer/lib/platform'
 import type { LiveStatus } from './types'
 import type { CallSegment, ConsentRecord } from '@renderer/features/calls/types'
 import {
@@ -354,6 +355,10 @@ export function useTranscription(
   // opens getDisplayMedia). Consent is re-checked AFTER the async permission
   // prompt, so a revoke during the prompt can't slip capture through.
   const enableOtherParty = useCallback(async () => {
+    // Buyer capture is macOS-only (system-audio loopback). The main process
+    // refuses to arm on other platforms too — this just avoids ever opening a
+    // doomed getDisplayMedia prompt there.
+    if (!isMac) return
     // Re-entrancy guard: ignore a second click while a previous enable is
     // still mid-flight (two concurrent arm-then-getDisplayMedia runs race).
     if (enablingOtherPartyRef.current) return

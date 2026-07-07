@@ -39,9 +39,11 @@ export function registerLoopbackCapture(): void {
   // Synchronous arm/disarm so the renderer can flip this in the same tick as the
   // click gesture, right before getDisplayMedia (an async IPC would race).
   ipcMain.on('loopback:arm', (event) => {
+    // Buyer capture rides on macOS system-audio loopback; other platforms have
+    // no capture path yet (M12 is macOS-only), so arming is refused outright.
     // The master switch can only remove capability: if it's off, refuse to
     // arm at all, regardless of what the renderer believes consent is.
-    armed = loadAppSettings().allowOtherPartyRecording
+    armed = process.platform === 'darwin' && loadAppSettings().allowOtherPartyRecording
     event.returnValue = armed
   })
   ipcMain.on('loopback:disarm', (event) => {
