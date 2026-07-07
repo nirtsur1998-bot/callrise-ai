@@ -188,7 +188,7 @@ export function GoogleConnect({
                   type="button"
                   onClick={() => void enableTwoWaySync()}
                   disabled={enablingSync}
-                  title="Let Sales OS add and update events in your Google Calendar"
+                  title="Let CallRise AI add and update events in your Google Calendar"
                   className={cn(
                     'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition',
                     enablingSync

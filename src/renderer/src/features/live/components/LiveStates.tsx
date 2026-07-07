@@ -69,7 +69,7 @@ export function DeniedState({ onRetry }: { onRetry: () => void }): React.JSX.Ele
     <CenteredState
       icon={<Mic className="h-6 w-6 text-faint" />}
       title="Microphone access is off"
-      subtitle="Sales OS needs permission to use your microphone. Turn it on in System Settings, then try again."
+      subtitle="CallRise AI needs permission to use your microphone. Turn it on in System Settings, then try again."
     >
       <div className="mt-5 flex items-center gap-2.5">
         <button

@@ -1,3 +1,3 @@
-# Sales OS — Product Vision
+# CallRise AI — Product Vision
 
 > Paste the product vision here.

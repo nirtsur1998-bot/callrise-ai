@@ -1,7 +1,7 @@
 {
-  "name": "sales-os",
+  "name": "callrise-ai",
   "version": "0.1.0",
-  "description": "Sales OS — desktop AI assistant for sales calls",
+  "description": "CallRise AI — desktop AI assistant for sales calls",
   "main": "./out/main/index.js",
   "author": "",
   "private": true,
@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.107.0",
+    "@azure/msal-node": "^5.3.1",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "@supabase/supabase-js": "^2.110.0",

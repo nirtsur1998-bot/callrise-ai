@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: sales-os-scaffold
+appId: ai.callrise.app
+productName: CallRise AI
 directories:
   buildResources: build
 files:
@@ -12,7 +12,7 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: sales-os-scaffold
+  executableName: CallRiseAI
   icon: build/icon.ico
   target:
     - target: nsis
@@ -33,7 +33,7 @@ mac:
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
     - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSAudioCaptureUsageDescription: Sales OS records the other party's call audio, only with their consent, so it can transcribe the conversation.
+    - NSAudioCaptureUsageDescription: CallRise AI records the other party's call audio, only with their consent, so it can transcribe the conversation.
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false

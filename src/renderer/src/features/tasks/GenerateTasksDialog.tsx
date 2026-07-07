@@ -244,7 +244,7 @@ function RemindersOnlyNote(): React.JSX.Element {
     <div className="flex items-start gap-2.5 rounded-xl border border-line-soft bg-canvas px-4 py-3 text-[13px] text-muted">
       <Info className="mt-0.5 h-4 w-4 shrink-0 text-faint" />
       <p>
-        These are reminders only. Sales OS won&apos;t send emails or schedule meetings — an
+        These are reminders only. CallRise AI won&apos;t send emails or schedule meetings — an
         &ldquo;Email&rdquo; or &ldquo;Meeting&rdquo; task just reminds you to do it yourself.
       </p>
     </div>

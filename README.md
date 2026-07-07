@@ -1,4 +1,4 @@
-# Sales OS
+# CallRise AI
 
 Desktop AI assistant for sales calls — built with Electron, React, TypeScript, Vite, and Tailwind CSS.
 

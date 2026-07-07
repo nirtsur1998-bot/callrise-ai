@@ -21,7 +21,7 @@ export async function getActiveAppName(): Promise<string | null> {
 // --- Last EXTERNAL app -------------------------------------------------------
 // The exclusion check fires when the Live Calls screen mounts — but the user
 // just clicked into THIS app to get there, so the frontmost app at that moment
-// is always Sales OS itself and the excluded-apps list never matched anything.
+// is always CallRise AI itself and the excluded-apps list never matched anything.
 // The meaningful signal is what the rep was using BEFORE switching here, so we
 // sample the frontmost app while OUR window is unfocused (one cheap check every
 // few seconds, only while blurred, name kept in memory only) and remember the

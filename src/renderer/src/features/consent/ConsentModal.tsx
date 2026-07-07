@@ -68,7 +68,7 @@ export function ConsentModal({ consent, onEnable, onClose }: ConsentModalProps):
         </div>
 
         <p className="mt-3 text-[13px] leading-relaxed text-muted">
-          Sales OS can transcribe the other person on the call — but only with their consent. Read
+          CallRise AI can transcribe the other person on the call — but only with their consent. Read
           the disclosure below, then record their answer. Recording the other party stays{' '}
           <span className="text-ink">off</span> until you confirm they said yes.
         </p>

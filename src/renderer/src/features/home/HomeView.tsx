@@ -14,7 +14,7 @@ export function HomeView(): React.JSX.Element {
     <div className="mx-auto max-w-3xl">
       {/* Greeting */}
       <header className="mb-7">
-        <h2 className="text-2xl font-semibold tracking-tight">Welcome to Sales OS</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">Welcome to CallRise AI</h2>
         <p className="mt-1.5 text-sm text-muted">
           Your AI assistant for sales calls. This is an early shell — features will land here step
           by step.

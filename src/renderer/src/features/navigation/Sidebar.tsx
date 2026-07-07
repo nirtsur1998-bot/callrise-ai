@@ -22,7 +22,7 @@ export function Sidebar({ active, onSelect, user, onSignOut }: SidebarProps): Re
         <div className="grid h-7 w-7 place-items-center rounded-lg bg-linear-to-br from-accent to-[#9b6cf2] shadow-sm">
           <AudioLines className="h-4 w-4 text-white" strokeWidth={2.25} />
         </div>
-        <span className="text-[15px] font-semibold tracking-tight">Sales OS</span>
+        <span className="text-[15px] font-semibold tracking-tight">CallRise AI</span>
       </div>
 
       {/* Navigation */}

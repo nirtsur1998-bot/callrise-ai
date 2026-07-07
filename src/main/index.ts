@@ -4,6 +4,12 @@ loadEnv()
 import { app, shell, BrowserWindow, session } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+
+// Renamed "Sales OS" -> "CallRise AI" (rebrand), but the on-disk data folder
+// keeps its original name so existing calls/tasks/settings/consent/Google
+// tokens aren't orphaned by the rename. Must run before app is ready.
+app.setName('CallRise AI')
+app.setPath('userData', join(app.getPath('appData'), 'sales-os'))
 import icon from '../../resources/icon.png?asset'
 import { registerTranscription, disposeTranscription } from './transcription'
 import { registerCalls } from './calls'
@@ -85,7 +91,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  electronApp.setAppUserModelId('com.salesos.app')
+  electronApp.setAppUserModelId('ai.callrise.app')
 
   // Grant microphone capture only to our own window, nothing else.
   const isOurWindow = (wc: Electron.WebContents | null): boolean =>

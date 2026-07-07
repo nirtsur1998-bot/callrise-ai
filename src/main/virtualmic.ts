@@ -4,7 +4,7 @@
 // installs a Core Audio driver and runs a small helper, `michelper`, that
 // captures the real mic, denoises it with DeepFilterNet3, and publishes the
 // clean audio as the "Sales OS Microphone" input device. Any app (Zoom, Meet,
-// or Sales OS itself) that selects that device then hears the denoised voice.
+// or CallRise AI itself) that selects that device then hears the denoised voice.
 //
 // This module lets the app DETECT and CONTROL that helper: is the driver
 // installed, is the helper running, and start/stop it as a child process.
@@ -280,7 +280,7 @@ async function startHelper(): Promise<{ ok: boolean; error?: string }> {
           }
           notifyUser(
             'Noise cancellation is off',
-            'It stopped and could not restart automatically. Your call app may be sending unclean audio — check Sales OS or switch microphones.'
+            'It stopped and could not restart automatically. Your call app may be sending unclean audio — check CallRise AI or switch microphones.'
           )
         }
       }

@@ -21,7 +21,7 @@ function Brand(): React.JSX.Element {
         <AudioLines className="h-5 w-5 text-white" strokeWidth={2.25} />
       </div>
       <div>
-        <h1 className="text-lg font-semibold tracking-tight">Sales OS</h1>
+        <h1 className="text-lg font-semibold tracking-tight">CallRise AI</h1>
         <p className="mt-0.5 text-[13px] text-muted">Your AI assistant for sales calls</p>
       </div>
     </div>
