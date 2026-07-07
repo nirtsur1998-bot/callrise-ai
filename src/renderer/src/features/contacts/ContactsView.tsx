@@ -26,15 +26,13 @@ import { ContactFormDialog, type ContactFormValues } from './ContactFormDialog'
 import { ContactDetail } from './ContactDetail'
 import { buildContactStats, recencyTone, formatRelative, type ContactStats } from './contactStats'
 import type { Contact } from './types'
+import { formatDateOnly } from '@renderer/lib/dateOnly'
 
 type SortMode = 'recent' | 'name'
 
-function formatRegisteredDate(value: string | undefined): string | null {
-  if (!value) return null
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return null
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-}
+// registeredAt is DATE-ONLY — formatDateOnly avoids the UTC-midnight parse
+// that displayed the previous day for users west of UTC.
+const formatRegisteredDate = formatDateOnly
 
 interface ContactsViewProps {
   /** Deep-link from the follow-up digest: open this contact on mount. */

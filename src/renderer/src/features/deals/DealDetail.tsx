@@ -112,7 +112,7 @@ export function DealDetail({
             </span>
           )}
         </div>
-        {deal.notes && <p className="mt-3 text-sm text-muted">{deal.notes}</p>}
+        {deal.notes && <p className="mt-3 text-sm whitespace-pre-line text-muted">{deal.notes}</p>}
       </div>
 
       {stale && (

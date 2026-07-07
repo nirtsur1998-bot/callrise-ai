@@ -20,6 +20,7 @@ import { useContactCallHistory } from './useContactCallHistory'
 import { CallHistoryList } from './CallHistoryList'
 import { formatRelative } from './contactStats'
 import type { Contact } from './types'
+import { formatDateOnly } from '@renderer/lib/dateOnly'
 
 interface ContactDetailProps {
   contact: Contact
@@ -127,7 +128,9 @@ export function ContactDetail({
               </span>
             )}
           </div>
-          {contact.notes && <p className="mt-3 text-sm text-muted">{contact.notes}</p>}
+          {contact.notes && (
+            <p className="mt-3 text-sm whitespace-pre-line text-muted">{contact.notes}</p>
+          )}
         </div>
       </div>
 
@@ -212,9 +215,6 @@ function StatCard({ icon: Icon, label, value, tone }: StatCardProps): React.JSX.
   )
 }
 
-function formatRegisteredDate(value: string | undefined): string | null {
-  if (!value) return null
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return null
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-}
+// registeredAt is DATE-ONLY — formatDateOnly avoids the UTC-midnight parse
+// that displayed the previous day for users west of UTC.
+const formatRegisteredDate = formatDateOnly

@@ -72,6 +72,19 @@ function sanitizeOptionalText(value: unknown, max: number): string | undefined {
   return clean ? clean : undefined
 }
 
+/** Like sanitizeOptionalText but PRESERVES newlines — for the multi-line
+ *  notes textarea. Collapsing newlines silently flattened users' notes into
+ *  one run-on line on every save AND read. Normalizes CRLF, caps blank runs. */
+function sanitizeMultilineText(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const clean = value
+    .replace(/\r\n?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, max)
+  return clean ? clean : undefined
+}
+
 /** A non-negative currency amount, rounded to cents. Anything invalid -> undefined. */
 function sanitizeValue(value: unknown): number | undefined {
   const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
@@ -163,7 +176,7 @@ function sanitizeDealRecord(value: unknown): Deal | null {
     stageId: v.stageId,
     value: sanitizeValue(v.value),
     expectedCloseDate: sanitizeDateOnly(v.expectedCloseDate),
-    notes: sanitizeOptionalText(v.notes, MAX_NOTES),
+    notes: sanitizeMultilineText(v.notes, MAX_NOTES),
     createdAt,
     updatedAt,
     riskAssessment: sanitizeRiskAssessment(v.riskAssessment),
@@ -190,7 +203,7 @@ export async function createDeal(dir: string, input: DealCreateInput): Promise<D
     stageId: input.stageId,
     value: sanitizeValue(input?.value),
     expectedCloseDate: sanitizeDateOnly(input?.expectedCloseDate),
-    notes: sanitizeOptionalText(input?.notes, MAX_NOTES),
+    notes: sanitizeMultilineText(input?.notes, MAX_NOTES),
     createdAt: now,
     updatedAt: now
   }
@@ -300,7 +313,7 @@ async function updateDealUnlocked(
   if ('value' in patch) deal.value = sanitizeValue(patch.value)
   if ('expectedCloseDate' in patch)
     deal.expectedCloseDate = sanitizeDateOnly(patch.expectedCloseDate)
-  if ('notes' in patch) deal.notes = sanitizeOptionalText(patch.notes, MAX_NOTES)
+  if ('notes' in patch) deal.notes = sanitizeMultilineText(patch.notes, MAX_NOTES)
 
   deal.updatedAt = new Date().toISOString()
 

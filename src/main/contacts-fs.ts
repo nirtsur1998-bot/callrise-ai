@@ -99,6 +99,19 @@ function sanitizeOptionalText(value: unknown, max: number): string | undefined {
   return clean ? clean : undefined
 }
 
+/** Like sanitizeOptionalText but PRESERVES newlines — for the multi-line
+ *  notes textarea. Collapsing newlines silently flattened users' notes into
+ *  one run-on line on every save AND read. Normalizes CRLF, caps blank runs. */
+function sanitizeMultilineText(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const clean = value
+    .replace(/\r\n?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, max)
+  return clean ? clean : undefined
+}
+
 async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true })
 }
@@ -141,7 +154,7 @@ function sanitizeContactRecord(value: unknown): Contact | null {
     email: sanitizeOptionalText(v.email, MAX_EMAIL),
     phoneCountry: sanitizeCountryCode(v.phoneCountry),
     phone: sanitizeOptionalText(v.phone, MAX_PHONE),
-    notes: sanitizeOptionalText(v.notes, MAX_NOTES),
+    notes: sanitizeMultilineText(v.notes, MAX_NOTES),
     createdAt,
     updatedAt
   }
@@ -165,7 +178,7 @@ export async function createContact(
     email: sanitizeOptionalText(input?.email, MAX_EMAIL),
     phoneCountry: sanitizeCountryCode(input?.phoneCountry),
     phone: sanitizeOptionalText(input?.phone, MAX_PHONE),
-    notes: sanitizeOptionalText(input?.notes, MAX_NOTES),
+    notes: sanitizeMultilineText(input?.notes, MAX_NOTES),
     createdAt: now,
     updatedAt: now
   }
@@ -264,7 +277,7 @@ async function updateContactUnlocked(
   if ('email' in patch) contact.email = sanitizeOptionalText(patch.email, MAX_EMAIL)
   if ('phoneCountry' in patch) contact.phoneCountry = sanitizeCountryCode(patch.phoneCountry)
   if ('phone' in patch) contact.phone = sanitizeOptionalText(patch.phone, MAX_PHONE)
-  if ('notes' in patch) contact.notes = sanitizeOptionalText(patch.notes, MAX_NOTES)
+  if ('notes' in patch) contact.notes = sanitizeMultilineText(patch.notes, MAX_NOTES)
 
   contact.updatedAt = new Date().toISOString() // mark modified (future backup ordering key)
 
