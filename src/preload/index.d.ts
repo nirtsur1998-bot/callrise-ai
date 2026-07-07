@@ -681,6 +681,9 @@ export interface BackupStatus {
   lastPushErrorAt?: string
   lastPullError?: string
   lastPullErrorAt?: string
+  /** `<id>.conflict` files across the stores — the losing sides of two-device
+   *  concurrent edits, kept beside the store so nothing is silently lost. */
+  conflictCount: number
 }
 
 export interface BackupApi {
@@ -690,6 +693,9 @@ export interface BackupApi {
   syncNow: () => Promise<{ pull: BackupRestoreResult; push: BackupPushResult }>
   /** Last-backed-up time / last error, for the trust UI. */
   getStatus: () => Promise<BackupStatus>
+  /** Reveal the first `<id>.conflict` file in Finder (they're plain JSON —
+   *  the kept "losing" copy of a two-device concurrent edit). */
+  revealConflicts: () => Promise<{ ok: boolean }>
   /** Fires when a restore changed tasks/calls on disk (screens should re-read). */
   onChanged: (cb: () => void) => () => void
 }

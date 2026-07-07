@@ -217,6 +217,30 @@ export function BackupCard(): React.JSX.Element {
         </p>
       )}
 
+      {syncScope.knowledgeBase && (
+        <p className="mt-4 text-[12px] text-faint">
+          Knowledge Base sync includes objection scripts you approved from calls — approving a mined
+          suggestion means its quotes sync with the rest of your library.
+        </p>
+      )}
+
+      {(status?.conflictCount ?? 0) > 0 && (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+          <p className="text-[12px] text-amber-300">
+            {status!.conflictCount} conflicting {status!.conflictCount === 1 ? 'copy' : 'copies'}{' '}
+            kept — the same record was edited on two devices at once; the losing version was saved
+            next to your data instead of being discarded.
+          </p>
+          <button
+            type="button"
+            onClick={() => void window.api.backup.revealConflicts()}
+            className="shrink-0 text-[12px] font-medium text-muted transition hover:text-ink"
+          >
+            Reveal in Finder
+          </button>
+        </div>
+      )}
+
       <p className="mt-4 border-t border-line-soft pt-3 text-[12px] text-faint">
         Backups happen automatically in the background and restore on a new device when you sign in.{' '}
         {syncScope.transcripts

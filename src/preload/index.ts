@@ -122,6 +122,8 @@ const api = {
     syncNow: () => ipcRenderer.invoke('backup:syncNow'),
     // Last-backed-up time / last error, for the trust UI.
     getStatus: () => ipcRenderer.invoke('backup:getStatus'),
+    // Reveal the first .conflict file in Finder (kept two-device edit copies).
+    revealConflicts: () => ipcRenderer.invoke('backup:revealConflicts'),
     // Fires when a restore changed tasks/calls on disk (screens should re-read).
     onChanged: (cb: () => void) => subscribe('backup:changed', cb)
   },

@@ -72,7 +72,12 @@ export function AudioSourcesCard(): React.JSX.Element {
         </p>
         <p className="mt-1.5 text-[11px] text-faint">
           Sales OS can&rsquo;t change this — set your output in{' '}
-          {isMac ? 'macOS (menu bar → Sound)' : isWindows ? 'Windows (Settings → Sound)' : 'your system sound settings'}.
+          {isMac
+            ? 'macOS (menu bar → Sound)'
+            : isWindows
+              ? 'Windows (Settings → Sound)'
+              : 'your system sound settings'}
+          .
         </p>
       </div>
     </Card>

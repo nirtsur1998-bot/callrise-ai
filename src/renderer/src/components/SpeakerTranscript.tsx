@@ -35,9 +35,7 @@ export function SpeakerTranscript({
           <div key={index}>
             <div className="mb-1 flex items-center gap-2">
               <span className={cn('h-1.5 w-1.5 rounded-full', style.dot)} />
-              <span
-                className={cn('text-xs font-semibold uppercase tracking-wide', style.label)}
-              >
+              <span className={cn('text-xs font-semibold uppercase tracking-wide', style.label)}>
                 Speaker {seg.speaker + 1}
               </span>
             </div>

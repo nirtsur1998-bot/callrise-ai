@@ -10,7 +10,7 @@
 // crash-safe (no watermark that could skip a record). Idempotency + "newest
 // wins" are enforced by the DB (primary key (user_id, id) + the server-side
 // trigger), so re-pushing an unchanged or older record is a harmless no-op.
-import { app, ipcMain, BrowserWindow } from 'electron'
+import { app, ipcMain, shell, BrowserWindow } from 'electron'
 import { join, dirname } from 'node:path'
 import { promises as fs } from 'node:fs'
 import { getSupabaseClient, getSignedInUserId } from './auth'
@@ -287,6 +287,22 @@ async function readState(): Promise<BackupState> {
     return {}
   }
 }
+function conflictDirs(): string[] {
+  return [tasksDir(), eventsDir(), callsDir(), knowledgeDir(), contactsDir(), dealsDir()]
+}
+
+async function countConflictFiles(): Promise<number> {
+  let count = 0
+  for (const dir of conflictDirs()) {
+    try {
+      count += (await fs.readdir(dir)).filter((f) => f.endsWith('.conflict')).length
+    } catch {
+      /* store dir missing — nothing to count */
+    }
+  }
+  return count
+}
+
 async function writeState(patch: BackupState): Promise<void> {
   const next = { ...(await readState()), ...patch }
   // Atomic like every other store: a torn write here blanks lastSyncAt, which
@@ -887,7 +903,26 @@ export function registerBackup(): void {
   // Manual triggers (the settings UI in a later step calls these).
   ipcMain.handle('backup:pushNow', () => enqueue(pushAll))
   ipcMain.handle('backup:syncNow', () => enqueue(syncNow))
-  ipcMain.handle('backup:getStatus', () => readState())
+  ipcMain.handle('backup:getStatus', async () => ({
+    ...(await readState()),
+    // Losing sides of two-device concurrent edits, kept as <id>.conflict —
+    // surfaced in the Settings card so "kept" data isn't invisibly lost.
+    conflictCount: await countConflictFiles()
+  }))
+  ipcMain.handle('backup:revealConflicts', async () => {
+    for (const dir of conflictDirs()) {
+      try {
+        const file = (await fs.readdir(dir)).find((f) => f.endsWith('.conflict'))
+        if (file) {
+          shell.showItemInFolder(join(dir, file))
+          return { ok: true as const }
+        }
+      } catch {
+        /* unreadable store dir — try the next one */
+      }
+    }
+    return { ok: false as const }
+  })
 
   getSupabaseClient()?.auth.onAuthStateChange((event, session) => {
     const uid = session?.user?.id

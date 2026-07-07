@@ -8,10 +8,7 @@ interface TranscriptViewProps {
 }
 
 /** Scrollable live transcript: speaker-labeled finalized turns + faint interim. */
-export function TranscriptView({
-  segments,
-  interimText
-}: TranscriptViewProps): React.JSX.Element {
+export function TranscriptView({ segments, interimText }: TranscriptViewProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
 

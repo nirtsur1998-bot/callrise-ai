@@ -25,9 +25,7 @@ export default function AppShell({
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-canvas text-ink">
       {/* Left: navigation */}
-      <aside className="w-60 shrink-0 border-r border-line-soft bg-surface">
-        {sidebar}
-      </aside>
+      <aside className="w-60 shrink-0 border-r border-line-soft bg-surface">{sidebar}</aside>
 
       {/* Center: active view */}
       <main className="flex min-w-0 flex-1 flex-col bg-canvas">
@@ -38,9 +36,7 @@ export default function AppShell({
       </main>
 
       {/* Right: AI copilot */}
-      <aside className="w-80 shrink-0 border-l border-line-soft bg-surface">
-        {copilot}
-      </aside>
+      <aside className="w-80 shrink-0 border-l border-line-soft bg-surface">{copilot}</aside>
     </div>
   )
 }
