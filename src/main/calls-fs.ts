@@ -962,7 +962,11 @@ function buildVerifyTurns(segments: CallSegment[]): VerifyTurn[] {
   return turns.map((t) => ({ speaker: t.speaker, text: normalizeForMatch(t.text) }))
 }
 
-function sanitizeEvidence(value: unknown, turns: VerifyTurn[]): CoachEvidence | undefined {
+function sanitizeEvidence(
+  value: unknown,
+  turns: VerifyTurn[],
+  repSpeaker: number | null
+): CoachEvidence | undefined {
   if (!value || typeof value !== 'object') return undefined
   const v = value as Record<string, unknown>
   const quote = str(v.quote, 500).trim()
@@ -975,12 +979,15 @@ function sanitizeEvidence(value: unknown, turns: VerifyTurn[]): CoachEvidence | 
   // transcript string), so a restored/cloud payload can't claim a stitched
   // or misattributed quote is verified. `speaker` comes from the matched
   // turn's actual speaker, not the unchecked claim, so a misattribution
-  // can't survive even if the text happens to match some other speaker.
+  // can't survive even if the text happens to match some other speaker. It
+  // must ALSO be the rep being coached — matching the transcript alone never
+  // confirms the buyer's own line isn't being shown as the rep's evidence.
   const match = turns.find((t) => t.speaker === claimedSpeaker && t.text.includes(nq))
+  const verified = !!match && repSpeaker !== null && claimedSpeaker === repSpeaker
   return {
     quote,
     speaker: match ? match.speaker : claimedSpeaker,
-    verified: !!match
+    verified
   }
 }
 
@@ -1000,6 +1007,11 @@ export function sanitizeCoaching(value: unknown, segments: CallSegment[]): Coach
 
   const scrub = makeFreeTextScrubber(transcript)
 
+  // Parsed early — evidence can only be verified when it's the REP's own
+  // words, so every sanitizeEvidence call below needs this first.
+  const m = (v.metrics ?? {}) as Record<string, unknown>
+  const repSpeaker = numOrNull(m.repSpeaker) === null ? null : clampInt(m.repSpeaker, 0, 1000, 0)
+
   const dimensions: CoachDimension[] = []
   const seenKeys = new Set<CoachDimensionKey>()
   for (const d of Array.isArray(v.dimensions) ? v.dimensions : []) {
@@ -1013,7 +1025,7 @@ export function sanitizeCoaching(value: unknown, segments: CallSegment[]): Coach
       key,
       score: clampInt(dd.score, 1, 5, 3),
       comment: scrub(str(dd.comment, 1000)),
-      evidence: sanitizeEvidence(dd.evidence, turns)
+      evidence: sanitizeEvidence(dd.evidence, turns, repSpeaker)
     })
   }
   // A partial rubric (hand-edited or legacy file) must not pass as a complete report.
@@ -1027,13 +1039,12 @@ export function sanitizeCoaching(value: unknown, segments: CallSegment[]): Coach
       kind: ii.kind === 'strategic' ? 'strategic' : 'mechanical',
       title: scrub(str(ii.title, 300)),
       detail: scrub(str(ii.detail, 1500)),
-      evidence: sanitizeEvidence(ii.evidence, turns)
+      evidence: sanitizeEvidence(ii.evidence, turns, repSpeaker)
     })
   }
 
   const dc = (v.dealContext ?? {}) as Record<string, unknown>
   const strength = (v.strength ?? {}) as Record<string, unknown>
-  const m = (v.metrics ?? {}) as Record<string, unknown>
 
   return {
     overallScore: clampInt(v.overallScore, 0, 100, 0),
@@ -1044,13 +1055,13 @@ export function sanitizeCoaching(value: unknown, segments: CallSegment[]): Coach
     },
     strength: {
       text: scrub(str(strength.text, 600)),
-      evidence: sanitizeEvidence(strength.evidence, turns)
+      evidence: sanitizeEvidence(strength.evidence, turns, repSpeaker)
     },
     dimensions,
     improvements,
     nextAction: scrub(str(v.nextAction, 500)),
     metrics: {
-      repSpeaker: numOrNull(m.repSpeaker) === null ? null : clampInt(m.repSpeaker, 0, 1000, 0),
+      repSpeaker,
       singleSpeaker: m.singleSpeaker === true,
       talkRatio: numOrNull(m.talkRatio),
       repWords: clampInt(m.repWords, 0, 10_000_000, 0),

@@ -230,14 +230,19 @@ function normalize(s: string): string {
 }
 
 /**
- * Build a verifier that checks a quote actually appears in the transcript.
- * Checks per merged same-speaker turn (never a flattened whole-transcript
- * string), so a quote stitched from the tail of one turn plus the head of
- * another can't verify, and the model's claimed speaker is cross-checked
- * against who actually said the words.
+ * Build a verifier that checks a quote actually appears in the transcript AND
+ * was actually said by the REP being coached. Checks per merged same-speaker
+ * turn (never a flattened whole-transcript string), so a quote stitched from
+ * the tail of one turn plus the head of another can't verify, and the
+ * model's claimed speaker is cross-checked against who actually said the
+ * words. Without the repSpeaker check, a buyer's line whose speaker index the
+ * model correctly reported would still verify — and be shown as "the rep
+ * said/did this" — because matching the transcript alone never confirms the
+ * speaker was the rep at all.
  */
 function makeVerifier(
-  segments: CallSegment[]
+  segments: CallSegment[],
+  repSpeaker: number | null
 ): (quote: unknown, speaker: unknown) => CoachEvidence | undefined {
   // Merge consecutive same-speaker segments into turns (same merge logic as computeMetrics).
   const turns: { speaker: number; text: string }[] = []
@@ -254,9 +259,12 @@ function makeVerifier(
     const nq = normalize(q)
     const sp =
       typeof speaker === 'number' && Number.isFinite(speaker) ? Math.max(0, Math.trunc(speaker)) : 0
-    // Verified only when a single turn spoken by the CLAIMED speaker contains the quote.
+    // Verified only when a single turn spoken by the CLAIMED speaker contains
+    // the quote AND that speaker is the rep being coached — evidence for
+    // coaching the rep can never be the buyer's own words.
     const match = entries.find((e) => e.speaker === sp && e.text.includes(nq))
-    return { quote: q.slice(0, 500), speaker: match ? match.speaker : sp, verified: !!match }
+    const verified = !!match && repSpeaker !== null && sp === repSpeaker
+    return { quote: q.slice(0, 500), speaker: match ? match.speaker : sp, verified }
   }
 }
 
@@ -360,7 +368,11 @@ function assembleReport(
   segments: CallSegment[],
   durationMs: number
 ): CoachingReport | null {
-  const verify = makeVerifier(segments)
+  const repSpeaker =
+    typeof raw.repSpeaker === 'number' && Number.isFinite(raw.repSpeaker)
+      ? Math.trunc(raw.repSpeaker)
+      : null
+  const verify = makeVerifier(segments, repSpeaker)
   const scrub = makeFreeTextScrubber(segments)
 
   const seenKeys = new Set<CoachDimensionKey>()
@@ -414,10 +426,6 @@ function assembleReport(
   }
 
   const dc = (raw.dealContext ?? {}) as Record<string, unknown>
-  const repSpeaker =
-    typeof raw.repSpeaker === 'number' && Number.isFinite(raw.repSpeaker)
-      ? Math.trunc(raw.repSpeaker)
-      : null
 
   return {
     overallScore,
