@@ -197,7 +197,17 @@ export function useLiveCues(
         .then((res) => {
           if (!mountedRef.current || generation !== generationRef.current || !res.ok) return
           if (repSpeakerRef.current === null && res.repSpeaker !== null) {
-            repSpeakerRef.current = res.repSpeaker // lock the rep for the call
+            // Same guard as coach.ts's batch path (speakers.has(repSpeaker)):
+            // never lock onto a speaker id that hasn't actually appeared in
+            // this call. Without it, a hallucinated/nonexistent guess gets
+            // locked in for the rest of the call — the rep-only pace
+            // safeguard then never fires (it compares against the wrong id),
+            // and every cue meant for the client fires on the rep's own
+            // words instead.
+            const observedSpeakers = new Set(turnsRef.current.map((t) => t.speaker))
+            if (observedSpeakers.has(res.repSpeaker)) {
+              repSpeakerRef.current = res.repSpeaker // lock the rep for the call
+            }
           }
           if (res.cue !== 'none' && res.text) emit(res.cue, res.text)
         })
