@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   CheckCircle2,
+  Circle,
   Building2,
   PhoneCall,
   ListPlus,
@@ -11,6 +12,10 @@ import { cn } from '@renderer/lib/cn'
 import { useContacts } from '@renderer/features/contacts/useContacts'
 import { buildContactStats, daysSinceLastCall } from '@renderer/features/contacts/contactStats'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
+import { useTasks } from '@renderer/features/tasks/useTasks'
+import { TASK_TYPE_META, PRIORITY_META, DUE_TONE_CLASS } from '@renderer/features/tasks/meta'
+import { formatDueLabel } from '@renderer/features/tasks/format'
+import type { Task } from '@renderer/features/tasks/types'
 import type { CallSummary } from '@renderer/features/calls/types'
 import type { Contact } from '@renderer/features/contacts/types'
 import { useDeals } from './useDeals'
@@ -73,6 +78,7 @@ export function FollowUpDigest({
   const { contacts, loading: contactsLoading } = useContacts()
   const { settings } = useAppSettings()
   const { staleFollowUpEnabled, staleAfterDays } = settings.crm
+  const { tasks, loading: tasksLoading, update: updateTask } = useTasks()
   const [calls, setCalls] = useState<CallSummary[]>([])
 
   useEffect(() => {
@@ -152,6 +158,31 @@ export function FollowUpDigest({
     })
   }, [deals, stages, contacts, calls, staleFollowUpEnabled, staleAfterDays])
 
+  // Open tasks tied to a deal or contact — so a follow-up already on the
+  // Tasks screen doesn't get lost. Soonest due date first (no due date last),
+  // then priority. Independent of the risk/cadence flags above: a task stays
+  // visible here until it's done, regardless of whether its deal/contact is
+  // still flagged.
+  const linkedTasks = useMemo<Task[]>(() => {
+    const contactById = new Map(contacts.map((c) => [c.id, c]))
+    const dealById = new Map(deals.map((d) => [d.id, d]))
+    return tasks
+      .filter(
+        (t) =>
+          t.status === 'open' &&
+          ((t.contactId && contactById.has(t.contactId)) || (t.dealId && dealById.has(t.dealId)))
+      )
+      .sort((a, b) => {
+        const dueDiff = (a.dueAt ? 0 : 1) - (b.dueAt ? 0 : 1)
+        if (dueDiff !== 0) return dueDiff
+        if (a.dueAt && b.dueAt && a.dueAt !== b.dueAt) return a.dueAt.localeCompare(b.dueAt)
+        return PRIORITY_META[a.priority].rank - PRIORITY_META[b.priority].rank
+      })
+  }, [tasks, contacts, deals])
+
+  const contactById = useMemo(() => new Map(contacts.map((c) => [c.id, c])), [contacts])
+  const dealById = useMemo(() => new Map(deals.map((d) => [d.id, d])), [deals])
+
   return (
     <div className="mx-auto max-w-3xl">
       <div className="mb-1 flex items-baseline gap-2.5">
@@ -195,7 +226,97 @@ export function FollowUpDigest({
           ))}
         </ul>
       )}
+
+      {/* Open tasks tied to a deal/contact — separate from the flagged list
+          above, since a task can be open regardless of risk/cadence state. */}
+      {!tasksLoading && linkedTasks.length > 0 && (
+        <div className="mt-8">
+          <div className="mb-1 flex items-baseline gap-2.5">
+            <h2 className="text-lg font-semibold tracking-tight">Open follow-up tasks</h2>
+            <span className="text-[13px] text-faint">
+              {linkedTasks.length} {linkedTasks.length === 1 ? 'item' : 'items'}
+            </span>
+          </div>
+          <p className="mb-5 text-[13px] text-faint">
+            Existing tasks tied to a deal or contact, still open — so a follow-up doesn&apos;t get
+            lost.
+          </p>
+          <ul className="space-y-2.5">
+            {linkedTasks.map((task) => (
+              <LinkedTaskRow
+                key={task.id}
+                task={task}
+                contact={task.contactId ? contactById.get(task.contactId) : undefined}
+                deal={task.dealId ? dealById.get(task.dealId) : undefined}
+                onDone={() => void updateTask(task.id, { status: 'done' })}
+                onOpen={() => {
+                  if (task.dealId && dealById.has(task.dealId)) onOpenDeal(task.dealId)
+                  else if (task.contactId && contactById.has(task.contactId))
+                    onOpenContact(task.contactId)
+                }}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
+  )
+}
+
+interface LinkedTaskRowProps {
+  task: Task
+  contact: Contact | undefined
+  deal: Deal | undefined
+  onDone: () => void
+  onOpen: () => void
+}
+
+function LinkedTaskRow({
+  task,
+  contact,
+  deal,
+  onDone,
+  onOpen
+}: LinkedTaskRowProps): React.JSX.Element {
+  const typeMeta = TASK_TYPE_META[task.type]
+  const priorityMeta = PRIORITY_META[task.priority]
+  const due = formatDueLabel(task.dueAt)
+  const TypeIcon = typeMeta.icon
+
+  return (
+    <li className="flex items-start gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3.5">
+      <button
+        type="button"
+        onClick={onDone}
+        title="Mark as done"
+        className="mt-0.5 shrink-0 text-faint transition hover:text-accent"
+      >
+        <Circle className="h-5 w-5" />
+      </button>
+      <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
+        <p className="truncate text-sm font-medium">{task.title}</p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-faint">
+          <span className="flex items-center gap-1">
+            <TypeIcon className="h-3 w-3" /> {typeMeta.label}
+          </span>
+          <span
+            className={cn(
+              'rounded-full border px-1.5 py-0.5 text-[10px] font-medium',
+              priorityMeta.badge
+            )}
+          >
+            {priorityMeta.label}
+          </span>
+          {due && <span className={DUE_TONE_CLASS[due.tone]}>{due.text}</span>}
+          {(deal || contact) && (
+            <span className="flex items-center gap-1">
+              <Building2 className="h-3 w-3" /> {deal ? deal.title : contact?.name}
+              {deal && contact?.name ? ` · ${contact.name}` : ''}
+            </span>
+          )}
+        </div>
+      </button>
+    </li>
   )
 }
 
