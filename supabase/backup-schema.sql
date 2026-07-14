@@ -23,10 +23,19 @@ language plpgsql
 set search_path = ''  -- pin the search path (Supabase best practice; silences the linter)
 as $$
 begin
+  -- Clock-skew clamp: a device can never claim to have edited a row LATER than
+  -- the server's own clock says "now" is. Without this, a device with a fast
+  -- clock could stamp `updated_at` far in the future; that inflated value would
+  -- then out-rank every later, genuinely newer edit from any correctly-clocked
+  -- device forever, silently discarding real edits. now() is the server's own
+  -- clock, so this clamp is immune to any single device's clock being wrong.
+  if new.updated_at > now() then
+    new.updated_at := now();
+  end if;
+
   -- Server-decided "newest wins": on an update, if the incoming row is NOT newer
-  -- than what's already stored, keep the stored row unchanged (return OLD). A
-  -- device with a wrong/behind clock therefore cannot overwrite a newer edit,
-  -- and re-pushing the same version is a harmless no-op.
+  -- than what's already stored, keep the stored row unchanged (return OLD).
+  -- Re-pushing the same version is a harmless no-op.
   if tg_op = 'UPDATE' and new.updated_at <= old.updated_at then
     return old;
   end if;

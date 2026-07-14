@@ -14,6 +14,10 @@ export const ts = (s: string | undefined | null): number => {
 export interface CloudRow {
   id: string
   updated_at: string
+  /** Authoritative, server-clock timestamp (set by the DB trigger) — used to
+   *  decide "is the cloud version newer", never the device-supplied updated_at
+   *  above, which could be wrong if that device's clock is wrong. */
+  server_updated_at: string
   deleted: boolean
   payload: unknown
 }
@@ -63,7 +67,10 @@ export async function reconcileStore<
       continue
     }
 
-    const cloudT = ts(row.updated_at)
+    // Use the server's own clock (server_updated_at) to decide whether the
+    // cloud copy is newer — never the pushing device's own updated_at, which a
+    // device with a fast/wrong clock could have inflated.
+    const cloudT = ts(row.server_updated_at)
     const localT = ts(local.updatedAt)
     if (cloudT <= localT) continue // local is same-or-newer → local wins; push uploads it
 

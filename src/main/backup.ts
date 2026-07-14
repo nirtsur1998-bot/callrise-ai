@@ -627,7 +627,7 @@ async function fetchAllRows(
     // skipping records past the first page during a large restore.
     const { data, error } = await client
       .from(table)
-      .select('id,updated_at,deleted,payload')
+      .select('id,updated_at,server_updated_at,deleted,payload')
       .eq('user_id', userId)
       .order('id')
       .range(from, from + PAGE - 1)
@@ -767,12 +767,14 @@ export async function pullAll(): Promise<RestoreResult> {
       try {
         const { data, error } = await client
           .from('backup_settings')
-          .select('updated_at,payload')
+          .select('updated_at,server_updated_at,payload')
           .eq('user_id', userId)
           .maybeSingle()
         if (error) throw new Error(error.message)
         const local = loadAppSettings()
-        if (data && ts(data.updated_at) > ts(local.settingsUpdatedAt)) {
+        // Compared on the server's clock (server_updated_at), not the pushing
+        // device's own updated_at — see backup-core.ts's reconcileStore for why.
+        if (data && ts(data.server_updated_at) > ts(local.settingsUpdatedAt)) {
           // Keeps the cloud row's timestamp (no restamp → no multi-device
           // ping-pong) and this device's own syncScope (privacy toggles are
           // per-device, never switched on remotely).
@@ -811,12 +813,13 @@ export async function pullAll(): Promise<RestoreResult> {
       try {
         const { data, error } = await client
           .from('backup_deal_stages')
-          .select('updated_at,payload')
+          .select('updated_at,server_updated_at,payload')
           .eq('user_id', userId)
           .maybeSingle()
         if (error) throw new Error(error.message)
         const local = loadDealStagesMeta()
-        if (data && ts(data.updated_at) > ts(local.updatedAt)) {
+        // Same server-clock comparison as backup_settings above.
+        if (data && ts(data.server_updated_at) > ts(local.updatedAt)) {
           const payload = data.payload as { stages?: unknown } | null
           applyPulledDealStages(payload?.stages, String(data.updated_at))
           notifyDataChanged() // pipeline board re-reads its columns
