@@ -188,6 +188,8 @@ export function useCalendar(): UseCalendar {
         end: patch.end !== undefined ? patch.end : event.end,
         allDay: patch.allDay !== undefined ? patch.allDay : event.allDay,
         notes: patch.notes !== undefined ? patch.notes : (event.notes ?? null),
+        contactId: patch.contactId !== undefined ? patch.contactId : (event.contactId ?? null),
+        dealId: patch.dealId !== undefined ? patch.dealId : (event.dealId ?? null),
         provider: event.provider,
         externalId: event.externalId,
         remoteUpdatedAt: event.remoteUpdatedAt

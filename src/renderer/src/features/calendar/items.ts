@@ -251,7 +251,9 @@ export function draftFromEvent(e: CalendarEvent): EventDraft {
     endDate: format(end, 'yyyy-MM-dd'),
     startTime: format(start, 'HH:mm'),
     endTime: format(end, 'HH:mm'),
-    notes: e.notes ?? ''
+    notes: e.notes ?? '',
+    contactId: e.contactId,
+    dealId: e.dealId
   }
 }
 
@@ -264,9 +266,13 @@ export function draftToInput(draft: EventDraft): {
   end: string
   allDay: boolean
   notes: string | null
+  contactId: string | null
+  dealId: string | null
 } {
   const title = draft.title.trim() || 'Untitled event'
   const notes = draft.notes.trim() || null
+  const contactId = draft.contactId ?? null
+  const dealId = draft.dealId ?? null
   const endDate = draft.endDate >= draft.startDate ? draft.endDate : draft.startDate // never before start
   if (draft.allDay) {
     const [ey, em, ed] = endDate.split('-').map(Number)
@@ -275,7 +281,9 @@ export function draftToInput(draft: EventDraft): {
       start: combineLocalIso(draft.startDate, '00:00'),
       end: new Date(ey, em - 1, ed, 23, 59, 59, 999).toISOString(),
       allDay: true,
-      notes
+      notes,
+      contactId,
+      dealId
     }
   }
   return {
@@ -283,6 +291,8 @@ export function draftToInput(draft: EventDraft): {
     start: combineLocalIso(draft.startDate, draft.startTime),
     end: combineLocalIso(endDate, draft.endTime),
     allDay: false,
-    notes
+    notes,
+    contactId,
+    dealId
   }
 }

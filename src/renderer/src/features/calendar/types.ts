@@ -23,6 +23,10 @@ export interface CalendarEvent {
   attendees?: { email: string; name?: string }[]
   remoteUpdatedAt?: string
   sync?: { state: EventSyncState; lastPushedAt?: string; lastError?: string }
+  /** The contact/deal this event is with, if linked — app-local only, never
+   *  pushed to Google/Outlook. Powers the follow-up dashboard. */
+  contactId?: string
+  dealId?: string
   createdAt: string
   updatedAt: string
 }
@@ -59,4 +63,6 @@ export interface EventDraft {
   startTime: string // HH:mm (ignored when allDay)
   endTime: string // HH:mm (ignored when allDay)
   notes: string
+  contactId?: string
+  dealId?: string
 }

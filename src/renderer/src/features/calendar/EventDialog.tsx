@@ -1,5 +1,9 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { X, Trash2 } from 'lucide-react'
+import { ContactPicker } from '@renderer/features/contacts/ContactPicker'
+import { useContacts } from '@renderer/features/contacts/useContacts'
+import { useDeals } from '@renderer/features/deals/useDeals'
+import { useDealStages } from '@renderer/features/deals/useDealStages'
 import type { EventDraft } from './types'
 
 const fieldClass =
@@ -35,9 +39,25 @@ export function EventDialog({
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { contacts, create: createContact } = useContacts()
+  const { deals } = useDeals()
+  const { stages } = useDealStages()
 
   const set = (patch: Partial<EventDraft>): void => setDraft((d) => ({ ...d, ...patch }))
   const canSave = draft.title.trim().length > 0 && !busy
+
+  // Only the linked contact's OPEN deals make sense to tie a meeting to.
+  const openStageIds = useMemo(
+    () => new Set(stages.filter((s) => s.kind === 'open').map((s) => s.id)),
+    [stages]
+  )
+  const contactDeals = useMemo(
+    () =>
+      draft.contactId
+        ? deals.filter((d) => d.contactId === draft.contactId && openStageIds.has(d.stageId))
+        : [],
+    [deals, draft.contactId, openStageIds]
+  )
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -171,6 +191,30 @@ export function EventDialog({
               className={`${fieldClass} resize-none`}
             />
           </Field>
+          <Field label="Linked contact (optional)">
+            <ContactPicker
+              value={draft.contactId}
+              contacts={contacts}
+              onSelect={(contactId) => set({ contactId, dealId: undefined })}
+              onCreate={createContact}
+            />
+          </Field>
+          {draft.contactId && contactDeals.length > 0 && (
+            <Field label="Linked deal (optional)">
+              <select
+                value={draft.dealId ?? ''}
+                onChange={(e) => set({ dealId: e.target.value || undefined })}
+                className={fieldClass}
+              >
+                <option value="">No deal</option>
+                {contactDeals.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.title}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
           {error && <p className="text-[13px] text-rose-300">{error}</p>}
         </div>
 

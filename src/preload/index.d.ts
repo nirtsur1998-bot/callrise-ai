@@ -547,6 +547,11 @@ export interface CalendarEvent {
   remoteUpdatedAt?: string
   /** Google/Outlook mirror lifecycle for local events (M14 two-way sync). */
   sync?: EventSync
+  /** The contact/deal this event is with, if linked from the New/Edit Event
+   *  dialog — app-local metadata only, never pushed to Google/Outlook. Powers
+   *  the follow-up dashboard's "next scheduled meeting" line. */
+  contactId?: string
+  dealId?: string
   createdAt: string
   updatedAt: string
 }
@@ -557,6 +562,8 @@ export interface EventCreateInput {
   end: string
   allDay?: boolean
   notes?: string | null
+  contactId?: string | null
+  dealId?: string | null
 }
 
 /** Editing/deleting a Google/Outlook event carries its link so the change
@@ -573,6 +580,8 @@ export interface EventUpdateInput {
   end?: string
   allDay?: boolean
   notes?: string | null
+  contactId?: string | null
+  dealId?: string | null
 }
 
 export interface EventsApi {

@@ -6,7 +6,8 @@ import {
   PhoneCall,
   ListPlus,
   AlertTriangle,
-  ShieldAlert
+  ShieldAlert,
+  CalendarClock
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { useContacts } from '@renderer/features/contacts/useContacts'
@@ -17,6 +18,7 @@ import { TASK_TYPE_META, PRIORITY_META, DUE_TONE_CLASS } from '@renderer/feature
 import { formatDueLabel } from '@renderer/features/tasks/format'
 import type { Task } from '@renderer/features/tasks/types'
 import type { CallSummary } from '@renderer/features/calls/types'
+import type { CalendarEvent } from '@renderer/features/calendar/types'
 import type { Contact } from '@renderer/features/contacts/types'
 import { useDeals } from './useDeals'
 import { useDealStages } from './useDealStages'
@@ -58,12 +60,42 @@ interface FlaggedItem {
   tier: AttentionTier
   reason: string
   deal?: Deal
+  /** The next scheduled meeting with this contact/deal, if any is booked. */
+  upcomingAt?: string
 }
 
 function formatOverdue(days: number): string {
   if (!Number.isFinite(days)) return 'No calls yet'
   const whole = Math.floor(days)
   return `${whole} day${whole === 1 ? '' : 's'} since last call`
+}
+
+function formatUpcoming(iso: string): string {
+  const d = new Date(iso)
+  return d.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  })
+}
+
+/** The earliest future event linked to this deal/contact, or undefined —
+ *  local calendar events only (the only kind that can carry a contactId/
+ *  dealId link). */
+function nextUpcomingEventAt(
+  events: CalendarEvent[],
+  contactId: string | undefined,
+  dealId: string | undefined
+): string | undefined {
+  const now = Date.now()
+  const matches = events.filter(
+    (e) => (dealId && e.dealId === dealId) || (contactId && e.contactId === contactId)
+  )
+  const upcoming = matches
+    .filter((e) => Date.parse(e.start) > now)
+    .sort((a, b) => a.start.localeCompare(b.start))
+  return upcoming[0]?.start
 }
 
 /** Every deal that needs attention (a medium/high risk assessment, or —
@@ -80,6 +112,7 @@ export function FollowUpDigest({
   const { staleFollowUpEnabled, staleAfterDays } = settings.crm
   const { tasks, loading: tasksLoading, update: updateTask } = useTasks()
   const [calls, setCalls] = useState<CallSummary[]>([])
+  const [events, setEvents] = useState<CalendarEvent[]>([])
 
   useEffect(() => {
     let active = true
@@ -88,6 +121,21 @@ export function FollowUpDigest({
     })
     return () => {
       active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    const load = (): void => {
+      void window.api.events.list().then((list) => {
+        if (active) setEvents(list)
+      })
+    }
+    load()
+    const off = window.api.events.onChanged(load)
+    return () => {
+      active = false
+      off()
     }
   }, [])
 
@@ -121,7 +169,8 @@ export function FollowUpDigest({
         days: daysSinceLastCall(lastCallAt),
         tier,
         reason,
-        deal
+        deal,
+        upcomingAt: nextUpcomingEventAt(events, deal.contactId, deal.id)
       })
     }
 
@@ -145,7 +194,8 @@ export function FollowUpDigest({
           contact,
           days,
           tier: 'stale' as const,
-          reason: formatOverdue(days)
+          reason: formatOverdue(days),
+          upcomingAt: nextUpcomingEventAt(events, contact.id, undefined)
         }
       })
 
@@ -156,7 +206,7 @@ export function FollowUpDigest({
       // ("no calls yet"), which makes the whole sort order unspecified.
       return a.days === b.days ? 0 : b.days > a.days ? 1 : -1
     })
-  }, [deals, stages, contacts, calls, staleFollowUpEnabled, staleAfterDays])
+  }, [deals, stages, contacts, calls, events, staleFollowUpEnabled, staleAfterDays])
 
   // Open tasks tied to a deal or contact — so a follow-up already on the
   // Tasks screen doesn't get lost. Soonest due date first (no due date last),
@@ -329,7 +379,7 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
   const [creating, setCreating] = useState(false)
   const [result, setResult] = useState<'created' | 'exists' | 'error' | null>(null)
   const created = result === 'created' || result === 'exists'
-  const { deal, contact, title, days, tier, reason } = item
+  const { deal, contact, title, days, tier, reason, upcomingAt } = item
   const value = deal ? formatValue(deal.value) : null
   const isRiskTier = tier === 'risk-high' || tier === 'risk-medium'
 
@@ -399,6 +449,12 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
           )}
           {reason}
         </p>
+        {upcomingAt && (
+          <p className="mt-1 flex items-center gap-1.5 text-[12px] text-sky-300">
+            <CalendarClock className="h-3 w-3 shrink-0" />
+            Already booked: {formatUpcoming(upcomingAt)}
+          </p>
+        )}
       </button>
 
       <div className="flex shrink-0 items-center gap-2">

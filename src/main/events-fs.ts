@@ -45,6 +45,11 @@ export interface CalendarEvent {
    *  the TRANSIENT Google-delete state; this flag is the permanent record.
    *  Hidden from every normal listing. */
   deleted?: boolean
+  /** The contact/deal this event is with, if linked from the New/Edit Event
+   *  dialog — app-local metadata only, never pushed to Google/Outlook. Powers
+   *  the follow-up dashboard's "next scheduled meeting" line. */
+  contactId?: string
+  dealId?: string
   createdAt: string
   updatedAt: string
 }
@@ -60,6 +65,8 @@ export interface EventCreateInput {
   provider?: unknown
   externalId?: unknown
   remoteUpdatedAt?: unknown
+  contactId?: unknown
+  dealId?: unknown
 }
 
 /** Fields the renderer may change (any absent key is left untouched). */
@@ -69,6 +76,8 @@ export interface EventUpdateInput {
   end?: unknown
   allDay?: unknown
   notes?: unknown
+  contactId?: unknown
+  dealId?: unknown
 }
 
 // Ids build file paths, so they must be tightly constrained (no "../", no
@@ -165,6 +174,8 @@ function sanitizeEventRecord(value: unknown): CalendarEvent | null {
     remoteUpdatedAt: toIso(v.remoteUpdatedAt) ?? undefined,
     sync: sanitizeSync(v.sync),
     deleted: v.deleted === true ? true : undefined, // preserve the tombstone flag
+    contactId: isSafeId(v.contactId) ? v.contactId : undefined,
+    dealId: isSafeId(v.dealId) ? v.dealId : undefined,
     createdAt,
     updatedAt: toIso(v.updatedAt) ?? createdAt
   }
@@ -191,6 +202,8 @@ export async function createEvent(dir: string, input: EventCreateInput): Promise
     provider: sanitizeLinkField(input?.provider),
     externalId: sanitizeLinkField(input?.externalId),
     remoteUpdatedAt: toIso(input?.remoteUpdatedAt) ?? undefined,
+    contactId: isSafeId(input?.contactId) ? input.contactId : undefined,
+    dealId: isSafeId(input?.dealId) ? input.dealId : undefined,
     createdAt: now,
     updatedAt: now
   }
@@ -274,6 +287,10 @@ export async function updateEvent(
   }
   if ('allDay' in patch) event.allDay = patch.allDay === true
   if ('notes' in patch) event.notes = sanitizeNotes(patch.notes)
+  // Absent key = untouched; present-but-invalid (undefined/null/malformed) = unlinked.
+  if ('contactId' in patch)
+    event.contactId = isSafeId(patch.contactId) ? patch.contactId : undefined
+  if ('dealId' in patch) event.dealId = isSafeId(patch.dealId) ? patch.dealId : undefined
   // Start/end are resolved together so the window always stays valid/ordered.
   if ('start' in patch || 'end' in patch) {
     const startRaw = 'start' in patch ? patch.start : event.start
