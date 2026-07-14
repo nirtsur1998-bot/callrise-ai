@@ -64,6 +64,14 @@ interface FlaggedItem {
   upcomingAt?: string
 }
 
+/** A calendar event, linked to a contact and/or deal, happening this week. */
+interface WeekMeeting {
+  key: string
+  event: CalendarEvent
+  contact: Contact | undefined
+  deal: Deal | undefined
+}
+
 function formatOverdue(days: number): string {
   if (!Number.isFinite(days)) return 'No calls yet'
   const whole = Math.floor(days)
@@ -96,6 +104,31 @@ function nextUpcomingEventAt(
     .filter((e) => Date.parse(e.start) > now)
     .sort((a, b) => a.start.localeCompare(b.start))
   return upcoming[0]?.start
+}
+
+/** Every calendar event linked to a contact/deal happening in the next 7
+ *  days — regardless of whether that contact/deal is flagged, so the rep can
+ *  see the full week of what's already booked at a glance. */
+function computeWeekMeetings(
+  events: CalendarEvent[],
+  contactById: Map<string, Contact>,
+  dealById: Map<string, Deal>
+): WeekMeeting[] {
+  const now = Date.now()
+  const weekMs = 7 * 24 * 60 * 60 * 1000
+  return events
+    .filter((e) => {
+      if (!e.contactId && !e.dealId) return false
+      const t = Date.parse(e.start)
+      return t > now && t <= now + weekMs
+    })
+    .map((event) => ({
+      key: `meeting-${event.id}`,
+      event,
+      contact: event.contactId ? contactById.get(event.contactId) : undefined,
+      deal: event.dealId ? dealById.get(event.dealId) : undefined
+    }))
+    .sort((a, b) => a.event.start.localeCompare(b.event.start))
 }
 
 /** Every deal that needs attention (a medium/high risk assessment, or —
@@ -233,6 +266,11 @@ export function FollowUpDigest({
   const contactById = useMemo(() => new Map(contacts.map((c) => [c.id, c])), [contacts])
   const dealById = useMemo(() => new Map(deals.map((d) => [d.id, d])), [deals])
 
+  const weekMeetings = useMemo<WeekMeeting[]>(
+    () => computeWeekMeetings(events, contactById, dealById),
+    [events, contactById, dealById]
+  )
+
   return (
     <div className="mx-auto max-w-3xl">
       <div className="mb-1 flex items-baseline gap-2.5">
@@ -309,7 +347,63 @@ export function FollowUpDigest({
           </ul>
         </div>
       )}
+
+      {/* Every meeting this week tied to a contact/deal — the calendar half of
+          the picture, independent of whether that contact/deal is flagged. */}
+      {weekMeetings.length > 0 && (
+        <div className="mt-8">
+          <div className="mb-1 flex items-baseline gap-2.5">
+            <h2 className="text-lg font-semibold tracking-tight">This week&apos;s meetings</h2>
+            <span className="text-[13px] text-faint">
+              {weekMeetings.length} {weekMeetings.length === 1 ? 'item' : 'items'}
+            </span>
+          </div>
+          <p className="mb-5 text-[13px] text-faint">
+            Calendar events linked to a contact or deal, coming up in the next 7 days.
+          </p>
+          <ul className="space-y-2.5">
+            {weekMeetings.map((meeting) => (
+              <WeekMeetingRow
+                key={meeting.key}
+                meeting={meeting}
+                onOpen={() => {
+                  if (meeting.deal) onOpenDeal(meeting.deal.id)
+                  else if (meeting.contact) onOpenContact(meeting.contact.id)
+                }}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
+  )
+}
+
+interface WeekMeetingRowProps {
+  meeting: WeekMeeting
+  onOpen: () => void
+}
+
+function WeekMeetingRow({ meeting, onOpen }: WeekMeetingRowProps): React.JSX.Element {
+  const { event, contact, deal } = meeting
+
+  return (
+    <li className="flex items-start gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3.5">
+      <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
+        <p className="truncate text-sm font-medium">{event.title}</p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-faint">
+          <span className="flex items-center gap-1 text-sky-300">
+            <CalendarClock className="h-3 w-3" /> {formatUpcoming(event.start)}
+          </span>
+          {(deal || contact) && (
+            <span className="flex items-center gap-1">
+              <Building2 className="h-3 w-3" /> {deal ? deal.title : contact?.name}
+              {deal && contact?.name ? ` · ${contact.name}` : ''}
+            </span>
+          )}
+        </div>
+      </button>
+    </li>
   )
 }
 

@@ -3,7 +3,6 @@ import { cn } from '@renderer/lib/cn'
 import { ContactsView } from '@renderer/features/contacts/ContactsView'
 import { DealsView } from '@renderer/features/deals/DealsView'
 import { FollowUpDigest } from '@renderer/features/deals/FollowUpDigest'
-import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 
 type CrmTab = 'contacts' | 'deals' | 'followups'
 
@@ -20,11 +19,12 @@ export function CrmView(): React.JSX.Element {
   const [tab, setTab] = useState<CrmTab>('contacts')
   const [openDealId, setOpenDealId] = useState<string | null>(null)
   const [openContactId, setOpenContactId] = useState<string | null>(null)
-  const { settings } = useAppSettings()
 
-  // The Follow-ups tab is fully hidden when the feature is off in Settings —
-  // not just grayed out, per the "off means invisible" rule from Phase 4 Step 1.
-  const tabs = settings.crm.staleFollowUpEnabled ? TABS : TABS.filter((t) => t.id !== 'followups')
+  // The Follow-ups tab always shows — it now covers risk flags, open linked
+  // tasks, and this week's meetings, none of which depend on the cadence
+  // (stale-after-days) setting. FollowUpDigest itself still respects that
+  // setting for its cadence-based rows.
+  const tabs = TABS
 
   const openDealFromDigest = (dealId: string): void => {
     setOpenDealId(dealId)
