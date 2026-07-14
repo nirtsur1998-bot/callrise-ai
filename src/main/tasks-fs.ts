@@ -25,6 +25,13 @@ export interface Task {
   callId?: string
   /** Denormalized call title, so the Tasks list needn't load every call. */
   callTitle?: string
+  /** The contact this task is tied to, if any — set automatically when a
+   *  follow-up task is created, or backfilled from callId's contact when an
+   *  AI-generated task is accepted. Powers the follow-up dashboard. */
+  contactId?: string
+  /** The specific deal this task is tied to, if any (a contact may have more
+   *  than one open deal; this pins it to one). */
+  dealId?: string
   /** Where the task came from. */
   source: TaskSource
   createdAt: string // ISO timestamp
@@ -50,6 +57,8 @@ export interface TaskCreateInput {
   note?: unknown
   callId?: unknown
   callTitle?: unknown
+  contactId?: unknown
+  dealId?: unknown
   source?: unknown
 }
 
@@ -155,6 +164,8 @@ function sanitizeTaskRecord(value: unknown): Task | null {
     note: sanitizeOptionalText(v.note, MAX_NOTE),
     callId: isSafeId(v.callId) ? v.callId : undefined,
     callTitle: sanitizeOptionalText(v.callTitle, MAX_CALL_TITLE),
+    contactId: isSafeId(v.contactId) ? v.contactId : undefined,
+    dealId: isSafeId(v.dealId) ? v.dealId : undefined,
     source: v.source === 'ai' ? 'ai' : 'manual',
     createdAt,
     updatedAt,
@@ -179,6 +190,8 @@ export async function createTask(dir: string, input: TaskCreateInput): Promise<T
     note: sanitizeOptionalText(input?.note, MAX_NOTE),
     callId: isSafeId(input?.callId) ? input.callId : undefined,
     callTitle: sanitizeOptionalText(input?.callTitle, MAX_CALL_TITLE),
+    contactId: isSafeId(input?.contactId) ? input.contactId : undefined,
+    dealId: isSafeId(input?.dealId) ? input.dealId : undefined,
     source: input?.source === 'ai' ? 'ai' : 'manual',
     createdAt: now,
     updatedAt: now,

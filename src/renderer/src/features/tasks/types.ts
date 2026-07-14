@@ -18,6 +18,8 @@ export interface Task {
   note?: string
   callId?: string
   callTitle?: string
+  contactId?: string
+  dealId?: string
   source: TaskSource
   createdAt: string
   updatedAt: string

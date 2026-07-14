@@ -117,13 +117,18 @@ export async function createFollowUpTask(
     priority: 'medium',
     clientName: contactName ?? null,
     note: `Deal: ${deal.title}`,
+    contactId: deal.contactId,
+    dealId: deal.id,
     source: 'manual'
   })
   return 'created'
 }
 
 /** Same action for a flagged contact that has no deal to hang the task off of. */
-export async function createContactFollowUpTask(contactName: string): Promise<FollowUpTaskResult> {
+export async function createContactFollowUpTask(
+  contactId: string,
+  contactName: string
+): Promise<FollowUpTaskResult> {
   const title = `Follow up with ${contactName}`
   if (await hasOpenTaskTitled(title)) return 'exists'
   await window.api.tasks.create({
@@ -131,6 +136,7 @@ export async function createContactFollowUpTask(contactName: string): Promise<Fo
     type: 'follow-up',
     priority: 'medium',
     clientName: contactName,
+    contactId,
     source: 'manual'
   })
   return 'created'

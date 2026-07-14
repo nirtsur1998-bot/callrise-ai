@@ -227,6 +227,10 @@ export interface Task {
   note?: string
   callId?: string
   callTitle?: string
+  /** The contact this task is tied to, if any — powers the follow-up dashboard. */
+  contactId?: string
+  /** The specific deal this task is tied to, if any. */
+  dealId?: string
   source: TaskSource
   createdAt: string
   /** Last modification (create or edit); backup "newest wins" key. */
@@ -254,6 +258,8 @@ export interface TaskCreateInput {
   note?: string | null
   callId?: string
   callTitle?: string
+  contactId?: string
+  dealId?: string
   source?: TaskSource
 }
 

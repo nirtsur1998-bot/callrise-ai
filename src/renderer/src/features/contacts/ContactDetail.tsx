@@ -60,7 +60,7 @@ export function ContactDetail({
   const handleCreateFollowUpTask = async (): Promise<void> => {
     setCreatingTask(true)
     try {
-      await createContactFollowUpTask(contact.name)
+      await createContactFollowUpTask(contact.id, contact.name)
       setTaskCreated(true)
     } catch {
       /* button stays visible for a retry */

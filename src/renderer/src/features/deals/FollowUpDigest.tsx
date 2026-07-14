@@ -217,7 +217,7 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
     setResult(null)
     try {
       if (deal) setResult(await createFollowUpTask(deal, contact?.name))
-      else if (contact) setResult(await createContactFollowUpTask(contact.name))
+      else if (contact) setResult(await createContactFollowUpTask(contact.id, contact.name))
     } catch {
       setResult('error')
     } finally {
