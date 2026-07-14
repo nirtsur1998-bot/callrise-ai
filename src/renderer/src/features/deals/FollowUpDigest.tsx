@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, Building2, PhoneCall, ListPlus, AlertTriangle } from 'lucide-react'
+import {
+  CheckCircle2,
+  Building2,
+  PhoneCall,
+  ListPlus,
+  AlertTriangle,
+  ShieldAlert
+} from 'lucide-react'
+import { cn } from '@renderer/lib/cn'
 import { useContacts } from '@renderer/features/contacts/useContacts'
 import { buildContactStats, daysSinceLastCall } from '@renderer/features/contacts/contactStats'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
@@ -8,11 +16,13 @@ import type { Contact } from '@renderer/features/contacts/types'
 import { useDeals } from './useDeals'
 import { useDealStages } from './useDealStages'
 import {
-  isDealStale,
+  dealAttentionTier,
+  ATTENTION_TIER_RANK,
   isContactStale,
   contactsWithOpenDeals,
   createFollowUpTask,
-  createContactFollowUpTask
+  createContactFollowUpTask,
+  type AttentionTier
 } from './staleness'
 import { formatValue } from './format'
 import type { Deal } from './types'
@@ -22,20 +32,38 @@ interface FollowUpDigestProps {
   onOpenContact: (contactId: string) => void
 }
 
-/** One flagged item — either a deal gone quiet, or (Phase 4 Step 3) a
- *  contact with no open deal at all who's gone quiet. Shown together, most
- *  overdue first, so nothing is missed just because it isn't a "deal" yet. */
+const RISK_TIER_LABEL: Record<'risk-high' | 'risk-medium', string> = {
+  'risk-high': 'High risk',
+  'risk-medium': 'Medium risk'
+}
+const RISK_TIER_CLASS: Record<'risk-high' | 'risk-medium', string> = {
+  'risk-high': 'border-rose-500/30 bg-rose-500/10 text-rose-300',
+  'risk-medium': 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+}
+
+/** One flagged item — a deal (risk-flagged or gone quiet), or a deal-less
+ *  contact who's gone quiet. `reason` is the plain-language "why", shown up
+ *  front: the AI risk summary for risk-tiered deals, or a recency line for
+ *  cadence-only items. */
 interface FlaggedItem {
   key: string
   title: string
   contact: Contact | undefined
   days: number // Infinity = never called
+  tier: AttentionTier
+  reason: string
   deal?: Deal
 }
 
-/** Every flagged deal AND deal-less contact across the whole CRM, in one
- *  place, most overdue first — so nothing goes stale just because it's
- *  buried in a board column or doesn't have a deal yet. */
+function formatOverdue(days: number): string {
+  if (!Number.isFinite(days)) return 'No calls yet'
+  const whole = Math.floor(days)
+  return `${whole} day${whole === 1 ? '' : 's'} since last call`
+}
+
+/** Every deal that needs attention (a medium/high risk assessment, or —
+ *  when the cadence feature is on — gone quiet too long) AND every deal-less
+ *  contact gone quiet, in one place: risk first, then most overdue. */
 export function FollowUpDigest({
   onOpenDeal,
   onOpenContact
@@ -65,25 +93,34 @@ export function FollowUpDigest({
     const contactById = new Map(contacts.map((c) => [c.id, c]))
     const openDealContactIds = contactsWithOpenDeals(deals, stages)
 
-    const dealItems: FlaggedItem[] = deals
-      .filter((d) =>
-        isDealStale(
-          stageById.get(d.stageId),
-          contactStats.get(d.contactId)?.lastCallAt,
-          staleFollowUpEnabled,
-          staleAfterDays,
-          d.createdAt
-        )
+    const dealItems: FlaggedItem[] = []
+    for (const deal of deals) {
+      const lastCallAt = contactStats.get(deal.contactId)?.lastCallAt
+      const tier = dealAttentionTier(
+        deal,
+        stageById.get(deal.stageId),
+        lastCallAt,
+        staleFollowUpEnabled,
+        staleAfterDays
       )
-      .map((deal) => ({
+      if (!tier) continue
+      const reason =
+        tier === 'stale'
+          ? formatOverdue(daysSinceLastCall(lastCallAt))
+          : (deal.riskAssessment?.summary ?? '')
+      dealItems.push({
         key: `deal-${deal.id}`,
         title: deal.title,
         contact: contactById.get(deal.contactId),
-        days: daysSinceLastCall(contactStats.get(deal.contactId)?.lastCallAt),
+        days: daysSinceLastCall(lastCallAt),
+        tier,
+        reason,
         deal
-      }))
+      })
+    }
 
     // Deal-less contacts: never double-flagged with a deal they already own.
+    // Always cadence-based — a contact has no risk assessment of its own.
     const contactItems: FlaggedItem[] = contacts
       .filter((c) =>
         isContactStale(
@@ -94,18 +131,25 @@ export function FollowUpDigest({
           c.createdAt
         )
       )
-      .map((contact) => ({
-        key: `contact-${contact.id}`,
-        title: contact.name,
-        contact,
-        days: daysSinceLastCall(contactStats.get(contact.id)?.lastCallAt)
-      }))
+      .map((contact) => {
+        const days = daysSinceLastCall(contactStats.get(contact.id)?.lastCallAt)
+        return {
+          key: `contact-${contact.id}`,
+          title: contact.name,
+          contact,
+          days,
+          tier: 'stale' as const,
+          reason: formatOverdue(days)
+        }
+      })
 
-    // Explicit comparison — `b.days - a.days` is NaN when both are Infinity
-    // ("no calls yet"), which makes the whole sort order unspecified.
-    return [...dealItems, ...contactItems].sort((a, b) =>
-      a.days === b.days ? 0 : b.days > a.days ? 1 : -1
-    )
+    return [...dealItems, ...contactItems].sort((a, b) => {
+      const tierDiff = ATTENTION_TIER_RANK[a.tier] - ATTENTION_TIER_RANK[b.tier]
+      if (tierDiff !== 0) return tierDiff
+      // Explicit comparison — `b.days - a.days` is NaN when both are Infinity
+      // ("no calls yet"), which makes the whole sort order unspecified.
+      return a.days === b.days ? 0 : b.days > a.days ? 1 : -1
+    })
   }, [deals, stages, contacts, calls, staleFollowUpEnabled, staleAfterDays])
 
   return (
@@ -117,25 +161,23 @@ export function FollowUpDigest({
         </span>
       </div>
       <p className="mb-5 text-[13px] text-faint">
-        Open deals and deal-less contacts whose last call is older than your Settings → CRM
-        threshold, most overdue first.
+        Open deals flagged medium/high risk, plus deals and deal-less contacts gone quiet past your
+        Settings → CRM threshold — risk first, then most overdue.
+        {!staleFollowUpEnabled && ' Cadence flagging is off, so only risk-flagged deals show here.'}
       </p>
 
       {loading ? (
         <div className="flex h-40 items-center justify-center text-sm text-faint">Loading…</div>
-      ) : !staleFollowUpEnabled ? (
-        <p className="rounded-xl border border-line-soft bg-surface px-4 py-8 text-center text-sm text-muted">
-          Follow-up flagging is off. Turn it on in Settings → CRM to see this list.
-        </p>
       ) : flagged.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl border border-line-soft bg-surface">
             <CheckCircle2 className="h-6 w-6 text-emerald-300" strokeWidth={1.75} />
           </div>
-          <h3 className="text-lg font-semibold">Nothing needs a follow-up</h3>
+          <h3 className="text-lg font-semibold">Nothing needs attention</h3>
           <p className="mt-1.5 max-w-xs text-sm text-muted">
-            Every open deal and contact has had a call within your threshold. Nice work staying in
-            touch.
+            {staleFollowUpEnabled
+              ? 'Every open deal and contact has had a call within your threshold, and nothing is flagged high/medium risk.'
+              : 'No deal is flagged medium/high risk. Cadence flagging is off in Settings → CRM.'}
           </p>
         </div>
       ) : (
@@ -157,12 +199,6 @@ export function FollowUpDigest({
   )
 }
 
-function formatOverdue(days: number): string {
-  if (!Number.isFinite(days)) return 'No calls yet'
-  const whole = Math.floor(days)
-  return `${whole} day${whole === 1 ? '' : 's'} since last call`
-}
-
 interface FollowUpRowProps {
   item: FlaggedItem
   onOpen: () => void
@@ -172,8 +208,9 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
   const [creating, setCreating] = useState(false)
   const [result, setResult] = useState<'created' | 'exists' | 'error' | null>(null)
   const created = result === 'created' || result === 'exists'
-  const { deal, contact, title, days } = item
+  const { deal, contact, title, days, tier, reason } = item
   const value = deal ? formatValue(deal.value) : null
+  const isRiskTier = tier === 'risk-high' || tier === 'risk-medium'
 
   const handleCreate = async (): Promise<void> => {
     setCreating(true)
@@ -182,7 +219,7 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
       if (deal) setResult(await createFollowUpTask(deal, contact?.name))
       else if (contact) setResult(await createContactFollowUpTask(contact.name))
     } catch {
-      setResult('error') // surfaced below — the old code swallowed this silently
+      setResult('error')
     } finally {
       setCreating(false)
     }
@@ -191,7 +228,19 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
   return (
     <li className="flex items-start gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3.5">
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
-        <p className="truncate text-sm font-medium">{title}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="truncate text-sm font-medium">{title}</p>
+          {isRiskTier && (
+            <span
+              className={cn(
+                'shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium',
+                RISK_TIER_CLASS[tier as 'risk-high' | 'risk-medium']
+              )}
+            >
+              {RISK_TIER_LABEL[tier as 'risk-high' | 'risk-medium']}
+            </span>
+          )}
+        </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-faint">
           {deal && (
             <span className="flex items-center gap-1">
@@ -210,10 +259,25 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
               No open deal
             </span>
           )}
-          <span className="flex items-center gap-1 font-medium text-amber-300">
-            <AlertTriangle className="h-3 w-3" /> {formatOverdue(days)}
-          </span>
+          {isRiskTier && Number.isFinite(days) && (
+            <span className="flex items-center gap-1">
+              <PhoneCall className="h-3 w-3" /> {formatOverdue(days)}
+            </span>
+          )}
         </div>
+        <p
+          className={cn(
+            'mt-1.5 flex items-start gap-1.5 text-[12px]',
+            isRiskTier ? 'text-muted' : 'font-medium text-amber-300'
+          )}
+        >
+          {isRiskTier ? (
+            <ShieldAlert className="mt-0.5 h-3 w-3 shrink-0 text-faint" />
+          ) : (
+            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          )}
+          {reason}
+        </p>
       </button>
 
       <div className="flex shrink-0 items-center gap-2">
