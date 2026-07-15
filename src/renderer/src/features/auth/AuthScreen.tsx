@@ -17,7 +17,7 @@ const primaryBtn =
 function Brand(): React.JSX.Element {
   return (
     <div className="mb-6 flex flex-col items-center gap-3 text-center">
-      <div className="grid h-11 w-11 place-items-center rounded-xl bg-linear-to-br from-accent to-[#9b6cf2] shadow-sm">
+      <div className="grid h-11 w-11 place-items-center rounded-xl bg-brand shadow-sm">
         <AudioLines className="h-5 w-5 text-white" strokeWidth={2.25} />
       </div>
       <div>

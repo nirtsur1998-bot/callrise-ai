@@ -50,7 +50,7 @@ export function OnboardingFlow({
       <div className="w-full max-w-md">
         {/* Brand + progress */}
         <div className="mb-6 flex items-center gap-3">
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-linear-to-br from-accent to-[#9b6cf2] shadow-sm">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-brand shadow-sm">
             <AudioLines className="h-4.5 w-4.5 text-white" strokeWidth={2.25} />
           </div>
           <div className="flex-1">

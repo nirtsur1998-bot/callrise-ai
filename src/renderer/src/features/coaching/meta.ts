@@ -20,18 +20,21 @@ export const DIMENSION_LABEL: Record<CoachDimensionKey, string> = {
 
 export type Tone = 'good' | 'mid' | 'low' | 'neutral'
 
+// Semantic status tokens (index.css) rather than raw emerald/amber/rose — so
+// these tones stay on-brand AND adapt per theme (the raw Tailwind shades were
+// identical in light + dark, washing out on white).
 export const TONE_TEXT: Record<Tone, string> = {
-  good: 'text-emerald-300',
-  mid: 'text-amber-300',
-  low: 'text-rose-300',
+  good: 'text-positive',
+  mid: 'text-warning',
+  low: 'text-danger',
   neutral: 'text-muted'
 }
 
 export const TONE_BAR: Record<Tone, string> = {
-  good: 'bg-emerald-400',
-  mid: 'bg-amber-400',
-  low: 'bg-rose-400',
-  neutral: 'bg-slate-500'
+  good: 'bg-positive',
+  mid: 'bg-warning',
+  low: 'bg-danger',
+  neutral: 'bg-faint'
 }
 
 export function scoreTone(score: number): Tone {

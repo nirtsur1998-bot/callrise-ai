@@ -20,6 +20,20 @@
   --color-faint: #686f7a; /* tertiary text / icons */
   --color-accent: #6e7bf2; /* single indigo accent */
   --color-accent-soft: #6e7bf21f; /* 12% accent tint */
+
+  /* Semantic status colors — one token family instead of raw emerald/amber/
+     rose scattered across screens. `-soft` is the tinted background variant. */
+  --color-positive: #4ec78f;
+  --color-positive-soft: #4ec78f1f;
+  --color-warning: #e0a83a;
+  --color-warning-soft: #e0a83a1f;
+  --color-danger: #ef6a6a;
+  --color-danger-soft: #ef6a6a1f;
+
+  /* Elevation — deliberately whisper-soft on dark surfaces, where depth reads
+     mostly from the border + a faint drop. Cards/menus/popovers share these. */
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.28), 0 1px 3px rgb(0 0 0 / 0.16);
+  --shadow-pop: 0 8px 28px -6px rgb(0 0 0 / 0.5), 0 2px 6px rgb(0 0 0 / 0.3);
 }
 
 @layer base {
@@ -45,6 +59,16 @@
     --color-faint: #8a8f99;
     --color-accent: #6e7bf2;
     --color-accent-soft: #6e7bf21a;
+    /* Slightly deeper status hues so they hold 4.5:1 on light surfaces. */
+    --color-positive: #12855a;
+    --color-positive-soft: #12855a14;
+    --color-warning: #a76b13;
+    --color-warning-soft: #a76b1314;
+    --color-danger: #cf3b3b;
+    --color-danger-soft: #cf3b3b14;
+    /* Real (not just-a-border) elevation reads better on light surfaces. */
+    --shadow-card: 0 1px 2px rgb(16 18 29 / 0.06), 0 1px 3px rgb(16 18 29 / 0.08);
+    --shadow-pop: 0 12px 32px -8px rgb(16 18 29 / 0.18), 0 2px 6px rgb(16 18 29 / 0.08);
     --scrollbar-thumb: #d6d8dd;
     --scrollbar-thumb-hover: #c3c6cc;
   }
@@ -61,7 +85,22 @@
     color: var(--color-ink);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
+    font-feature-settings: 'cv11', 'ss01'; /* nicer digits/glyphs where the font supports it */
+  }
+
+  /* One consistent, accessible focus ring on everything interactive — replaces
+     the app's mix of no-ring / ad-hoc styles. Only shows for keyboard users
+     (focus-visible), so it never fights the mouse-driven aesthetic. */
+  :where(button, a, input, select, textarea, [role='switch'], [tabindex]):focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  /* On-brand text selection instead of the OS default blue. */
+  ::selection {
+    background: color-mix(in srgb, var(--color-accent) 32%, transparent);
   }
 
   /* Slim, unobtrusive scrollbars to match the aesthetic. */
@@ -86,5 +125,11 @@
   }
   .no-drag {
     -webkit-app-region: no-drag;
+  }
+
+  /* The brand mark's gradient — one definition instead of the inline
+     `from-accent to-[#9b6cf2]` repeated across the app. */
+  .bg-brand {
+    background-image: linear-gradient(135deg, var(--color-accent), #9b6cf2);
   }
 }

@@ -12,7 +12,7 @@ import { MainApp } from './MainApp'
 function Splash(): React.JSX.Element {
   return (
     <div className="flex h-screen w-screen items-center justify-center bg-canvas">
-      <div className="grid h-11 w-11 animate-pulse place-items-center rounded-xl bg-linear-to-br from-accent to-[#9b6cf2]">
+      <div className="grid h-11 w-11 animate-pulse place-items-center rounded-xl bg-brand">
         <AudioLines className="h-5 w-5 text-white" strokeWidth={2.25} />
       </div>
     </div>

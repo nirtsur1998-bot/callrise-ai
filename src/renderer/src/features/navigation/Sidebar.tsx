@@ -19,7 +19,7 @@ export function Sidebar({ active, onSelect, user, onSignOut }: SidebarProps): Re
       {/* Brand — draggable; padded down on macOS to clear the traffic lights
           (Windows draws its own title bar, so no extra clearance is needed). */}
       <div className={cn('drag flex items-center gap-2.5 px-4 pb-4', isMac ? 'pt-9' : 'pt-4')}>
-        <div className="grid h-7 w-7 place-items-center rounded-lg bg-linear-to-br from-accent to-[#9b6cf2] shadow-sm">
+        <div className="grid h-7 w-7 place-items-center rounded-lg bg-brand shadow-sm">
           <AudioLines className="h-4 w-4 text-white" strokeWidth={2.25} />
         </div>
         <span className="text-[15px] font-semibold tracking-tight">CallRise AI</span>
