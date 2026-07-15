@@ -17,9 +17,17 @@ import { NAV_ITEMS, type NavId } from '@renderer/features/navigation/nav-items'
 import type { AuthUser } from '@renderer/features/auth/types'
 import { getAutoOpenMeetingPage } from '@renderer/features/settings/prefs'
 
-/** The signed-in application shell. Only rendered once a user is logged in. */
-export function MainApp({ user }: { user: AuthUser }): React.JSX.Element {
-  const [active, setActive] = useState<NavId>('home')
+/** The signed-in application shell. Only rendered once a user is logged in.
+ *  `initialNav` lets onboarding drop the user straight onto a screen (e.g. Live
+ *  Calls after "Start my first call") instead of always landing on Home. */
+export function MainApp({
+  user,
+  initialNav = 'home'
+}: {
+  user: AuthUser
+  initialNav?: NavId
+}): React.JSX.Element {
+  const [active, setActive] = useState<NavId>(initialNav)
   const activeItem = NAV_ITEMS.find((item) => item.id === active) ?? NAV_ITEMS[0]
 
   // Remember the last non-settings tab, so Settings' Back arrow returns to

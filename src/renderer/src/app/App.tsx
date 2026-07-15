@@ -1,7 +1,11 @@
+import { useState } from 'react'
 import { AudioLines } from 'lucide-react'
 import { useAuth } from '@renderer/features/auth/useAuth'
 import { AuthScreen } from '@renderer/features/auth/AuthScreen'
 import { useTheme } from '@renderer/features/settings/useTheme'
+import { OnboardingFlow, type OnboardingExit } from '@renderer/features/onboarding/OnboardingFlow'
+import { isOnboardingComplete } from '@renderer/features/onboarding/prefs'
+import type { NavId } from '@renderer/features/navigation/nav-items'
 import { MainApp } from './MainApp'
 
 /** A brief splash while we check whether someone is already signed in. */
@@ -17,15 +21,25 @@ function Splash(): React.JSX.Element {
 
 /**
  * Login gate: show a splash while checking, the auth screen when logged out,
- * and the full app once a user is signed in.
+ * a one-time onboarding flow for a freshly set-up device, then the full app.
  */
 function App(): React.JSX.Element {
   useTheme() // applies the saved dark/light/system preference to <html>, app-wide
   const { loading, configured, user } = useAuth()
 
+  // Per-device: has onboarding been finished (or skipped) already?
+  const [onboarded, setOnboarded] = useState(isOnboardingComplete)
+  const [initialNav, setInitialNav] = useState<NavId>('home')
+
+  const handleOnboardingComplete = (exit: OnboardingExit): void => {
+    setInitialNav(exit === 'live-calls' ? 'live-calls' : 'home')
+    setOnboarded(true)
+  }
+
   if (loading) return <Splash />
   if (!user) return <AuthScreen configured={configured} />
-  return <MainApp user={user} />
+  if (!onboarded) return <OnboardingFlow onComplete={handleOnboardingComplete} />
+  return <MainApp user={user} initialNav={initialNav} />
 }
 
 export default App
