@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import AppShell from './AppShell'
 import { Sidebar } from '@renderer/features/navigation/Sidebar'
 import { CopilotPanel } from '@renderer/features/copilot/CopilotPanel'
+import { useVoiceAiCollapsed } from '@renderer/features/copilot/useVoiceAiCollapsed'
 import { HomeView } from '@renderer/features/home/HomeView'
 import { LiveView } from '@renderer/features/live/LiveView'
 import { PastCallsView } from '@renderer/features/calls/PastCallsView'
@@ -28,6 +29,7 @@ export function MainApp({
   initialNav?: NavId
 }): React.JSX.Element {
   const [active, setActive] = useState<NavId>(initialNav)
+  const [copilotCollapsed, setCopilotCollapsed] = useVoiceAiCollapsed()
   const activeItem = NAV_ITEMS.find((item) => item.id === active) ?? NAV_ITEMS[0]
 
   // Remember the last non-settings tab, so Settings' Back arrow returns to
@@ -61,7 +63,13 @@ export function MainApp({
     <AppShell
       title={activeItem.label}
       sidebar={<Sidebar active={active} onSelect={setActive} user={user} onSignOut={signOut} />}
-      copilot={<CopilotPanel />}
+      copilot={
+        <CopilotPanel
+          collapsed={copilotCollapsed}
+          onToggleCollapsed={() => setCopilotCollapsed(!copilotCollapsed)}
+        />
+      }
+      copilotCollapsed={copilotCollapsed}
     >
       {active === 'home' ? (
         <HomeView />

@@ -1,10 +1,13 @@
 import type { ReactNode } from 'react'
+import { cn } from '@renderer/lib/cn'
 
 interface AppShellProps {
   /** Left navigation column. */
   sidebar: ReactNode
   /** Right-hand AI copilot column. */
   copilot: ReactNode
+  /** Narrows the copilot column to its icon rail width. */
+  copilotCollapsed?: boolean
   /** Title shown in the center column's top bar. */
   title: string
   /** The active view, rendered in the center column. */
@@ -19,6 +22,7 @@ interface AppShellProps {
 export default function AppShell({
   sidebar,
   copilot,
+  copilotCollapsed = false,
   title,
   children
 }: AppShellProps): React.JSX.Element {
@@ -35,8 +39,16 @@ export default function AppShell({
         <div className="flex-1 overflow-y-auto px-8 py-7">{children}</div>
       </main>
 
-      {/* Right: AI copilot */}
-      <aside className="w-80 shrink-0 border-l border-line-soft bg-surface">{copilot}</aside>
+      {/* Right: AI copilot — width responds to collapsed state so the whole
+          column (border included) narrows, not just its inner content. */}
+      <aside
+        className={cn(
+          'shrink-0 overflow-hidden border-l border-line-soft bg-surface transition-[width] duration-200',
+          copilotCollapsed ? 'w-16' : 'w-80'
+        )}
+      >
+        {copilot}
+      </aside>
     </div>
   )
 }
