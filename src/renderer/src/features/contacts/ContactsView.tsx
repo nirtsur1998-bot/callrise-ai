@@ -15,6 +15,12 @@ import {
 import { cn } from '@renderer/lib/cn'
 import { flagEmoji, countryDial } from '@renderer/lib/countries'
 import { TONE_TEXT } from '@renderer/features/coaching/meta'
+import { PageHeader } from '@renderer/components/PageHeader'
+import { Button } from '@renderer/components/Button'
+import { IconButton } from '@renderer/components/IconButton'
+import { SkeletonRows } from '@renderer/components/Skeleton'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
+import { EmptyState } from '@renderer/components/EmptyState'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import { useDeals } from '@renderer/features/deals/useDeals'
 import { useDealStages } from '@renderer/features/deals/useDealStages'
@@ -134,23 +140,18 @@ export function ContactsView({
 
   return (
     <div className="mx-auto max-w-3xl">
-      {/* Header */}
-      <div className="mb-1 flex items-center justify-between">
-        <div className="flex items-baseline gap-2.5">
-          <h2 className="text-lg font-semibold tracking-tight">Contacts</h2>
-          <span className="text-[13px] text-faint">{contacts.length} total</span>
-        </div>
-        <button
-          type="button"
-          onClick={() => setAdding(true)}
-          className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110"
-        >
-          <Plus className="h-4 w-4" /> Add contact
-        </button>
-      </div>
-      <p className="mb-5 text-[13px] text-faint">
-        The people you sell to — your call history with each one lives here.
-      </p>
+      <PageHeader
+        title="Contacts"
+        count={
+          query.trim() ? `${visible.length} of ${contacts.length}` : `${contacts.length} total`
+        }
+        subtitle="The people you sell to — your call history with each one lives here."
+        actions={
+          <Button onClick={() => setAdding(true)} icon={Plus}>
+            Add contact
+          </Button>
+        }
+      />
 
       {contacts.length > 0 && (
         <div className="mb-4 flex items-center gap-2">
@@ -164,42 +165,37 @@ export function ContactsView({
               className="w-full rounded-lg border border-line bg-surface py-2 pl-9 pr-3 text-sm text-ink placeholder:text-faint transition focus:border-accent focus:outline-none"
             />
           </div>
-          <div className="flex shrink-0 items-center gap-0.5 rounded-lg border border-line p-0.5">
-            {(['recent', 'name'] as SortMode[]).map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setSort(s)}
-                className={cn(
-                  'rounded-md px-2.5 py-1.5 text-xs font-medium transition',
-                  sort === s ? 'bg-accent-soft text-ink' : 'text-muted hover:text-ink'
-                )}
-              >
-                {s === 'recent' ? 'Recent' : 'A–Z'}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            options={[
+              { id: 'recent', label: 'Recent' },
+              { id: 'name', label: 'A-Z' }
+            ]}
+            value={sort}
+            onChange={setSort}
+            className="shrink-0"
+          />
         </div>
       )}
 
       {deleteBlocked && (
-        <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+        <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-warning/30 bg-warning-soft px-4 py-3">
           <p className="text-[13px] text-ink">
             {deleteBlocked} still has deals on the Deals screen — delete or re-assign those deals
             first, then delete the contact.
           </p>
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => setDeleteBlocked(null)}
-            className="shrink-0 text-[13px] font-medium text-muted transition hover:text-ink"
+            className="shrink-0 border-0 text-[13px]"
           >
             Dismiss
-          </button>
+          </Button>
         </div>
       )}
 
       {loading ? (
-        <ListSkeleton />
+        <SkeletonRows rows={3} />
       ) : contacts.length === 0 ? (
         <EmptyAll onAdd={() => setAdding(true)} />
       ) : visible.length === 0 ? (
@@ -330,47 +326,38 @@ function ContactRow({
               </span>
             )}
           </div>
-          {contact.notes && <p className="mt-1.5 text-[12px] text-muted">{contact.notes}</p>}
+          {contact.notes && (
+            <p className="mt-1.5 line-clamp-1 break-words text-[12px] text-muted">
+              {contact.notes}
+            </p>
+          )}
         </button>
 
         <div className="flex shrink-0 items-center gap-1">
           {confirm ? (
             <>
-              <button
-                type="button"
-                onClick={onDelete}
-                className="rounded-lg bg-rose-500/20 px-2.5 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/30"
-              >
+              <Button variant="danger" size="sm" onClick={onDelete}>
                 Delete
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirm(false)}
-                className="rounded-lg border border-line px-2.5 py-1.5 text-xs text-muted hover:text-ink"
-              >
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setConfirm(false)}>
                 Cancel
-              </button>
+              </Button>
             </>
           ) : (
             <>
-              <button
-                type="button"
+              <IconButton
+                icon={Pencil}
+                label="Edit contact"
                 onClick={onEdit}
-                title="Edit contact"
-                className="grid h-8 w-8 place-items-center rounded-lg text-faint opacity-0 transition hover:bg-canvas hover:text-ink group-hover:opacity-100"
-              >
-                <Pencil className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
+                className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+              />
+              <IconButton
+                icon={Trash2}
+                label="Delete contact"
+                variant="danger"
                 onClick={() => setConfirm(true)}
-                title="Delete contact"
-                className={cn(
-                  'grid h-8 w-8 place-items-center rounded-lg text-faint opacity-0 transition hover:bg-canvas hover:text-rose-300 group-hover:opacity-100'
-                )}
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
+                className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+              />
             </>
           )}
         </div>
@@ -379,42 +366,14 @@ function ContactRow({
   )
 }
 
-function ListSkeleton(): React.JSX.Element {
-  return (
-    <ul className="space-y-2.5">
-      {[0, 1, 2].map((i) => (
-        <li
-          key={i}
-          className="flex items-center gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3.5"
-        >
-          <div className="h-9 w-9 shrink-0 animate-pulse rounded-full bg-elevated" />
-          <div className="min-w-0 flex-1 space-y-2">
-            <div className="h-3.5 w-32 animate-pulse rounded bg-elevated" />
-            <div className="h-2.5 w-48 animate-pulse rounded bg-elevated" />
-          </div>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
 function EmptyAll({ onAdd }: { onAdd: () => void }): React.JSX.Element {
   return (
-    <div className="flex flex-col items-center justify-center py-16 text-center">
-      <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl border border-line-soft bg-surface">
-        <ContactIcon className="h-6 w-6 text-faint" strokeWidth={1.75} />
-      </div>
-      <h3 className="text-lg font-semibold">No contacts yet</h3>
-      <p className="mt-1.5 max-w-xs text-sm text-muted">
-        Add the people you sell to, so your calls can build a history with each one.
-      </p>
-      <button
-        type="button"
-        onClick={onAdd}
-        className="mt-4 flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110"
-      >
-        <Plus className="h-4 w-4" /> Add contact
-      </button>
-    </div>
+    <EmptyState
+      icon={ContactIcon}
+      title="No contacts yet"
+      description="Add the people you sell to, so your calls can build a history with each one."
+      action={{ label: 'Add contact', onClick: onAdd, icon: Plus }}
+      titleAs="h2"
+    />
   )
 }

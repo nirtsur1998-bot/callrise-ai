@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { LogOut } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
+import { fieldClass } from '@renderer/components/field'
+import { cn } from '@renderer/lib/cn'
 import { useAuth } from '@renderer/features/auth/useAuth'
 import { AudioSourcesCard } from '@renderer/features/audio/AudioSourcesCard'
 
@@ -8,6 +10,9 @@ export function AccountSection(): React.JSX.Element {
   const { loading, configured, user } = useAuth()
   const [name, setName] = useState(user?.name ?? '')
   const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const savedTimeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(savedTimeout.current), [])
 
   // Keep the draft in sync with the real value once it loads (or changes
   // elsewhere, e.g. after a save broadcasts back).
@@ -27,6 +32,9 @@ export function AccountSection(): React.JSX.Element {
     try {
       await window.api.auth.updateName(trimmed)
       // useAuth's onChange subscription picks up the broadcasted new name.
+      setSaved(true)
+      clearTimeout(savedTimeout.current)
+      savedTimeout.current = setTimeout(() => setSaved(false), 2000)
     } finally {
       setSaving(false)
     }
@@ -44,14 +52,17 @@ export function AccountSection(): React.JSX.Element {
         ) : user ? (
           <div className="space-y-4">
             <div>
-              <label className="mb-1.5 block text-[13px] font-medium text-muted">Name</label>
+              <label className="mb-1.5 flex items-center gap-2 text-[13px] font-medium text-muted">
+                Name
+                {saved && <span className="text-[12px] text-positive">Saved</span>}
+              </label>
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onBlur={() => void commitName()}
                 disabled={saving}
                 placeholder="Your name"
-                className="w-full max-w-sm rounded-lg border border-line-soft bg-canvas px-3 py-2 text-sm outline-none transition focus:border-line"
+                className={cn(fieldClass, 'max-w-sm')}
               />
             </div>
             <div className="flex items-center justify-between gap-4 border-t border-line-soft pt-4">

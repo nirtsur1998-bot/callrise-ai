@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Search, Plus, X } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { Button } from '@renderer/components/Button'
+import { IconButton } from '@renderer/components/IconButton'
 import { ContactFormDialog, type ContactFormValues } from './ContactFormDialog'
 import type { Contact } from './types'
 
@@ -61,22 +63,16 @@ export function ContactPicker({
               <p className="truncate text-[11px] text-faint">{selected.company}</p>
             )}
           </div>
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => setOpen(true)}
-            className="rounded-lg border border-line px-2.5 py-1 text-xs text-muted transition hover:text-ink"
+            className="border-line py-1"
           >
             Change
-          </button>
+          </Button>
           {!required && (
-            <button
-              type="button"
-              onClick={() => onSelect(undefined)}
-              title="Unlink contact"
-              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-rose-300"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
+            <IconButton icon={X} label="Unlink contact" onClick={() => onSelect(undefined)} />
           )}
         </div>
       ) : (
@@ -91,7 +87,7 @@ export function ContactPicker({
       )}
 
       {open && (
-        <div className="absolute z-50 mt-1.5 w-full min-w-[260px] overflow-hidden rounded-xl border border-line bg-surface shadow-2xl">
+        <div className="animate-pop absolute z-50 mt-1.5 w-full min-w-[260px] overflow-hidden rounded-xl border border-line bg-surface shadow-2xl">
           <div className="relative border-b border-line-soft p-2">
             <Search className="pointer-events-none absolute left-4 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint" />
             <input
@@ -99,6 +95,9 @@ export function ContactPicker({
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setOpen(false)
+              }}
               placeholder="Search contacts…"
               className="w-full rounded-lg bg-canvas py-1.5 pl-8 pr-2 text-sm text-ink placeholder:text-faint focus:outline-none"
             />

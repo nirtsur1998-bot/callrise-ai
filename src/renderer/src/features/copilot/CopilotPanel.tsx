@@ -5,12 +5,16 @@ import {
   AudioLines,
   Radio,
   Mic,
-  Loader2
+  Loader2,
+  PhoneCall
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { isMac } from '@renderer/lib/platform'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
+import { fieldClass } from '@renderer/components/field'
 import { useAutoStartListening } from '@renderer/features/settings/useAutoStartListening'
+import { useAutoTranscribeCalls } from '@renderer/features/settings/useAutoTranscribeCalls'
 import { useVirtualMic } from '@renderer/features/audio/useVirtualMic'
 import { useAudioDevices } from '@renderer/features/audio/useAudioDevices'
 import { useCueSettings } from '@renderer/features/live/useCueSettings'
@@ -40,6 +44,7 @@ export function CopilotPanel({
   onToggleCollapsed
 }: CopilotPanelProps): React.JSX.Element {
   const [autoStart, setAutoStart] = useAutoStartListening()
+  const [autoTranscribeCalls, setAutoTranscribeCalls] = useAutoTranscribeCalls()
   const cues = useCueSettings()
   const { status: micStatus, busy: micBusy, start: startMic, stop: stopMic } = useVirtualMic()
   const { mics, selectedMicId, chooseMic } = useAudioDevices()
@@ -58,6 +63,7 @@ export function CopilotPanel({
           type="button"
           onClick={onToggleCollapsed}
           title="Expand Voice AI"
+          aria-label="Expand Voice AI"
           className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-ink"
         >
           <ChevronsLeft className="h-4 w-4" />
@@ -69,6 +75,12 @@ export function CopilotPanel({
             active={autoStart}
             label="AI Note Taker"
             onClick={() => setAutoStart(!autoStart)}
+          />
+          <RailToggle
+            icon={PhoneCall}
+            active={autoTranscribeCalls}
+            label="Auto-transcribe detected calls"
+            onClick={() => setAutoTranscribeCalls(!autoTranscribeCalls)}
           />
           {isMac && (
             <RailToggle
@@ -89,6 +101,7 @@ export function CopilotPanel({
             type="button"
             onClick={onToggleCollapsed}
             title="Choose microphone"
+            aria-label="Choose microphone"
             className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-ink"
           >
             <Mic className="h-4 w-4" />
@@ -106,6 +119,7 @@ export function CopilotPanel({
           type="button"
           onClick={onToggleCollapsed}
           title="Collapse"
+          aria-label="Collapse Voice AI panel"
           className="no-drag grid h-7 w-7 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-ink"
         >
           <ChevronsRight className="h-4 w-4" />
@@ -120,6 +134,21 @@ export function CopilotPanel({
             checked={autoStart}
             onChange={setAutoStart}
           />
+        </Section>
+
+        {/* Call detection — notices a known calling app (WhatsApp, Zoom,
+            Teams, MicroSIP, …) running and offers to transcribe it. */}
+        <Section icon={PhoneCall} title="Call detection">
+          <ToggleRow
+            label="Auto-transcribe detected calls"
+            checked={autoTranscribeCalls}
+            onChange={setAutoTranscribeCalls}
+          />
+          <p className="mt-2 text-[12px] text-faint">
+            {autoTranscribeCalls
+              ? 'Starts transcribing right away when a known calling app is detected.'
+              : "You'll get a prompt to confirm before we start transcribing."}
+          </p>
         </Section>
 
         {/* Noise cancellation — macOS only, same guard as the Home card. */}
@@ -143,29 +172,13 @@ export function CopilotPanel({
         {/* Live coaching cues */}
         <Section icon={Radio} title="Live coaching cues">
           <ToggleRow label="Show live cues" checked={cues.enabled} onChange={cues.setEnabled} />
-          <div
-            className={cn(
-              'mt-3 grid grid-cols-3 gap-1.5',
-              !cues.enabled && 'pointer-events-none opacity-40'
-            )}
-          >
-            {SENSITIVITY_LEVELS.map((lvl) => (
-              <button
-                key={lvl.id}
-                type="button"
-                disabled={!cues.enabled}
-                onClick={() => cues.setSensitivity(lvl.id)}
-                className={cn(
-                  'rounded-lg border py-1.5 text-[12px] font-medium transition',
-                  cues.sensitivity === lvl.id
-                    ? 'border-accent bg-accent-soft text-ink'
-                    : 'border-line-soft bg-canvas text-muted hover:border-line'
-                )}
-              >
-                {lvl.label}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            options={SENSITIVITY_LEVELS}
+            value={cues.sensitivity}
+            onChange={cues.setSensitivity}
+            disabled={!cues.enabled}
+            className="mt-3 w-full"
+          />
         </Section>
 
         {/* Microphone */}
@@ -173,7 +186,8 @@ export function CopilotPanel({
           <select
             value={selectedMicId}
             onChange={(e) => chooseMic(e.target.value)}
-            className="w-full rounded-lg border border-line-soft bg-canvas px-3 py-2 text-[13px] text-ink outline-none transition focus:border-line"
+            aria-label="Microphone"
+            className={cn(fieldClass, 'text-[13px]')}
           >
             <option value="">System default</option>
             {mics.map((m) => (

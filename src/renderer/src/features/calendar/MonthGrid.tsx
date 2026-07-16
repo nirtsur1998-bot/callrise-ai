@@ -1,4 +1,6 @@
+import { useEffect, useRef, useState } from 'react'
 import { startOfMonth, startOfWeek, addDays, isSameMonth, isToday, format } from 'date-fns'
+import { Plus } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import type { CalendarEvent, CalendarItem } from './types'
 import { ITEM_STYLES, itemsOnDay, sortForDay } from './items'
@@ -25,6 +27,35 @@ export function MonthGrid({
   const gridStart = startOfWeek(startOfMonth(cursor), { weekStartsOn: 0 })
   const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i))
 
+  const [peekDay, setPeekDay] = useState<string | null>(null)
+  const peekRef = useRef<HTMLDivElement | null>(null)
+
+  // Cursor changes (month navigation) should close any open peek popover.
+  // Adjusting state during render (rather than in an effect) avoids an extra render pass.
+  const [prevCursor, setPrevCursor] = useState(cursor)
+  if (prevCursor !== cursor) {
+    setPrevCursor(cursor)
+    if (peekDay !== null) setPeekDay(null)
+  }
+
+  useEffect(() => {
+    if (!peekDay) return
+    const handleClick = (e: MouseEvent): void => {
+      if (peekRef.current && !peekRef.current.contains(e.target as Node)) {
+        setPeekDay(null)
+      }
+    }
+    const handleKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setPeekDay(null)
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [peekDay])
+
   return (
     <div className="flex h-full flex-col">
       {/* Weekday header */}
@@ -44,50 +75,83 @@ export function MonthGrid({
           const overflow = dayItems.length - visible.length
           const inMonth = isSameMonth(day, cursor)
           const today = isToday(day)
+          const dayKey = format(day, 'yyyy-MM-dd')
+          const isPeekOpen = peekDay === dayKey
 
           return (
             <div
               key={day.toISOString()}
-              onClick={() => onNewEvent(day)}
               className={cn(
-                'group flex min-h-0 cursor-pointer flex-col gap-1 overflow-hidden p-1.5 transition',
-                inMonth ? 'bg-canvas hover:bg-elevated/60' : 'bg-canvas/40'
+                'group relative flex min-h-0 flex-col gap-1 overflow-hidden p-1.5 transition',
+                inMonth ? 'bg-canvas hover:bg-elevated/60' : 'bg-canvas/40',
+                today && 'bg-accent/5'
               )}
             >
+              {/* Fills the empty area of the cell; sits behind the date number
+                  and chips so clicking them still opens/edits instead of
+                  creating a new event. Keyboard-reachable via Tab. */}
               <button
                 type="button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onZoomDay(day)
-                }}
-                className={cn(
-                  'grid h-6 w-6 shrink-0 place-items-center self-start rounded-full text-[12px] transition',
-                  today
-                    ? 'bg-accent font-semibold text-white'
-                    : inMonth
-                      ? 'text-muted hover:bg-elevated hover:text-ink'
-                      : 'text-faint'
-                )}
+                aria-label={`New event on ${format(day, 'MMMM d')}`}
+                onClick={() => onNewEvent(day)}
+                className="absolute inset-0 z-0 flex items-end justify-center pb-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
               >
-                {format(day, 'd')}
+                <Plus className="h-3.5 w-3.5 text-faint" />
               </button>
 
-              <div className="flex min-h-0 flex-col gap-0.5 overflow-hidden">
-                {visible.map((item) => (
-                  <Chip key={item.key} item={item} onEditEvent={onEditEvent} />
-                ))}
-                {overflow > 0 && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onZoomDay(day)
-                    }}
-                    className="px-1 text-left text-[11px] text-faint transition hover:text-muted"
-                  >
-                    +{overflow} more
-                  </button>
-                )}
+              <div className="relative z-10 flex min-h-0 flex-col gap-1">
+                <button
+                  type="button"
+                  aria-label={`Open ${format(day, 'MMMM d')}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onZoomDay(day)
+                  }}
+                  className={cn(
+                    'grid h-6 w-6 shrink-0 place-items-center self-start rounded-full text-[12px] transition',
+                    today
+                      ? 'bg-accent font-semibold text-white'
+                      : inMonth
+                        ? 'text-muted hover:bg-elevated hover:text-ink'
+                        : 'text-faint'
+                  )}
+                >
+                  {format(day, 'd')}
+                </button>
+
+                <div className="flex min-h-0 flex-col gap-0.5 overflow-hidden">
+                  {visible.map((item) => (
+                    <Chip key={item.key} item={item} onEditEvent={onEditEvent} />
+                  ))}
+                  {overflow > 0 && (
+                    <div className="relative" ref={isPeekOpen ? peekRef : undefined}>
+                      <button
+                        type="button"
+                        aria-expanded={isPeekOpen}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setPeekDay(isPeekOpen ? null : dayKey)
+                        }}
+                        className="px-1 text-left text-[11px] text-faint transition hover:text-muted"
+                      >
+                        +{overflow} more
+                      </button>
+
+                      {isPeekOpen && (
+                        <div className="animate-pop absolute left-0 top-full z-20 mt-1 w-64 rounded-xl border border-line bg-surface p-2 shadow-pop">
+                          <div className="mb-1 px-1 text-[11px] font-medium text-muted">
+                            {format(day, 'EEEE, MMM d')}
+                          </div>
+                          <div className="flex max-h-64 flex-col gap-0.5 overflow-y-auto">
+                            {dayItems.map((item) => (
+                              <Chip key={item.key} item={item} onEditEvent={onEditEvent} />
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )

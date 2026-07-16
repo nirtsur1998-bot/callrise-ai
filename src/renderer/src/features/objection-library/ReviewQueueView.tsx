@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Check, X, Pencil, Eye } from 'lucide-react'
+import { Check, X, Pencil, Eye, AlertTriangle, Inbox } from 'lucide-react'
 import { useObjectionQueue } from './useObjectionQueue'
 import { ViewCallModal } from './ViewCallModal'
+import { SkeletonRows } from '@renderer/components/Skeleton'
+import { Badge } from '@renderer/components/Badge'
+import { Button } from '@renderer/components/Button'
+import { EmptyState } from '@renderer/components/EmptyState'
+import { fieldClass } from '@renderer/components/field'
+import { cn } from '@renderer/lib/cn'
 import { TYPE_LABEL, type ObjectionQueueItem } from './types'
 
 /**
@@ -24,15 +30,17 @@ export function ReviewQueueView({
   }, [refreshToken, refresh])
 
   if (loading) {
-    return <p className="text-sm text-faint">Loading…</p>
+    return <SkeletonRows rows={3} />
   }
 
   if (items.length === 0) {
     return (
-      <p className="text-[13px] text-faint">
-        Nothing to review yet. Suggestions you send from a call&apos;s &quot;Mine this call
-        (test)&quot; panel will show up here.
-      </p>
+      <EmptyState
+        compact
+        icon={Inbox}
+        title="Nothing to review yet"
+        description="Suggestions you send from a call's “Mine this call (test)” panel, or from scanning past calls, will show up here."
+      />
     )
   }
 
@@ -96,15 +104,15 @@ function QueueRow({ item, onApprove, onReject, onViewCall }: QueueRowProps): Rea
   return (
     <div className="rounded-xl border border-line-soft bg-surface p-4">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold tracking-wide text-faint uppercase">
-          {TYPE_LABEL[item.type]}
-        </p>
+        <Badge tone="neutral">{TYPE_LABEL[item.type]}</Badge>
         <button
           type="button"
           onClick={onViewCall}
-          className="flex items-center gap-1 text-[12px] text-muted transition hover:text-ink"
+          title={item.callTitle}
+          className="press flex min-w-0 items-center gap-1 text-[12px] text-muted transition hover:text-ink"
         >
-          <Eye className="h-3.5 w-3.5" /> {item.callTitle}
+          <Eye className="h-3.5 w-3.5 shrink-0" />{' '}
+          <span className="min-w-0 truncate">{item.callTitle}</span>
         </button>
       </div>
 
@@ -118,7 +126,7 @@ function QueueRow({ item, onApprove, onReject, onViewCall }: QueueRowProps): Rea
               value={trigger}
               onChange={(e) => setTrigger(e.target.value)}
               rows={2}
-              className="w-full rounded-lg border border-line bg-elevated px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+              className={cn(fieldClass, 'resize-y')}
             />
           </div>
           <div>
@@ -127,7 +135,7 @@ function QueueRow({ item, onApprove, onReject, onViewCall }: QueueRowProps): Rea
               value={response}
               onChange={(e) => setResponse(e.target.value)}
               rows={3}
-              className="w-full rounded-lg border border-line bg-elevated px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+              className={cn(fieldClass, 'resize-y')}
             />
           </div>
         </div>
@@ -144,67 +152,53 @@ function QueueRow({ item, onApprove, onReject, onViewCall }: QueueRowProps): Rea
         </>
       )}
 
-      <p className="mt-2 text-[12px] text-muted">
-        <span
-          className={
-            item.recoveredWell ? 'font-medium text-emerald-400' : 'font-medium text-amber-400'
-          }
-        >
-          {item.recoveredWell
-            ? 'AI thinks this recovered well'
-            : 'AI is not sure this fully recovered'}
-        </span>{' '}
-        — a suggestion, not a fact. {item.judgmentNote}
+      <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-muted">
+        {item.recoveredWell ? (
+          <Badge tone="positive" icon={Check}>
+            Recovered well
+          </Badge>
+        ) : (
+          <Badge tone="warning" icon={AlertTriangle}>
+            Not sure it recovered
+          </Badge>
+        )}
+        <span>— a suggestion, not a fact. {item.judgmentNote}</span>
       </p>
 
-      {error && <p className="mt-2 text-[13px] text-rose-300">{error}</p>}
+      {error && <p className="mt-2 text-[13px] text-danger">{error}</p>}
 
       <div className="mt-3 flex items-center gap-2">
         {editing ? (
           <>
-            <button
-              type="button"
+            <Button
+              size="sm"
+              icon={Check}
               disabled={busy || !trigger.trim() || !response.trim()}
               onClick={saveAndApprove}
-              className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:brightness-110 disabled:opacity-50"
             >
-              <Check className="h-3.5 w-3.5" /> Save &amp; approve
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setEditing(false)}
-              className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
-            >
+              Save &amp; approve
+            </Button>
+            <Button variant="secondary" size="sm" disabled={busy} onClick={() => setEditing(false)}>
               Cancel
-            </button>
+            </Button>
           </>
         ) : (
           <>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={approveAsIs}
-              className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:brightness-110 disabled:opacity-50"
-            >
-              <Check className="h-3.5 w-3.5" /> Approve
-            </button>
-            <button
-              type="button"
+            <Button size="sm" icon={Check} disabled={busy} onClick={approveAsIs}>
+              Approve
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={Pencil}
               disabled={busy}
               onClick={() => setEditing(true)}
-              className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
             >
-              <Pencil className="h-3.5 w-3.5" /> Edit
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={rejectRow}
-              className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-rose-300"
-            >
-              <X className="h-3.5 w-3.5" /> Reject
-            </button>
+              Edit
+            </Button>
+            <Button variant="secondary" size="sm" icon={X} disabled={busy} onClick={rejectRow}>
+              Reject
+            </Button>
           </>
         )}
       </div>

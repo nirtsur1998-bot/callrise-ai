@@ -1,7 +1,9 @@
-import { PhoneCall, Loader2, Check } from 'lucide-react'
+import { PhoneCall, Loader2, Check, User, Sparkles, Mic } from 'lucide-react'
+import { Badge, type BadgeTone } from '@renderer/components/Badge'
+import { Button } from '@renderer/components/Button'
 import type { OnboardingState } from '../useOnboarding'
 
-/** Closing screen: a one-line recap of what got set, then the two exits. */
+/** Closing screen: a three-row recap of what got set, then the two exits. */
 export function Done({
   o,
   busy,
@@ -14,38 +16,54 @@ export function Done({
   onExplore: () => void
 }): React.JSX.Element {
   const who = [o.name.trim(), o.role.trim()].filter(Boolean).join(', ') || 'set up and ready'
-  const cues = o.cuesEnabled
-    ? `on, ${o.sensitivity === 'low' ? 'calm' : o.sensitivity === 'medium' ? 'balanced' : 'active'}`
-    : 'off'
-  const recording = o.recordBothSides ? 'both sides, with consent' : 'my side only'
+  const cuesLabel = o.cuesEnabled
+    ? o.sensitivity === 'low'
+      ? 'On — calm'
+      : o.sensitivity === 'medium'
+        ? 'On — balanced'
+        : 'On — active'
+    : 'Off'
+  const cuesTone: BadgeTone = o.cuesEnabled ? 'positive' : 'neutral'
+  const recording = o.recordBothSides ? 'Both sides, with consent' : 'My side only'
 
   return (
     <div className="text-center">
-      <div className="mx-auto mb-4 grid h-11 w-11 place-items-center rounded-full bg-emerald-500/15">
-        <Check className="h-5 w-5 text-emerald-300" strokeWidth={2.5} />
+      <div className="mx-auto mb-4 grid h-11 w-11 place-items-center rounded-full bg-positive-soft">
+        <Check className="h-5 w-5 text-positive" strokeWidth={2.5} />
       </div>
       <h1 className="text-xl font-semibold tracking-tight">You’re all set</h1>
-      <p className="mx-auto mt-2 max-w-xs text-[13px] leading-relaxed text-muted">
-        You’re <span className="text-ink">{who}</span>. Cues are{' '}
-        <span className="text-ink">{cues}</span>. Recording:{' '}
-        <span className="text-ink">{recording}</span>.
-      </p>
+
+      <div className="mx-auto mt-5 max-w-xs space-y-2 rounded-xl border border-line-soft bg-canvas p-3.5 text-left">
+        <div className="flex items-center justify-between gap-3">
+          <span className="flex items-center gap-2 text-[13px] text-muted">
+            <User className="h-3.5 w-3.5 shrink-0 text-faint" /> You
+          </span>
+          <Badge className="max-w-[60%] truncate">{who}</Badge>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="flex items-center gap-2 text-[13px] text-muted">
+            <Sparkles className="h-3.5 w-3.5 shrink-0 text-faint" /> Coaching cues
+          </span>
+          <Badge tone={cuesTone}>{cuesLabel}</Badge>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="flex items-center gap-2 text-[13px] text-muted">
+            <Mic className="h-3.5 w-3.5 shrink-0 text-faint" /> Recording
+          </span>
+          <Badge>{recording}</Badge>
+        </div>
+      </div>
 
       <div className="mt-6 space-y-2.5">
-        <button
-          type="button"
-          onClick={onStartCall}
-          disabled={busy}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-3.5 py-2.5 text-sm font-medium text-white transition hover:brightness-110 disabled:opacity-60"
-        >
+        <Button fullWidth onClick={onStartCall} disabled={busy}>
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <PhoneCall className="h-4 w-4" />}
           Start my first call
-        </button>
+        </Button>
         <button
           type="button"
           onClick={onExplore}
           disabled={busy}
-          className="w-full rounded-lg px-3.5 py-2.5 text-sm font-medium text-muted transition hover:text-ink disabled:opacity-50"
+          className="w-full rounded-lg px-3.5 py-2.5 text-sm font-medium text-muted transition hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
         >
           Explore the app
         </button>

@@ -1,5 +1,9 @@
 import { useState } from 'react'
 import { X, Plus, ArrowUp, ArrowDown, Trash2 } from 'lucide-react'
+import { Modal } from '@renderer/components/Modal'
+import { Button } from '@renderer/components/Button'
+import { IconButton } from '@renderer/components/IconButton'
+import { fieldClass } from '@renderer/components/field'
 import type { DealStage, DealStageKind } from './types'
 
 const KIND_LABEL: Record<DealStageKind, string> = { open: 'Open', won: 'Won', lost: 'Lost' }
@@ -66,116 +70,87 @@ export function StageEditorDialog({
     )
   }
 
+  // The Modal's Escape handler always fires — guard the close itself instead,
+  // so a save in flight can't be abandoned mid-write. (This dialog previously
+  // had NO Escape handling at all.)
+  const guardedClose = (): void => {
+    if (!saving) onClose()
+  }
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-canvas/70 p-6 backdrop-blur-sm"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !saving) onClose()
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Manage stages"
-        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl"
-      >
-        <div className="flex items-center justify-between gap-4 border-b border-line-soft px-6 py-4">
-          <h2 className="text-sm font-semibold">Manage stages</h2>
-          <button
-            type="button"
-            onClick={() => !saving && onClose()}
-            disabled={saving}
-            title="Close"
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-ink disabled:opacity-40"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+    <Modal onClose={guardedClose} title="Manage stages" className="flex max-h-[85vh] flex-col">
+      <div className="flex items-center justify-between gap-4 border-b border-line-soft px-6 py-4">
+        <h2 className="text-sm font-semibold">Manage stages</h2>
+        <IconButton icon={X} label="Close" onClick={guardedClose} disabled={saving} />
+      </div>
 
-        <div className="flex-1 space-y-2 overflow-y-auto px-6 py-5">
-          <p className="mb-1 text-[13px] text-muted">
-            Every deal sits in exactly one stage. Reorder with the arrows — order here is the order
-            shown on the pipeline board.
-          </p>
-          {draft.map((stage, i) => (
-            <div key={stage.id} className="flex items-center gap-1.5">
-              <input
-                type="text"
-                value={stage.label}
-                onChange={(e) => update(i, { label: e.target.value })}
-                placeholder="Stage name"
-                className="min-w-0 flex-1 rounded-lg border border-line bg-canvas px-3 py-2 text-sm text-ink placeholder:text-faint transition focus:border-accent focus:outline-none"
-              />
-              <select
-                value={stage.kind}
-                onChange={(e) => update(i, { kind: e.target.value as DealStageKind })}
-                className="rounded-lg border border-line bg-canvas px-2 py-2 text-xs text-ink transition focus:border-accent focus:outline-none [color-scheme:dark]"
-              >
-                {KIND_ORDER.map((k) => (
-                  <option key={k} value={k}>
-                    {KIND_LABEL[k]}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={() => move(i, -1)}
-                disabled={i === 0}
-                title="Move up"
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-ink disabled:opacity-30"
-              >
-                <ArrowUp className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => move(i, 1)}
-                disabled={i === draft.length - 1}
-                title="Move down"
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-ink disabled:opacity-30"
-              >
-                <ArrowDown className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => remove(i)}
-                title="Remove stage"
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-rose-300"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ))}
-          <button
-            type="button"
-            onClick={add}
-            className="mt-1 flex items-center gap-1.5 rounded-lg border border-dashed border-line px-3 py-2 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
-          >
-            <Plus className="h-3.5 w-3.5" /> Add stage
-          </button>
-        </div>
-
-        <div className="flex items-center justify-between gap-4 border-t border-line-soft px-6 py-4">
-          <p className="text-[13px] text-rose-300">{error}</p>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => !saving && onClose()}
-              disabled={saving}
-              className="rounded-lg border border-line px-3.5 py-2 text-sm text-muted transition hover:text-ink disabled:opacity-50"
+      <div className="flex-1 space-y-2 overflow-y-auto px-6 py-5">
+        <p className="mb-1 text-[13px] text-muted">
+          Every deal sits in exactly one stage. Reorder with the arrows — order here is the order
+          shown on the pipeline board.
+        </p>
+        {draft.map((stage, i) => (
+          <div key={stage.id} className="flex items-center gap-1.5">
+            <input
+              type="text"
+              value={stage.label}
+              onChange={(e) => update(i, { label: e.target.value })}
+              placeholder="Stage name"
+              className={`min-w-0 flex-1 ${fieldClass}`}
+            />
+            <select
+              value={stage.kind}
+              onChange={(e) => update(i, { kind: e.target.value as DealStageKind })}
+              className={`${fieldClass} !w-auto text-xs [color-scheme:dark]`}
             >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={submit}
-              disabled={!canSave}
-              className="rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110 disabled:opacity-50"
-            >
-              {saving ? 'Saving…' : 'Save stages'}
-            </button>
+              {KIND_ORDER.map((k) => (
+                <option key={k} value={k}>
+                  {KIND_LABEL[k]}
+                </option>
+              ))}
+            </select>
+            <IconButton
+              icon={ArrowUp}
+              label="Move up"
+              onClick={() => move(i, -1)}
+              disabled={i === 0}
+            />
+            <IconButton
+              icon={ArrowDown}
+              label="Move down"
+              onClick={() => move(i, 1)}
+              disabled={i === draft.length - 1}
+            />
+            <IconButton
+              icon={Trash2}
+              label="Remove stage"
+              onClick={() => remove(i)}
+              variant="danger"
+            />
           </div>
+        ))}
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={Plus}
+          onClick={add}
+          className="mt-1 border-dashed"
+        >
+          Add stage
+        </Button>
+      </div>
+
+      <div className="flex items-center justify-between gap-4 border-t border-line-soft px-6 py-4">
+        <p className="text-[13px] text-danger">{error}</p>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={guardedClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={!canSave}>
+            {saving ? 'Saving…' : 'Save stages'}
+          </Button>
         </div>
       </div>
-    </div>
+    </Modal>
   )
 }

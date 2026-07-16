@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import {
-  ArrowLeft,
   Building2,
   Mail,
   Phone,
@@ -14,7 +13,11 @@ import {
   CheckCircle2
 } from 'lucide-react'
 import { flagEmoji, countryDial, countryName } from '@renderer/lib/countries'
-import { TONE_TEXT, overallTier } from '@renderer/features/coaching/meta'
+import { TONE_TO_GAUGE, overallTier } from '@renderer/features/coaching/meta'
+import { ScoreGauge } from '@renderer/components/ScoreGauge'
+import { Button } from '@renderer/components/Button'
+import { BackButton } from '@renderer/components/BackButton'
+import { StatCard } from '@renderer/components/StatCard'
 import { isContactStale, createContactFollowUpTask } from '@renderer/features/deals/staleness'
 import { useContactCallHistory } from './useContactCallHistory'
 import { CallHistoryList } from './CallHistoryList'
@@ -80,20 +83,10 @@ export function ContactDetail({
   return (
     <div className="flex h-full flex-col">
       <div className="mb-4 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={onBack}
-          className="flex items-center gap-2 text-sm text-muted transition hover:text-ink"
-        >
-          <ArrowLeft className="h-4 w-4" /> Contacts
-        </button>
-        <button
-          type="button"
-          onClick={onEdit}
-          className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
-        >
-          <Pencil className="h-3.5 w-3.5" /> Edit
-        </button>
+        <BackButton onClick={onBack} label="Contacts" />
+        <Button variant="secondary" size="sm" icon={Pencil} onClick={onEdit}>
+          Edit
+        </Button>
       </div>
 
       {/* Contact header */}
@@ -120,15 +113,21 @@ export function ContactDetail({
               </span>
             )}
             {contact.email && (
-              <span className="flex items-center gap-1.5">
+              <a
+                href={`mailto:${contact.email}`}
+                className="flex items-center gap-1.5 hover:text-accent hover:underline"
+              >
                 <Mail className="h-3.5 w-3.5" /> {contact.email}
-              </span>
+              </a>
             )}
             {contact.phone && (
-              <span className="flex items-center gap-1.5">
+              <a
+                href={`tel:${contact.phone}`}
+                className="flex items-center gap-1.5 hover:text-accent hover:underline"
+              >
                 <Phone className="h-3.5 w-3.5" /> {dial ? `${dial} ` : ''}
                 {contact.phone}
-              </span>
+              </a>
             )}
             {registered && (
               <span className="flex items-center gap-1.5">
@@ -143,27 +142,27 @@ export function ContactDetail({
       </div>
 
       {stale && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/30 bg-warning-soft px-4 py-3">
           <div className="flex items-center gap-2.5">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-300" />
+            <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
             <p className="text-[13px] text-ink">
               No calls with {contact.name} in over {staleAfterDays} days — may need a follow-up.
             </p>
           </div>
           {taskCreated ? (
-            <span className="shrink-0 flex items-center gap-1 text-[13px] font-medium text-emerald-300">
+            <span className="shrink-0 flex items-center gap-1 text-[13px] font-medium text-positive">
               <CheckCircle2 className="h-3.5 w-3.5" /> Task created — see Tasks.
             </span>
           ) : (
-            <button
-              type="button"
+            <Button
+              size="sm"
+              icon={ListPlus}
               onClick={() => void handleCreateFollowUpTask()}
               disabled={creatingTask}
-              className="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:brightness-110 disabled:opacity-50"
+              className="shrink-0"
             >
-              <ListPlus className="h-3.5 w-3.5" />
               {creatingTask ? 'Creating…' : 'Create follow-up task'}
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -171,19 +170,26 @@ export function ContactDetail({
       {/* Quick stats — the "so what" glance before diving into individual calls */}
       {!loading && linked.length > 0 && (
         <div className="mb-4 grid grid-cols-3 gap-3">
-          <StatCard icon={PhoneCall} label="Calls" value={String(linked.length)} tone="text-ink" />
+          <StatCard icon={PhoneCall} label="Calls" value={String(linked.length)} />
           <StatCard
             icon={CalendarClock}
             label="Last contact"
             value={formatRelative(linked[0].call.createdAt)}
-            tone="text-ink"
           />
-          <StatCard
-            icon={GraduationCap}
-            label="Avg. coach score"
-            value={avgScore !== null ? String(avgScore) : '—'}
-            tone={avgScore !== null ? TONE_TEXT[overallTier(avgScore).tone] : 'text-faint'}
-          />
+          <div className="flex items-center gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3">
+            <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-faint">
+              <GraduationCap className="h-3 w-3" /> Avg. coach score
+            </p>
+            {avgScore !== null ? (
+              <ScoreGauge
+                score={avgScore}
+                size={48}
+                tone={TONE_TO_GAUGE[overallTier(avgScore).tone]}
+              />
+            ) : (
+              <span className="text-lg font-semibold text-faint">—</span>
+            )}
+          </div>
         </div>
       )}
 
@@ -201,24 +207,6 @@ export function ContactDetail({
           emptyMessage={`No calls linked to ${contact.name} yet. Open a saved call and link it here.`}
         />
       </div>
-    </div>
-  )
-}
-
-interface StatCardProps {
-  icon: typeof PhoneCall
-  label: string
-  value: string
-  tone: string
-}
-
-function StatCard({ icon: Icon, label, value, tone }: StatCardProps): React.JSX.Element {
-  return (
-    <div className="rounded-xl border border-line-soft bg-surface px-4 py-3">
-      <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-faint">
-        <Icon className="h-3 w-3" /> {label}
-      </p>
-      <p className={`mt-1 text-lg font-semibold ${tone}`}>{value}</p>
     </div>
   )
 }

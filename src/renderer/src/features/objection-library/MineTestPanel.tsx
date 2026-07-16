@@ -1,5 +1,8 @@
 import { useCallback, useState } from 'react'
-import { MessageSquareQuote, Send } from 'lucide-react'
+import { MessageSquareQuote, Send, Check, AlertTriangle } from 'lucide-react'
+import { Badge } from '@renderer/components/Badge'
+import { Button } from '@renderer/components/Button'
+import { EmptyState } from '@renderer/components/EmptyState'
 import { TYPE_LABEL, type MinedObjectionCandidate } from './types'
 
 interface MineTestPanelProps {
@@ -70,28 +73,25 @@ export function MineTestPanel({ callId, enabled }: MineTestPanelProps): React.JS
         </p>
       ) : (
         <div className="flex flex-col items-start gap-3">
-          {error && <p className="text-[13px] text-rose-300">{error}</p>}
-          <button
-            type="button"
-            disabled={loading}
-            onClick={run}
-            className="flex items-center gap-2 rounded-lg border border-line px-3.5 py-2 text-sm font-medium text-ink transition hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-          >
-            <MessageSquareQuote className="h-4 w-4" />
+          {error && <p className="text-[13px] text-danger">{error}</p>}
+          <Button variant="secondary" icon={MessageSquareQuote} disabled={loading} onClick={run}>
             {loading ? 'Mining…' : 'Mine this call (test)'}
-          </button>
+          </Button>
 
           {candidates && candidates.length === 0 && (
-            <p className="text-sm text-muted">No objections found in this call.</p>
+            <EmptyState
+              compact
+              icon={MessageSquareQuote}
+              title="No objections found"
+              description="This call didn't have any clear buyer pushback for the AI to pull out."
+            />
           )}
 
           {candidates && candidates.length > 0 && (
             <div className="w-full space-y-3">
               {candidates.map((c, i) => (
                 <div key={i} className="rounded-xl border border-line-soft bg-elevated/40 p-4">
-                  <p className="text-[11px] font-semibold tracking-wide text-faint uppercase">
-                    {TYPE_LABEL[c.type]}
-                  </p>
+                  <Badge tone="neutral">{TYPE_LABEL[c.type]}</Badge>
                   <p className="mt-1.5 text-sm">
                     <span className="text-faint">Buyer said: </span>
                     &ldquo;{c.objectionQuote}&rdquo;
@@ -100,40 +100,32 @@ export function MineTestPanel({ callId, enabled }: MineTestPanelProps): React.JS
                     <span className="text-faint">You responded: </span>
                     &ldquo;{c.responseQuote}&rdquo;
                   </p>
-                  <p className="mt-2 text-[12px] text-muted">
-                    <span
-                      className={
-                        c.recoveredWell
-                          ? 'font-medium text-emerald-400'
-                          : 'font-medium text-amber-400'
-                      }
-                    >
-                      {c.recoveredWell
-                        ? 'AI thinks this recovered well'
-                        : 'AI is not sure this fully recovered'}
-                    </span>{' '}
-                    — a suggestion, not a fact. {c.judgmentNote}
+                  <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-muted">
+                    {c.recoveredWell ? (
+                      <Badge tone="positive" icon={Check}>
+                        Recovered well
+                      </Badge>
+                    ) : (
+                      <Badge tone="warning" icon={AlertTriangle}>
+                        Not sure it recovered
+                      </Badge>
+                    )}
+                    <span>— a suggestion, not a fact. {c.judgmentNote}</span>
                   </p>
                 </div>
               ))}
 
               {sent === null ? (
-                <button
-                  type="button"
-                  disabled={sending}
-                  onClick={sendToQueue}
-                  className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110 disabled:cursor-default disabled:opacity-50"
-                >
-                  <Send className="h-4 w-4" />
+                <Button icon={Send} disabled={sending} onClick={sendToQueue}>
                   {sending ? 'Sending…' : 'Send to review queue'}
-                </button>
+                </Button>
               ) : sent > 0 ? (
-                <p className="text-[13px] text-emerald-400">
+                <p className="text-[13px] text-positive">
                   Sent {sent} suggestion{sent === 1 ? '' : 's'} to the review queue — see it in
                   Settings → Objection Library.
                 </p>
               ) : (
-                <p className="text-[13px] text-rose-300">
+                <p className="text-[13px] text-danger">
                   Could not send these to the review queue. Please try again.
                 </p>
               )}

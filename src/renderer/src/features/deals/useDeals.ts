@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useToast } from '@renderer/features/notifications/useToast'
 import type { Deal } from './types'
 
 export type DealCreateInput = Parameters<typeof window.api.deals.create>[0]
 export type DealUpdateInput = Parameters<typeof window.api.deals.update>[1]
+
+const UNDO_WINDOW_MS = 6000
 
 export interface UseDeals {
   deals: Deal[]
@@ -10,18 +13,33 @@ export interface UseDeals {
   refresh: () => Promise<void>
   create: (input: DealCreateInput) => Promise<Deal | null>
   update: (id: string, patch: DealUpdateInput) => Promise<void>
-  remove: (id: string) => Promise<void>
+  /** Optimistically hides the deal and schedules the actual delete after a
+   *  short undo window — call `undoDelete` within that window to cancel it. */
+  remove: (id: string) => void
+  /** Cancels a pending delete started by `remove`, restoring the deal. */
+  undoDelete: (id: string) => void
 }
 
 export function useDeals(): UseDeals {
   const [deals, setDeals] = useState<Deal[]>([])
   const [loading, setLoading] = useState(true)
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set())
   const mountedRef = useRef(true)
+  const timeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const toast = useToast()
 
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    const timeouts = timeoutsRef.current
+    return () => {
+      for (const handle of timeouts.values()) clearTimeout(handle)
+      timeouts.clear()
     }
   }, [])
 
@@ -66,12 +84,46 @@ export function useDeals(): UseDeals {
   )
 
   const remove = useCallback(
-    async (id: string) => {
-      await window.api.deals.delete(id)
-      await refresh()
+    (id: string) => {
+      setPendingDeleteIds((prev) => new Set(prev).add(id))
+      const handle = setTimeout(() => {
+        timeoutsRef.current.delete(id)
+        void (async () => {
+          try {
+            await window.api.deals.delete(id)
+          } catch {
+            toast.error('Could not delete the deal. Please try again.')
+          }
+          if (mountedRef.current) {
+            setPendingDeleteIds((prev) => {
+              const next = new Set(prev)
+              next.delete(id)
+              return next
+            })
+          }
+          await refresh()
+        })()
+      }, UNDO_WINDOW_MS)
+      timeoutsRef.current.set(id, handle)
     },
-    [refresh]
+    [refresh, toast]
   )
 
-  return { deals, loading, refresh, create, update, remove }
+  const undoDelete = useCallback((id: string) => {
+    const handle = timeoutsRef.current.get(id)
+    if (handle) {
+      clearTimeout(handle)
+      timeoutsRef.current.delete(id)
+    }
+    setPendingDeleteIds((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }, [])
+
+  const visibleDeals =
+    pendingDeleteIds.size === 0 ? deals : deals.filter((d) => !pendingDeleteIds.has(d.id))
+
+  return { deals: visibleDeals, loading, refresh, create, update, remove, undoDelete }
 }

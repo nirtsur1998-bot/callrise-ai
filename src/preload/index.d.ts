@@ -955,6 +955,11 @@ export interface AppControlApi {
   getLastExternalApp: () => Promise<string | null>
   /** Deep-link to the macOS Accessibility settings pane active-win needs. */
   openAccessibilitySettings: () => Promise<{ ok: boolean }>
+  /** Fires when the frontmost app (while our window is blurred) matches a
+   *  known calling app (WhatsApp, Zoom, Teams, MicroSIP, …) — a best-effort
+   *  heuristic, not a guarantee a call is actually happening. Payload is the
+   *  detected app's display name. Returns an unsubscribe function. */
+  onCallDetected: (cb: (appName: string) => void) => () => void
 }
 
 declare global {

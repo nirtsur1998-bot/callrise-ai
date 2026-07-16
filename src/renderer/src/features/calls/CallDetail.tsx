@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  ArrowLeft,
   Trash2,
   Clock,
   Users,
@@ -11,10 +10,19 @@ import {
   RotateCw,
   ListChecks,
   GraduationCap,
-  Contact as ContactIcon
+  Contact as ContactIcon,
+  Copy,
+  Check
 } from 'lucide-react'
 import { SpeakerTranscript } from '@renderer/components/SpeakerTranscript'
 import { SummaryView, SummaryLoading } from '@renderer/components/SummaryView'
+import { IconButton } from '@renderer/components/IconButton'
+import { Button } from '@renderer/components/Button'
+import { BackButton } from '@renderer/components/BackButton'
+import { Card } from '@renderer/components/Card'
+import { Skeleton } from '@renderer/components/Skeleton'
+import { overallTier, TONE_TO_BADGE, speakerLabel } from '@renderer/features/coaching/meta'
+import { Badge } from '@renderer/components/Badge'
 import { GenerateTasksDialog } from '@renderer/features/tasks/GenerateTasksDialog'
 import { CoachReportView, CoachLoading } from '@renderer/features/coaching/CoachReportView'
 import { MineTestPanel } from '@renderer/features/objection-library/MineTestPanel'
@@ -64,6 +72,7 @@ export function CallDetail({
   const [tasksAdded, setTasksAdded] = useState(0)
   const [coaching, setCoaching] = useState(false)
   const [coachError, setCoachError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
   const { contacts, create: createContact } = useContacts()
   const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([])
   const [matchDismissed, setMatchDismissed] = useState(() => isMatchDismissed(callId))
@@ -203,6 +212,22 @@ export function CallDetail({
     [callId, notifyChanged]
   )
 
+  const copyTranscript = useCallback(() => {
+    if (!call) return
+    const text = call.segments
+      .map(
+        (seg) =>
+          `${speakerLabel(seg.speaker, call.coaching?.metrics.repSpeaker ?? null)}: ${seg.text}`
+      )
+      .join('\n')
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => {
+        if (mountedRef.current) setCopied(false)
+      }, 1500)
+    })
+  }, [call])
+
   const deleteCall = useCallback(async () => {
     await window.api.calls.delete(callId)
     onChanged()
@@ -321,7 +346,18 @@ export function CallDetail({
 
   if (!call) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-faint">Loading…</div>
+      <div className="mx-auto w-full max-w-3xl">
+        <Skeleton className="mb-4 h-4 w-24" />
+        <div className="mb-4">
+          <Skeleton className="h-6 w-2/3" />
+          <Skeleton className="mt-2 h-3.5 w-1/2" />
+        </div>
+        <div className="space-y-4">
+          <Skeleton className="h-40 rounded-2xl" />
+          <Skeleton className="h-40 rounded-2xl" />
+          <Skeleton className="h-40 rounded-2xl" />
+        </div>
+      </div>
     )
   }
 
@@ -340,42 +376,31 @@ export function CallDetail({
     calendarMatches.length === 1 &&
     contacts.some((c) => c.email?.toLowerCase() === calendarMatches[0].attendee.email)
 
+  const tier = call.coaching ? overallTier(call.coaching.overallScore) : null
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="mx-auto flex h-full w-full max-w-3xl flex-col">
       {/* Top bar */}
       <div className="mb-4 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={onBack}
-          className="flex items-center gap-2 text-sm text-muted transition hover:text-ink"
-        >
-          <ArrowLeft className="h-4 w-4" /> Past Calls
-        </button>
+        <BackButton onClick={onBack} label="Past Calls" />
         {confirmDelete ? (
           <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={deleteCall}
-              className="rounded-lg bg-rose-500/20 px-2.5 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/30"
-            >
+            <Button variant="danger" size="sm" onClick={deleteCall}>
               Delete call
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirmDelete(false)}
-              className="rounded-lg border border-line px-2.5 py-1.5 text-xs text-muted hover:text-ink"
-            >
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => setConfirmDelete(false)}>
               Cancel
-            </button>
+            </Button>
           </div>
         ) : (
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={Trash2}
             onClick={() => setConfirmDelete(true)}
-            className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-muted transition hover:border-rose-500/40 hover:text-rose-300"
           >
-            <Trash2 className="h-3.5 w-3.5" /> Delete
-          </button>
+            Delete
+          </Button>
         )}
       </div>
 
@@ -391,6 +416,11 @@ export function CallDetail({
             <Users className="h-3.5 w-3.5" /> {call.speakerCount} speaker
             {call.speakerCount === 1 ? '' : 's'}
           </span>
+          {call.coaching && tier && (
+            <Badge tone={TONE_TO_BADGE[tier.tone]}>
+              <span className="tabular-nums">{call.coaching.overallScore}</span> · {tier.label}
+            </Badge>
+          )}
         </div>
       </div>
 
@@ -399,7 +429,7 @@ export function CallDetail({
         {noKey && <NoKeyBanner />}
 
         {/* Linked contact */}
-        <section className="rounded-2xl border border-line-soft bg-surface p-6">
+        <Card>
           <div className="mb-3 flex items-center gap-2">
             <ContactIcon className="h-4 w-4 text-accent" />
             <h3 className="text-sm font-semibold">Contact</h3>
@@ -428,23 +458,19 @@ export function CallDetail({
             onSelect={(contactId) => void linkContact(contactId)}
             onCreate={createContact}
           />
-        </section>
+        </Card>
 
         {/* AI summary */}
-        <section className="rounded-2xl border border-line-soft bg-surface p-6">
+        <Card>
           <div className="mb-4 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-accent" />
               <h3 className="text-sm font-semibold">AI summary</h3>
             </div>
             {call.summary && !summarizing && (
-              <button
-                type="button"
-                onClick={summarizeCall}
-                className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
-              >
-                <RotateCw className="h-3.5 w-3.5" /> Regenerate
-              </button>
+              <Button variant="secondary" size="sm" icon={RotateCw} onClick={summarizeCall}>
+                Regenerate
+              </Button>
             )}
           </div>
           {summarizing ? (
@@ -457,33 +483,47 @@ export function CallDetail({
                 Generate a concise summary of this call — executive summary, key points, action
                 items, and any questions or objections.
               </p>
-              {summaryError && <p className="text-[13px] text-rose-300">{summaryError}</p>}
-              <button
-                type="button"
-                onClick={summarizeCall}
-                className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110"
-              >
-                <Sparkles className="h-4 w-4" /> Summarize
-              </button>
+              {summaryError && <p className="text-[13px] text-danger">{summaryError}</p>}
+              <Button icon={Sparkles} onClick={summarizeCall}>
+                Summarize
+              </Button>
             </div>
           )}
-        </section>
+        </Card>
+
+        {/* Transcript */}
+        <div className="rounded-2xl border border-line-soft bg-surface px-7 py-6">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Transcript</h3>
+            {call.segments.length > 0 && (
+              <IconButton
+                icon={copied ? Check : Copy}
+                label="Copy transcript"
+                onClick={copyTranscript}
+              />
+            )}
+          </div>
+          {call.segments.length > 0 ? (
+            <SpeakerTranscript
+              segments={call.segments}
+              repSpeaker={call.coaching?.metrics.repSpeaker ?? null}
+            />
+          ) : (
+            <p className="text-sm italic text-faint">This call has no transcript.</p>
+          )}
+        </div>
 
         {/* Sales coaching */}
-        <section className="rounded-2xl border border-line-soft bg-surface p-6">
+        <Card>
           <div className="mb-4 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <GraduationCap className="h-4 w-4 text-accent" />
               <h3 className="text-sm font-semibold">Sales coaching</h3>
             </div>
             {call.coaching && !coaching && (
-              <button
-                type="button"
-                onClick={coachCall}
-                className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
-              >
-                <RotateCw className="h-3.5 w-3.5" /> Re-coach
-              </button>
+              <Button variant="secondary" size="sm" icon={RotateCw} onClick={coachCall}>
+                Re-coach
+              </Button>
             )}
           </div>
           {coaching ? (
@@ -497,22 +537,18 @@ export function CallDetail({
                 with quotes from the transcript, your talk-time metrics, your top two things to
                 improve, and one concrete thing to try on your next call.
               </p>
-              {coachError && <p className="text-[13px] text-rose-300">{coachError}</p>}
-              <button
-                type="button"
-                onClick={coachCall}
-                className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110"
-              >
-                <GraduationCap className="h-4 w-4" /> Coach this call
-              </button>
+              {coachError && <p className="text-[13px] text-danger">{coachError}</p>}
+              <Button icon={GraduationCap} onClick={coachCall}>
+                Coach this call
+              </Button>
             </div>
           )}
-        </section>
+        </Card>
 
         <MineTestPanel callId={callId} enabled={settings.objectionMining.enabled} />
 
         {/* Tasks */}
-        <section className="rounded-2xl border border-line-soft bg-surface p-6">
+        <Card>
           <div className="mb-4 flex items-center gap-2">
             <ListChecks className="h-4 w-4 text-accent" />
             <h3 className="text-sm font-semibold">Tasks</h3>
@@ -527,23 +563,19 @@ export function CallDetail({
               </span>
             </p>
             {tasksAdded > 0 && (
-              <p className="text-[13px] text-emerald-300">
+              <p className="text-[13px] text-positive">
                 Added {tasksAdded} {tasksAdded === 1 ? 'task' : 'tasks'} — find them in the Tasks
                 tab.
               </p>
             )}
-            <button
-              type="button"
-              onClick={() => setShowTasks(true)}
-              className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110"
-            >
-              <ListChecks className="h-4 w-4" /> Generate tasks
-            </button>
+            <Button icon={ListChecks} onClick={() => setShowTasks(true)}>
+              Generate tasks
+            </Button>
           </div>
-        </section>
+        </Card>
 
         {/* Files */}
-        <section className="rounded-2xl border border-line-soft bg-surface p-6">
+        <Card>
           <div className="mb-4 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Paperclip className="h-4 w-4 text-faint" />
@@ -552,14 +584,15 @@ export function CallDetail({
                 <span className="text-[11px] text-faint">{attachments.length}</span>
               )}
             </div>
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={Plus}
               disabled={adding}
-              className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink disabled:opacity-50"
+              onClick={() => fileInputRef.current?.click()}
             >
-              <Plus className="h-3.5 w-3.5" /> {adding ? 'Adding…' : 'Add file'}
-            </button>
+              {adding ? 'Adding…' : 'Add file'}
+            </Button>
           </div>
           <input
             ref={fileInputRef}
@@ -572,7 +605,7 @@ export function CallDetail({
               if (f) void handleFile(f)
             }}
           />
-          {addError && <p className="mb-3 text-[13px] text-rose-300">{addError}</p>}
+          {addError && <p className="mb-3 text-[13px] text-danger">{addError}</p>}
           {attachments.length === 0 ? (
             <p className="text-sm text-faint">
               No files yet. Add a PDF, .txt, .md, or .docx and summarize it.
@@ -590,17 +623,7 @@ export function CallDetail({
               ))}
             </div>
           )}
-        </section>
-
-        {/* Transcript */}
-        <section className="rounded-2xl border border-line-soft bg-surface px-7 py-6">
-          <h3 className="mb-4 text-sm font-semibold">Transcript</h3>
-          {call.segments.length > 0 ? (
-            <SpeakerTranscript segments={call.segments} />
-          ) : (
-            <p className="text-sm text-faint">This call has no transcript.</p>
-          )}
-        </section>
+        </Card>
       </div>
 
       {showTasks && (
@@ -620,14 +643,12 @@ export function CallDetail({
 
 function NoKeyBanner(): React.JSX.Element {
   return (
-    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
+    <div className="rounded-xl border border-warning/30 bg-warning-soft p-4 text-sm text-warning">
       <p className="font-medium">Add your Anthropic API key</p>
-      <p className="mt-1 text-amber-200/80">
+      <p className="mt-1 text-warning/80">
         AI summaries need an Anthropic key. Get one at console.anthropic.com, paste it into the
-        <code className="mx-1 rounded bg-canvas px-1 py-0.5 text-amber-100">.env</code> file as
-        <code className="mx-1 rounded bg-canvas px-1 py-0.5 text-amber-100">
-          ANTHROPIC_API_KEY=…
-        </code>
+        <code className="mx-1 rounded bg-canvas px-1 py-0.5 text-warning">.env</code> file as
+        <code className="mx-1 rounded bg-canvas px-1 py-0.5 text-warning">ANTHROPIC_API_KEY=…</code>
         , then restart the app.
       </p>
     </div>
@@ -703,44 +724,30 @@ function AttachmentCard({
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {!summarizing && (
-            <button
-              type="button"
-              onClick={summarize}
-              className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
-            >
-              <Sparkles className="h-3.5 w-3.5" /> {attachment.summary ? 'Regenerate' : 'Summarize'}
-            </button>
+            <Button variant="secondary" size="sm" icon={Sparkles} onClick={summarize}>
+              {attachment.summary ? 'Regenerate' : 'Summarize'}
+            </Button>
           )}
           {confirmRemove ? (
             <>
-              <button
-                type="button"
-                onClick={remove}
-                className="rounded-lg bg-rose-500/20 px-2 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/30"
-              >
+              <Button variant="danger" size="sm" onClick={remove}>
                 Remove
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmRemove(false)}
-                className="rounded-lg border border-line px-2 py-1.5 text-xs text-muted hover:text-ink"
-              >
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setConfirmRemove(false)}>
                 Cancel
-              </button>
+              </Button>
             </>
           ) : (
-            <button
-              type="button"
+            <IconButton
+              icon={Trash2}
+              label="Remove file"
+              variant="danger"
               onClick={() => setConfirmRemove(true)}
-              title="Remove file"
-              className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-rose-300"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
+            />
           )}
         </div>
       </div>
-      {error && <p className="mt-3 text-[13px] text-rose-300">{error}</p>}
+      {error && <p className="mt-3 text-[13px] text-danger">{error}</p>}
       {summarizing ? (
         <div className="mt-4">
           <SummaryLoading label="Summarizing file with Claude…" />

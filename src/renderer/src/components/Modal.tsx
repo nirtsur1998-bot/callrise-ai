@@ -1,0 +1,74 @@
+import { useId, useRef, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { cn } from '@renderer/lib/cn'
+import { useModalA11y } from '@renderer/lib/useModalA11y'
+
+interface ModalProps {
+  onClose: () => void
+  children: ReactNode
+  /** Accessible dialog title (wired to aria-labelledby). Omit if the panel
+   *  renders its own labelled heading and passes labelledBy instead. */
+  title?: string
+  labelledBy?: string
+  /** Max width of the panel. */
+  size?: 'sm' | 'md' | 'lg' | 'xl'
+  /** Skip auto-focusing the first field (dialogs with their own autoFocus). */
+  initialFocus?: boolean
+  className?: string
+}
+
+const SIZE = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-2xl' } as const
+
+/**
+ * The one modal shell — owns the scrim, centered panel, backdrop-close, and
+ * (via useModalA11y) focus-trap, Escape, focus restoration, and scroll-lock,
+ * with a scrim-fade + panel-pop entrance. Every dialog wraps its content in
+ * this instead of re-implementing the overlay.
+ */
+export function Modal({
+  onClose,
+  children,
+  title,
+  labelledBy,
+  size = 'md',
+  initialFocus = true,
+  className
+}: ModalProps): React.JSX.Element {
+  const panelRef = useRef<HTMLDivElement>(null)
+  const headingId = useId()
+  useModalA11y(panelRef, onClose, initialFocus)
+
+  // Rendered into document.body via a portal, NOT in place in the React tree.
+  // `position: fixed` only escapes the whole window when every ancestor lacks
+  // a transform/filter/animation of those properties — the app's own
+  // page-transition animation (MainApp's `.animate-view`, which animates
+  // `transform`) makes that ancestor a "containing block", which silently
+  // repositioned (and clipped) the modal relative to a small scrolling
+  // content div instead of the real viewport. A portal makes the modal immune
+  // to that regardless of where in the tree it's opened from.
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" onMouseDown={onClose}>
+      <div className="animate-scrim absolute inset-0 bg-black/50 backdrop-blur-[2px]" />
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy ?? (title ? headingId : undefined)}
+        onMouseDown={(e) => e.stopPropagation()}
+        className={cn(
+          'animate-pop relative w-full overflow-hidden rounded-2xl border border-line bg-surface shadow-pop',
+          SIZE[size],
+          className
+        )}
+      >
+        {title && (
+          <h2 id={headingId} className="sr-only">
+            {title}
+          </h2>
+        )}
+        {children}
+      </div>
+    </div>,
+    document.body
+  )
+}

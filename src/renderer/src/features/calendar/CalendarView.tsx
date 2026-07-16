@@ -12,6 +12,8 @@ import {
 } from 'date-fns'
 import { ChevronLeft, ChevronRight, Plus, CalendarDays } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { Skeleton } from '@renderer/components/Skeleton'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { useCalendar } from './useCalendar'
 import { GoogleConnect } from '@renderer/features/google/GoogleConnect'
 import { OutlookConnect } from '@renderer/features/outlook/OutlookConnect'
@@ -131,6 +133,7 @@ export function CalendarView(): React.JSX.Element {
               type="button"
               onClick={goPrev}
               title="Previous"
+              aria-label={view === 'month' ? 'Previous month' : 'Previous week'}
               className="grid h-8 w-8 place-items-center rounded-lg text-muted transition hover:bg-elevated hover:text-ink"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -146,6 +149,7 @@ export function CalendarView(): React.JSX.Element {
               type="button"
               onClick={goNext}
               title="Next"
+              aria-label={view === 'month' ? 'Next month' : 'Next week'}
               className="grid h-8 w-8 place-items-center rounded-lg text-muted transition hover:bg-elevated hover:text-ink"
             >
               <ChevronRight className="h-4 w-4" />
@@ -155,21 +159,14 @@ export function CalendarView(): React.JSX.Element {
 
         <div className="flex items-center gap-3">
           <Legend />
-          <div className="flex items-center gap-0.5 rounded-lg border border-line p-0.5">
-            {(['month', 'week'] as View[]).map((v) => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => setView(v)}
-                className={cn(
-                  'rounded-md px-2.5 py-1 text-xs font-medium capitalize transition',
-                  view === v ? 'bg-accent-soft text-ink' : 'text-muted hover:text-ink'
-                )}
-              >
-                {v}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            value={view}
+            onChange={setView}
+            options={[
+              { id: 'month', label: 'Month' },
+              { id: 'week', label: 'Week' }
+            ]}
+          />
           <button
             type="button"
             onClick={() => openNew(cursor, view === 'week' ? 9 : undefined)}
@@ -180,18 +177,19 @@ export function CalendarView(): React.JSX.Element {
         </div>
       </header>
 
-      {/* Google Calendar connection (M13, read-only) */}
-      <GoogleConnect
-        onChange={() => void refreshGoogle()}
-        syncing={googleSyncing}
-        lastSynced={googleLastSynced}
-      />
-      {/* Outlook Calendar connection (M15), same shape as Google's */}
-      <OutlookConnect
-        onChange={() => void refreshOutlook()}
-        syncing={outlookSyncing}
-        lastSynced={outlookLastSynced}
-      />
+      {/* Google + Outlook Calendar connections, side-by-side */}
+      <div className="mb-3 flex flex-wrap gap-3 [&>*]:!mb-0 [&>*]:min-w-[300px] [&>*]:flex-1">
+        <GoogleConnect
+          onChange={() => void refreshGoogle()}
+          syncing={googleSyncing}
+          lastSynced={googleLastSynced}
+        />
+        <OutlookConnect
+          onChange={() => void refreshOutlook()}
+          syncing={outlookSyncing}
+          lastSynced={outlookLastSynced}
+        />
+      </div>
 
       {items.length === 0 && !loading && (
         <p className="mb-3 flex items-center gap-2 text-[13px] text-faint">
@@ -204,7 +202,11 @@ export function CalendarView(): React.JSX.Element {
       {/* Body */}
       <div className="min-h-0 flex-1">
         {loading ? (
-          <div className="flex h-full items-center justify-center text-sm text-faint">Loading…</div>
+          <div className="grid h-full grid-cols-7 gap-1.5">
+            {Array.from({ length: 35 }).map((_, i) => (
+              <Skeleton key={i} className="rounded-lg" />
+            ))}
+          </div>
         ) : view === 'month' ? (
           <MonthGrid
             cursor={cursor}

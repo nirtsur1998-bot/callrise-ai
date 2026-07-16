@@ -1,6 +1,7 @@
 import { Card } from '@renderer/components/Card'
 import { cn } from '@renderer/lib/cn'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { useCueSettings } from '@renderer/features/live/useCueSettings'
 import { SENSITIVITIES, type Sensitivity } from '@renderer/features/live/useLiveCues'
 import { SettingRow } from './SettingRow'
@@ -10,6 +11,8 @@ const SENSITIVITY_LABEL: Record<Sensitivity, string> = {
   medium: 'Medium',
   high: 'High'
 }
+
+const SENSITIVITY_OPTIONS = SENSITIVITIES.map((s) => ({ id: s, label: SENSITIVITY_LABEL[s] }))
 
 export function CoachingSection(): React.JSX.Element {
   const { enabled, setEnabled, sensitivity, setSensitivity } = useCueSettings()
@@ -26,22 +29,12 @@ export function CoachingSection(): React.JSX.Element {
 
       <div className={cn('mt-4 border-t border-line-soft pt-4', !enabled && 'opacity-50')}>
         <p className="mb-2 text-[13px] font-medium">Default sensitivity</p>
-        <div className="inline-flex rounded-lg border border-line p-0.5">
-          {SENSITIVITIES.map((s) => (
-            <button
-              key={s}
-              type="button"
-              disabled={!enabled}
-              onClick={() => setSensitivity(s)}
-              className={cn(
-                'rounded-md px-3 py-1.5 text-[13px] font-medium transition disabled:cursor-default',
-                sensitivity === s ? 'bg-accent-soft text-ink' : 'text-muted hover:text-ink'
-              )}
-            >
-              {SENSITIVITY_LABEL[s]}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          options={SENSITIVITY_OPTIONS}
+          value={sensitivity}
+          onChange={setSensitivity}
+          disabled={!enabled}
+        />
         <p className="mt-2 text-[11px] text-faint">
           Low shows cues least often (calmest); High shows them most often.
         </p>

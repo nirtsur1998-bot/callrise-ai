@@ -1,21 +1,29 @@
-import type { LucideIcon } from 'lucide-react'
+import { Home, type LucideIcon } from 'lucide-react'
+import { EmptyState } from './EmptyState'
+import type { NavId } from '@renderer/features/navigation/nav-items'
 
 interface PlaceholderViewProps {
   title: string
   icon: LucideIcon
+  /** Lets the empty state offer an escape hatch back to Home. */
+  onNavigate: (id: NavId) => void
 }
 
 /** Empty-state shown for sidebar sections we haven't built yet. */
-export function PlaceholderView({ title, icon: Icon }: PlaceholderViewProps): React.JSX.Element {
+export function PlaceholderView({
+  title,
+  icon: Icon,
+  onNavigate
+}: PlaceholderViewProps): React.JSX.Element {
   return (
-    <div className="flex h-full flex-col items-center justify-center text-center">
-      <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl border border-line-soft bg-surface">
-        <Icon className="h-6 w-6 text-faint" strokeWidth={1.75} />
-      </div>
-      <h2 className="text-lg font-semibold">{title}</h2>
-      <p className="mt-1.5 max-w-xs text-sm text-muted">
-        This section is part of the CallRise AI vision. We&rsquo;ll build it in a later step.
-      </p>
+    <div className="flex h-full items-center justify-center">
+      <EmptyState
+        icon={Icon}
+        title={title}
+        titleAs="h2"
+        description="This section is part of the CallRise AI vision — we’ll build it in a later step."
+        action={{ label: 'Back to Home', onClick: () => onNavigate('home'), icon: Home }}
+      />
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Sparkles, List, ListChecks, MessageCircleQuestion } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { Skeleton } from '@renderer/components/Skeleton'
 import type { Summary } from '@renderer/features/calls/types'
 
 function SectionHeader({ icon, label }: { icon: ReactNode; label: string }): React.JSX.Element {
@@ -51,7 +52,7 @@ export function SummaryView({ summary }: { summary: Summary }): React.JSX.Elemen
           icon={<List className="h-4 w-4" />}
           label="Key points"
           items={summary.keyPoints}
-          dotClass="bg-indigo-400"
+          dotClass="bg-accent"
         />
       )}
       {summary.actionItems.length > 0 && (
@@ -59,7 +60,7 @@ export function SummaryView({ summary }: { summary: Summary }): React.JSX.Elemen
           icon={<ListChecks className="h-4 w-4" />}
           label="Action items"
           items={summary.actionItems}
-          dotClass="bg-emerald-400"
+          dotClass="bg-positive"
         />
       )}
       {summary.questions.length > 0 && (
@@ -67,7 +68,7 @@ export function SummaryView({ summary }: { summary: Summary }): React.JSX.Elemen
           icon={<MessageCircleQuestion className="h-4 w-4" />}
           label="Questions & objections"
           items={summary.questions}
-          dotClass="bg-amber-400"
+          dotClass="bg-warning"
         />
       )}
       <p className="text-[11px] text-faint">
@@ -90,10 +91,10 @@ export function SummaryLoading({
         <span>{label}</span>
       </div>
       <div className="mt-4 space-y-2.5">
-        <div className="h-3 w-3/4 animate-pulse rounded bg-elevated" />
-        <div className="h-3 w-full animate-pulse rounded bg-elevated" />
-        <div className="h-3 w-5/6 animate-pulse rounded bg-elevated" />
-        <div className="h-3 w-2/3 animate-pulse rounded bg-elevated" />
+        <Skeleton className="h-3 w-3/4" />
+        <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3 w-5/6" />
+        <Skeleton className="h-3 w-2/3" />
       </div>
     </div>
   )

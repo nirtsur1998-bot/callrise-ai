@@ -33,7 +33,10 @@ export function Waveform({ analyser, active }: WaveformProps): React.JSX.Element
       ctx.clearRect(0, 0, w, h)
       ctx.lineWidth = 2 * dpr
       ctx.lineJoin = 'round'
-      ctx.strokeStyle = active ? '#6e7bf2' : '#2a313b'
+      const style = getComputedStyle(canvas)
+      ctx.strokeStyle = active
+        ? style.getPropertyValue('--color-accent').trim() || '#6e7bf2'
+        : style.getPropertyValue('--color-line').trim() || '#2a313b'
       ctx.beginPath()
       if (analyser && data) {
         analyser.getByteTimeDomainData(data)

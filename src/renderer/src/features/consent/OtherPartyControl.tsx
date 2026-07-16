@@ -42,12 +42,12 @@ export function OtherPartyControl({ consent, onOpen }: OtherPartyControlProps): 
       className={cn(
         'no-drag flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition',
         on
-          ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+          ? 'border-positive/40 bg-positive-soft text-positive'
           : 'border-line text-muted hover:text-ink'
       )}
     >
       {on ? <ShieldCheck className="h-3.5 w-3.5" /> : <Shield className="h-3.5 w-3.5" />}
-      {on ? 'Other party ✓' : 'Other party'}
+      Other party
     </button>
   )
 }

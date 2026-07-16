@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Sparkles, Send, X, Loader2 } from 'lucide-react'
+import { IconButton } from '@renderer/components/IconButton'
 import type { CallSegment } from '@renderer/features/calls/types'
 
 interface Answer {
@@ -62,7 +63,7 @@ export function AskCoach({
             </div>
           ) : error ? (
             <div className="flex items-start justify-between gap-3">
-              <p className="text-[13px] text-rose-300">{error}</p>
+              <p className="text-[13px] text-danger">{error}</p>
               <DismissButton onClick={dismiss} />
             </div>
           ) : answer ? (
@@ -112,14 +113,5 @@ export function AskCoach({
 }
 
 function DismissButton({ onClick }: { onClick: () => void }): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title="Dismiss"
-      className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-faint transition hover:bg-elevated hover:text-ink"
-    >
-      <X className="h-3.5 w-3.5" />
-    </button>
-  )
+  return <IconButton icon={X} onClick={onClick} label="Dismiss" className="h-6 w-6" />
 }

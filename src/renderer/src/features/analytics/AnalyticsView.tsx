@@ -1,7 +1,20 @@
-import { BarChart3, Sparkles, Target, Compass } from 'lucide-react'
+import {
+  BarChart3,
+  Sparkles,
+  Target,
+  Compass,
+  Activity,
+  Scale,
+  ListChecks,
+  CheckCircle2,
+  type LucideIcon
+} from 'lucide-react'
 import { Card } from '@renderer/components/Card'
+import { PageHeader } from '@renderer/components/PageHeader'
+import { Skeleton } from '@renderer/components/Skeleton'
+import { EmptyState } from '@renderer/components/EmptyState'
 import { cn } from '@renderer/lib/cn'
-import { DIMENSION_LABEL, TONE_TEXT } from '@renderer/features/coaching/meta'
+import { DIMENSION_LABEL, TONE_TEXT, type Tone } from '@renderer/features/coaching/meta'
 import { useAnalyticsData } from './useAnalyticsData'
 import type { DimensionTrend } from './aggregate'
 import {
@@ -24,12 +37,50 @@ function pct(ratio: number): string {
   return `${Math.round(ratio * 100)}%`
 }
 
+// Tints each card's icon tile by tone, so the color itself hints at health
+// before the reader even parses the number.
+const TONE_ICON_BG: Record<Tone, string> = {
+  good: 'bg-positive-soft',
+  mid: 'bg-warning-soft',
+  low: 'bg-danger-soft',
+  neutral: 'bg-accent-soft'
+}
+
 function EarlyNote({ count, noun }: { count: number; noun: string }): React.JSX.Element {
   return (
     <p className="mt-2 text-[11px] text-faint">
       Early days — based on {count} {noun}
       {count === 1 ? '' : 's'}.
     </p>
+  )
+}
+
+/** De-duplicates the repeated "icon tile + title + hint line" header pattern
+ *  used at the top of every card below. */
+function CardHeading({
+  icon: Icon,
+  title,
+  hint,
+  tone = 'neutral'
+}: {
+  icon: LucideIcon
+  title: string
+  hint: string
+  tone?: Tone
+}): React.JSX.Element {
+  return (
+    <div className="flex items-center gap-3">
+      <div
+        className={cn('grid h-8 w-8 shrink-0 place-items-center rounded-lg', TONE_ICON_BG[tone])}
+        aria-hidden="true"
+      >
+        <Icon className={cn('h-4 w-4', TONE_TEXT[tone])} strokeWidth={2} />
+      </div>
+      <div>
+        <h3 className="text-sm font-medium">{title}</h3>
+        <p className="text-[13px] text-faint">{hint}</p>
+      </div>
+    </div>
   )
 }
 
@@ -43,15 +94,36 @@ function HeadlineBanner({
   const Icon = headline.tone === 'good' ? Sparkles : headline.source === 'none' ? Compass : Target
   return (
     <Card className="mb-4 flex items-start gap-3 bg-elevated">
-      <div className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-surface">
+      <div
+        className={cn(
+          'mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl',
+          TONE_ICON_BG[headline.tone]
+        )}
+      >
         <Icon className={cn('h-[18px] w-[18px]', TONE_TEXT[headline.tone])} strokeWidth={2} />
       </div>
       <div>
-        <p className="text-[11px] uppercase tracking-wide text-faint">Your biggest takeaway</p>
+        <p className="text-[11px] uppercase tracking-wide text-faint">Takeaway</p>
         <p className="mt-0.5 text-[15px] font-medium leading-snug text-ink">{headline.text}</p>
         {caveat && <p className="mt-1 text-[11px] text-faint">{caveat}</p>}
       </div>
     </Card>
+  )
+}
+
+/** Mirrors the real layout's shape so the loading state doesn't jump when
+ *  the data arrives — a banner-height block + five card-shaped blocks. */
+function AnalyticsSkeleton(): React.JSX.Element {
+  return (
+    <div aria-busy="true" aria-label="Loading analytics">
+      <Skeleton className="mb-5 h-7 w-40" />
+      <Skeleton className="mb-4 h-20 w-full rounded-2xl" />
+      <div className="space-y-4">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Skeleton key={i} className="h-28 w-full rounded-2xl" />
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -60,20 +132,21 @@ export function AnalyticsView(): React.JSX.Element {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-faint">Loading…</div>
+      <div className="mx-auto max-w-3xl">
+        <AnalyticsSkeleton />
+      </div>
     )
   }
 
   if (!analytics || analytics.totalCalls === 0) {
     return (
-      <div className="flex h-full flex-col items-center justify-center text-center">
-        <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl border border-line-soft bg-surface">
-          <BarChart3 className="h-6 w-6 text-faint" strokeWidth={1.75} />
-        </div>
-        <h2 className="text-lg font-semibold">Not enough data yet</h2>
-        <p className="mt-1.5 max-w-xs text-sm text-muted">
-          Save a few calls — and coach some of them — and your trends will show up here.
-        </p>
+      <div className="flex h-full items-center justify-center">
+        <EmptyState
+          icon={BarChart3}
+          title="Not enough data yet"
+          description="Save a few calls — and coach some of them — and your trends will show up here."
+          titleAs="h2"
+        />
       </div>
     )
   }
@@ -101,20 +174,21 @@ export function AnalyticsView(): React.JSX.Element {
 
   return (
     <div className="mx-auto max-w-3xl">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold tracking-tight">Analytics</h2>
-        <span className="text-[13px] text-faint">
-          {totalCalls} call{totalCalls === 1 ? '' : 's'} · {coachedCount} coached
-        </span>
-      </div>
+      <PageHeader
+        title="Analytics"
+        count={`${totalCalls} call${totalCalls === 1 ? '' : 's'} · ${coachedCount} coached`}
+      />
 
       <HeadlineBanner headline={headline} caveat={headlineCaveat} />
 
       <div className="space-y-4">
         {/* 1 — Activity over time (informational, not graded) */}
         <Card>
-          <h3 className="text-sm font-medium">Activity over time</h3>
-          <p className="mt-0.5 text-[13px] text-faint">Calls per {granularity}</p>
+          <CardHeading
+            icon={Activity}
+            title="Activity over time"
+            hint={`Calls per ${granularity}`}
+          />
           <div className="mt-3">
             <ActivityBars buckets={activity} />
             {activity.length > 1 && (
@@ -131,8 +205,12 @@ export function AnalyticsView(): React.JSX.Element {
 
         {/* 2 — Talk-to-listen ratio */}
         <Card>
-          <h3 className="text-sm font-medium">Talk-to-listen ratio</h3>
-          <p className="mt-0.5 text-[13px] text-faint">Your share of words · healthy 40–55%</p>
+          <CardHeading
+            icon={Scale}
+            title="Talk-to-listen ratio"
+            hint="Your share of words · healthy 40–55%"
+            tone={talkRatio.average === null ? 'neutral' : talkRatioTone(talkRatio.average)}
+          />
           {talkRatio.average === null ? (
             <p className="mt-3 text-sm text-muted">
               Coach a call with two speakers to see your balance.
@@ -158,6 +236,7 @@ export function AnalyticsView(): React.JSX.Element {
                   healthyFrom={0.4}
                   healthyTo={0.55}
                   tone={talkRatioTone(talkRatio.average)}
+                  showEndpointLabels
                 />
               </div>
               <p className="mt-3 text-sm text-muted">{talkRatioVerdict(talkRatio.average)}</p>
@@ -168,8 +247,16 @@ export function AnalyticsView(): React.JSX.Element {
 
         {/* 3 — Coaching skills */}
         <Card>
-          <h3 className="text-sm font-medium">Coaching skills</h3>
-          <p className="mt-0.5 text-[13px] text-faint">Average per skill (1–5) · healthy ≥ 4</p>
+          <CardHeading
+            icon={ListChecks}
+            title="Coaching skills"
+            hint="Average per skill (1–5) · healthy ≥ 4"
+            tone={
+              weakest
+                ? skillTone(scoredDims.find((d) => d.key === weakest)?.average ?? 5)
+                : 'neutral'
+            }
+          />
           {scoredDims.length === 0 ? (
             <p className="mt-3 text-sm text-muted">Coach a call to score your skills.</p>
           ) : (
@@ -192,6 +279,7 @@ export function AnalyticsView(): React.JSX.Element {
                         healthyFrom={4}
                         healthyTo={5}
                         tone={tone}
+                        showEndpointLabels
                       />
                     </div>
                   )
@@ -209,12 +297,22 @@ export function AnalyticsView(): React.JSX.Element {
 
         {/* 4 — Where to focus */}
         <Card>
-          <h3 className="text-sm font-medium">Where to focus</h3>
-          <p className="mt-0.5 text-[13px] text-faint">Your lowest skills right now</p>
+          <CardHeading
+            icon={Target}
+            title="Where to focus"
+            hint="Your lowest skills right now"
+            tone={
+              focus.length === 0 && scoredDims.length > 0
+                ? 'good'
+                : focus.length > 0
+                  ? 'mid'
+                  : 'neutral'
+            }
+          />
           {scoredDims.length === 0 ? (
             <p className="mt-3 text-sm text-muted">Coach a call to see where to focus.</p>
           ) : focus.length === 0 ? (
-            <p className="mt-3 text-sm text-emerald-300">
+            <p className="mt-3 text-sm text-positive">
               Strong across the board — your skills are in great shape.
             </p>
           ) : (
@@ -241,8 +339,12 @@ export function AnalyticsView(): React.JSX.Element {
 
         {/* 5 — Task follow-through */}
         <Card>
-          <h3 className="text-sm font-medium">Task follow-through</h3>
-          <p className="mt-0.5 text-[13px] text-faint">Generated vs. completed</p>
+          <CardHeading
+            icon={CheckCircle2}
+            title="Task follow-through"
+            hint="Generated vs. completed"
+            tone={tasks.completionRate !== null ? completionTone(tasks.completionRate) : 'neutral'}
+          />
           {tasks.total === 0 ? (
             <p className="mt-3 text-sm text-muted">
               No tasks yet — they&rsquo;ll appear as you add or generate them.

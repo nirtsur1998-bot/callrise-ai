@@ -74,8 +74,8 @@ export function NoiseCancellationCard(): React.JSX.Element | null {
       </div>
 
       {error && (
-        <div className="mb-3 rounded-xl border border-red-500/20 bg-red-500/5 p-3">
-          <p className="flex items-start gap-1.5 text-[13px] text-red-300">
+        <div className="mb-3 rounded-xl border border-danger/20 bg-danger-soft p-3">
+          <p className="flex items-start gap-1.5 text-[13px] text-danger">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             {errorMessage(error)}
           </p>
@@ -85,7 +85,7 @@ export function NoiseCancellationCard(): React.JSX.Element | null {
       {/* Not set up: the driver isn't installed yet. */}
       {!driverInstalled && (
         <div className="rounded-xl border border-line-soft bg-canvas p-3">
-          <p className="flex items-start gap-1.5 text-[13px] text-amber-300">
+          <p className="flex items-start gap-1.5 text-[13px] text-warning">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             The &ldquo;Sales OS Microphone&rdquo; audio device isn&rsquo;t installed yet.
           </p>
@@ -98,7 +98,7 @@ export function NoiseCancellationCard(): React.JSX.Element | null {
 
       {/* Driver present but the helper binary is missing (dev edge case). */}
       {driverInstalled && !helperAvailable && (
-        <p className="flex items-start gap-1.5 text-[11px] text-amber-300">
+        <p className="flex items-start gap-1.5 text-[11px] text-warning">
           <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
           The noise-cancellation engine couldn&rsquo;t be found on disk.
         </p>
@@ -106,8 +106,8 @@ export function NoiseCancellationCard(): React.JSX.Element | null {
 
       {/* Set up + on. */}
       {setUp && on && (
-        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
-          <p className="flex items-center gap-1.5 text-[13px] text-emerald-300">
+        <div className="rounded-xl border border-positive/20 bg-positive-soft p-3">
+          <p className="flex items-center gap-1.5 text-[13px] text-positive">
             <CheckCircle2 className="h-3.5 w-3.5" /> On — your voice is being cleaned.
           </p>
           <p className="mt-1.5 text-[11px] text-faint">
@@ -120,7 +120,7 @@ export function NoiseCancellationCard(): React.JSX.Element | null {
 
       {/* Set up + running but the denoiser fell back to raw passthrough. */}
       {setUp && helperRunning && !denoiseActive && (
-        <p className="flex items-start gap-1.5 text-[11px] text-amber-300">
+        <p className="flex items-start gap-1.5 text-[11px] text-warning">
           <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
           Running, but the denoiser didn&rsquo;t load — audio is passing through uncleaned.
         </p>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useToast } from '@renderer/features/notifications/useToast'
 import type { Task } from './types'
 
 // Derive the create/update payload shapes straight from the preload bridge so
@@ -12,18 +13,33 @@ export interface UseTasks {
   refresh: () => Promise<void>
   create: (input: TaskCreateInput) => Promise<void>
   update: (id: string, patch: TaskUpdateInput) => Promise<void>
-  remove: (id: string) => Promise<void>
+  /** Optimistically hides the task and schedules the real delete ~6s later,
+   *  giving `undoDelete` a window to cancel it. */
+  remove: (id: string) => void
+  /** Cancels a pending delete started by `remove`, so the task reappears and
+   *  is never actually deleted. */
+  undoDelete: (id: string) => void
 }
+
+/** How long a deleted task stays recoverable via the "Undo" toast action
+ *  before the delete actually hits disk. */
+const UNDO_WINDOW_MS = 6000
 
 export function useTasks(): UseTasks {
   const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set())
   const mountedRef = useRef(true)
+  const timeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const toast = useToast()
 
   useEffect(() => {
     mountedRef.current = true
+    const timeouts = timeoutsRef.current
     return () => {
       mountedRef.current = false
+      for (const handle of timeouts.values()) clearTimeout(handle)
+      timeouts.clear()
     }
   }, [])
 
@@ -72,12 +88,45 @@ export function useTasks(): UseTasks {
   )
 
   const remove = useCallback(
-    async (id: string) => {
-      await window.api.tasks.delete(id)
-      await refresh()
+    (id: string) => {
+      setPendingDeleteIds((prev) => new Set(prev).add(id))
+      const handle = setTimeout(() => {
+        timeoutsRef.current.delete(id)
+        void (async () => {
+          try {
+            await window.api.tasks.delete(id)
+          } catch {
+            toast.error('Could not delete the task. Please try again.')
+          }
+          if (mountedRef.current) {
+            setPendingDeleteIds((prev) => {
+              const next = new Set(prev)
+              next.delete(id)
+              return next
+            })
+          }
+          await refresh()
+        })()
+      }, UNDO_WINDOW_MS)
+      timeoutsRef.current.set(id, handle)
     },
-    [refresh]
+    [refresh, toast]
   )
 
-  return { tasks, loading, refresh, create, update, remove }
+  const undoDelete = useCallback((id: string) => {
+    const handle = timeoutsRef.current.get(id)
+    if (handle) {
+      clearTimeout(handle)
+      timeoutsRef.current.delete(id)
+    }
+    setPendingDeleteIds((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }, [])
+
+  const visibleTasks = tasks.filter((t) => !pendingDeleteIds.has(t.id))
+
+  return { tasks: visibleTasks, loading, refresh, create, update, remove, undoDelete }
 }

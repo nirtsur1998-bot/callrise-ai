@@ -10,6 +10,8 @@ interface AppShellProps {
   copilotCollapsed?: boolean
   /** Title shown in the center column's top bar. */
   title: string
+  /** Optional per-screen actions rendered in the top bar's drag strip. */
+  headerActions?: ReactNode
   /** The active view, rendered in the center column. */
   children: ReactNode
 }
@@ -24,6 +26,7 @@ export default function AppShell({
   copilot,
   copilotCollapsed = false,
   title,
+  headerActions,
   children
 }: AppShellProps): React.JSX.Element {
   return (
@@ -33,8 +36,15 @@ export default function AppShell({
 
       {/* Center: active view */}
       <main className="flex min-w-0 flex-1 flex-col bg-canvas">
-        <header className="drag flex h-14 shrink-0 items-center border-b border-line-soft px-6">
-          <h1 className="text-sm font-medium text-muted">{title}</h1>
+        {/* Draggable window strip. No visible title here — every screen
+            renders its own PageHeader — but `title` still names the screen
+            for assistive tech, and `headerActions` gives a screen an escape
+            hatch into the drag strip if it ever needs one. */}
+        <header
+          aria-label={title}
+          className="drag flex h-14 shrink-0 items-center justify-end px-6"
+        >
+          {headerActions && <div className="no-drag flex items-center gap-2">{headerActions}</div>}
         </header>
         <div className="flex-1 overflow-y-auto px-8 py-7">{children}</div>
       </main>

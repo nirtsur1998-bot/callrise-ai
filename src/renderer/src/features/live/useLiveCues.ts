@@ -52,6 +52,9 @@ function countWords(text: string): number {
 export interface UseLiveCues {
   cue: LiveCue | null
   dismiss: () => void
+  /** The rep's speaker id once identified (deterministic or brain-guessed), for
+   *  labeling the transcript "You"/"Buyer". Null until known. */
+  repSpeaker: number | null
 }
 
 /**
@@ -69,6 +72,7 @@ export function useLiveCues(
   knownRepSpeaker: number | null = null
 ): UseLiveCues {
   const [cue, setCue] = useState<LiveCue | null>(null)
+  const [repSpeaker, setRepSpeaker] = useState<number | null>(knownRepSpeaker)
 
   const cfgRef = useRef<Thresholds>(SENSITIVITY_THRESHOLDS[sensitivity])
   useEffect(() => {
@@ -105,7 +109,12 @@ export function useLiveCues(
   // (Can flip on mid-call; the main effect below re-reads knownRepRef on reset.)
   useEffect(() => {
     knownRepRef.current = knownRepSpeaker
-    if (knownRepSpeaker !== null) repSpeakerRef.current = knownRepSpeaker
+    // Buyer capture just stopped (channel-0 certainty lost) — revert to
+    // unknown rather than leaving the transcript labeling stuck on the old
+    // channel, so the brain's own guess (or "Speaker N") takes back over.
+    repSpeakerRef.current = knownRepSpeaker
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mirror the ref for the transcript label when buyer capture starts/stops mid-call
+    setRepSpeaker(knownRepSpeaker)
   }, [knownRepSpeaker])
 
   const clearCue = useCallback(() => {
@@ -129,6 +138,7 @@ export function useLiveCues(
       if (debounceRef.current) clearTimeout(debounceRef.current)
       // eslint-disable-next-line react-hooks/set-state-in-effect -- clear a visible cue when cues mute / the call stops
       clearCue()
+      setRepSpeaker(knownRepRef.current)
       return
     }
 
@@ -139,6 +149,7 @@ export function useLiveCues(
     repSpeakerRef.current = knownRepRef.current
     inFlightRef.current = false
     lastCallAtRef.current = 0
+    setRepSpeaker(knownRepRef.current)
 
     const emit = (kind: CueKind, text: string): boolean => {
       const now = Date.now()
@@ -207,6 +218,7 @@ export function useLiveCues(
             const observedSpeakers = new Set(turnsRef.current.map((t) => t.speaker))
             if (observedSpeakers.has(res.repSpeaker)) {
               repSpeakerRef.current = res.repSpeaker // lock the rep for the call
+              setRepSpeaker(res.repSpeaker)
             }
           }
           if (res.cue !== 'none' && res.text) emit(res.cue, res.text)
@@ -274,5 +286,5 @@ export function useLiveCues(
     }
   }, [active, enabled, clearCue])
 
-  return { cue, dismiss: clearCue }
+  return { cue, dismiss: clearCue, repSpeaker }
 }

@@ -1,5 +1,7 @@
-import { ListChecks, ShieldAlert } from 'lucide-react'
+import { ListChecks, ShieldAlert, CheckCircle2, Circle } from 'lucide-react'
+import { cn } from '@renderer/lib/cn'
 import { formatDate, formatDuration } from '@renderer/features/calls/format'
+import { Skeleton } from '@renderer/components/Skeleton'
 import type { Call } from '@renderer/features/calls/types'
 import type { Task } from '@renderer/features/tasks/types'
 import type { LinkedCall } from './useContactCallHistory'
@@ -37,15 +39,15 @@ export function CallHistoryList({
 
 export function HistorySkeleton(): React.JSX.Element {
   return (
-    <ul className="space-y-3">
+    <ul className="space-y-3" aria-busy="true" aria-label="Loading">
       {[0, 1].map((i) => (
         <li key={i} className="rounded-xl border border-line-soft bg-surface p-5">
           <div className="flex items-center justify-between">
-            <div className="h-4 w-40 animate-pulse rounded bg-elevated" />
-            <div className="h-3 w-24 animate-pulse rounded bg-elevated" />
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-3 w-24" />
           </div>
-          <div className="mt-3 h-3 w-full animate-pulse rounded bg-elevated" />
-          <div className="mt-2 h-3 w-2/3 animate-pulse rounded bg-elevated" />
+          <Skeleton className="mt-3 h-3 w-full" />
+          <Skeleton className="mt-2 h-3 w-2/3" />
         </li>
       ))}
     </ul>
@@ -73,7 +75,7 @@ function LinkedCallCard({ call, tasks }: { call: Call; tasks: Task[] }): React.J
 
       {objection?.comment && (
         <div className="mt-3 flex items-start gap-2 rounded-lg border border-line-soft bg-canvas px-3 py-2.5">
-          <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+          <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
           <div className="min-w-0">
             <p className="text-[11px] font-medium uppercase tracking-wide text-faint">Objections</p>
             <p className="mt-0.5 text-[13px] text-muted">{objection.comment}</p>
@@ -93,9 +95,18 @@ function LinkedCallCard({ call, tasks }: { call: Call; tasks: Task[] }): React.J
             </p>
             <ul className="mt-1 space-y-0.5">
               {tasks.map((t) => (
-                <li key={t.id} className="truncate text-[13px] text-muted">
-                  {t.status === 'done' ? '✓ ' : '• '}
-                  {t.title}
+                <li
+                  key={t.id}
+                  className="flex items-center gap-1.5 truncate text-[13px] text-muted"
+                >
+                  {t.status === 'done' ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-positive" />
+                  ) : (
+                    <Circle className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <span className={cn(t.status === 'done' && 'line-through text-faint')}>
+                    {t.title}
+                  </span>
                 </li>
               ))}
             </ul>

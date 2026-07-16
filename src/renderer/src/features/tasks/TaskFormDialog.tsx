@@ -1,4 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
+import { Modal } from '@renderer/components/Modal'
+import { Button } from '@renderer/components/Button'
+import { IconButton } from '@renderer/components/IconButton'
 import { X } from 'lucide-react'
 import { TaskEditor } from './TaskEditor'
 import { emptyDraft, type TaskDraft } from './draft'
@@ -43,13 +46,11 @@ export function TaskFormDialog({
   const isEdit = Boolean(task)
   const canSave = draft.title.trim().length > 0 && !saving
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && !saving) onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, saving])
+  // The Modal's Escape handler always fires — guard the close itself instead,
+  // so a save in flight can't be abandoned mid-write.
+  const guardedClose = (): void => {
+    if (!saving) onClose()
+  }
 
   const submit = async (): Promise<void> => {
     if (!canSave) return
@@ -72,29 +73,22 @@ export function TaskFormDialog({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-canvas/70 p-6 backdrop-blur-sm"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !saving) onClose()
-      }}
+    <Modal
+      onClose={guardedClose}
+      title={isEdit ? 'Edit task' : 'Add task'}
+      initialFocus={false}
+      className="flex max-h-[85vh] flex-col"
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={isEdit ? 'Edit task' : 'Add task'}
-        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl"
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          void submit()
+        }}
+        className="flex min-h-0 flex-1 flex-col"
       >
         <div className="flex items-center justify-between gap-4 border-b border-line-soft px-6 py-4">
           <h2 className="text-sm font-semibold">{isEdit ? 'Edit task' : 'Add task'}</h2>
-          <button
-            type="button"
-            onClick={() => !saving && onClose()}
-            disabled={saving}
-            title="Close"
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-ink disabled:opacity-40"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <IconButton icon={X} label="Close" onClick={guardedClose} disabled={saving} />
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
@@ -102,27 +96,17 @@ export function TaskFormDialog({
         </div>
 
         <div className="flex items-center justify-between gap-4 border-t border-line-soft px-6 py-4">
-          <p className="text-[13px] text-rose-300">{error}</p>
+          <p className="text-[13px] text-danger">{error}</p>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => !saving && onClose()}
-              disabled={saving}
-              className="rounded-lg border border-line px-3.5 py-2 text-sm text-muted transition hover:text-ink disabled:opacity-50"
-            >
+            <Button variant="secondary" onClick={guardedClose} disabled={saving}>
               Cancel
-            </button>
-            <button
-              type="button"
-              onClick={submit}
-              disabled={!canSave}
-              className="rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110 disabled:opacity-50"
-            >
+            </Button>
+            <Button onClick={() => void submit()} disabled={!canSave}>
               {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Add task'}
-            </button>
+            </Button>
           </div>
         </div>
-      </div>
-    </div>
+      </form>
+    </Modal>
   )
 }

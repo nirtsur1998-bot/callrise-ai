@@ -3,6 +3,10 @@ import AppShell from './AppShell'
 import { Sidebar } from '@renderer/features/navigation/Sidebar'
 import { CopilotPanel } from '@renderer/features/copilot/CopilotPanel'
 import { useVoiceAiCollapsed } from '@renderer/features/copilot/useVoiceAiCollapsed'
+import { CommandPalette, type PaletteAction } from '@renderer/features/navigation/CommandPalette'
+import { ShortcutsOverlay } from '@renderer/features/navigation/ShortcutsOverlay'
+import { PhoneCall, SunMoon } from 'lucide-react'
+import { useTheme } from '@renderer/features/settings/useTheme'
 import { HomeView } from '@renderer/features/home/HomeView'
 import { LiveView } from '@renderer/features/live/LiveView'
 import { PastCallsView } from '@renderer/features/calls/PastCallsView'
@@ -17,6 +21,8 @@ import { PlaceholderView } from '@renderer/components/PlaceholderView'
 import { NAV_ITEMS, type NavId } from '@renderer/features/navigation/nav-items'
 import type { AuthUser } from '@renderer/features/auth/types'
 import { getAutoOpenMeetingPage } from '@renderer/features/settings/prefs'
+import { useAutoTranscribeCalls } from '@renderer/features/settings/useAutoTranscribeCalls'
+import { CallDetectedBanner } from '@renderer/features/live/components/CallDetectedBanner'
 
 /** The signed-in application shell. Only rendered once a user is logged in.
  *  `initialNav` lets onboarding drop the user straight onto a screen (e.g. Live
@@ -30,7 +36,86 @@ export function MainApp({
 }): React.JSX.Element {
   const [active, setActive] = useState<NavId>(initialNav)
   const [copilotCollapsed, setCopilotCollapsed] = useVoiceAiCollapsed()
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const { mode: themeMode, setMode: setThemeMode } = useTheme()
   const activeItem = NAV_ITEMS.find((item) => item.id === active) ?? NAV_ITEMS[0]
+
+  // "We noticed a call" — a known-calling-app (WhatsApp, Zoom, Teams, …)
+  // became frontmost while the rep was away. With auto-transcribe off, this
+  // shows a top banner the rep must explicitly accept; with it on, we skip
+  // the prompt and jump straight into Live Calls with a one-shot auto-start.
+  const [autoTranscribeCalls] = useAutoTranscribeCalls()
+  const [detectedCallApp, setDetectedCallApp] = useState<string | null>(null)
+  const [pendingCallAutoStart, setPendingCallAutoStart] = useState(false)
+
+  useEffect(() => {
+    return window.api.app.onCallDetected((appName) => {
+      if (autoTranscribeCalls) {
+        setActive('live-calls')
+        setPendingCallAutoStart(true)
+      } else {
+        setDetectedCallApp(appName)
+      }
+    })
+  }, [autoTranscribeCalls])
+
+  const startTranscribingDetectedCall = (): void => {
+    setDetectedCallApp(null)
+    setActive('live-calls')
+    setPendingCallAutoStart(true)
+  }
+
+  // Quick actions offered by the command palette alongside screen jumps.
+  // Kept small and honest — only things this component can actually do
+  // without reaching into other features' local state.
+  const paletteActions: PaletteAction[] = [
+    {
+      id: 'live-call',
+      label: 'Start a live call',
+      icon: PhoneCall,
+      onRun: () => setActive('live-calls')
+    },
+    {
+      id: 'toggle-theme',
+      label: 'Toggle theme',
+      icon: SunMoon,
+      onRun: () => setThemeMode(themeMode === 'light' ? 'dark' : 'light')
+    }
+  ]
+
+  // Global ⌘K / Ctrl+K toggles the command palette from anywhere (including
+  // Settings, which renders its own shell below).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPaletteOpen((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Global `?` opens the keyboard-shortcuts cheat sheet, except while the
+  // user is typing in a text field (so a literal "?" still types normally).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== '?') return
+      const el = document.activeElement
+      const isTyping =
+        el instanceof HTMLElement &&
+        (el.tagName === 'INPUT' ||
+          el.tagName === 'TEXTAREA' ||
+          el.tagName === 'SELECT' ||
+          el.isContentEditable)
+      if (isTyping) return
+      e.preventDefault()
+      setShortcutsOpen((v) => !v)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // Remember the last non-settings tab, so Settings' Back arrow returns to
   // wherever the user actually was, not always Home.
@@ -53,16 +138,48 @@ export function MainApp({
     void window.api.auth.signOut() // the gate swaps back to the login screen via the broadcast
   }
 
+  const palette = (
+    <>
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onSelect={setActive}
+        actions={paletteActions}
+      />
+      <ShortcutsOverlay open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      {detectedCallApp && (
+        <CallDetectedBanner
+          appName={detectedCallApp}
+          onStart={startTranscribingDetectedCall}
+          onDismiss={() => setDetectedCallApp(null)}
+        />
+      )}
+    </>
+  )
+
   // Settings is a dedicated full-screen surface (its own nav, no copilot),
   // not one more panel inside the normal 3-column shell.
   if (active === 'settings') {
-    return <SettingsShell user={user} onBack={() => setActive(lastNonSettingsRef.current)} />
+    return (
+      <>
+        <SettingsShell user={user} onBack={() => setActive(lastNonSettingsRef.current)} />
+        {palette}
+      </>
+    )
   }
 
   return (
     <AppShell
       title={activeItem.label}
-      sidebar={<Sidebar active={active} onSelect={setActive} user={user} onSignOut={signOut} />}
+      sidebar={
+        <Sidebar
+          active={active}
+          onSelect={setActive}
+          user={user}
+          onSignOut={signOut}
+          onOpenPalette={() => setPaletteOpen(true)}
+        />
+      }
       copilot={
         <CopilotPanel
           collapsed={copilotCollapsed}
@@ -71,30 +188,41 @@ export function MainApp({
       }
       copilotCollapsed={copilotCollapsed}
     >
-      {active === 'home' ? (
-        <HomeView />
-      ) : active === 'live-calls' ? (
-        <LiveView onSaved={handleCallSaved} />
-      ) : active === 'past-calls' ? (
-        <PastCallsView
-          initialSelectedId={openCallId}
-          onInitialSelectionConsumed={() => setOpenCallId(null)}
-        />
-      ) : active === 'tasks' ? (
-        <TasksView />
-      ) : active === 'crm' ? (
-        <CrmView />
-      ) : active === 'calendar' ? (
-        <CalendarView />
-      ) : active === 'coaching' ? (
-        <CoachingView />
-      ) : active === 'analytics' ? (
-        <AnalyticsView />
-      ) : active === 'knowledge' ? (
-        <KnowledgeView />
-      ) : (
-        <PlaceholderView title={activeItem.label} icon={activeItem.icon} />
-      )}
+      {/* Keyed on the active screen so each view fades/slides in on switch. */}
+      <div key={active} className="animate-view">
+        {active === 'home' ? (
+          <HomeView
+            userName={user.name?.trim() || user.email.split('@')[0]}
+            onNavigate={setActive}
+          />
+        ) : active === 'live-calls' ? (
+          <LiveView
+            onSaved={handleCallSaved}
+            autoStartFromDetection={pendingCallAutoStart}
+            onAutoStartFromDetectionConsumed={() => setPendingCallAutoStart(false)}
+          />
+        ) : active === 'past-calls' ? (
+          <PastCallsView
+            initialSelectedId={openCallId}
+            onInitialSelectionConsumed={() => setOpenCallId(null)}
+          />
+        ) : active === 'tasks' ? (
+          <TasksView />
+        ) : active === 'crm' ? (
+          <CrmView />
+        ) : active === 'calendar' ? (
+          <CalendarView />
+        ) : active === 'coaching' ? (
+          <CoachingView />
+        ) : active === 'analytics' ? (
+          <AnalyticsView />
+        ) : active === 'knowledge' ? (
+          <KnowledgeView />
+        ) : (
+          <PlaceholderView title={activeItem.label} icon={activeItem.icon} onNavigate={setActive} />
+        )}
+      </div>
+      {palette}
     </AppShell>
   )
 }

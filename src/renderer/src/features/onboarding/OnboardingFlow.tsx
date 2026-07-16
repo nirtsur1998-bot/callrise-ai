@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { AudioLines, ArrowLeft, ArrowRight, Loader2 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { Button } from '@renderer/components/Button'
 import { useOnboarding } from './useOnboarding'
 import { Welcome } from './steps/Welcome'
 import { AboutYou } from './steps/AboutYou'
@@ -13,10 +14,7 @@ import { Done } from './steps/Done'
 export type OnboardingExit = 'home' | 'live-calls'
 
 const secondaryBtn =
-  'rounded-lg px-3.5 py-2.5 text-sm font-medium text-muted transition hover:text-ink disabled:opacity-50'
-
-const primaryBtn =
-  'flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60'
+  'rounded-lg px-3.5 py-2.5 text-sm font-medium text-muted transition hover:text-ink disabled:cursor-not-allowed disabled:opacity-50'
 
 export function OnboardingFlow({
   onComplete
@@ -54,7 +52,13 @@ export function OnboardingFlow({
             <AudioLines className="h-4.5 w-4.5 text-white" strokeWidth={2.25} />
           </div>
           <div className="flex-1">
-            <div className="h-1 w-full overflow-hidden rounded-full bg-elevated">
+            <div
+              role="progressbar"
+              aria-valuenow={Math.round(progress * 100)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              className="h-1 w-full overflow-hidden rounded-full bg-elevated"
+            >
               <div
                 className="h-full rounded-full bg-accent transition-[width] duration-300"
                 style={{ width: `${Math.round(progress * 100)}%` }}
@@ -69,19 +73,21 @@ export function OnboardingFlow({
         </div>
 
         <div className="rounded-2xl border border-line-soft bg-surface p-7">
-          {o.step === 'welcome' && <Welcome onStart={o.next} onSkip={skip} busy={busy} />}
-          {o.step === 'about' && <AboutYou o={o} />}
-          {o.step === 'sell' && <WhatYouSell o={o} />}
-          {o.step === 'recording' && <RecordingConsent o={o} />}
-          {o.step === 'cues' && <CoachingCues o={o} />}
-          {o.step === 'done' && (
-            <Done
-              o={o}
-              busy={busy}
-              onStartCall={() => done('live-calls')}
-              onExplore={() => done('home')}
-            />
-          )}
+          <div key={o.step} className="animate-view">
+            {o.step === 'welcome' && <Welcome onStart={o.next} onSkip={skip} busy={busy} />}
+            {o.step === 'about' && <AboutYou o={o} />}
+            {o.step === 'sell' && <WhatYouSell o={o} />}
+            {o.step === 'recording' && <RecordingConsent o={o} />}
+            {o.step === 'cues' && <CoachingCues o={o} />}
+            {o.step === 'done' && (
+              <Done
+                o={o}
+                busy={busy}
+                onStartCall={() => done('live-calls')}
+                onExplore={() => done('home')}
+              />
+            )}
+          </div>
 
           {/* Shared footer for the middle steps (welcome + done own their own actions). */}
           {o.step !== 'welcome' && o.step !== 'done' && (
@@ -97,10 +103,10 @@ export function OnboardingFlow({
                 <button type="button" onClick={skip} disabled={busy} className={secondaryBtn}>
                   Skip for now
                 </button>
-                <button type="button" onClick={o.next} disabled={busy} className={primaryBtn}>
+                <Button onClick={o.next} disabled={busy}>
                   {busy && <Loader2 className="h-4 w-4 animate-spin" />}
                   Continue <ArrowRight className="h-4 w-4" />
-                </button>
+                </Button>
               </div>
             </div>
           )}

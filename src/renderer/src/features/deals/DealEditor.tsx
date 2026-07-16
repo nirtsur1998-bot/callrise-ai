@@ -1,11 +1,9 @@
 import type { ReactNode } from 'react'
 import { ContactPicker } from '@renderer/features/contacts/ContactPicker'
 import { useContacts } from '@renderer/features/contacts/useContacts'
+import { fieldClass } from '@renderer/components/field'
 import type { DealDraft } from './draft'
 import type { DealStage } from './types'
-
-const fieldClass =
-  'w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm text-ink placeholder:text-faint transition focus:border-accent focus:outline-none [color-scheme:dark]'
 
 function Field({ label, children }: { label: string; children: ReactNode }): React.JSX.Element {
   return (

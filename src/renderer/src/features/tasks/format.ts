@@ -44,6 +44,18 @@ export function formatDueLabel(iso?: string): DueLabel | null {
   return { text: date, tone: 'later' }
 }
 
+export type DueBucket = 'overdue' | 'today' | 'soon' | 'later' | 'none'
+
+/** Groups a due date into one of the buckets used to section the Open list. */
+export function dueBucket(iso?: string): DueBucket {
+  if (!iso) return 'none'
+  const diff = dueDiffDays(iso)
+  if (diff < 0) return 'overdue'
+  if (diff === 0) return 'today'
+  if (diff <= 7) return 'soon'
+  return 'later'
+}
+
 /** Convert an ISO timestamp to the value a <input type="date"> expects (local). */
 export function isoToDateInputValue(iso?: string): string {
   if (!iso) return ''

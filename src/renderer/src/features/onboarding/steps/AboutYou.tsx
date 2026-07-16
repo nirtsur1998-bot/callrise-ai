@@ -1,6 +1,7 @@
-import { cn } from '@renderer/lib/cn'
+import { fieldClass } from '@renderer/components/field'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import type { OnboardingState } from '../useOnboarding'
-import { StepHeader, fieldInput } from './StepHeader'
+import { StepHeader } from './StepHeader'
 
 const PRONOUNS = [
   { id: 'he', label: 'He/him' },
@@ -29,7 +30,7 @@ export function AboutYou({ o }: { o: OnboardingState }): React.JSX.Element {
             maxLength={MAX_NAME}
             autoFocus
             placeholder="e.g. Alex Rivera"
-            className={fieldInput}
+            className={fieldClass}
           />
         </div>
         <div>
@@ -39,28 +40,19 @@ export function AboutYou({ o }: { o: OnboardingState }): React.JSX.Element {
             onChange={(e) => o.setRole(e.target.value)}
             maxLength={MAX_ROLE}
             placeholder="e.g. Account Executive at Acme Co"
-            className={fieldInput}
+            className={fieldClass}
           />
         </div>
         <div>
           <p className="mb-1.5 text-[13px] font-medium text-muted">
             Preferred pronoun for summaries
           </p>
-          <div className="inline-flex flex-wrap gap-1 rounded-lg border border-line p-0.5">
-            {PRONOUNS.map((opt) => (
-              <button
-                key={opt.id || 'skip'}
-                type="button"
-                onClick={() => o.setPronoun(opt.id)}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-[13px] font-medium transition',
-                  o.pronoun === opt.id ? 'bg-accent-soft text-ink' : 'text-muted hover:text-ink'
-                )}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            options={PRONOUNS.map((opt) => ({ id: opt.id, label: opt.label }))}
+            value={o.pronoun}
+            onChange={o.setPronoun}
+            className="flex-wrap"
+          />
         </div>
       </div>
     </div>

@@ -176,7 +176,8 @@ const api = {
     setLaunchAtLogin: (value: boolean) => ipcRenderer.invoke('app:setLaunchAtLogin', value),
     getActiveApp: () => ipcRenderer.invoke('app:getActiveApp'),
     getLastExternalApp: () => ipcRenderer.invoke('app:getLastExternalApp'),
-    openAccessibilitySettings: () => ipcRenderer.invoke('app:openAccessibilitySettings')
+    openAccessibilitySettings: () => ipcRenderer.invoke('app:openAccessibilitySettings'),
+    onCallDetected: (cb: (appName: string) => void) => subscribe('app:callDetected', cb)
   }
 }
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ScanSearch } from 'lucide-react'
+import { Button } from '@renderer/components/Button'
 
 // Rough, honest per-call estimate — same AI model as coaching. Not a
 // guarantee, just enough for the user to judge before confirming a batch run.
@@ -118,21 +119,22 @@ export function ScanPastCallsCard({
   return (
     <div className="flex flex-col items-start gap-3">
       <p className="text-sm text-muted">
-        <span className="font-medium text-ink">{eligibleCount}</span> past call
+        <span className="font-medium text-ink tabular-nums">{eligibleCount}</span> past call
         {eligibleCount === 1 ? '' : 's'} with a transcript {eligibleCount === 1 ? 'has' : 'have'}{' '}
         not been mined yet. Scanning calls Claude once per call — expect{' '}
-        {formatMinutes(eligibleCount * SECONDS_PER_CALL)} and {formatCost(eligibleCount)} in AI cost
-        (a rough estimate, not a guarantee).
+        <span className="tabular-nums">{formatMinutes(eligibleCount * SECONDS_PER_CALL)}</span> and{' '}
+        <span className="tabular-nums">{formatCost(eligibleCount)}</span> in AI cost (a rough
+        estimate, not a guarantee).
       </p>
 
-      {error && <p className="text-[13px] text-rose-300">{error}</p>}
+      {error && <p className="text-[13px] text-danger">{error}</p>}
 
       {result && (
         <p
           className={
             result.stopped || result.failed > 0
-              ? 'text-[13px] text-amber-300'
-              : 'text-[13px] text-emerald-400'
+              ? 'text-[13px] text-warning'
+              : 'text-[13px] text-positive'
           }
         >
           Scanned {result.scanned} call{result.scanned === 1 ? '' : 's'} and found{' '}
@@ -149,17 +151,11 @@ export function ScanPastCallsCard({
 
       {/* Keep the button when the scan didn't finish cleanly, so the user can retry. */}
       {(!result || result.stopped || result.failed > 0) && (
-        <button
-          type="button"
-          disabled={scanning}
-          onClick={startScan}
-          className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110 disabled:cursor-default disabled:opacity-50"
-        >
-          <ScanSearch className="h-4 w-4" />
+        <Button icon={ScanSearch} disabled={scanning} onClick={startScan}>
           {scanning
             ? 'Scanning…'
             : `Scan ${eligibleCount} past call${eligibleCount === 1 ? '' : 's'}`}
-        </button>
+        </Button>
       )}
     </div>
   )

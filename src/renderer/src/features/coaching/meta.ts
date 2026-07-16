@@ -1,3 +1,5 @@
+import type { BadgeTone } from '@renderer/components/Badge'
+import type { GaugeTone } from '@renderer/components/ScoreGauge'
 import type { CoachDimensionKey, CoachMetrics } from './types'
 
 export const DIMENSION_ORDER: CoachDimensionKey[] = [
@@ -19,6 +21,25 @@ export const DIMENSION_LABEL: Record<CoachDimensionKey, string> = {
 }
 
 export type Tone = 'good' | 'mid' | 'low' | 'neutral'
+
+// Maps the coaching Tone scale onto Badge/ScoreGauge's tone vocabulary, so a
+// score's Badge, ScoreGauge ring, and tier label always agree — ScoreGauge's
+// own built-in toneFor() uses different score cutoffs than overallTier below,
+// so any caller placing a gauge next to a tier label MUST pass this explicitly.
+export const TONE_TO_BADGE: Record<Tone, BadgeTone> = {
+  good: 'positive',
+  mid: 'warning',
+  low: 'danger',
+  neutral: 'neutral'
+}
+
+// Same mapping, typed for ScoreGauge's tone prop (which has no 'accent').
+export const TONE_TO_GAUGE: Record<Tone, GaugeTone> = {
+  good: 'positive',
+  mid: 'warning',
+  low: 'danger',
+  neutral: 'neutral'
+}
 
 // Semantic status tokens (index.css) rather than raw emerald/amber/rose — so
 // these tones stay on-brand AND adapt per theme (the raw Tailwind shades were
@@ -52,9 +73,21 @@ export function overallTier(score: number): { label: string; tone: Tone } {
   return { label: 'Early', tone: 'low' }
 }
 
-export function speakerLabel(speaker: number, repSpeaker: number | null): string {
+/**
+ * @param speakerCount  Distinct speakers in the call, when known. With more
+ *   than 2, every non-rep speaker collapsing to "Buyer" would make separate
+ *   participants indistinguishable, so this falls back to "Speaker N" for
+ *   them instead (the rep is still always "You").
+ */
+export function speakerLabel(
+  speaker: number,
+  repSpeaker: number | null,
+  speakerCount?: number
+): string {
   if (repSpeaker === null) return `Speaker ${speaker + 1}`
-  return speaker === repSpeaker ? 'You' : 'Buyer'
+  if (speaker === repSpeaker) return 'You'
+  if (speakerCount !== undefined && speakerCount > 2) return `Speaker ${speaker + 1}`
+  return 'Buyer'
 }
 
 export interface MetricRow {

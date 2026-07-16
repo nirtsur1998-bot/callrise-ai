@@ -1,4 +1,6 @@
 import { Card } from '@renderer/components/Card'
+import { fieldClass } from '@renderer/components/field'
+import { cn } from '@renderer/lib/cn'
 import { useAppSettings, type SummaryLanguage } from './useAppSettings'
 import { SUMMARY_LANGUAGES, SUMMARY_LANGUAGE_LABEL } from './summaryLanguages'
 import { SettingRow } from './SettingRow'
@@ -16,7 +18,7 @@ export function SummaryLanguageSection(): React.JSX.Element {
             value={settings.summaryLanguage}
             disabled={loading}
             onChange={(e) => void update({ summaryLanguage: e.target.value as SummaryLanguage })}
-            className="rounded-lg border border-line-soft bg-canvas px-3 py-2 text-sm text-ink outline-none transition focus:border-line"
+            className={cn(fieldClass, 'w-auto')}
           >
             {SUMMARY_LANGUAGES.map((lang) => (
               <option key={lang} value={lang}>

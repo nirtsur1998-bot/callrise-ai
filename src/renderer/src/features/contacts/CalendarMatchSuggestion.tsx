@@ -1,4 +1,6 @@
 import { CalendarClock, X, Link2, UserPlus } from 'lucide-react'
+import { Button } from '@renderer/components/Button'
+import { IconButton } from '@renderer/components/IconButton'
 import type { CalendarMatch } from './calendarMatch'
 import type { Contact } from './types'
 
@@ -49,14 +51,7 @@ export function CalendarMatchSuggestion({
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onDismiss}
-          title="Not now"
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-ink"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        <IconButton icon={X} label="Not now" onClick={onDismiss} />
       </div>
 
       <ul className="mt-3 space-y-2">
@@ -76,21 +71,24 @@ export function CalendarMatchSuggestion({
                 </p>
               </div>
               {existing ? (
-                <button
-                  type="button"
+                <Button
+                  size="sm"
+                  icon={Link2}
                   onClick={() => onLink(existing.id)}
-                  className="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-medium text-white transition hover:brightness-110"
+                  className="shrink-0"
                 >
-                  <Link2 className="h-3.5 w-3.5" /> Link to {existing.name}
-                </button>
+                  Link to {existing.name}
+                </Button>
               ) : (
-                <button
-                  type="button"
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={UserPlus}
                   onClick={() => onCreateAndLink(attendee)}
-                  className="flex shrink-0 items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
+                  className="shrink-0"
                 >
-                  <UserPlus className="h-3.5 w-3.5" /> Add as contact
-                </button>
+                  Add as contact
+                </Button>
               )}
             </li>
           )
@@ -113,21 +111,17 @@ export function AutoLinkedNotice({
   onUndo
 }: AutoLinkedNoticeProps): React.JSX.Element {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-4 py-3">
+    <div className="flex items-center justify-between gap-3 rounded-xl border border-positive/30 bg-positive-soft px-4 py-3">
       <div className="flex items-center gap-2.5">
-        <Link2 className="h-4 w-4 shrink-0 text-emerald-300" />
+        <Link2 className="h-4 w-4 shrink-0 text-positive" />
         <p className="text-[13px] text-ink">
           Automatically linked to <span className="font-medium">{contactName}</span> — matched by
           calendar time.
         </p>
       </div>
-      <button
-        type="button"
-        onClick={onUndo}
-        className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
-      >
+      <Button variant="secondary" size="sm" onClick={onUndo} className="shrink-0">
         Undo
-      </button>
+      </Button>
     </div>
   )
 }

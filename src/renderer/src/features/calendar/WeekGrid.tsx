@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   startOfWeek,
   startOfDay,
@@ -38,10 +38,26 @@ export function WeekGrid({
   const weekStart = startOfWeek(cursor, { weekStartsOn: 0 })
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
   const scrollRef = useRef<HTMLDivElement>(null)
+  const nowLineRef = useRef<HTMLDivElement>(null)
+  const [now, setNow] = useState(new Date())
 
-  // Open scrolled to the morning rather than midnight.
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = 7 * HOUR_HEIGHT
+    const id = setInterval(() => setNow(new Date()), 60_000)
+    return () => clearInterval(id)
+  }, [])
+
+  // Open scrolled to center on the current time rather than a fixed hour.
+  // This grid's own overflow-y-auto container isn't reliably the element
+  // that actually scrolls (a parent in the flex chain isn't height-clamped,
+  // so the page itself grows and scrolls instead) — scrollIntoView on the
+  // now-line marker resolves whichever ancestor is truly scrollable, so it
+  // works regardless of that layout quirk. Deferred a frame so the mount's
+  // page-enter transition (MainApp's `.animate-view`) has already committed.
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      nowLineRef.current?.scrollIntoView({ block: 'center' })
+    })
+    return () => cancelAnimationFrame(raf)
   }, [])
 
   return (
@@ -156,6 +172,19 @@ export function WeekGrid({
                     style={{ height: HOUR_HEIGHT }}
                   />
                 ))}
+
+                {/* Live now-line */}
+                {today && (
+                  <div
+                    ref={nowLineRef}
+                    className="pointer-events-none absolute inset-x-0 z-10"
+                    style={{ top: (minutesInto(now, day) / 60) * HOUR_HEIGHT }}
+                  >
+                    <div className="relative h-px bg-accent">
+                      <span className="absolute -left-0.5 -top-[3px] h-1.5 w-1.5 rounded-full bg-accent" />
+                    </div>
+                  </div>
+                )}
 
                 {/* Timed blocks */}
                 {laidOut.map(({ item, lane, lanes }) => {

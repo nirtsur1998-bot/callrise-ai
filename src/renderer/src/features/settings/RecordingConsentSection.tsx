@@ -2,7 +2,9 @@ import { useState } from 'react'
 import { ShieldCheck, ShieldOff, RotateCcw } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { cn } from '@renderer/lib/cn'
+import { fieldClass } from '@renderer/components/field'
 import type { ConsentJurisdiction } from '@renderer/features/calls/types'
 import {
   DEFAULT_SCRIPT,
@@ -49,7 +51,7 @@ export function RecordingConsentSection(): React.JSX.Element {
       <Card
         className={cn(
           'mb-5 border-2',
-          allowed ? 'border-line-soft' : 'border-amber-500/40 bg-amber-500/[0.03]'
+          allowed ? 'border-line-soft' : 'border-accent/30 bg-accent-soft'
         )}
       >
         <SettingRow
@@ -62,9 +64,9 @@ export function RecordingConsentSection(): React.JSX.Element {
           control={
             <div className="flex items-center gap-2">
               {allowed ? (
-                <ShieldCheck className="h-4 w-4 text-emerald-300" />
+                <ShieldCheck className="h-4 w-4 text-positive" />
               ) : (
-                <ShieldOff className="h-4 w-4 text-amber-300" />
+                <ShieldOff className="h-4 w-4 text-accent" />
               )}
               <ToggleSwitch
                 checked={allowed}
@@ -86,22 +88,12 @@ export function RecordingConsentSection(): React.JSX.Element {
         <p className="mb-3 text-[12px] text-muted">
           Pre-fills the per-call consent step — you can still change it on any individual call.
         </p>
-        <div className="inline-flex rounded-lg border border-line p-0.5">
-          {JURISDICTIONS.map((j) => (
-            <button
-              key={j.id}
-              type="button"
-              disabled={!allowed}
-              onClick={() => setJurisdiction(j.id)}
-              className={cn(
-                'rounded-md px-3 py-1.5 text-[13px] font-medium transition disabled:cursor-default',
-                jurisdiction === j.id ? 'bg-accent-soft text-ink' : 'text-muted hover:text-ink'
-              )}
-            >
-              {j.label}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          options={JURISDICTIONS}
+          value={jurisdiction}
+          onChange={setJurisdiction}
+          disabled={!allowed}
+        />
       </Card>
 
       <Card className={cn('mb-5', !allowed && 'opacity-50')}>
@@ -125,7 +117,7 @@ export function RecordingConsentSection(): React.JSX.Element {
           disabled={!allowed}
           onChange={(e) => setScript(e.target.value)}
           rows={3}
-          className="w-full resize-y rounded-lg border border-line-soft bg-canvas px-3 py-2 text-sm outline-none transition focus:border-line disabled:cursor-default"
+          className={cn(fieldClass, 'resize-y')}
         />
       </Card>
     </>

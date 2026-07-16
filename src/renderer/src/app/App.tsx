@@ -5,6 +5,7 @@ import { AuthScreen } from '@renderer/features/auth/AuthScreen'
 import { useTheme } from '@renderer/features/settings/useTheme'
 import { OnboardingFlow, type OnboardingExit } from '@renderer/features/onboarding/OnboardingFlow'
 import { isOnboardingComplete } from '@renderer/features/onboarding/prefs'
+import { ToastProvider } from '@renderer/features/notifications/ToastProvider'
 import type { NavId } from '@renderer/features/navigation/nav-items'
 import { MainApp } from './MainApp'
 
@@ -36,10 +37,21 @@ function App(): React.JSX.Element {
     setOnboarded(true)
   }
 
-  if (loading) return <Splash />
-  if (!user) return <AuthScreen configured={configured} />
-  if (!onboarded) return <OnboardingFlow onComplete={handleOnboardingComplete} />
-  return <MainApp user={user} initialNav={initialNav} />
+  // Toasts wrap the whole gate so success/error feedback is available on every
+  // screen (auth, onboarding, and the main app).
+  return (
+    <ToastProvider>
+      {loading ? (
+        <Splash />
+      ) : !user ? (
+        <AuthScreen configured={configured} />
+      ) : !onboarded ? (
+        <OnboardingFlow onComplete={handleOnboardingComplete} />
+      ) : (
+        <MainApp user={user} initialNav={initialNav} />
+      )}
+    </ToastProvider>
+  )
 }
 
 export default App

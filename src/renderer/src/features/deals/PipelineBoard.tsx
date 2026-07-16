@@ -1,5 +1,7 @@
+import { useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, PhoneCall, Building2 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { Badge } from '@renderer/components/Badge'
 import type { Contact } from '@renderer/features/contacts/types'
 import {
   recencyTone,
@@ -10,6 +12,7 @@ import { TONE_TEXT } from '@renderer/features/coaching/meta'
 import { formatValue } from './format'
 import { isDealStale } from './staleness'
 import { StaleBadge } from './StaleBadge'
+import { RISK_TIER_TONE } from './risk'
 import type { Deal, DealStage } from './types'
 
 interface PipelineBoardProps {
@@ -25,8 +28,20 @@ interface PipelineBoardProps {
 
 const KIND_HEADER_TEXT: Record<DealStage['kind'], string> = {
   open: 'text-ink',
-  won: 'text-emerald-300',
-  lost: 'text-rose-300'
+  won: 'text-positive',
+  lost: 'text-danger'
+}
+
+const KIND_RULE: Record<DealStage['kind'], string> = {
+  open: 'border-t-line',
+  won: 'border-t-positive',
+  lost: 'border-t-danger'
+}
+
+const KIND_COUNT_PILL: Record<DealStage['kind'], string> = {
+  open: 'text-faint',
+  won: 'rounded-full bg-positive-soft px-1.5 py-0.5 text-positive',
+  lost: 'rounded-full bg-danger-soft px-1.5 py-0.5 text-danger'
 }
 
 /** A simple kanban: columns = stages (in configured order), cards = deals.
@@ -44,6 +59,22 @@ export function PipelineBoard({
   onMoveStage,
   onOpen
 }: PipelineBoardProps): React.JSX.Element {
+  const [recentlyMovedId, setRecentlyMovedId] = useState<string | null>(null)
+  const flashTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (flashTimeout.current) clearTimeout(flashTimeout.current)
+    }
+  }, [])
+
+  const handleMove = (dealId: string, stageId: string): void => {
+    onMoveStage(dealId, stageId)
+    setRecentlyMovedId(dealId)
+    if (flashTimeout.current) clearTimeout(flashTimeout.current)
+    flashTimeout.current = setTimeout(() => setRecentlyMovedId(null), 700)
+  }
+
   const dealsByStage = new Map<string, Deal[]>()
   for (const deal of deals) {
     const list = dealsByStage.get(deal.stageId)
@@ -62,7 +93,7 @@ export function PipelineBoard({
       {orphaned.length > 0 && (
         <div className="w-64 shrink-0">
           <div className="mb-2.5 flex items-baseline justify-between px-1">
-            <h3 className="text-sm font-semibold text-amber-300">No stage</h3>
+            <h3 className="text-sm font-semibold text-warning">No stage</h3>
             <span className="text-[11px] text-faint">{orphaned.length}</span>
           </div>
           <p className="mb-2.5 px-1 text-[11px] text-faint">
@@ -80,8 +111,9 @@ export function PipelineBoard({
                 canMovePrev={false}
                 canMoveNext={stages.length > 0}
                 onMovePrev={() => {}}
-                onMoveNext={() => onMoveStage(deal.id, stages[0].id)}
+                onMoveNext={() => handleMove(deal.id, stages[0].id)}
                 onEdit={() => onOpen(deal)}
+                flash={deal.id === recentlyMovedId}
               />
             ))}
           </div>
@@ -92,11 +124,16 @@ export function PipelineBoard({
         const total = stageDeals.reduce((sum, d) => sum + (d.value ?? 0), 0)
         return (
           <div key={stage.id} className="w-64 shrink-0">
-            <div className="mb-2.5 flex items-baseline justify-between px-1">
+            <div
+              className={cn(
+                'mb-2.5 flex items-baseline justify-between border-t-2 px-1 pt-2',
+                KIND_RULE[stage.kind]
+              )}
+            >
               <h3 className={cn('text-sm font-semibold', KIND_HEADER_TEXT[stage.kind])}>
                 {stage.label}
               </h3>
-              <span className="text-[11px] text-faint">
+              <span className={cn('text-[11px] font-medium', KIND_COUNT_PILL[stage.kind])}>
                 {stageDeals.length}
                 {total > 0 ? ` · ${formatValue(total)}` : ''}
               </span>
@@ -122,9 +159,10 @@ export function PipelineBoard({
                     )}
                     canMovePrev={stageIndex > 0}
                     canMoveNext={stageIndex < stages.length - 1}
-                    onMovePrev={() => onMoveStage(deal.id, stages[stageIndex - 1].id)}
-                    onMoveNext={() => onMoveStage(deal.id, stages[stageIndex + 1].id)}
+                    onMovePrev={() => handleMove(deal.id, stages[stageIndex - 1].id)}
+                    onMoveNext={() => handleMove(deal.id, stages[stageIndex + 1].id)}
                     onEdit={() => onOpen(deal)}
+                    flash={deal.id === recentlyMovedId}
                   />
                 ))
               )}
@@ -146,6 +184,7 @@ interface DealCardProps {
   onMovePrev: () => void
   onMoveNext: () => void
   onEdit: () => void
+  flash?: boolean
 }
 
 function DealCard({
@@ -157,10 +196,12 @@ function DealCard({
   canMoveNext,
   onMovePrev,
   onMoveNext,
-  onEdit
+  onEdit,
+  flash
 }: DealCardProps): React.JSX.Element {
   const value = formatValue(deal.value)
   const tone = recencyTone(stats?.lastCallAt)
+  const risk = deal.riskAssessment?.level
 
   return (
     <div
@@ -169,12 +210,26 @@ function DealCard({
       onClick={onEdit}
       onKeyDown={(e) => {
         if (e.key === 'Enter') onEdit()
+        if (e.key === ' ') {
+          e.preventDefault()
+          onEdit()
+        }
       }}
-      className="cursor-pointer rounded-xl border border-line-soft bg-surface p-3.5 transition hover:border-line hover:bg-elevated"
+      className={cn(
+        'press group cursor-pointer rounded-xl border border-line-soft bg-surface p-3.5 transition hover:border-line hover:bg-elevated',
+        flash && 'flash'
+      )}
     >
       <div className="flex items-start justify-between gap-2">
         <p className="min-w-0 truncate text-sm font-medium">{deal.title}</p>
-        {stale && <StaleBadge />}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {stale && <StaleBadge />}
+          {(risk === 'high' || risk === 'medium') && (
+            <Badge tone={RISK_TIER_TONE[risk === 'high' ? 'risk-high' : 'risk-medium']}>
+              {risk === 'high' ? 'High risk' : 'Medium risk'}
+            </Badge>
+          )}
+        </div>
       </div>
       <p className="mt-1 flex items-center gap-1 truncate text-[11px] text-faint">
         <Building2 className="h-3 w-3 shrink-0" />
@@ -194,7 +249,7 @@ function DealCard({
       </div>
 
       <div
-        className="mt-2.5 flex items-center justify-between border-t border-line-soft pt-2"
+        className="mt-2.5 flex items-center justify-between border-t border-line-soft pt-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -202,7 +257,8 @@ function DealCard({
           onClick={onMovePrev}
           disabled={!canMovePrev}
           title="Move to previous stage"
-          className="grid h-7 w-7 place-items-center rounded-lg text-faint transition hover:bg-canvas hover:text-ink disabled:opacity-20"
+          aria-label="Move to previous stage"
+          className="press grid h-7 w-7 place-items-center rounded-lg text-faint transition hover:bg-canvas hover:text-ink disabled:opacity-20"
         >
           <ChevronLeft className="h-3.5 w-3.5" />
         </button>
@@ -212,7 +268,8 @@ function DealCard({
           onClick={onMoveNext}
           disabled={!canMoveNext}
           title="Move to next stage"
-          className="grid h-7 w-7 place-items-center rounded-lg text-faint transition hover:bg-canvas hover:text-ink disabled:opacity-20"
+          aria-label="Move to next stage"
+          className="press grid h-7 w-7 place-items-center rounded-lg text-faint transition hover:bg-canvas hover:text-ink disabled:opacity-20"
         >
           <ChevronRight className="h-3.5 w-3.5" />
         </button>

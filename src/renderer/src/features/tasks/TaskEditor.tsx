@@ -4,9 +4,7 @@ import type { TaskType, TaskPriority } from './types'
 import type { TaskDraft } from './draft'
 import { TASK_TYPE_META, TASK_TYPE_ORDER, PRIORITY_META, PRIORITY_ORDER } from './meta'
 import { isoToDateInputValue, dateInputValueToIso } from './format'
-
-const fieldClass =
-  'w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm text-ink placeholder:text-faint transition focus:border-accent focus:outline-none [color-scheme:dark]'
+import { fieldClass } from '@renderer/components/field'
 
 function Field({ label, children }: { label: string; children: ReactNode }): React.JSX.Element {
   return (

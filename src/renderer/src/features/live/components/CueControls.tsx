@@ -34,24 +34,28 @@ export function CueControls({
         {enabled ? <Bell className="h-3.5 w-3.5" /> : <BellOff className="h-3.5 w-3.5" />}
         {enabled ? 'Cues on' : 'Muted'}
       </button>
-      {enabled && (
-        <div className="no-drag flex items-center gap-0.5 rounded-lg border border-line p-0.5">
-          {SENSITIVITIES.map((s) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => onSensitivity(s)}
-              title={`${SENS_LABEL[s]} sensitivity`}
-              className={cn(
-                'rounded px-1.5 py-0.5 text-[11px] font-semibold transition',
-                sensitivity === s ? 'bg-accent-soft text-ink' : 'text-muted hover:text-ink'
-              )}
-            >
-              {SENS_LABEL[s][0]}
-            </button>
-          ))}
-        </div>
-      )}
+      <div
+        className={cn(
+          'no-drag flex items-center gap-0.5 rounded-lg border border-line p-0.5 transition',
+          !enabled && 'pointer-events-none opacity-40'
+        )}
+      >
+        {SENSITIVITIES.map((s) => (
+          <button
+            key={s}
+            type="button"
+            disabled={!enabled}
+            onClick={() => onSensitivity(s)}
+            title={`${SENS_LABEL[s]} sensitivity`}
+            className={cn(
+              'rounded px-1.5 py-0.5 text-[11px] font-semibold transition',
+              sensitivity === s ? 'bg-accent-soft text-ink' : 'text-muted hover:text-ink'
+            )}
+          >
+            {SENS_LABEL[s][0]}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

@@ -1,6 +1,19 @@
 import { useState } from 'react'
-import { Award, Wrench, Lightbulb, Target, Quote, ListPlus, Check, Sparkles } from 'lucide-react'
+import {
+  Award,
+  Wrench,
+  Lightbulb,
+  Target,
+  Quote,
+  ListPlus,
+  Check,
+  Sparkles,
+  Trophy
+} from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { ScoreGauge } from '@renderer/components/ScoreGauge'
+import { Skeleton } from '@renderer/components/Skeleton'
+import { Badge } from '@renderer/components/Badge'
 import type { CoachingReport, CoachDimension, CoachEvidence } from './types'
 import {
   DIMENSION_ORDER,
@@ -10,7 +23,9 @@ import {
   speakerLabel,
   metricRows,
   TONE_TEXT,
-  TONE_BAR
+  TONE_BAR,
+  TONE_TO_GAUGE,
+  TONE_TO_BADGE
 } from './meta'
 
 interface CoachReportViewProps {
@@ -33,17 +48,24 @@ export function CoachReportView({
   return (
     <div className="space-y-4">
       {/* Overall + deal context */}
-      <div className="flex items-center gap-4 rounded-2xl border border-line-soft bg-canvas p-5">
-        <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-xl bg-elevated">
-          <span className={cn('text-2xl font-bold tabular-nums', TONE_TEXT[tier.tone])}>
-            {report.overallScore}
-          </span>
-          <span className="text-[9px] uppercase tracking-wide text-faint">/ 100</span>
-        </div>
+      <div
+        className={cn(
+          'flex items-center gap-4 rounded-2xl border border-line-soft bg-canvas p-5',
+          report.overallScore >= 85 && 'animate-pop'
+        )}
+      >
+        <ScoreGauge score={report.overallScore} size={72} tone={TONE_TO_GAUGE[tier.tone]} />
         <div className="min-w-0">
-          <p className={cn('text-sm font-semibold', TONE_TEXT[tier.tone])}>{tier.label} call</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone={TONE_TO_BADGE[tier.tone]}>{tier.label} call</Badge>
+            {report.overallScore >= 85 && (
+              <Badge tone="positive" icon={Trophy}>
+                Great call
+              </Badge>
+            )}
+          </div>
           {report.dealContext.summary && (
-            <p className="mt-0.5 text-[13px] text-muted">{report.dealContext.summary}</p>
+            <p className="mt-1.5 text-[13px] text-muted">{report.dealContext.summary}</p>
           )}
           {report.dealContext.lens && (
             <p className="mt-1 text-[11px] text-faint">Lens: {report.dealContext.lens}</p>
@@ -52,12 +74,9 @@ export function CoachReportView({
       </div>
 
       {/* Deterministic metrics */}
-      <div className="flex flex-wrap gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
         {metricRows(report.metrics).map((m) => (
-          <div
-            key={m.label}
-            className="min-w-[7rem] flex-1 rounded-xl border border-line-soft bg-canvas px-3 py-2"
-          >
+          <div key={m.label} className="rounded-xl border border-line-soft bg-canvas px-3 py-2">
             <p className="text-[10px] uppercase tracking-wide text-faint">{m.label}</p>
             <p className={cn('text-sm font-semibold tabular-nums', TONE_TEXT[m.tone])}>{m.value}</p>
             <p className="text-[10px] text-faint">{m.hint}</p>
@@ -67,8 +86,8 @@ export function CoachReportView({
 
       {/* Lead strength */}
       {report.strength.text && (
-        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-          <div className="flex items-center gap-2 text-emerald-300">
+        <div className="rounded-2xl border border-positive/30 bg-positive-soft p-4">
+          <div className="flex items-center gap-2 text-positive">
             <Award className="h-4 w-4" />
             <h4 className="text-xs font-semibold uppercase tracking-wide">What worked</h4>
           </div>
@@ -84,15 +103,13 @@ export function CoachReportView({
         <div className="grid gap-3 sm:grid-cols-2">
           {report.improvements.map((imp, i) => (
             <div key={i} className="rounded-2xl border border-line-soft bg-canvas p-4">
-              <div className="flex items-center gap-2 text-accent">
-                {imp.kind === 'mechanical' ? (
-                  <Wrench className="h-4 w-4" />
-                ) : (
-                  <Lightbulb className="h-4 w-4" />
-                )}
-                <h4 className="text-xs font-semibold uppercase tracking-wide">
+              <div className="flex items-center gap-2">
+                <Badge
+                  tone={imp.kind === 'mechanical' ? 'neutral' : 'accent'}
+                  icon={imp.kind === 'mechanical' ? Wrench : Lightbulb}
+                >
                   {imp.kind === 'mechanical' ? 'Quick fix' : 'Strategic'}
-                </h4>
+                </Badge>
               </div>
               <p className="mt-2 text-sm font-medium text-ink">{imp.title}</p>
               {imp.detail && <p className="mt-1 text-[13px] text-muted">{imp.detail}</p>}
@@ -213,7 +230,7 @@ function NextAction({
         className={cn(
           'mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition',
           saved
-            ? 'cursor-default bg-emerald-500/15 text-emerald-300'
+            ? 'cursor-default bg-positive-soft text-positive'
             : 'border border-line text-muted hover:bg-elevated hover:text-ink disabled:opacity-50'
         )}
       >
@@ -227,7 +244,7 @@ function NextAction({
           </>
         )}
       </button>
-      {error && <p className="mt-2 text-[13px] text-rose-300">{error}</p>}
+      {error && <p className="mt-2 text-[13px] text-danger">{error}</p>}
     </div>
   )
 }
@@ -240,15 +257,15 @@ export function CoachLoading(): React.JSX.Element {
         <Sparkles className="h-4 w-4 animate-pulse text-accent" />
         <span>Coaching this call with Claude — scoring against the rubric…</span>
       </div>
-      <div className="h-16 animate-pulse rounded-2xl bg-elevated" />
+      <Skeleton className="h-16 rounded-2xl" />
       <div className="flex gap-2">
         {[0, 1, 2, 3, 4].map((i) => (
-          <div key={i} className="h-12 flex-1 animate-pulse rounded-xl bg-elevated" />
+          <Skeleton key={i} className="h-12 flex-1 rounded-xl" />
         ))}
       </div>
       <div className="space-y-2.5">
         {[0, 1, 2, 3, 4, 5].map((i) => (
-          <div key={i} className="h-6 animate-pulse rounded bg-elevated" />
+          <Skeleton key={i} className="h-6" />
         ))}
       </div>
     </div>

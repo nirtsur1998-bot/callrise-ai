@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { X, Phone } from 'lucide-react'
+import { Modal } from '@renderer/components/Modal'
+import { IconButton } from '@renderer/components/IconButton'
 import { SpeakerTranscript } from '@renderer/components/SpeakerTranscript'
+import { SkeletonRows } from '@renderer/components/Skeleton'
 import type { Call } from '@renderer/features/calls/types'
 
 interface ViewCallModalProps {
@@ -36,45 +39,29 @@ export function ViewCallModal({
   }, [callId])
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-canvas/70 p-6 backdrop-blur-sm"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="View call"
-        className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl"
-      >
-        <div className="flex items-start justify-between gap-4 border-b border-line-soft px-6 py-4">
-          <div className="flex items-center gap-2.5">
-            <div className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft">
-              <Phone className="h-4 w-4 text-accent" />
-            </div>
-            <p className="truncate text-sm font-semibold">{callTitle}</p>
+    <Modal onClose={onClose} title="View call" size="xl" className="flex max-h-[85vh] flex-col">
+      <div className="flex items-start justify-between gap-4 border-b border-line-soft px-6 py-4">
+        <div className="flex items-center gap-2.5">
+          <div className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft">
+            <Phone className="h-4 w-4 text-accent" />
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            title="Close"
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-ink"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <p className="truncate text-sm font-semibold">{callTitle}</p>
         </div>
-
-        <div className="flex-1 overflow-y-auto px-6 py-4">
-          {!loaded ? (
-            <p className="text-sm text-faint">Loading…</p>
-          ) : !call ? (
-            <p className="text-sm text-muted">This call is no longer available.</p>
-          ) : (
-            <SpeakerTranscript segments={call.segments} />
-          )}
-        </div>
+        <IconButton icon={X} label="Close" onClick={onClose} />
       </div>
-    </div>
+
+      <div className="flex-1 overflow-y-auto px-6 py-4">
+        {!loaded ? (
+          <SkeletonRows rows={6} />
+        ) : !call ? (
+          <p className="text-sm text-muted">This call is no longer available.</p>
+        ) : (
+          <SpeakerTranscript
+            segments={call.segments}
+            repSpeaker={call.coaching?.metrics.repSpeaker ?? null}
+          />
+        )}
+      </div>
+    </Modal>
   )
 }

@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { GraduationCap, ArrowLeft, Clock } from 'lucide-react'
-import { cn } from '@renderer/lib/cn'
+import { EmptyState } from '@renderer/components/EmptyState'
+import { PageHeader } from '@renderer/components/PageHeader'
+import { ScoreGauge } from '@renderer/components/ScoreGauge'
+import { SkeletonRows, Skeleton } from '@renderer/components/Skeleton'
+import { Badge } from '@renderer/components/Badge'
 import { useCalls } from '@renderer/features/calls/useCalls'
-import { formatDate } from '@renderer/features/calls/format'
+import { formatDate, formatDuration } from '@renderer/features/calls/format'
 import type { Call } from '@renderer/features/calls/types'
 import { CoachReportView } from './CoachReportView'
-import { overallTier, TONE_TEXT } from './meta'
+import { overallTier, TONE_TO_BADGE, TONE_TO_GAUGE } from './meta'
 
 export function CoachingView(): React.JSX.Element {
   const { calls, loading } = useCalls()
@@ -17,7 +21,9 @@ export function CoachingView(): React.JSX.Element {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-faint">Loading…</div>
+      <div className="mx-auto max-w-3xl">
+        <SkeletonRows rows={4} />
+      </div>
     )
   }
 
@@ -25,53 +31,50 @@ export function CoachingView(): React.JSX.Element {
 
   if (coached.length === 0) {
     return (
-      <div className="flex h-full flex-col items-center justify-center text-center">
-        <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl border border-line-soft bg-surface">
-          <GraduationCap className="h-6 w-6 text-faint" strokeWidth={1.75} />
-        </div>
-        <h2 className="text-lg font-semibold">Coach your first call</h2>
-        <p className="mt-1.5 max-w-xs text-sm text-muted">
-          Open a saved call and choose &ldquo;Coach this call&rdquo; for an evidence-based
-          scorecard. Coached calls show up here.
-        </p>
+      <div className="flex h-full items-center justify-center">
+        <EmptyState
+          icon={GraduationCap}
+          title="Coach your first call"
+          titleAs="h2"
+          description="Open a saved call and choose “Coach this call” for an evidence-based scorecard. Coached calls show up here."
+        />
       </div>
     )
   }
 
   return (
     <div className="mx-auto max-w-3xl">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold tracking-tight">Coaching</h2>
-        <span className="text-[13px] text-faint">
-          {coached.length} coached call{coached.length === 1 ? '' : 's'}
-        </span>
-      </div>
+      <PageHeader
+        title="Coaching"
+        count={`${coached.length} coached call${coached.length === 1 ? '' : 's'}`}
+      />
       <ul className="space-y-2.5">
-        {coached.map((c) => {
+        {coached.map((c, index) => {
           const tier = c.coachScore !== undefined ? overallTier(c.coachScore) : null
           return (
-            <li key={c.id}>
+            <li
+              key={c.id}
+              className="stagger-item"
+              style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}
+            >
               <button
                 type="button"
                 onClick={() => setSelectedId(c.id)}
-                className="group flex w-full items-center gap-4 rounded-xl border border-line-soft bg-surface px-4 py-3.5 text-left transition hover:border-line hover:bg-elevated"
+                className="group flex w-full items-center gap-4 rounded-xl border border-line-soft bg-surface px-4 py-3.5 text-left shadow-card transition hover:border-line hover:bg-elevated"
               >
-                <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-elevated">
-                  <span
-                    className={cn(
-                      'text-base font-bold tabular-nums',
-                      tier ? TONE_TEXT[tier.tone] : 'text-muted'
-                    )}
-                  >
-                    {c.coachScore ?? '–'}
-                  </span>
-                  <span className="text-[8px] uppercase tracking-wide text-faint">/ 100</span>
-                </div>
+                {c.coachScore !== undefined && tier ? (
+                  <ScoreGauge score={c.coachScore} size={48} tone={TONE_TO_GAUGE[tier.tone]} />
+                ) : (
+                  <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-elevated text-muted">
+                    –
+                  </div>
+                )}
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium">{c.title}</p>
                   <div className="mt-1 flex items-center gap-3 text-[11px] text-faint">
                     <span>{formatDate(c.createdAt)}</span>
-                    {tier && <span className={TONE_TEXT[tier.tone]}>{tier.label}</span>}
+                    <span>{formatDuration(c.durationMs)}</span>
+                    {tier && <Badge tone={TONE_TO_BADGE[tier.tone]}>{tier.label}</Badge>}
                   </div>
                 </div>
               </button>
@@ -120,9 +123,19 @@ function CoachingDetail({
       </button>
 
       {!loaded ? (
-        <div className="flex flex-1 items-center justify-center text-sm text-faint">Loading…</div>
+        <div className="space-y-4">
+          <Skeleton className="h-6 w-2/3" />
+          <Skeleton className="h-3.5 w-1/3" />
+          <Skeleton className="h-40 rounded-2xl" />
+          <Skeleton className="h-24 rounded-2xl" />
+        </div>
       ) : !call || !call.coaching ? (
-        <p className="text-sm text-muted">This coaching report is no longer available.</p>
+        <EmptyState
+          icon={GraduationCap}
+          title="This coaching report is no longer available"
+          titleAs="h2"
+          description="The call it belonged to may have been deleted."
+        />
       ) : (
         <div className="flex-1 overflow-y-auto pb-2">
           <div className="mb-4">

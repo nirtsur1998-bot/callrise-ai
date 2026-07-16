@@ -1,6 +1,7 @@
-import { AudioLines, LogOut } from 'lucide-react'
+import { AudioLines, LogOut, Search } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { isMac } from '@renderer/lib/platform'
+import { IconButton } from '@renderer/components/IconButton'
 import { NAV_ITEMS, type NavId } from './nav-items'
 import type { AuthUser } from '@renderer/features/auth/types'
 
@@ -9,54 +10,120 @@ interface SidebarProps {
   onSelect: (id: NavId) => void
   user: AuthUser
   onSignOut: () => void
+  /** Opens the command palette (also bound to ⌘K globally). */
+  onOpenPalette: () => void
 }
 
-export function Sidebar({ active, onSelect, user, onSignOut }: SidebarProps): React.JSX.Element {
+export function Sidebar({
+  active,
+  onSelect,
+  user,
+  onSignOut,
+  onOpenPalette
+}: SidebarProps): React.JSX.Element {
   const displayName = user.name?.trim() || user.email.split('@')[0]
   const initial = (user.name?.trim()?.[0] ?? user.email[0] ?? '?').toUpperCase()
+
+  // Settings is pinned above the footer, not part of the scrolling list.
+  const settingsItem = NAV_ITEMS.find((item) => item.id === 'settings')
+  const scrollItems = NAV_ITEMS.filter((item) => item.id !== 'settings')
+
+  // Group the scrolling items by their `section`, preserving list order —
+  // items sharing a section render as one contiguous group.
+  const groups: { section: string | undefined; items: typeof scrollItems }[] = []
+  for (const item of scrollItems) {
+    const last = groups[groups.length - 1]
+    if (last && last.section === item.section) {
+      last.items.push(item)
+    } else {
+      groups.push({ section: item.section, items: [item] })
+    }
+  }
+
+  const renderNavButton = (item: (typeof scrollItems)[number]): React.JSX.Element => {
+    const Icon = item.icon
+    const isActive = item.id === active
+    return (
+      <li key={item.id}>
+        <button
+          type="button"
+          onClick={() => onSelect(item.id)}
+          aria-current={isActive ? 'page' : undefined}
+          className={cn(
+            'no-drag group relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
+            isActive ? 'bg-accent-soft text-ink' : 'text-muted hover:bg-elevated hover:text-ink'
+          )}
+        >
+          {/* Signature left indicator, flush to the sidebar edge. Always
+              mounted so it can transition in/out instead of popping. */}
+          <span
+            aria-hidden="true"
+            className={cn(
+              'absolute top-1/2 left-0 h-5 w-[3px] -translate-x-3 -translate-y-1/2 origin-center rounded-r-full bg-accent transition-transform duration-200',
+              isActive ? 'scale-y-100' : 'scale-y-0'
+            )}
+          />
+          <Icon
+            className={cn(
+              'h-[18px] w-[18px] transition-colors',
+              isActive ? 'text-accent' : 'text-faint group-hover:text-muted'
+            )}
+            strokeWidth={2}
+          />
+          <span className="font-medium">{item.label}</span>
+        </button>
+      </li>
+    )
+  }
+
   return (
     <div className="flex h-full flex-col">
       {/* Brand — draggable; padded down on macOS to clear the traffic lights
           (Windows draws its own title bar, so no extra clearance is needed). */}
-      <div className={cn('drag flex items-center gap-2.5 px-4 pb-4', isMac ? 'pt-9' : 'pt-4')}>
+      <div className={cn('drag flex items-center gap-2.5 px-4 pb-3', isMac ? 'pt-9' : 'pt-4')}>
         <div className="grid h-7 w-7 place-items-center rounded-lg bg-brand shadow-sm">
           <AudioLines className="h-4 w-4 text-white" strokeWidth={2.25} />
         </div>
         <span className="text-[15px] font-semibold tracking-tight">CallRise AI</span>
       </div>
 
+      {/* Quick search / command palette trigger */}
+      <div className="px-3 pb-1">
+        <button
+          type="button"
+          onClick={onOpenPalette}
+          className="no-drag flex w-full items-center gap-2.5 rounded-lg border border-line-soft bg-canvas px-3 py-2 text-[13px] text-faint transition hover:border-line hover:text-muted"
+        >
+          <Search className="h-3.5 w-3.5" />
+          <span className="flex-1 text-left">Jump to…</span>
+          <kbd className="rounded border border-line bg-surface px-1.5 py-0.5 text-[10px] font-medium text-faint">
+            {isMac ? '⌘K' : 'Ctrl K'}
+          </kbd>
+        </button>
+      </div>
+
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-3 py-2">
-        <ul className="space-y-0.5">
-          {NAV_ITEMS.map((item) => {
-            const Icon = item.icon
-            const isActive = item.id === active
-            return (
-              <li key={item.id}>
-                <button
-                  type="button"
-                  onClick={() => onSelect(item.id)}
-                  className={cn(
-                    'no-drag group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
-                    isActive
-                      ? 'bg-accent-soft text-ink'
-                      : 'text-muted hover:bg-elevated hover:text-ink'
-                  )}
-                >
-                  <Icon
-                    className={cn(
-                      'h-[18px] w-[18px] transition-colors',
-                      isActive ? 'text-accent' : 'text-faint group-hover:text-muted'
-                    )}
-                    strokeWidth={2}
-                  />
-                  <span className="font-medium">{item.label}</span>
-                </button>
-              </li>
-            )
-          })}
+      <nav aria-label="Primary" className="flex-1 overflow-y-auto px-3 py-2">
+        <ul className="space-y-4">
+          {groups.map((group, i) => (
+            <li key={group.section ?? `group-${i}`}>
+              {group.section && (
+                <p className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-faint uppercase">
+                  {group.section}
+                </p>
+              )}
+              <ul className="space-y-0.5">{group.items.map(renderNavButton)}</ul>
+            </li>
+          ))}
         </ul>
       </nav>
+
+      {/* Settings — pinned above the footer, not part of the scrolling list. */}
+      {settingsItem && (
+        <div className="border-t border-line-soft px-3 py-2">
+          <ul>{renderNavButton(settingsItem)}</ul>
+        </div>
+      )}
 
       {/* Footer — signed-in user + log out. */}
       <div className="border-t border-line-soft px-3 py-3">
@@ -68,14 +135,12 @@ export function Sidebar({ active, onSelect, user, onSignOut }: SidebarProps): Re
             <p className="truncate text-[13px] font-medium">{displayName}</p>
             <p className="truncate text-[11px] text-faint">{user.email}</p>
           </div>
-          <button
-            type="button"
+          <IconButton
+            icon={LogOut}
+            label="Log out"
             onClick={onSignOut}
-            title="Log out"
-            className="no-drag grid h-8 w-8 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-ink"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
+            className="no-drag shrink-0"
+          />
         </div>
       </div>
     </div>

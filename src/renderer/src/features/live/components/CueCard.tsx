@@ -9,6 +9,7 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { IconButton } from '@renderer/components/IconButton'
 import type { CueKind, LiveCue } from '../useLiveCues'
 
 interface CueStyle {
@@ -17,45 +18,57 @@ interface CueStyle {
   ring: string
   iconBg: string
   iconText: string
+  /** Solid bar color for the countdown bar (matches iconBg's hue). */
+  bar: string
 }
 
 const META: Record<CueKind, CueStyle> = {
   objection: {
     icon: AlertTriangle,
     label: 'Objection',
-    ring: 'border-amber-500/40',
-    iconBg: 'bg-amber-500/15',
-    iconText: 'text-amber-300'
+    ring: 'border-warning/40',
+    iconBg: 'bg-warning-soft',
+    iconText: 'text-warning',
+    bar: 'bg-warning'
   },
   discovery: {
     icon: Search,
     label: 'Discovery',
     ring: 'border-accent/40',
     iconBg: 'bg-accent-soft',
-    iconText: 'text-accent'
+    iconText: 'text-accent',
+    bar: 'bg-accent'
   },
   'next-question': {
     icon: MessageCircleQuestion,
     label: 'Ask',
-    ring: 'border-sky-500/40',
-    iconBg: 'bg-sky-500/15',
-    iconText: 'text-sky-300'
+    ring: 'border-accent/40',
+    iconBg: 'bg-accent-soft',
+    iconText: 'text-accent',
+    bar: 'bg-accent'
   },
   'buying-signal': {
     icon: TrendingUp,
     label: 'Buying signal',
-    ring: 'border-emerald-500/40',
-    iconBg: 'bg-emerald-500/15',
-    iconText: 'text-emerald-300'
+    ring: 'border-positive/40',
+    iconBg: 'bg-positive-soft',
+    iconText: 'text-positive',
+    bar: 'bg-positive'
   },
   pace: {
     icon: Gauge,
     label: 'Pace',
-    ring: 'border-slate-500/40',
-    iconBg: 'bg-slate-500/15',
-    iconText: 'text-slate-300'
+    ring: 'border-line',
+    iconBg: 'bg-elevated',
+    iconText: 'text-muted',
+    bar: 'bg-muted'
   }
 }
+
+// Mirrors useLiveCues' AUTO_DISMISS_MS so the countdown bar visually matches
+// when the cue actually disappears (kept in sync by hand — that file isn't
+// touched by this styling pass).
+const AUTO_DISMISS_MS = 10_000
 
 /**
  * A single, glanceable, non-modal coaching cue pinned to the bottom-right of
@@ -81,7 +94,7 @@ export function CueCard({
     <div
       role="status"
       className={cn(
-        'absolute bottom-4 right-4 z-40 w-64 rounded-xl border bg-surface/95 p-3 shadow-2xl backdrop-blur transition-all duration-300',
+        'absolute bottom-4 right-4 z-40 w-64 overflow-hidden rounded-xl border bg-surface/95 p-3 shadow-2xl backdrop-blur transition-all duration-300',
         meta.ring,
         shown ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
       )}
@@ -96,15 +109,12 @@ export function CueCard({
           </p>
           <p className="text-sm font-medium text-ink">{cue.text}</p>
         </div>
-        <button
-          type="button"
-          onClick={onDismiss}
-          title="Dismiss"
-          className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-faint transition hover:bg-elevated hover:text-ink"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        <IconButton icon={X} onClick={onDismiss} label="Dismiss" />
       </div>
+      <div
+        className={cn('cue-countdown absolute inset-x-0 bottom-0 h-0.5 origin-left', meta.bar)}
+        style={{ animationDuration: `${AUTO_DISMISS_MS}ms` }}
+      />
     </div>
   )
 }

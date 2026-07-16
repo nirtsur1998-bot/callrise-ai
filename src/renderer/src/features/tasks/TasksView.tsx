@@ -11,10 +11,18 @@ import {
   Trash2
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { EmptyState } from '@renderer/components/EmptyState'
+import { Badge } from '@renderer/components/Badge'
+import { Button } from '@renderer/components/Button'
+import { IconButton } from '@renderer/components/IconButton'
+import { PageHeader } from '@renderer/components/PageHeader'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
+import { SkeletonRows } from '@renderer/components/Skeleton'
+import { useToast } from '@renderer/features/notifications/useToast'
 import { useTasks } from './useTasks'
 import { TaskFormDialog, type TaskFormValues } from './TaskFormDialog'
-import { formatDueLabel } from './format'
-import { TASK_TYPE_META, PRIORITY_META, DUE_TONE_CLASS } from './meta'
+import { formatDueLabel, dueBucket, type DueBucket } from './format'
+import { TASK_TYPE_META, PRIORITY_META } from './meta'
 import type { Task } from './types'
 
 type Filter = 'open' | 'done' | 'all'
@@ -40,11 +48,42 @@ function compareDone(a: Task, b: Task): number {
   return (b.completedAt ?? b.createdAt).localeCompare(a.completedAt ?? a.createdAt)
 }
 
+const BUCKET_ORDER: DueBucket[] = ['overdue', 'today', 'soon', 'later', 'none']
+const BUCKET_LABEL: Record<DueBucket, string> = {
+  overdue: 'Overdue',
+  today: 'Today',
+  soon: 'This week',
+  later: 'Later',
+  none: 'No due date'
+}
+
+/** Groups already-sorted open tasks into due-date buckets, in a fixed order,
+ *  dropping empty buckets. */
+function bucketOpenTasks(open: Task[]): { bucket: DueBucket; tasks: Task[] }[] {
+  const groups = new Map<DueBucket, Task[]>()
+  for (const task of open) {
+    const b = dueBucket(task.dueAt)
+    const list = groups.get(b)
+    if (list) list.push(task)
+    else groups.set(b, [task])
+  }
+  return BUCKET_ORDER.filter((b) => groups.has(b)).map((b) => ({
+    bucket: b,
+    tasks: groups.get(b)!
+  }))
+}
+
 export function TasksView(): React.JSX.Element {
-  const { tasks, loading, create, update, remove } = useTasks()
+  const { tasks, loading, create, update, remove, undoDelete } = useTasks()
+  const toast = useToast()
   const [filter, setFilter] = useState<Filter>('open')
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Task | null>(null)
+
+  const deleteTask = (task: Task): void => {
+    remove(task.id)
+    toast.error('Task deleted', { label: 'Undo', onClick: () => undoDelete(task.id) })
+  }
 
   const { open, done } = useMemo(() => {
     return {
@@ -58,57 +97,63 @@ export function TasksView(): React.JSX.Element {
   const toggle = (task: Task): Promise<void> =>
     update(task.id, { status: task.status === 'done' ? 'open' : 'done' })
 
+  const filterOptions = FILTERS.map((f) => ({
+    id: f.id,
+    label: `${f.label} ${f.id === 'open' ? open.length : f.id === 'done' ? done.length : tasks.length}`
+  }))
+
   return (
     <div className="mx-auto max-w-3xl">
-      {/* Header */}
-      <div className="mb-1 flex items-center justify-between">
-        <div className="flex items-baseline gap-2.5">
-          <h2 className="text-lg font-semibold tracking-tight">Tasks</h2>
-          <span className="text-[13px] text-faint">{tasks.length} total</span>
-        </div>
-        <button
-          type="button"
-          onClick={() => setAdding(true)}
-          className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110"
-        >
-          <Plus className="h-4 w-4" /> Add task
-        </button>
-      </div>
-      <p className="mb-5 text-[13px] text-faint">
-        Reminders only — completing a task won&apos;t send emails or schedule anything.
-      </p>
+      <PageHeader
+        title="Tasks"
+        count={`${tasks.length} total`}
+        subtitle="Reminders only — completing a task won't send emails or schedule anything."
+        actions={
+          <Button onClick={() => setAdding(true)} icon={Plus}>
+            Add task
+          </Button>
+        }
+      />
 
       {/* Filter tabs */}
-      <div className="mb-4 flex items-center gap-1">
-        {FILTERS.map((f) => {
-          const count = f.id === 'open' ? open.length : f.id === 'done' ? done.length : tasks.length
-          const isActive = filter === f.id
-          return (
-            <button
-              key={f.id}
-              type="button"
-              onClick={() => setFilter(f.id)}
-              className={cn(
-                'rounded-lg px-3 py-1.5 text-[13px] font-medium transition',
-                isActive ? 'bg-accent-soft text-ink' : 'text-muted hover:bg-elevated hover:text-ink'
-              )}
-            >
-              {f.label}{' '}
-              <span className={cn('ml-0.5', isActive ? 'text-accent' : 'text-faint')}>{count}</span>
-            </button>
-          )
-        })}
+      <div className="mb-4">
+        <SegmentedControl options={filterOptions} value={filter} onChange={setFilter} />
       </div>
 
       {/* Body */}
       {loading ? (
-        <div className="flex h-40 items-center justify-center text-sm text-faint">Loading…</div>
+        <SkeletonRows rows={4} />
       ) : tasks.length === 0 ? (
         <EmptyAll onAdd={() => setAdding(true)} />
       ) : visible.length === 0 ? (
-        <p className="rounded-xl border border-line-soft bg-surface px-4 py-8 text-center text-sm text-muted">
-          {filter === 'open' ? "No open tasks — you're all caught up." : 'No completed tasks yet.'}
-        </p>
+        <EmptyState
+          compact
+          icon={CheckCircle2}
+          title="All caught up"
+          description={filter === 'open' ? 'No open tasks right now.' : 'No completed tasks yet.'}
+        />
+      ) : filter === 'open' ? (
+        <ul className="space-y-2.5">
+          {bucketOpenTasks(visible).map(({ bucket, tasks: bucketTasks }) => (
+            <li key={bucket}>
+              <div className="mb-1.5 flex items-center gap-2 px-1 text-[11px] font-medium tracking-wide text-faint uppercase">
+                {BUCKET_LABEL[bucket]}
+                <span className="text-faint/70">{bucketTasks.length}</span>
+              </div>
+              <ul className="space-y-2.5">
+                {bucketTasks.map((task) => (
+                  <TaskRow
+                    key={task.id}
+                    task={task}
+                    onToggle={() => void toggle(task)}
+                    onEdit={() => setEditing(task)}
+                    onDelete={() => deleteTask(task)}
+                  />
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
       ) : (
         <ul className="space-y-2.5">
           {visible.map((task) => (
@@ -117,7 +162,7 @@ export function TasksView(): React.JSX.Element {
               task={task}
               onToggle={() => void toggle(task)}
               onEdit={() => setEditing(task)}
-              onDelete={() => void remove(task.id)}
+              onDelete={() => deleteTask(task)}
             />
           ))}
         </ul>
@@ -154,46 +199,55 @@ interface TaskRowProps {
 }
 
 function TaskRow({ task, onToggle, onEdit, onDelete }: TaskRowProps): React.JSX.Element {
-  const [confirm, setConfirm] = useState(false)
   const done = task.status === 'done'
   const typeMeta = TASK_TYPE_META[task.type]
   const TypeIcon = typeMeta.icon
   const prio = PRIORITY_META[task.priority]
   const due = formatDueLabel(task.dueAt)
 
+  const dueTone = due
+    ? due.tone === 'overdue'
+      ? 'danger'
+      : due.tone === 'today'
+        ? 'warning'
+        : 'neutral'
+    : 'neutral'
+
   return (
     <li>
-      <div className="group flex items-start gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3.5 transition hover:border-line hover:bg-elevated">
+      <div
+        className={cn(
+          'group flex items-start gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3.5 transition hover:border-line hover:bg-elevated',
+          done && 'opacity-60'
+        )}
+      >
         <button
           type="button"
           onClick={onToggle}
-          title={done ? 'Mark as open' : 'Mark as done'}
-          className="mt-0.5 shrink-0 text-faint transition hover:text-accent"
+          aria-label={done ? 'Mark as open' : 'Mark as done'}
+          aria-pressed={done}
+          className="press -m-1 mt-0.5 shrink-0 rounded-lg p-1 text-faint transition hover:bg-elevated hover:text-accent"
         >
           {done ? <CheckCircle2 className="h-5 w-5 text-accent" /> : <Circle className="h-5 w-5" />}
         </button>
 
         <div className="min-w-0 flex-1">
-          <p className={cn('truncate text-sm font-medium', done && 'text-faint line-through')}>
+          <p
+            className={cn('line-clamp-2 text-sm font-medium', done && 'text-faint line-through')}
+            title={task.title}
+          >
             {task.title}
           </p>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-faint">
+            <Badge tone={prio.tone}>{prio.label}</Badge>
+            {due && (
+              <Badge tone={dueTone} icon={CalendarClock}>
+                {due.text}
+              </Badge>
+            )}
             <span className="flex items-center gap-1">
               <TypeIcon className="h-3 w-3" /> {typeMeta.label}
             </span>
-            <span className={cn('rounded-full border px-1.5 py-0.5 font-medium', prio.badge)}>
-              {prio.label}
-            </span>
-            {due && (
-              <span
-                className={cn(
-                  'flex items-center gap-1',
-                  done ? 'text-faint' : DUE_TONE_CLASS[due.tone]
-                )}
-              >
-                <CalendarClock className="h-3 w-3" /> {due.text}
-              </span>
-            )}
             {task.clientName && (
               <span className="flex items-center gap-1">
                 <Building2 className="h-3 w-3" /> {task.clientName}
@@ -213,43 +267,19 @@ function TaskRow({ task, onToggle, onEdit, onDelete }: TaskRowProps): React.JSX.
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
-          {confirm ? (
-            <>
-              <button
-                type="button"
-                onClick={onDelete}
-                className="rounded-lg bg-rose-500/20 px-2.5 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/30"
-              >
-                Delete
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirm(false)}
-                className="rounded-lg border border-line px-2.5 py-1.5 text-xs text-muted hover:text-ink"
-              >
-                Cancel
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                onClick={onEdit}
-                title="Edit task"
-                className="grid h-8 w-8 place-items-center rounded-lg text-faint opacity-0 transition hover:bg-canvas hover:text-ink group-hover:opacity-100"
-              >
-                <Pencil className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirm(true)}
-                title="Delete task"
-                className="grid h-8 w-8 place-items-center rounded-lg text-faint opacity-0 transition hover:bg-canvas hover:text-rose-300 group-hover:opacity-100"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </>
-          )}
+          <IconButton
+            icon={Pencil}
+            label="Edit task"
+            onClick={onEdit}
+            className="press opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/40"
+          />
+          <IconButton
+            icon={Trash2}
+            label="Delete task"
+            variant="danger"
+            onClick={onDelete}
+            className="press opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/40"
+          />
         </div>
       </div>
     </li>
@@ -258,21 +288,11 @@ function TaskRow({ task, onToggle, onEdit, onDelete }: TaskRowProps): React.JSX.
 
 function EmptyAll({ onAdd }: { onAdd: () => void }): React.JSX.Element {
   return (
-    <div className="flex flex-col items-center justify-center py-16 text-center">
-      <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl border border-line-soft bg-surface">
-        <ListChecks className="h-6 w-6 text-faint" strokeWidth={1.75} />
-      </div>
-      <h3 className="text-lg font-semibold">No tasks yet</h3>
-      <p className="mt-1.5 max-w-xs text-sm text-muted">
-        Open a saved call and choose “Generate tasks”, or add one yourself.
-      </p>
-      <button
-        type="button"
-        onClick={onAdd}
-        className="mt-4 flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110"
-      >
-        <Plus className="h-4 w-4" /> Add task
-      </button>
-    </div>
+    <EmptyState
+      icon={ListChecks}
+      title="No tasks yet"
+      description="Open a saved call and choose “Generate tasks”, or add one yourself."
+      action={{ label: 'Add task', onClick: onAdd, icon: Plus }}
+    />
   )
 }

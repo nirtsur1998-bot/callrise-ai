@@ -4,8 +4,9 @@
 // not granted, unsupported platform, helper crash) resolves to null, and
 // callers must fail OPEN (never block auto-start just because detection
 // itself didn't work).
-import { app, ipcMain, shell } from 'electron'
+import { app, ipcMain, shell, BrowserWindow } from 'electron'
 import activeWin from 'active-win'
+import { isKnownCallingApp } from './known-calling-apps'
 
 /** The frontmost app's name, or null if detection isn't available/failed. */
 export async function getActiveAppName(): Promise<string | null> {
@@ -34,9 +35,29 @@ function isSelf(name: string): boolean {
   return name === app.getName() || name === 'Electron'
 }
 
+// --- Known-calling-app detection --------------------------------------------
+// A lightweight heuristic layered on the same poll: if the frontmost app
+// while we're blurred matches a known calling app (WhatsApp, Zoom, Teams,
+// MicroSIP, …), tell every window once so it can offer to start transcribing.
+// `lastNotifiedApp` prevents re-notifying every 5s for the same ongoing call —
+// it only resets when the rep returns to CallRise (a fresh blur means a fresh
+// chance to notice a NEW call, even in the same app).
+let lastNotifiedApp: string | null = null
+
+function broadcastCallDetected(appName: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('app:callDetected', appName)
+  }
+}
+
 async function sampleExternalApp(): Promise<void> {
   const name = await getActiveAppName()
-  if (name && !isSelf(name)) lastExternalApp = name
+  if (!name || isSelf(name)) return
+  lastExternalApp = name
+  if (isKnownCallingApp(name) && name !== lastNotifiedApp) {
+    lastNotifiedApp = name
+    broadcastCallDetected(name)
+  }
 }
 
 function startSampling(): void {
@@ -50,6 +71,9 @@ function stopSampling(): void {
     clearInterval(pollTimer)
     pollTimer = null
   }
+  // A fresh return-to-CallRise means the next blur should be able to notice a
+  // new call, even one in the same app the rep was just using.
+  lastNotifiedApp = null
 }
 
 let registered = false

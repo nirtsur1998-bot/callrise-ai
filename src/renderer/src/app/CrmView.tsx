@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { cn } from '@renderer/lib/cn'
+import { PageHeader } from '@renderer/components/PageHeader'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { ContactsView } from '@renderer/features/contacts/ContactsView'
 import { DealsView } from '@renderer/features/deals/DealsView'
 import { FollowUpDigest } from '@renderer/features/deals/FollowUpDigest'
@@ -38,23 +39,10 @@ export function CrmView(): React.JSX.Element {
 
   return (
     <div>
-      <div className="mb-5 flex items-center gap-1">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => setTab(t.id)}
-            className={cn(
-              'rounded-lg px-3.5 py-1.5 text-sm font-medium transition',
-              tab === t.id
-                ? 'bg-accent-soft text-ink'
-                : 'text-muted hover:bg-elevated hover:text-ink'
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <PageHeader
+        title="CRM"
+        actions={<SegmentedControl options={tabs} value={tab} onChange={setTab} />}
+      />
       {tab === 'contacts' ? (
         <ContactsView
           initialViewId={openContactId}

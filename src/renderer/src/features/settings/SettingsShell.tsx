@@ -69,7 +69,7 @@ export function SettingsShell({ user, onBack }: SettingsShellProps): React.JSX.E
           <ul className="space-y-4">
             {SETTINGS_GROUPS.map((group, i) => (
               <li key={group.label ?? `group-${i}`}>
-                {group.label && (
+                {group.label && group.items.length > 1 && (
                   <p className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-faint uppercase">
                     {group.label}
                   </p>

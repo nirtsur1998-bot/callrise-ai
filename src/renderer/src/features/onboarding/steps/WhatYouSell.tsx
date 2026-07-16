@@ -1,5 +1,7 @@
+import { fieldClass } from '@renderer/components/field'
+import { cn } from '@renderer/lib/cn'
 import type { OnboardingState } from '../useOnboarding'
-import { StepHeader, fieldInput } from './StepHeader'
+import { StepHeader } from './StepHeader'
 
 const MAX_ABOUT = 1500
 
@@ -19,7 +21,7 @@ export function WhatYouSell({ o }: { o: OnboardingState }): React.JSX.Element {
         autoFocus
         rows={5}
         placeholder="e.g. I sell mid-market SaaS, usually 3–6 month cycles, and I lead with ROI over feature lists."
-        className={`${fieldInput} resize-y`}
+        className={cn(fieldClass, 'resize-y')}
       />
       <p className="mt-2 text-[11px] text-faint">
         Optional — but it’s the single biggest thing that makes the AI sound like it knows your

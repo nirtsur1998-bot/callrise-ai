@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Mic, Square, Pause, Play, AlertTriangle, MicOff, Loader2 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { isMac } from '@renderer/lib/platform'
+import { IconButton } from '@renderer/components/IconButton'
+import { Button } from '@renderer/components/Button'
 import type { ConsentMethod } from '@renderer/features/calls/types'
 import { useTranscription } from './useTranscription'
 import { useLiveCues } from './useLiveCues'
@@ -32,9 +34,24 @@ interface LiveViewProps {
    *  id right after a successful save. Optional so LiveView still works
    *  standalone (e.g. in tests) without a parent wiring navigation. */
   onSaved?: (callId: string) => void
+  /** One-shot: true when the parent navigated here because the rep either
+   *  clicked "Start transcribing" on a detected-call banner, or has the
+   *  Auto-transcribe setting on and a known calling app was just detected.
+   *  Distinct from the general auto-start-listening setting below — this
+   *  fires once per detection, not on every Live Calls visit, and (being an
+   *  explicit confirmation or an explicit opt-in setting) doesn't consult
+   *  the auto-start exclusion list. */
+  autoStartFromDetection?: boolean
+  /** Called once autoStartFromDetection has been acted on, so the parent can
+   *  clear the flag (otherwise a later plain visit would auto-start again). */
+  onAutoStartFromDetectionConsumed?: () => void
 }
 
-export function LiveView({ onSaved }: LiveViewProps): React.JSX.Element {
+export function LiveView({
+  onSaved,
+  autoStartFromDetection = false,
+  onAutoStartFromDetectionConsumed
+}: LiveViewProps): React.JSX.Element {
   // Recording consent for the current call (gates future other-party capture).
   const consent = useConsent()
   const [consentOpen, setConsentOpen] = useState(false)
@@ -60,7 +77,7 @@ export function LiveView({ onSaved }: LiveViewProps): React.JSX.Element {
   const { enabled, setEnabled, sensitivity, setSensitivity } = useCueSettings()
   // When buyer capture is live, the rep is channel 0 — tell the cues so they
   // don't have to guess who the rep is.
-  const { cue, dismiss } = useLiveCues(
+  const { cue, dismiss, repSpeaker } = useLiveCues(
     status === 'listening',
     enabled,
     sensitivity,
@@ -120,6 +137,17 @@ export function LiveView({ onSaved }: LiveViewProps): React.JSX.Element {
     })()
   }, [autoStartListening, status, start])
 
+  // Detected-call auto-start (banner click, or the Auto-transcribe setting) —
+  // shares autoStartedRef with the effect above so whichever fires first wins
+  // and the other never double-starts.
+  useEffect(() => {
+    if (!autoStartFromDetection) return
+    onAutoStartFromDetectionConsumed?.()
+    if (status !== 'idle' || autoStartedRef.current) return
+    autoStartedRef.current = true
+    start()
+  }, [autoStartFromDetection, onAutoStartFromDetectionConsumed, status, start])
+
   // "They said yes": record consent, then — still inside the click gesture —
   // open buyer capture (getDisplayMedia requires a user gesture).
   const handleEnableOtherParty = (method: ConsentMethod): void => {
@@ -156,7 +184,7 @@ export function LiveView({ onSaved }: LiveViewProps): React.JSX.Element {
     if (status === 'error') {
       return (
         <CenteredState
-          icon={<AlertTriangle className="h-6 w-6 text-rose-400" />}
+          icon={<AlertTriangle className="h-6 w-6 text-danger" />}
           title="Something went wrong"
           subtitle={errorMessage ?? 'Please try again.'}
           action={{ label: 'Try again', onClick: start }}
@@ -185,12 +213,12 @@ export function LiveView({ onSaved }: LiveViewProps): React.JSX.Element {
       />
 
       {/* Control bar */}
-      <div className="flex items-center gap-4 rounded-2xl border border-line-soft bg-surface px-5 py-4">
+      <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-line-soft bg-surface px-5 py-4">
         {stoppable ? (
           <button
             type="button"
             onClick={stop}
-            className="no-drag flex items-center gap-2 rounded-xl bg-rose-500/15 px-4 py-2.5 text-sm font-semibold text-rose-300 ring-1 ring-inset ring-rose-500/30 transition hover:bg-rose-500/25"
+            className="no-drag flex items-center gap-2 rounded-xl bg-danger-soft px-4 py-2.5 text-sm font-semibold text-danger ring-1 ring-inset ring-danger/30 transition hover:bg-danger/20"
           >
             <Square className="h-4 w-4 fill-current" /> Stop
           </button>
@@ -205,21 +233,19 @@ export function LiveView({ onSaved }: LiveViewProps): React.JSX.Element {
         )}
 
         {(status === 'listening' || status === 'paused') && (
-          <button
-            type="button"
+          <IconButton
+            icon={status === 'paused' ? Play : Pause}
             onClick={togglePause}
-            title={status === 'paused' ? 'Resume' : 'Pause'}
-            className="no-drag grid h-9 w-9 place-items-center rounded-lg border border-line text-muted transition hover:bg-elevated hover:text-ink"
-          >
-            {status === 'paused' ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-          </button>
+            label={status === 'paused' ? 'Resume' : 'Pause'}
+            className="no-drag h-9 w-9 border border-line"
+          />
         )}
 
-        <div className="min-w-0 flex-1">
+        <div className="min-w-[120px] flex-1">
           <Waveform analyser={analyser} active={status === 'listening'} />
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {allowOtherPartyRecording && (
             <OtherPartyControl consent={consent} onOpen={() => setConsentOpen(true)} />
           )}
@@ -229,27 +255,33 @@ export function LiveView({ onSaved }: LiveViewProps): React.JSX.Element {
             sensitivity={sensitivity}
             onSensitivity={setSensitivity}
           />
-          {status === 'connecting' && <Loader2 className="h-4 w-4 animate-spin text-muted" />}
           <StatusBadge status={status} />
-          {latencyMs !== null && (status === 'listening' || status === 'paused') && (
-            <div className="rounded-lg border border-line-soft bg-canvas px-2.5 py-1 text-right">
-              <div className="text-[10px] uppercase tracking-wider text-faint">latency</div>
-              <div
-                className={cn(
-                  'text-sm font-semibold tabular-nums',
-                  latencyMs < 500 ? 'text-emerald-400' : 'text-amber-400'
-                )}
-              >
-                {latencyMs} ms
-              </div>
-            </div>
-          )}
+          <div className="flex min-w-[70px] items-center gap-1.5 text-[13px]">
+            {latencyMs !== null && (status === 'listening' || status === 'paused') && (
+              <>
+                <span
+                  className={cn(
+                    'h-1.5 w-1.5 rounded-full',
+                    latencyMs < 500 ? 'bg-positive' : 'bg-warning'
+                  )}
+                />
+                <span
+                  className={cn(
+                    'font-medium tabular-nums',
+                    latencyMs < 500 ? 'text-positive' : 'text-warning'
+                  )}
+                >
+                  {latencyMs} ms
+                </span>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Inline banners — keep the transcript visible underneath. */}
       {otherPartyError && (
-        <InlineBanner tone={otherPartyError === 'interrupted' ? 'amber' : 'rose'}>
+        <InlineBanner tone={otherPartyError === 'interrupted' ? 'warning' : 'danger'}>
           <span>
             {otherPartyError === 'denied'
               ? isMac
@@ -261,13 +293,14 @@ export function LiveView({ onSaved }: LiveViewProps): React.JSX.Element {
           </span>
           <span className="flex shrink-0 gap-2">
             {otherPartyError === 'denied' && isMac && (
-              <button
-                type="button"
+              <Button
+                variant="danger"
+                size="sm"
+                className="no-drag"
                 onClick={() => void window.api.loopback.openScreenSettings()}
-                className="no-drag rounded-lg bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/30"
               >
                 Open Settings
-              </button>
+              </Button>
             )}
             <button
               type="button"
@@ -275,8 +308,8 @@ export function LiveView({ onSaved }: LiveViewProps): React.JSX.Element {
               className={cn(
                 'no-drag rounded-lg px-3 py-1.5 text-xs font-semibold',
                 otherPartyError === 'interrupted'
-                  ? 'bg-amber-500/20 text-amber-100 hover:bg-amber-500/30'
-                  : 'bg-rose-500/20 text-rose-200 hover:bg-rose-500/30'
+                  ? 'bg-warning-soft text-warning hover:bg-warning/20'
+                  : 'bg-danger-soft text-danger hover:bg-danger/20'
               )}
             >
               {otherPartyError === 'interrupted' ? 'Resume' : 'Try again'}
@@ -285,54 +318,46 @@ export function LiveView({ onSaved }: LiveViewProps): React.JSX.Element {
         </InlineBanner>
       )}
       {status === 'idle' && savedNotice && (
-        <InlineBanner tone="emerald">
+        <InlineBanner tone="positive">
           <span>Call saved to Past Calls.</span>
         </InlineBanner>
       )}
       {status === 'reconnecting' && (
-        <InlineBanner tone="amber">
+        <InlineBanner tone="warning">
           <span>Reconnecting to the transcription service…</span>
         </InlineBanner>
       )}
       {status === 'error' && (
-        <InlineBanner tone="rose">
+        <InlineBanner tone="danger">
           <span>{errorMessage ?? 'Something went wrong.'}</span>
-          <button
-            type="button"
-            onClick={start}
-            className="no-drag shrink-0 rounded-lg bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/30"
-          >
+          <Button variant="danger" size="sm" className="no-drag shrink-0" onClick={start}>
             Try again
-          </button>
+          </Button>
         </InlineBanner>
       )}
       {status === 'no-key' && (
-        <InlineBanner tone="rose">
+        <InlineBanner tone="danger">
           <span>Add your Deepgram API key to the .env file, then retry.</span>
-          <button
-            type="button"
-            onClick={start}
-            className="no-drag shrink-0 rounded-lg bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/30"
-          >
+          <Button variant="danger" size="sm" className="no-drag shrink-0" onClick={start}>
             Try again
-          </button>
+          </Button>
         </InlineBanner>
       )}
       {status === 'denied' && (
-        <InlineBanner tone="amber">
+        <InlineBanner tone="warning">
           <span>Microphone access is off.</span>
           <span className="flex shrink-0 gap-2">
             <button
               type="button"
               onClick={() => void window.api.transcription.openMicSettings()}
-              className="no-drag rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-100 hover:bg-amber-500/30"
+              className="no-drag rounded-lg bg-warning-soft px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/20"
             >
               Open Settings
             </button>
             <button
               type="button"
               onClick={start}
-              className="no-drag rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-100 hover:bg-amber-500/30"
+              className="no-drag rounded-lg bg-warning-soft px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/20"
             >
               Try again
             </button>
@@ -340,12 +365,12 @@ export function LiveView({ onSaved }: LiveViewProps): React.JSX.Element {
         </InlineBanner>
       )}
       {status === 'no-device' && (
-        <InlineBanner tone="amber">
+        <InlineBanner tone="warning">
           <span>Microphone disconnected.</span>
           <button
             type="button"
             onClick={start}
-            className="no-drag shrink-0 rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-100 hover:bg-amber-500/30"
+            className="no-drag shrink-0 rounded-lg bg-warning-soft px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/20"
           >
             Reconnect
           </button>
@@ -354,7 +379,12 @@ export function LiveView({ onSaved }: LiveViewProps): React.JSX.Element {
 
       {/* Transcript + the floating cue card (kept above the Ask-coach bar). */}
       <div className="relative flex min-h-0 flex-1 flex-col">
-        <TranscriptView segments={segments} interimText={interimText} />
+        <TranscriptView
+          segments={segments}
+          interimText={interimText}
+          repSpeaker={repSpeaker}
+          paused={status === 'paused'}
+        />
         {cue && <CueCard key={cue.id} cue={cue} onDismiss={dismiss} />}
       </div>
 

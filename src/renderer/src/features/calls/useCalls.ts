@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Call, CallSummary } from './types'
+
+// A saved call's transcript/audio are more consequential to lose than a task
+// or deal, so the real (irreversible) delete is held behind this window —
+// same "optimistic hide + real delete after a grace period" pattern used
+// elsewhere, giving the Undo toast time to act before anything is gone.
+const DELETE_GRACE_MS = 6000
 
 interface UseCalls {
   calls: CallSummary[]
   loading: boolean
   remove: (id: string) => Promise<void>
+  undoDelete: (id: string) => void
   get: (id: string) => Promise<Call | null>
   refresh: () => Promise<void>
 }
@@ -12,6 +19,8 @@ interface UseCalls {
 export function useCalls(): UseCalls {
   const [calls, setCalls] = useState<CallSummary[]>([])
   const [loading, setLoading] = useState(true)
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set())
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
   const refresh = useCallback(async () => {
     try {
@@ -35,19 +44,61 @@ export function useCalls(): UseCalls {
     return window.api.backup.onChanged(() => void refresh())
   }, [refresh])
 
+  useEffect(() => {
+    // Cancel any pending real-deletes if the hook unmounts first — the timer
+    // callback below guards on this same map, so clearing it is enough.
+    const timers = timersRef.current
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer)
+      timers.clear()
+    }
+  }, [])
+
   const remove = useCallback(
     async (id: string) => {
-      try {
-        await window.api.calls.delete(id)
-      } catch {
-        /* ignore — refresh reflects the true state */
-      }
-      await refresh()
+      // Optimistic hide: the call disappears from the list immediately, but the
+      // real (irreversible) delete only fires after the grace period — giving
+      // the Undo toast a real window to act in before the transcript is gone.
+      setPendingDeleteIds((prev) => new Set(prev).add(id))
+      const timer = setTimeout(() => {
+        timersRef.current.delete(id)
+        void (async () => {
+          try {
+            await window.api.calls.delete(id)
+          } catch {
+            /* ignore — refresh reflects the true state */
+          }
+          setPendingDeleteIds((prev) => {
+            const next = new Set(prev)
+            next.delete(id)
+            return next
+          })
+          await refresh()
+        })()
+      }, DELETE_GRACE_MS)
+      timersRef.current.set(id, timer)
     },
     [refresh]
   )
 
+  const undoDelete = useCallback((id: string) => {
+    const timer = timersRef.current.get(id)
+    if (timer) {
+      clearTimeout(timer)
+      timersRef.current.delete(id)
+    }
+    setPendingDeleteIds((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }, [])
+
   const get = useCallback((id: string) => window.api.calls.get(id), [])
 
-  return { calls, loading, remove, get, refresh }
+  const visibleCalls = pendingDeleteIds.size
+    ? calls.filter((c) => !pendingDeleteIds.has(c.id))
+    : calls
+
+  return { calls: visibleCalls, loading, remove, undoDelete, get, refresh }
 }

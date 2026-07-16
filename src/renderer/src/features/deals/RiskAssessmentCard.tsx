@@ -1,11 +1,16 @@
 import { useState } from 'react'
 import { ShieldAlert, RotateCw, ArrowRight, PhoneCall } from 'lucide-react'
-import { cn } from '@renderer/lib/cn'
-import type { Tone } from '@renderer/features/coaching/meta'
-import { TONE_TEXT, TONE_BAR } from '@renderer/features/coaching/meta'
+import { Badge, type BadgeTone } from '@renderer/components/Badge'
+import { Button } from '@renderer/components/Button'
+import { Skeleton } from '@renderer/components/Skeleton'
+import { formatRelative } from '@renderer/features/contacts/contactStats'
 import type { Deal, DealRiskLevel } from './types'
 
-const LEVEL_TONE: Record<DealRiskLevel, Tone> = { low: 'good', medium: 'mid', high: 'low' }
+const LEVEL_TONE: Record<DealRiskLevel, BadgeTone> = {
+  low: 'positive',
+  medium: 'warning',
+  high: 'danger'
+}
 const LEVEL_LABEL: Record<DealRiskLevel, string> = {
   low: 'Low risk',
   medium: 'Medium risk',
@@ -55,18 +60,19 @@ export function RiskAssessmentCard({
           <h3 className="text-sm font-semibold">Risk assessment</h3>
         </div>
         {assessment && !assessing && (
-          <button
-            type="button"
-            onClick={() => void assess()}
-            className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
-          >
-            <RotateCw className="h-3.5 w-3.5" /> Re-assess
-          </button>
+          <div className="flex items-center gap-2.5">
+            <span className="text-[11px] text-faint">
+              Assessed {formatRelative(assessment.createdAt)}
+            </span>
+            <Button variant="secondary" size="sm" icon={RotateCw} onClick={() => void assess()}>
+              Re-assess
+            </Button>
+          </div>
         )}
       </div>
 
       {noKey && (
-        <p className="mb-3 text-[13px] text-amber-200">
+        <p className="mb-3 text-[13px] text-warning">
           Add your Anthropic API key (ANTHROPIC_API_KEY in .env) to use this feature.
         </p>
       )}
@@ -74,9 +80,7 @@ export function RiskAssessmentCard({
       {/* Hoisted above the branch: with a cached assessment, a failed
           Re-assess used to set this and render NOTHING — the old report
           reappeared looking like a silent success with stale data. */}
-      {error && !assessing && assessment && (
-        <p className="mb-3 text-[13px] text-rose-300">{error}</p>
-      )}
+      {error && !assessing && assessment && <p className="mb-3 text-[13px] text-danger">{error}</p>}
 
       {assessing ? (
         <RiskLoading />
@@ -88,14 +92,10 @@ export function RiskAssessmentCard({
             Get an AI read on whether this deal is likely to stall — grounded only in this
             deal&apos;s own data and its contact&apos;s call history, never guessed.
           </p>
-          {error && <p className="text-[13px] text-rose-300">{error}</p>}
-          <button
-            type="button"
-            onClick={() => void assess()}
-            className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110"
-          >
-            <ShieldAlert className="h-4 w-4" /> Assess risk
-          </button>
+          {error && <p className="text-[13px] text-danger">{error}</p>}
+          <Button icon={ShieldAlert} onClick={() => void assess()}>
+            Assess risk
+          </Button>
         </div>
       )}
     </section>
@@ -111,12 +111,11 @@ function RiskReport({
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-4 rounded-xl border border-line-soft bg-canvas p-4">
-        <div className={cn('h-2.5 w-2.5 shrink-0 rounded-full', TONE_BAR[tone])} />
+        <Badge tone={tone} className="shrink-0">
+          {LEVEL_LABEL[assessment.level]}
+        </Badge>
         <div className="min-w-0">
-          <p className={cn('text-sm font-semibold', TONE_TEXT[tone])}>
-            {LEVEL_LABEL[assessment.level]}
-          </p>
-          <p className="mt-0.5 text-[13px] text-muted">{assessment.summary}</p>
+          <p className="text-[13px] text-muted">{assessment.summary}</p>
         </div>
       </div>
 
@@ -154,9 +153,9 @@ function RiskReport({
 function RiskLoading(): React.JSX.Element {
   return (
     <div className="space-y-3">
-      <div className="h-14 animate-pulse rounded-xl bg-elevated" />
-      <div className="h-10 animate-pulse rounded-lg bg-elevated" />
-      <div className="h-10 animate-pulse rounded-lg bg-elevated" />
+      <Skeleton className="h-14 rounded-xl" />
+      <Skeleton className="h-10 rounded-lg" />
+      <Skeleton className="h-10 rounded-lg" />
     </div>
   )
 }

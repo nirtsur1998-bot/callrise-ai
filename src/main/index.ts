@@ -15,9 +15,11 @@ app.setPath('userData', userDataDir)
 // no project folder (and its working directory is arbitrary), so also look
 // next to the executable and in the app's data folder — installs get their
 // keys by dropping a .env in either place.
-const envPaths = ['.env', join(dirname(process.execPath), '.env'), join(userDataDir, '.env')].filter(
-  (p) => existsSync(p)
-)
+const envPaths = [
+  '.env',
+  join(dirname(process.execPath), '.env'),
+  join(userDataDir, '.env')
+].filter((p) => existsSync(p))
 if (envPaths.length > 0) loadEnv({ path: envPaths })
 import icon from '../../resources/icon.png?asset'
 import { registerTranscription, disposeTranscription } from './transcription'

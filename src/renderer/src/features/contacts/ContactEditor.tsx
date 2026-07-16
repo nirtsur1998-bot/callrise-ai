@@ -1,15 +1,22 @@
 import type { ReactNode } from 'react'
 import { CountrySelect } from '@renderer/components/CountrySelect'
+import { fieldClass } from '@renderer/components/field'
 import type { ContactDraft } from './draft'
 
-const fieldClass =
-  'w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm text-ink placeholder:text-faint transition focus:border-accent focus:outline-none [color-scheme:dark]'
-
-function Field({ label, children }: { label: string; children: ReactNode }): React.JSX.Element {
+function Field({
+  label,
+  required,
+  children
+}: {
+  label: string
+  required?: boolean
+  children: ReactNode
+}): React.JSX.Element {
   return (
     <label className="block">
       <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-faint">
         {label}
+        {required && <span className="ml-0.5 text-danger">*</span>}
       </span>
       {children}
     </label>
@@ -32,7 +39,7 @@ export function ContactEditor({
 
   return (
     <div className="space-y-3">
-      <Field label="Name">
+      <Field label="Name" required>
         <input
           type="text"
           value={value.name}
@@ -44,7 +51,7 @@ export function ContactEditor({
       </Field>
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Company (optional)">
+        <Field label="Company">
           <input
             type="text"
             value={value.company}
@@ -53,7 +60,7 @@ export function ContactEditor({
             className={fieldClass}
           />
         </Field>
-        <Field label="Customer No. (optional)">
+        <Field label="Customer No.">
           <input
             type="text"
             value={value.cid}
@@ -65,14 +72,14 @@ export function ContactEditor({
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Country (optional)">
+        <Field label="Country">
           <CountrySelect
             value={value.country}
             onChange={(code) => set({ country: code })}
             placeholder="Select country"
           />
         </Field>
-        <Field label="Registered date (optional)">
+        <Field label="Registered date">
           <input
             type="date"
             value={value.registeredAt}
@@ -82,7 +89,7 @@ export function ContactEditor({
         </Field>
       </div>
 
-      <Field label="Email (optional)">
+      <Field label="Email">
         <input
           type="email"
           value={value.email}
@@ -92,7 +99,7 @@ export function ContactEditor({
         />
       </Field>
 
-      <Field label="Phone (optional)">
+      <Field label="Phone">
         <div className="grid grid-cols-[minmax(0,7.5rem)_1fr] gap-2">
           <CountrySelect
             value={value.phoneCountry}
@@ -110,7 +117,7 @@ export function ContactEditor({
         </div>
       </Field>
 
-      <Field label="Notes (optional)">
+      <Field label="Notes">
         <textarea
           value={value.notes}
           onChange={(e) => set({ notes: e.target.value })}

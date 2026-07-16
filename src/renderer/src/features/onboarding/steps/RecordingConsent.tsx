@@ -1,5 +1,6 @@
 import { Mic, Users, ShieldCheck } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import type { ConsentJurisdiction } from '@renderer/features/calls/types'
 import type { OnboardingState } from '../useOnboarding'
 import { StepHeader } from './StepHeader'
@@ -35,7 +36,7 @@ export function RecordingConsent({ o }: { o: OnboardingState }): React.JSX.Eleme
         title="Recording"
         subtitle="What CallRise captures on a call. You can change this any time in Settings."
       />
-      <div className="space-y-2.5">
+      <div role="radiogroup" aria-label="Recording mode" className="space-y-2.5">
         {choices.map((c) => {
           const selected = o.recordBothSides === c.both
           const Icon = c.icon
@@ -43,6 +44,9 @@ export function RecordingConsent({ o }: { o: OnboardingState }): React.JSX.Eleme
             <button
               key={c.title}
               type="button"
+              role="radio"
+              aria-checked={selected}
+              tabIndex={selected ? 0 : -1}
               onClick={() => o.setRecordBothSides(c.both)}
               className={cn(
                 'flex w-full items-start gap-3 rounded-xl border p-3.5 text-left transition',
@@ -73,27 +77,17 @@ export function RecordingConsent({ o }: { o: OnboardingState }): React.JSX.Eleme
       {o.recordBothSides && (
         <div className="mt-4 rounded-xl border border-line-soft bg-canvas p-3.5">
           <div className="mb-2 flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-emerald-300" />
+            <ShieldCheck className="h-4 w-4 text-positive" />
             <p className="text-[13px] font-medium">Default consent jurisdiction</p>
           </div>
           <p className="mb-2.5 text-[12px] text-muted">
             Pre-fills the per-call consent step — changeable on any individual call.
           </p>
-          <div className="inline-flex rounded-lg border border-line p-0.5">
-            {JURISDICTIONS.map((j) => (
-              <button
-                key={j.id}
-                type="button"
-                onClick={() => o.setJurisdiction(j.id)}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-[13px] font-medium transition',
-                  o.jurisdiction === j.id ? 'bg-accent-soft text-ink' : 'text-muted hover:text-ink'
-                )}
-              >
-                {j.label}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            options={JURISDICTIONS}
+            value={o.jurisdiction}
+            onChange={o.setJurisdiction}
+          />
         </div>
       )}
 

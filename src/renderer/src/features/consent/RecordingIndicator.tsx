@@ -2,6 +2,8 @@
 // "your mic" until the other party's audio is ACTUALLY streaming, and only then
 // shows "you + the other party" — so the label never over-claims what's being
 // captured (e.g. during the permission prompt, or if buyer capture failed).
+import { ShieldCheck } from 'lucide-react'
+import { Badge } from '@renderer/components/Badge'
 
 interface RecordingIndicatorProps {
   /** Mic capture is actively running (session live, not paused). */
@@ -25,8 +27,8 @@ export function RecordingIndicator({
 }: RecordingIndicatorProps): React.JSX.Element {
   if (paused) {
     return (
-      <div className="inline-flex items-center gap-2 text-[13px] font-medium text-amber-300">
-        <span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
+      <div className="inline-flex items-center gap-2 text-[13px] font-medium text-warning">
+        <span className="h-2.5 w-2.5 rounded-full bg-warning" />
         Paused — not recording
       </div>
     )
@@ -47,21 +49,21 @@ export function RecordingIndicator({
 
   return (
     <div className="inline-flex items-center gap-2.5">
-      <div className="inline-flex items-center gap-2 rounded-full bg-rose-500/15 px-2.5 py-1 ring-1 ring-inset ring-rose-500/30">
+      <div className="inline-flex items-center gap-2 rounded-full bg-danger-soft px-2.5 py-1 ring-1 ring-inset ring-danger/30">
         <span className="relative flex h-2.5 w-2.5">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
-          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-rose-500" />
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75" />
+          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-danger" />
         </span>
-        <span className="text-[13px] font-semibold text-rose-200">{label}</span>
+        <span className="text-[13px] font-semibold text-danger">{label}</span>
       </div>
 
       {/* Consent is recorded, but buyer audio isn't streaming this instant
           (e.g. during the permission prompt, or after it stopped). */}
-      {otherPartyConsented && !capturingBoth && (
-        <span className="text-[11px] text-faint">consent recorded</span>
-      )}
+      {otherPartyConsented && !capturingBoth && <Badge tone="neutral">consent recorded</Badge>}
       {capturingBoth && (
-        <span className="text-[11px] font-medium text-emerald-300">with consent</span>
+        <Badge tone="positive" icon={ShieldCheck}>
+          with consent
+        </Badge>
       )}
     </div>
   )

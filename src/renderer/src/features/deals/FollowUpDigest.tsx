@@ -10,6 +10,9 @@ import {
   CalendarClock
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { Badge } from '@renderer/components/Badge'
+import { Button } from '@renderer/components/Button'
+import { SkeletonRows } from '@renderer/components/Skeleton'
 import { useContacts } from '@renderer/features/contacts/useContacts'
 import { buildContactStats, daysSinceLastCall } from '@renderer/features/contacts/contactStats'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
@@ -32,20 +35,12 @@ import {
   type AttentionTier
 } from './staleness'
 import { formatValue } from './format'
+import { RISK_TIER_LABEL, RISK_TIER_TONE } from './risk'
 import type { Deal } from './types'
 
 interface FollowUpDigestProps {
   onOpenDeal: (dealId: string) => void
   onOpenContact: (contactId: string) => void
-}
-
-const RISK_TIER_LABEL: Record<'risk-high' | 'risk-medium', string> = {
-  'risk-high': 'High risk',
-  'risk-medium': 'Medium risk'
-}
-const RISK_TIER_CLASS: Record<'risk-high' | 'risk-medium', string> = {
-  'risk-high': 'border-rose-500/30 bg-rose-500/10 text-rose-300',
-  'risk-medium': 'border-amber-500/30 bg-amber-500/10 text-amber-300'
 }
 
 /** One flagged item — a deal (risk-flagged or gone quiet), or a deal-less
@@ -286,11 +281,11 @@ export function FollowUpDigest({
       </p>
 
       {loading ? (
-        <div className="flex h-40 items-center justify-center text-sm text-faint">Loading…</div>
+        <SkeletonRows rows={4} />
       ) : flagged.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl border border-line-soft bg-surface">
-            <CheckCircle2 className="h-6 w-6 text-emerald-300" strokeWidth={1.75} />
+            <CheckCircle2 className="h-6 w-6 text-positive" strokeWidth={1.75} />
           </div>
           <h3 className="text-lg font-semibold">Nothing needs attention</h3>
           <p className="mt-1.5 max-w-xs text-sm text-muted">
@@ -392,7 +387,7 @@ function WeekMeetingRow({ meeting, onOpen }: WeekMeetingRowProps): React.JSX.Ele
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
         <p className="truncate text-sm font-medium">{event.title}</p>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-faint">
-          <span className="flex items-center gap-1 text-sky-300">
+          <span className="flex items-center gap-1 text-accent">
             <CalendarClock className="h-3 w-3" /> {formatUpcoming(event.start)}
           </span>
           {(deal || contact) && (
@@ -443,14 +438,9 @@ function LinkedTaskRow({
           <span className="flex items-center gap-1">
             <TypeIcon className="h-3 w-3" /> {typeMeta.label}
           </span>
-          <span
-            className={cn(
-              'rounded-full border px-1.5 py-0.5 text-[10px] font-medium',
-              priorityMeta.badge
-            )}
-          >
+          <Badge tone={priorityMeta.tone} className="text-[10px]">
             {priorityMeta.label}
-          </span>
+          </Badge>
           {due && <span className={DUE_TONE_CLASS[due.tone]}>{due.text}</span>}
           {(deal || contact) && (
             <span className="flex items-center gap-1">
@@ -496,14 +486,9 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
         <div className="flex flex-wrap items-center gap-2">
           <p className="truncate text-sm font-medium">{title}</p>
           {isRiskTier && (
-            <span
-              className={cn(
-                'shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium',
-                RISK_TIER_CLASS[tier as 'risk-high' | 'risk-medium']
-              )}
-            >
+            <Badge tone={RISK_TIER_TONE[tier as 'risk-high' | 'risk-medium']}>
               {RISK_TIER_LABEL[tier as 'risk-high' | 'risk-medium']}
-            </span>
+            </Badge>
           )}
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-faint">
@@ -533,7 +518,7 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
         <p
           className={cn(
             'mt-1.5 flex items-start gap-1.5 text-[12px]',
-            isRiskTier ? 'text-muted' : 'font-medium text-amber-300'
+            isRiskTier ? 'text-muted' : 'font-medium text-warning'
           )}
         >
           {isRiskTier ? (
@@ -544,7 +529,7 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
           {reason}
         </p>
         {upcomingAt && (
-          <p className="mt-1 flex items-center gap-1.5 text-[12px] text-sky-300">
+          <p className="mt-1 flex items-center gap-1.5 text-[12px] text-accent">
             <CalendarClock className="h-3 w-3 shrink-0" />
             Already booked: {formatUpcoming(upcomingAt)}
           </p>
@@ -553,32 +538,29 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
 
       <div className="flex shrink-0 items-center gap-2">
         {created ? (
-          <span className="flex items-center gap-1 text-[12px] font-medium text-emerald-300">
+          <span className="flex items-center gap-1 text-[12px] font-medium text-positive">
             <CheckCircle2 className="h-3.5 w-3.5" />
             {result === 'exists' ? 'Already on Tasks' : 'Task created'}
           </span>
         ) : (
           <>
             {result === 'error' && (
-              <span className="text-[12px] text-rose-300">Couldn&apos;t create — try again</span>
+              <span className="text-[12px] text-danger">Couldn&apos;t create — try again</span>
             )}
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={ListPlus}
               onClick={() => void handleCreate()}
               disabled={creating}
-              className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink disabled:opacity-50"
             >
-              <ListPlus className="h-3.5 w-3.5" /> {creating ? 'Creating…' : 'Create task'}
-            </button>
+              {creating ? 'Creating…' : 'Create task'}
+            </Button>
           </>
         )}
-        <button
-          type="button"
-          onClick={onOpen}
-          className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
-        >
-          <PhoneCall className="h-3.5 w-3.5" /> Open
-        </button>
+        <Button variant="secondary" size="sm" icon={PhoneCall} onClick={onOpen}>
+          Open
+        </Button>
       </div>
     </li>
   )

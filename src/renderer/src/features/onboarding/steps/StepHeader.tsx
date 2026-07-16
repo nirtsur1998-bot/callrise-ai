@@ -13,6 +13,3 @@ export function StepHeader({
     </div>
   )
 }
-
-export const fieldInput =
-  'w-full rounded-lg border border-line-soft bg-canvas px-3 py-2 text-sm text-ink outline-none transition placeholder:text-faint focus:border-line'

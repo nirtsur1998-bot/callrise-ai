@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { RotateCcw } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { CountrySelect } from '@renderer/components/CountrySelect'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { cn } from '@renderer/lib/cn'
+import { fieldClass } from '@renderer/components/field'
 import { clearAllDismissedMatches } from '@renderer/features/contacts/calendarMatch'
 import { useAppSettings, type CrmSettings } from './useAppSettings'
 import { SettingRow } from './SettingRow'
@@ -40,15 +42,32 @@ export function CrmSection(): React.JSX.Element {
   }, [crm.staleAfterDays])
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  // Transient "Saved" labels next to blur-committed fields, auto-clearing
+  // after ~2s — mirrors the "Cleared." message below.
+  const [savedField, setSavedField] = useState<'prefix' | 'staleDays' | null>(null)
+  const savedTimeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const flashSaved = (field: 'prefix' | 'staleDays'): void => {
+    setSavedField(field)
+    clearTimeout(savedTimeout.current)
+    savedTimeout.current = setTimeout(() => setSavedField(null), 2000)
+  }
+  useEffect(() => () => clearTimeout(savedTimeout.current), [])
+
   const commitPrefix = (): void => {
     const next = prefixDraft.trim() || 'CUST-'
     setPrefixDraft(next)
-    if (next !== crm.cidPrefix) setCrm({ cidPrefix: next })
+    if (next !== crm.cidPrefix) {
+      setCrm({ cidPrefix: next })
+      flashSaved('prefix')
+    }
   }
   const commitStaleDays = (): void => {
     const next = Math.min(Math.max(Math.round(Number(staleDraft) || 14), 1), 365)
     setStaleDraft(String(next))
-    if (next !== crm.staleAfterDays) setCrm({ staleAfterDays: next })
+    if (next !== crm.staleAfterDays) {
+      setCrm({ staleAfterDays: next })
+      flashSaved('staleDays')
+    }
   }
 
   return (
@@ -74,24 +93,12 @@ export function CrmSection(): React.JSX.Element {
           )}
         >
           <p className="mb-2 text-[13px] font-medium">Match sensitivity</p>
-          <div className="inline-flex rounded-lg border border-line p-0.5">
-            {SENSITIVITIES.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                disabled={!crm.calendarMatchEnabled || loading}
-                onClick={() => setCrm({ matchSensitivity: s.id })}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-[13px] font-medium transition disabled:cursor-default',
-                  crm.matchSensitivity === s.id
-                    ? 'bg-accent-soft text-ink'
-                    : 'text-muted hover:text-ink'
-                )}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            options={SENSITIVITIES}
+            value={crm.matchSensitivity}
+            onChange={(id) => setCrm({ matchSensitivity: id })}
+            disabled={!crm.calendarMatchEnabled || loading}
+          />
           <p className="mt-2 text-[11px] text-faint">
             How close a calendar event must be to the call&rsquo;s actual time to count as a match.
           </p>
@@ -136,7 +143,7 @@ export function CrmSection(): React.JSX.Element {
               <RotateCcw className="h-3.5 w-3.5" /> Show again
             </button>
           </div>
-          {cleared && <p className="mt-2 text-[12px] text-emerald-300">Cleared.</p>}
+          {cleared && <p className="mt-2 text-[12px] text-positive">Cleared.</p>}
         </div>
       </Card>
 
@@ -168,14 +175,17 @@ export function CrmSection(): React.JSX.Element {
         <div
           className={cn('mt-4 border-t border-line-soft pt-4', !crm.autoNumberCid && 'opacity-50')}
         >
-          <label className="mb-1.5 block text-[13px] font-medium text-muted">Prefix</label>
+          <label className="mb-1.5 flex items-center gap-2 text-[13px] font-medium text-muted">
+            Prefix
+            {savedField === 'prefix' && <span className="text-[12px] text-positive">Saved</span>}
+          </label>
           <input
             value={prefixDraft}
             disabled={!crm.autoNumberCid || loading}
             onChange={(e) => setPrefixDraft(e.target.value)}
             onBlur={commitPrefix}
             placeholder="CUST-"
-            className="w-full max-w-[200px] rounded-lg border border-line-soft bg-canvas px-3 py-2 text-sm outline-none transition focus:border-line disabled:cursor-default"
+            className={cn(fieldClass, 'max-w-[200px]')}
           />
           <p className="mt-2 text-[11px] text-faint">
             Next number: {crm.cidPrefix}
@@ -203,8 +213,9 @@ export function CrmSection(): React.JSX.Element {
             !crm.staleFollowUpEnabled && 'opacity-50'
           )}
         >
-          <label className="mb-1.5 block text-[13px] font-medium text-muted">
+          <label className="mb-1.5 flex items-center gap-2 text-[13px] font-medium text-muted">
             Flag after this many days without a call
+            {savedField === 'staleDays' && <span className="text-[12px] text-positive">Saved</span>}
           </label>
           <input
             type="number"
@@ -214,7 +225,7 @@ export function CrmSection(): React.JSX.Element {
             disabled={!crm.staleFollowUpEnabled || loading}
             onChange={(e) => setStaleDraft(e.target.value)}
             onBlur={commitStaleDays}
-            className="w-24 rounded-lg border border-line-soft bg-canvas px-3 py-2 text-sm outline-none transition focus:border-line disabled:cursor-default"
+            className={cn(fieldClass, 'w-24')}
           />
           <p className="mt-2 text-[11px] text-faint">Only applies to open (not Won/Lost) deals.</p>
         </div>

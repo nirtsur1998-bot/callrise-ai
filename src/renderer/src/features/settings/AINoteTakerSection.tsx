@@ -5,6 +5,7 @@ import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
 import { cn } from '@renderer/lib/cn'
 import { SettingRow } from './SettingRow'
 import { useAutoStartListening } from './useAutoStartListening'
+import { useAutoTranscribeCalls } from './useAutoTranscribeCalls'
 import {
   getAutoOpenMeetingPage,
   setAutoOpenMeetingPage,
@@ -19,6 +20,7 @@ import {
 
 export function AINoteTakerSection(): React.JSX.Element {
   const [autoStart, setAutoStart] = useAutoStartListening()
+  const [autoTranscribeCalls, setAutoTranscribeCalls] = useAutoTranscribeCalls()
   const [autoOpen, setAutoOpenState] = useState(() => getAutoOpenMeetingPage())
   const [autoSummarize, setAutoSummarizeState] = useState(() => getAutoSummarize())
   const [autoTitle, setAutoTitleState] = useState(() => getAutoGenerateTitle())
@@ -51,6 +53,19 @@ export function AINoteTakerSection(): React.JSX.Element {
               />
             }
           />
+          <div className="pt-4">
+            <SettingRow
+              title="Auto-transcribe detected calls"
+              description="When CallRise AI notices a known calling app (WhatsApp, Zoom, Teams, MicroSIP, …) running, start transcribing right away instead of asking first."
+              control={
+                <ToggleSwitch
+                  checked={autoTranscribeCalls}
+                  onChange={setAutoTranscribeCalls}
+                  label="Auto-transcribe detected calls"
+                />
+              }
+            />
+          </div>
           <div className="pt-4">
             <SettingRow
               title="Automatically open meeting page"
@@ -109,7 +124,7 @@ export function AINoteTakerSection(): React.JSX.Element {
         </p>
 
         {detectionAvailable === false && (
-          <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3.5 py-2.5 text-[13px] text-amber-300">
+          <div className="mb-3 flex items-start gap-2 rounded-xl border border-warning/30 bg-warning-soft px-3.5 py-2.5 text-[13px] text-warning">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <span className="flex-1">
               CallRise AI needs the Accessibility permission to detect the app you&rsquo;re using.
@@ -117,7 +132,7 @@ export function AINoteTakerSection(): React.JSX.Element {
             <button
               type="button"
               onClick={() => void window.api.app.openAccessibilitySettings()}
-              className="shrink-0 rounded-lg border border-amber-500/40 px-2.5 py-1 text-xs font-medium text-amber-200 hover:bg-amber-500/10"
+              className="shrink-0 rounded-lg border border-warning/40 px-2.5 py-1 text-xs font-medium text-warning hover:bg-warning/20"
             >
               Open Settings
             </button>

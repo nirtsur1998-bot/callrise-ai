@@ -1,5 +1,8 @@
 import { useState, type FormEvent } from 'react'
-import { AudioLines, Loader2 } from 'lucide-react'
+import { AudioLines, Loader2, AlertCircle, CheckCircle2, Eye, EyeOff } from 'lucide-react'
+import { cn } from '@renderer/lib/cn'
+import { fieldClass } from '@renderer/components/field'
+import { IconButton } from '@renderer/components/IconButton'
 
 type Mode = 'login' | 'signup' | 'confirm'
 
@@ -7,9 +10,6 @@ type Mode = 'login' | 'signup' | 'confirm'
 // the whole numeric code rather than locking the field to one exact length.
 const OTP_MIN = 6
 const OTP_MAX = 10
-
-const inputClass =
-  'w-full rounded-lg border border-line bg-canvas px-3 py-2.5 text-sm text-ink placeholder:text-faint transition focus:border-accent focus:outline-none'
 
 const primaryBtn =
   'flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-3.5 py-2.5 text-sm font-medium text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60'
@@ -28,18 +28,42 @@ function Brand(): React.JSX.Element {
   )
 }
 
+function ErrorAlert({ message }: { message: string }): React.JSX.Element {
+  return (
+    <p
+      role="alert"
+      className="flex items-start gap-2 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-[13px] text-danger"
+    >
+      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+      {message}
+    </p>
+  )
+}
+
+function InfoAlert({ message }: { message: string }): React.JSX.Element {
+  return (
+    <p
+      aria-live="polite"
+      className="flex items-start gap-2 rounded-lg border border-positive/30 bg-positive-soft px-3 py-2 text-[13px] text-positive"
+    >
+      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+      {message}
+    </p>
+  )
+}
+
 /** Shown when the Supabase keys are missing from .env. */
 function NotConfigured(): React.JSX.Element {
   return (
-    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
+    <div className="rounded-xl border border-warning/30 bg-warning-soft p-4 text-sm text-warning">
       <p className="font-medium">Accounts aren’t set up yet</p>
-      <p className="mt-1 text-amber-200/80">
-        Add <code className="rounded bg-canvas px-1 py-0.5 text-amber-100">SUPABASE_URL</code> and{' '}
-        <code className="rounded bg-canvas px-1 py-0.5 text-amber-100">SUPABASE_ANON_KEY</code> to
-        your <code className="rounded bg-canvas px-1 py-0.5 text-amber-100">.env</code> file, then
+      <p className="mt-1 text-warning/80">
+        Add <code className="rounded bg-canvas px-1 py-0.5 text-warning">SUPABASE_URL</code> and{' '}
+        <code className="rounded bg-canvas px-1 py-0.5 text-warning">SUPABASE_ANON_KEY</code> to
+        your <code className="rounded bg-canvas px-1 py-0.5 text-warning">.env</code> file, then
         fully restart the app (stop{' '}
-        <code className="rounded bg-canvas px-1 py-0.5 text-amber-100">npm run dev</code> and start
-        it again).
+        <code className="rounded bg-canvas px-1 py-0.5 text-warning">npm run dev</code> and start it
+        again).
       </p>
     </div>
   )
@@ -54,6 +78,7 @@ export function AuthScreen({ configured }: { configured: boolean }): React.JSX.E
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
+  const [showPw, setShowPw] = useState(false)
 
   const clearMessages = (): void => {
     setError(null)
@@ -137,7 +162,7 @@ export function AuthScreen({ configured }: { configured: boolean }): React.JSX.E
   }
 
   return (
-    <div className="relative flex h-screen w-screen items-center justify-center bg-canvas px-6 text-ink">
+    <div className="relative flex h-screen w-screen items-center justify-center overflow-y-auto bg-canvas px-6 py-8 text-ink">
       {/* Draggable strip so the window can still be moved. */}
       <div className="drag absolute inset-x-0 top-0 h-10" />
 
@@ -147,7 +172,7 @@ export function AuthScreen({ configured }: { configured: boolean }): React.JSX.E
         {!configured ? (
           <NotConfigured />
         ) : (
-          <div className="rounded-2xl border border-line-soft bg-surface p-7">
+          <div className="animate-view rounded-2xl border border-line-soft bg-surface p-7">
             {mode === 'confirm' ? (
               <form onSubmit={submitConfirm} className="space-y-4">
                 <div>
@@ -161,15 +186,16 @@ export function AuthScreen({ configured }: { configured: boolean }): React.JSX.E
                   type="text"
                   inputMode="numeric"
                   autoComplete="one-time-code"
+                  aria-label="Enter the code"
                   maxLength={OTP_MAX}
                   value={code}
                   autoFocus
                   onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, OTP_MAX))}
                   placeholder="Enter the code"
-                  className={`${inputClass} text-center text-lg tracking-[0.3em]`}
+                  className={cn(fieldClass, 'text-center text-lg tracking-[0.3em]')}
                 />
-                {error && <p className="text-[13px] text-rose-300">{error}</p>}
-                {info && <p className="text-[13px] text-emerald-300">{info}</p>}
+                {error && <ErrorAlert message={error} />}
+                {info && <InfoAlert message={info} />}
                 <button
                   type="submit"
                   disabled={busy || code.length < OTP_MIN}
@@ -204,27 +230,41 @@ export function AuthScreen({ configured }: { configured: boolean }): React.JSX.E
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
+                    autoComplete="name"
+                    aria-label="Name (optional)"
                     placeholder="Name (optional)"
-                    className={inputClass}
+                    className={fieldClass}
                   />
                   <input
                     type="email"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    autoComplete="email"
+                    aria-label="you@company.com"
                     placeholder="you@company.com"
-                    className={inputClass}
+                    className={fieldClass}
                   />
-                  <input
-                    type="password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Password (at least 6 characters)"
-                    className={inputClass}
-                  />
+                  <div className="relative">
+                    <input
+                      type={showPw ? 'text' : 'password'}
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      autoComplete="new-password"
+                      aria-label="Password (at least 6 characters)"
+                      placeholder="Password (at least 6 characters)"
+                      className={cn(fieldClass, 'pr-10')}
+                    />
+                    <IconButton
+                      icon={showPw ? EyeOff : Eye}
+                      label={showPw ? 'Hide password' : 'Show password'}
+                      onClick={() => setShowPw((v) => !v)}
+                      className="absolute top-1/2 right-1 -translate-y-1/2"
+                    />
+                  </div>
                 </div>
-                {error && <p className="text-[13px] text-rose-300">{error}</p>}
+                {error && <ErrorAlert message={error} />}
                 <button
                   type="submit"
                   disabled={busy || !email || password.length < 6}
@@ -253,20 +293,32 @@ export function AuthScreen({ configured }: { configured: boolean }): React.JSX.E
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    autoComplete="email"
+                    aria-label="you@company.com"
                     placeholder="you@company.com"
-                    className={inputClass}
+                    className={fieldClass}
                   />
-                  <input
-                    type="password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Password"
-                    className={inputClass}
-                  />
+                  <div className="relative">
+                    <input
+                      type={showPw ? 'text' : 'password'}
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      autoComplete="current-password"
+                      aria-label="Password"
+                      placeholder="Password"
+                      className={cn(fieldClass, 'pr-10')}
+                    />
+                    <IconButton
+                      icon={showPw ? EyeOff : Eye}
+                      label={showPw ? 'Hide password' : 'Show password'}
+                      onClick={() => setShowPw((v) => !v)}
+                      className="absolute top-1/2 right-1 -translate-y-1/2"
+                    />
+                  </div>
                 </div>
-                {error && <p className="text-[13px] text-rose-300">{error}</p>}
-                {info && <p className="text-[13px] text-emerald-300">{info}</p>}
+                {error && <ErrorAlert message={error} />}
+                {info && <InfoAlert message={info} />}
                 <button type="submit" disabled={busy || !email || !password} className={primaryBtn}>
                   {busy && <Loader2 className="h-4 w-4 animate-spin" />}
                   {busy ? 'Logging in…' : 'Log in'}

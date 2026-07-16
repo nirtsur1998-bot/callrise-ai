@@ -30,19 +30,22 @@ export interface NavItem {
   id: NavId
   label: string
   icon: LucideIcon
+  /** Group header the sidebar renders above this item's section. Items
+   *  sharing a section render as one contiguous group, in list order. */
+  section?: string
 }
 
 /** The left-sidebar navigation. Order here is the order shown. */
 export const NAV_ITEMS: NavItem[] = [
-  { id: 'home', label: 'Home', icon: Home },
-  { id: 'live-calls', label: 'Live Calls', icon: PhoneCall },
-  { id: 'past-calls', label: 'Past Calls', icon: History },
-  { id: 'tasks', label: 'Tasks', icon: ListChecks },
-  { id: 'crm', label: 'CRM', icon: Contact },
-  { id: 'calendar', label: 'Calendar', icon: Calendar },
-  { id: 'coaching', label: 'Coaching', icon: GraduationCap },
-  { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-  { id: 'team', label: 'Team', icon: UsersRound },
-  { id: 'knowledge', label: 'Knowledge', icon: BookOpen },
+  { id: 'home', label: 'Home', icon: Home, section: 'Workspace' },
+  { id: 'live-calls', label: 'Live Calls', icon: PhoneCall, section: 'Workspace' },
+  { id: 'past-calls', label: 'Past Calls', icon: History, section: 'Workspace' },
+  { id: 'tasks', label: 'Tasks', icon: ListChecks, section: 'Workspace' },
+  { id: 'crm', label: 'CRM', icon: Contact, section: 'Pipeline' },
+  { id: 'calendar', label: 'Calendar', icon: Calendar, section: 'Pipeline' },
+  { id: 'coaching', label: 'Coaching', icon: GraduationCap, section: 'Insights' },
+  { id: 'analytics', label: 'Analytics', icon: BarChart3, section: 'Insights' },
+  { id: 'team', label: 'Team', icon: UsersRound, section: 'Library' },
+  { id: 'knowledge', label: 'Knowledge', icon: BookOpen, section: 'Library' },
   { id: 'settings', label: 'Settings', icon: Settings }
 ]

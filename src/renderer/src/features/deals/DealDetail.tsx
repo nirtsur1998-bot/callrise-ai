@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import {
-  ArrowLeft,
   Building2,
   CalendarClock,
   PhoneCall,
@@ -10,6 +9,10 @@ import {
   ListPlus
 } from 'lucide-react'
 import { TONE_TEXT, overallTier } from '@renderer/features/coaching/meta'
+import { Badge } from '@renderer/components/Badge'
+import { Button } from '@renderer/components/Button'
+import { BackButton } from '@renderer/components/BackButton'
+import { StatCard } from '@renderer/components/StatCard'
 import { useContactCallHistory } from '@renderer/features/contacts/useContactCallHistory'
 import { CallHistoryList } from '@renderer/features/contacts/CallHistoryList'
 import { formatRelative } from '@renderer/features/contacts/contactStats'
@@ -83,20 +86,10 @@ export function DealDetail({
   return (
     <div className="flex h-full flex-col">
       <div className="mb-4 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={onBack}
-          className="flex items-center gap-2 text-sm text-muted transition hover:text-ink"
-        >
-          <ArrowLeft className="h-4 w-4" /> Deals
-        </button>
-        <button
-          type="button"
-          onClick={onEdit}
-          className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-muted transition hover:bg-elevated hover:text-ink"
-        >
-          <Pencil className="h-3.5 w-3.5" /> Edit
-        </button>
+        <BackButton onClick={onBack} label="Deals" />
+        <Button variant="secondary" size="sm" icon={Pencil} onClick={onEdit}>
+          Edit
+        </Button>
       </div>
 
       {/* Deal header */}
@@ -104,9 +97,9 @@ export function DealDetail({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <h2 className="text-xl font-semibold tracking-tight">{deal.title}</h2>
           {stage && (
-            <span className="shrink-0 rounded-full border border-line-soft bg-canvas px-2.5 py-1 text-[12px] font-medium text-muted">
+            <Badge tone="neutral" className="shrink-0">
               {stage.label}
-            </span>
+            </Badge>
           )}
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted">
@@ -125,28 +118,28 @@ export function DealDetail({
       </div>
 
       {stale && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/30 bg-warning-soft px-4 py-3">
           <div className="flex items-center gap-2.5">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-300" />
+            <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
             <p className="text-[13px] text-ink">
               No calls with {contact?.name ?? 'this contact'} in over {staleAfterDays} days — this
               deal may need a follow-up.
             </p>
           </div>
           {taskCreated ? (
-            <span className="shrink-0 text-[13px] font-medium text-emerald-300">
+            <span className="shrink-0 text-[13px] font-medium text-positive">
               Task created — see Tasks.
             </span>
           ) : (
-            <button
-              type="button"
+            <Button
+              size="sm"
+              icon={ListPlus}
               onClick={() => void handleCreateFollowUpTask()}
               disabled={creatingTask}
-              className="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:brightness-110 disabled:opacity-50"
+              className="shrink-0"
             >
-              <ListPlus className="h-3.5 w-3.5" />
               {creatingTask ? 'Creating…' : 'Create follow-up task'}
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -168,7 +161,7 @@ export function DealDetail({
           <StatCard
             icon={GraduationCap}
             label="Avg. coach score"
-            value={avgScore !== null ? String(avgScore) : '—'}
+            value={avgScore !== null ? `${avgScore} · ${overallTier(avgScore).label}` : '—'}
             tone={avgScore !== null ? TONE_TEXT[overallTier(avgScore).tone] : 'text-faint'}
           />
         </div>
@@ -188,24 +181,6 @@ export function DealDetail({
           emptyMessage={`No calls linked to ${contact?.name ?? 'this contact'} yet. Open a saved call and link it there.`}
         />
       </div>
-    </div>
-  )
-}
-
-interface StatCardProps {
-  icon: typeof PhoneCall
-  label: string
-  value: string
-  tone: string
-}
-
-function StatCard({ icon: Icon, label, value, tone }: StatCardProps): React.JSX.Element {
-  return (
-    <div className="rounded-xl border border-line-soft bg-surface px-4 py-3">
-      <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-faint">
-        <Icon className="h-3 w-3" /> {label}
-      </p>
-      <p className={`mt-1 text-lg font-semibold ${tone}`}>{value}</p>
     </div>
   )
 }

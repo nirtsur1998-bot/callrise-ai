@@ -1,6 +1,5 @@
 import {
   CloudCheck,
-  CloudOff,
   AlertTriangle,
   Loader2,
   RefreshCw,
@@ -16,6 +15,7 @@ import {
 } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { cn } from '@renderer/lib/cn'
+import { isMac } from '@renderer/lib/platform'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import { useBackupStatus } from './useBackupStatus'
@@ -102,8 +102,7 @@ export function BackupCard(): React.JSX.Element {
     void updateSettings({ syncScope: { [key]: value } })
   }
 
-  const syncedOptional = OPTIONAL_ITEMS.filter((i) => syncScope[i.key])
-  const localOptional = OPTIONAL_ITEMS.filter((i) => !syncScope[i.key])
+  const syncedCount = OPTIONAL_ITEMS.filter((i) => syncScope[i.key]).length
 
   return (
     <Card>
@@ -112,11 +111,11 @@ export function BackupCard(): React.JSX.Element {
           <div
             className={cn(
               'grid h-10 w-10 shrink-0 place-items-center rounded-xl',
-              hasError ? 'bg-amber-500/15' : 'bg-accent-soft'
+              hasError ? 'bg-warning-soft' : 'bg-accent-soft'
             )}
           >
             {hasError ? (
-              <AlertTriangle className="h-5 w-5 text-amber-400" strokeWidth={2} />
+              <AlertTriangle className="h-5 w-5 text-warning" strokeWidth={2} />
             ) : (
               <CloudCheck className="h-5 w-5 text-accent" strokeWidth={2} />
             )}
@@ -126,7 +125,7 @@ export function BackupCard(): React.JSX.Element {
             {loading ? (
               <p className="text-[13px] text-faint">Checking status…</p>
             ) : errorMessage ? (
-              <p className="text-[13px] text-amber-400">{errorMessage}</p>
+              <p className="text-[13px] text-warning">{errorMessage}</p>
             ) : lastSyncedAt ? (
               <p className="text-[13px] text-muted">Backed up {agoLabel(lastSyncedAt)}</p>
             ) : (
@@ -156,61 +155,47 @@ export function BackupCard(): React.JSX.Element {
         </button>
       </div>
 
-      <div className="mt-5 grid grid-cols-1 gap-4 border-t border-line-soft pt-4 sm:grid-cols-2">
-        <div>
-          <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium tracking-wide text-faint uppercase">
-            <CloudCheck className="h-3.5 w-3.5" /> Synced to your account
-          </p>
-          <ul className="space-y-1.5">
-            {ALWAYS_SYNCED.map(({ icon: Icon, label }) => (
-              <li key={label} className="flex items-center gap-2 text-[13px] text-muted">
+      <div className="mt-5 border-t border-line-soft pt-4">
+        <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium tracking-wide text-faint uppercase">
+          <CloudCheck className="h-3.5 w-3.5" /> Always synced to your account
+        </p>
+        <ul className="space-y-1.5">
+          {ALWAYS_SYNCED.map(({ icon: Icon, label }) => (
+            <li key={label} className="flex items-center gap-2 text-[13px] text-muted">
+              <Icon className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
+              {label}
+            </li>
+          ))}
+        </ul>
+
+        {/* One stable list — declared order never changes when a toggle
+            flips, so rows don't jump between "synced"/"local" groupings. */}
+        <p className="mt-4 mb-2 text-[11px] font-medium tracking-wide text-faint uppercase">
+          Optional — {syncedCount} of {OPTIONAL_ITEMS.length} synced
+        </p>
+        <ul className="space-y-1.5">
+          {OPTIONAL_ITEMS.map(({ key, icon: Icon, label }) => (
+            <li key={key} className="flex items-center justify-between gap-2 text-[13px]">
+              <span className="flex items-center gap-2 text-muted">
                 <Icon className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
                 {label}
-              </li>
-            ))}
-            {syncedOptional.map(({ key, icon: Icon, label }) => (
-              <li key={key} className="flex items-center justify-between gap-2 text-[13px]">
-                <span className="flex items-center gap-2 text-muted">
-                  <Icon className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
-                  {label}
-                </span>
-                <ToggleSwitch
-                  checked
-                  onChange={(v) => setScope(key, v)}
-                  label={`Sync ${label} to the cloud`}
-                />
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium tracking-wide text-faint uppercase">
-            <CloudOff className="h-3.5 w-3.5" /> Stays only on this device
-          </p>
-          <ul className="space-y-1.5">
-            {localOptional.map(({ key, icon: Icon, label }) => (
-              <li key={key} className="flex items-center justify-between gap-2 text-[13px]">
-                <span className="flex items-center gap-2 text-muted">
-                  <Icon className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
-                  {label}
-                </span>
-                <ToggleSwitch
-                  checked={false}
-                  onChange={(v) => setScope(key, v)}
-                  label={`Sync ${label} to the cloud`}
-                />
-              </li>
-            ))}
-            <li className="flex items-center gap-2 text-[13px] text-muted">
-              <Lock className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
-              Your Google Calendar connection
+              </span>
+              <ToggleSwitch
+                checked={syncScope[key]}
+                onChange={(v) => setScope(key, v)}
+                label={`Sync ${label} to the cloud`}
+              />
             </li>
-          </ul>
-        </div>
+          ))}
+          <li className="flex items-center gap-2 text-[13px] text-muted">
+            <Lock className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
+            Your Google Calendar connection — stays only on this device
+          </li>
+        </ul>
       </div>
 
       {syncScope.transcripts && (
-        <p className="mt-4 flex items-start gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[12px] text-amber-300">
+        <p className="mt-4 flex items-start gap-1.5 rounded-lg border border-warning/20 bg-warning-soft px-3 py-2 text-[12px] text-warning">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           Call recordings & transcripts sync is ON — your buyer conversations are stored in your
           cloud account, not just this device.
@@ -225,8 +210,8 @@ export function BackupCard(): React.JSX.Element {
       )}
 
       {(status?.conflictCount ?? 0) > 0 && (
-        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
-          <p className="text-[12px] text-amber-300">
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-warning/20 bg-warning-soft px-3 py-2">
+          <p className="text-[12px] text-warning">
             {status!.conflictCount} conflicting {status!.conflictCount === 1 ? 'copy' : 'copies'}{' '}
             kept — the same record was edited on two devices at once; the losing version was saved
             next to your data instead of being discarded.
@@ -236,7 +221,7 @@ export function BackupCard(): React.JSX.Element {
             onClick={() => void window.api.backup.revealConflicts()}
             className="shrink-0 text-[12px] font-medium text-muted transition hover:text-ink"
           >
-            Reveal in Finder
+            {isMac ? 'Reveal in Finder' : 'Show in folder'}
           </button>
         </div>
       )}

@@ -7,6 +7,7 @@ const KEY_AUTO_SUMMARIZE = 'salesos.settings.autoSummarize'
 const KEY_AUTO_GENERATE_TITLE = 'salesos.settings.autoGenerateTitle'
 const KEY_EXCLUDED_APPS = 'salesos.settings.excludedApps'
 const KEY_SEEN_APPS = 'salesos.settings.seenApps'
+const KEY_AUTO_TRANSCRIBE_CALLS = 'salesos.settings.autoTranscribeCalls'
 
 function read(key: string): string | null {
   try {
@@ -93,4 +94,15 @@ export function addSeenApp(appName: string): void {
   const current = getSeenApps()
   if (!appName || current.includes(appName)) return
   write(KEY_SEEN_APPS, JSON.stringify([...current, appName].sort()))
+}
+
+// Default OFF: skips the "we noticed a call — want to transcribe it?" prompt
+// and starts listening immediately instead — a real capture-without-asking
+// behavior change, so it stays opt-in like auto-start-listening above.
+export function getAutoTranscribeCalls(): boolean {
+  return read(KEY_AUTO_TRANSCRIBE_CALLS) === 'true'
+}
+
+export function setAutoTranscribeCalls(value: boolean): void {
+  write(KEY_AUTO_TRANSCRIBE_CALLS, String(value))
 }

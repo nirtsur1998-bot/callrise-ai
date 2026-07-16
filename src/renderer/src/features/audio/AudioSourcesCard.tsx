@@ -1,5 +1,7 @@
 import { Mic, Volume2, RefreshCw, Headphones, AlertTriangle } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
+import { IconButton } from '@renderer/components/IconButton'
+import { fieldClass } from '@renderer/components/field'
 import { cn } from '@renderer/lib/cn'
 import { useAudioDevices } from './useAudioDevices'
 import { isMac, isWindows } from '@renderer/lib/platform'
@@ -18,14 +20,7 @@ export function AudioSourcesCard(): React.JSX.Element {
     <Card className="mb-5">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-medium">Audio sources</h3>
-        <button
-          type="button"
-          onClick={refresh}
-          title="Refresh devices"
-          className="grid h-7 w-7 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-ink"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-        </button>
+        <IconButton icon={RefreshCw} onClick={refresh} label="Refresh devices" />
       </div>
 
       {/* Microphone (input) — the one thing we control */}
@@ -35,7 +30,8 @@ export function AudioSourcesCard(): React.JSX.Element {
       <select
         value={selectedMicId}
         onChange={(e) => chooseMic(e.target.value)}
-        className="mt-1.5 w-full rounded-lg border border-line-soft bg-canvas px-3 py-2 text-sm text-ink outline-none transition focus:border-line"
+        aria-label="Microphone"
+        className={cn(fieldClass, 'mt-1.5')}
       >
         <option value="">System default</option>
         {mics.map((m) => (
@@ -52,9 +48,9 @@ export function AudioSourcesCard(): React.JSX.Element {
       <div className="mt-4 rounded-xl border border-line-soft bg-canvas p-3">
         <div className="flex items-center gap-2 text-[13px]">
           {onHeadphones ? (
-            <Headphones className="h-4 w-4 text-emerald-300" />
+            <Headphones className="h-4 w-4 text-positive" />
           ) : (
-            <Volume2 className="h-4 w-4 text-amber-300" />
+            <Volume2 className="h-4 w-4 text-warning" />
           )}
           <span className="text-muted">Call plays through</span>
           <span className="font-medium text-ink">{outputLabel ?? 'Unknown'}</span>
@@ -62,7 +58,7 @@ export function AudioSourcesCard(): React.JSX.Element {
         <p
           className={cn(
             'mt-1.5 flex items-start gap-1.5 text-[11px]',
-            onHeadphones ? 'text-faint' : 'text-amber-300'
+            onHeadphones ? 'text-faint' : 'text-warning'
           )}
         >
           {!onHeadphones && <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />}

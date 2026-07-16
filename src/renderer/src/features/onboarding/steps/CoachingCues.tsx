@@ -35,13 +35,16 @@ export function CoachingCues({ o }: { o: OnboardingState }): React.JSX.Element {
 
       <div className={cn('mt-3 transition', !o.cuesEnabled && 'pointer-events-none opacity-40')}>
         <p className="mb-2 text-[13px] font-medium text-muted">How often</p>
-        <div className="grid grid-cols-3 gap-2">
+        <div role="radiogroup" aria-label="Cue sensitivity" className="grid grid-cols-3 gap-2">
           {LEVELS.map((lvl) => {
             const selected = o.sensitivity === lvl.id
             return (
               <button
                 key={lvl.id}
                 type="button"
+                role="radio"
+                aria-checked={selected}
+                tabIndex={selected ? 0 : -1}
                 disabled={!o.cuesEnabled}
                 onClick={() => o.setSensitivity(lvl.id)}
                 className={cn(

@@ -11,24 +11,24 @@ export const ITEM_STYLES: Record<CalendarItemKind, { chip: string; block: string
     dot: 'bg-accent'
   },
   task: {
-    chip: 'bg-amber-500/15 text-amber-200',
-    block: 'border-l-2 border-amber-400 bg-amber-500/15 text-amber-100',
-    dot: 'bg-amber-400'
+    chip: 'bg-warning-soft text-warning',
+    block: 'border-l-2 border-warning bg-warning-soft text-warning',
+    dot: 'bg-warning'
   },
   call: {
-    chip: 'bg-sky-500/15 text-sky-200',
-    block: 'border-l-2 border-sky-400 bg-sky-500/15 text-sky-100',
-    dot: 'bg-sky-400'
+    chip: 'bg-track-call-soft text-track-call',
+    block: 'border-l-2 border-track-call bg-track-call-soft text-track-call',
+    dot: 'bg-track-call'
   },
   google: {
-    chip: 'bg-emerald-500/15 text-emerald-200',
-    block: 'border-l-2 border-emerald-400 bg-emerald-500/15 text-emerald-100',
-    dot: 'bg-emerald-400'
+    chip: 'bg-positive-soft text-positive',
+    block: 'border-l-2 border-positive bg-positive-soft text-positive',
+    dot: 'bg-positive'
   },
   outlook: {
-    chip: 'bg-blue-600/15 text-blue-300',
-    block: 'border-l-2 border-blue-500 bg-blue-600/15 text-blue-200',
-    dot: 'bg-blue-500'
+    chip: 'bg-track-outlook-soft text-track-outlook',
+    block: 'border-l-2 border-track-outlook bg-track-outlook-soft text-track-outlook',
+    dot: 'bg-track-outlook'
   }
 }
 
