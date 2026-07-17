@@ -23,7 +23,7 @@ win:
         - x64
         - arm64
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
+  artifactName: CallRise AI Windows.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
@@ -40,8 +40,10 @@ mac:
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
+  target:
+    - dmg
 dmg:
-  artifactName: ${name}-${version}-${arch}.${ext}
+  artifactName: CallRise AI Mac (${arch}).${ext}
 linux:
   target:
     - AppImage
