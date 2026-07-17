@@ -52,7 +52,12 @@ const api = {
     scanPastCallsForObjections: () => ipcRenderer.invoke('objections:scanPastCalls'),
     generateTitle: (callId: string) => ipcRenderer.invoke('calls:generateTitle', callId),
     setContact: (callId: string, contactId: string | null) =>
-      ipcRenderer.invoke('calls:setContact', callId, contactId)
+      ipcRenderer.invoke('calls:setContact', callId, contactId),
+    addBookmark: (callId: string, atMs: number, text: string) =>
+      ipcRenderer.invoke('calls:addBookmark', callId, atMs, text),
+    removeBookmark: (callId: string, bookmarkId: string) =>
+      ipcRenderer.invoke('calls:removeBookmark', callId, bookmarkId),
+    exportCoachingPdf: (callId: string) => ipcRenderer.invoke('coach:exportPdf', callId)
   },
   tasks: {
     list: () => ipcRenderer.invoke('tasks:list'),
@@ -65,7 +70,10 @@ const api = {
     list: () => ipcRenderer.invoke('contacts:list'),
     create: (input: unknown) => ipcRenderer.invoke('contacts:create', input),
     update: (id: string, patch: unknown) => ipcRenderer.invoke('contacts:update', id, patch),
-    delete: (id: string) => ipcRenderer.invoke('contacts:delete', id)
+    delete: (id: string) => ipcRenderer.invoke('contacts:delete', id),
+    addComment: (id: string, text: string) => ipcRenderer.invoke('contacts:addComment', id, text),
+    removeComment: (id: string, commentId: string) =>
+      ipcRenderer.invoke('contacts:removeComment', id, commentId)
   },
   deals: {
     list: () => ipcRenderer.invoke('deals:list'),
@@ -177,7 +185,8 @@ const api = {
     getActiveApp: () => ipcRenderer.invoke('app:getActiveApp'),
     getLastExternalApp: () => ipcRenderer.invoke('app:getLastExternalApp'),
     openAccessibilitySettings: () => ipcRenderer.invoke('app:openAccessibilitySettings'),
-    onCallDetected: (cb: (appName: string) => void) => subscribe('app:callDetected', cb)
+    onCallDetected: (cb: (appName: string) => void) => subscribe('app:callDetected', cb),
+    isPackaged: () => ipcRenderer.invoke('app:isPackaged')
   }
 }
 

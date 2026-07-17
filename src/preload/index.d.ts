@@ -371,6 +371,15 @@ export interface CallsApi {
   generateTitle: (callId: string) => Promise<{ ok: true; title: string } | { ok: false }>
   /** Link (contactId) or clear (null) the contact this call belongs to. */
   setContact: (callId: string, contactId: string | null) => Promise<Call | null>
+  /** Bookmark a moment mid-call ("clip this") — atMs from call start, plus the
+   *  transcript text at that point. */
+  addBookmark: (callId: string, atMs: number, text: string) => Promise<Call | null>
+  removeBookmark: (callId: string, bookmarkId: string) => Promise<Call | null>
+  /** Renders the call's coaching report as a PDF and prompts the user to save
+   *  it. Returns the saved path on success, or 'canceled'/'no-report'/'failed'. */
+  exportCoachingPdf: (
+    callId: string
+  ) => Promise<{ ok: true; path: string } | { ok: false; error: string }>
 }
 
 export interface TasksApi {
@@ -379,6 +388,15 @@ export interface TasksApi {
   update: (id: string, patch: TaskUpdateInput) => Promise<Task | null>
   delete: (id: string) => Promise<{ ok: boolean }>
   generateFromCall: (callId: string) => Promise<GenerateTasksResult>
+}
+
+/** A comment left on a contact — either the rep's own note, or an AI-drafted
+ *  one from a linked call (opt-in, Settings → CRM → "Auto-generate notes"). */
+export interface ContactComment {
+  id: string
+  text: string
+  createdAt: string
+  source: 'user' | 'ai'
 }
 
 export interface Contact {
@@ -401,6 +419,7 @@ export interface Contact {
   createdAt: string
   /** Last modification (create or edit); a future backup's "newest wins" key. */
   updatedAt: string
+  comments?: ContactComment[]
 }
 
 export interface ContactCreateInput {
@@ -434,6 +453,8 @@ export interface ContactsApi {
   /** `reason: 'has-deals'` = blocked because deals still reference this
    *  contact (delete or re-assign them first — mirrors stage removal). */
   delete: (id: string) => Promise<{ ok: boolean; reason?: 'has-deals' }>
+  addComment: (id: string, text: string) => Promise<Contact | null>
+  removeComment: (id: string, commentId: string) => Promise<Contact | null>
 }
 
 export type DealStageKind = 'open' | 'won' | 'lost'
@@ -891,6 +912,9 @@ export interface CrmSettings {
   /** A deal is flagged once its contact's last call is older than this many
    *  days (or there's never been a call at all). */
   staleAfterDays: number
+  /** Opt-in: when a call gets linked to a contact (and has a transcript),
+   *  send it to Claude for a short CRM note appended to that contact. */
+  autoGenerateNotes: boolean
 }
 
 export interface AppSettings {
@@ -960,6 +984,10 @@ export interface AppControlApi {
    *  heuristic, not a guarantee a call is actually happening. Payload is the
    *  detected app's display name. Returns an unsubscribe function. */
   onCallDetected: (cb: (appName: string) => void) => () => void
+  /** True for an installed/packaged build, false when running from source
+   *  via `npm run dev` — lets the renderer show the right "how to fix this"
+   *  instructions (relaunch the app vs. restart the dev server). */
+  isPackaged: () => Promise<boolean>
 }
 
 declare global {

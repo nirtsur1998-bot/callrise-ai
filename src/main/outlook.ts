@@ -219,7 +219,7 @@ function connect(scopes: string[], mode: SyncMode): Promise<ConnectResult> {
       }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       res.end(
-        '<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;background:#0b0d11;color:#e7e9ec;display:grid;place-items:center;height:100vh;margin:0"><p>You can close this tab and return to Sales OS.</p></body>'
+        '<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;background:#0b0d11;color:#e7e9ec;display:grid;place-items:center;height:100vh;margin:0"><p>You can close this tab and return to CallRise AI.</p></body>'
       )
       const err = url.searchParams.get('error')
       if (err) return finish({ ok: false, error: err })

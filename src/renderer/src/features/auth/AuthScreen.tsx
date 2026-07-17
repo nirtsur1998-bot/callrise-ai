@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { AudioLines, Loader2, AlertCircle, CheckCircle2, Eye, EyeOff } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { fieldClass } from '@renderer/components/field'
 import { IconButton } from '@renderer/components/IconButton'
+import { isMac } from '@renderer/lib/platform'
 
 type Mode = 'login' | 'signup' | 'confirm'
 
@@ -52,18 +53,44 @@ function InfoAlert({ message }: { message: string }): React.JSX.Element {
   )
 }
 
-/** Shown when the Supabase keys are missing from .env. */
+/** Shown when the Supabase keys are missing from .env. Wording adapts to
+ *  dev-vs-packaged (no `npm run dev` to restart in an installed app) and
+ *  points at the actual .env location a packaged build reads from, since
+ *  that's not a project folder the way it is in dev. */
 function NotConfigured(): React.JSX.Element {
+  const [packaged, setPackaged] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    window.api.app
+      .isPackaged()
+      .then(setPackaged)
+      .catch(() => setPackaged(null))
+  }, [])
+
+  const envLocation = isMac
+    ? '~/Library/Application Support/sales-os/.env'
+    : 'the app’s install folder (next to CallRiseAI.exe), as .env'
+
   return (
     <div className="rounded-xl border border-warning/30 bg-warning-soft p-4 text-sm text-warning">
       <p className="font-medium">Accounts aren’t set up yet</p>
       <p className="mt-1 text-warning/80">
         Add <code className="rounded bg-canvas px-1 py-0.5 text-warning">SUPABASE_URL</code> and{' '}
-        <code className="rounded bg-canvas px-1 py-0.5 text-warning">SUPABASE_ANON_KEY</code> to
-        your <code className="rounded bg-canvas px-1 py-0.5 text-warning">.env</code> file, then
-        fully restart the app (stop{' '}
-        <code className="rounded bg-canvas px-1 py-0.5 text-warning">npm run dev</code> and start it
-        again).
+        <code className="rounded bg-canvas px-1 py-0.5 text-warning">SUPABASE_ANON_KEY</code> to{' '}
+        {packaged ? (
+          <>
+            a <code className="rounded bg-canvas px-1 py-0.5 text-warning">.env</code> file at{' '}
+            <code className="rounded bg-canvas px-1 py-0.5 text-warning">{envLocation}</code>,
+            then quit and reopen the app.
+          </>
+        ) : (
+          <>
+            your <code className="rounded bg-canvas px-1 py-0.5 text-warning">.env</code> file,
+            then fully restart the app (stop{' '}
+            <code className="rounded bg-canvas px-1 py-0.5 text-warning">npm run dev</code> and
+            start it again).
+          </>
+        )}
       </p>
     </div>
   )

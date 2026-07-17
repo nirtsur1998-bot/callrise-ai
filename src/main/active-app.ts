@@ -90,6 +90,10 @@ export function registerActiveApp(): void {
   // auto-start exclusion check actually needs.
   ipcMain.handle('app:getLastExternalApp', (): string | null => lastExternalApp)
 
+  // Lets the renderer show the right "fix this" instructions — a packaged
+  // install has no `npm run dev` to restart, it just needs relaunching.
+  ipcMain.handle('app:isPackaged', (): boolean => app.isPackaged)
+
   // Deep-link to the permission active-win needs, mirroring the mic/screen-
   // recording settings links elsewhere in this app.
   ipcMain.handle('app:openAccessibilitySettings', async () => {
