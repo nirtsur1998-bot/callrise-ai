@@ -40,11 +40,16 @@ export async function writeJsonAtomic(path: string, value: unknown): Promise<voi
       await tmpHandle.close()
     }
     await fs.rename(tmp, path)
-    const dirHandle = await fs.open(dirname(path), 'r')
-    try {
-      await dirHandle.sync() // flush the directory entry so the rename survives power loss
-    } finally {
-      await dirHandle.close()
+    // Windows can't open a directory as a file handle (unlike macOS/Linux),
+    // so this extra directory-fsync is POSIX-only; NTFS's own journaling
+    // already makes the rename durable there without it.
+    if (process.platform !== 'win32') {
+      const dirHandle = await fs.open(dirname(path), 'r')
+      try {
+        await dirHandle.sync() // flush the directory entry so the rename survives power loss
+      } finally {
+        await dirHandle.close()
+      }
     }
   } catch (err) {
     await fs.unlink(tmp).catch(() => {}) // never leave a partial temp behind
@@ -71,11 +76,13 @@ export function writeJsonAtomicSync(path: string, value: unknown): void {
       closeSync(fd)
     }
     renameSync(tmp, path)
-    fd = openSync(dirname(path), 'r')
-    try {
-      fsyncSync(fd)
-    } finally {
-      closeSync(fd)
+    if (process.platform !== 'win32') {
+      fd = openSync(dirname(path), 'r')
+      try {
+        fsyncSync(fd)
+      } finally {
+        closeSync(fd)
+      }
     }
   } catch (err) {
     try {
