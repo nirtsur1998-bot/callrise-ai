@@ -28,6 +28,17 @@ export interface ConsentRecord {
   decidedAt?: string
 }
 
+/** A moment the rep bookmarked mid-call ("clip this") — a timestamp + the
+ *  transcript text at that point, so it's findable later without re-reading
+ *  the whole call. */
+export interface Bookmark {
+  id: string
+  /** Milliseconds from the start of the call. */
+  atMs: number
+  text: string
+  createdAt: string
+}
+
 export type AttachmentExt = 'pdf' | 'txt' | 'md' | 'docx'
 
 export interface Attachment {
@@ -64,6 +75,7 @@ export interface Call extends CallBase {
   attachments?: Attachment[]
   coaching?: CoachingReport
   consent?: ConsentRecord
+  bookmarks?: Bookmark[]
 }
 
 export type SummaryResult =

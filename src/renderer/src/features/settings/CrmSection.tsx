@@ -230,6 +230,21 @@ export function CrmSection(): React.JSX.Element {
           <p className="mt-2 text-[11px] text-faint">Only applies to open (not Won/Lost) deals.</p>
         </div>
       </Card>
+
+      <Card className="mb-5">
+        <SettingRow
+          title="Auto-generate notes"
+          description="When a call gets linked to a contact (and has a transcript or summary), send it to Claude for a short CRM note appended to that contact — a couple of sentences on what was discussed and where things stand. You'll always see it's AI-drafted, and can delete it any time."
+          control={
+            <ToggleSwitch
+              checked={crm.autoGenerateNotes}
+              disabled={loading}
+              onChange={(v) => setCrm({ autoGenerateNotes: v })}
+              label="Auto-generate notes"
+            />
+          }
+        />
+      </Card>
     </>
   )
 }

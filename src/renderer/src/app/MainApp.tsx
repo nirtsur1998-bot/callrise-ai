@@ -17,6 +17,7 @@ import { CoachingView } from '@renderer/features/coaching/CoachingView'
 import { AnalyticsView } from '@renderer/features/analytics/AnalyticsView'
 import { SettingsShell } from '@renderer/features/settings/SettingsShell'
 import { KnowledgeView } from '@renderer/features/knowledge/KnowledgeView'
+import { TeamView } from '@renderer/features/team/TeamView'
 import { PlaceholderView } from '@renderer/components/PlaceholderView'
 import { NAV_ITEMS, type NavId } from '@renderer/features/navigation/nav-items'
 import type { AuthUser } from '@renderer/features/auth/types'
@@ -218,6 +219,8 @@ export function MainApp({
           <AnalyticsView />
         ) : active === 'knowledge' ? (
           <KnowledgeView />
+        ) : active === 'team' ? (
+          <TeamView />
         ) : (
           <PlaceholderView title={activeItem.label} icon={activeItem.icon} onNavigate={setActive} />
         )}

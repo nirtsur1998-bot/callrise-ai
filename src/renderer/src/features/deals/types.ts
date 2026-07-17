@@ -34,6 +34,11 @@ export type AssessDealRiskResult =
   | { ok: true; assessment: DealRiskAssessment }
   | { ok: false; error: 'no-key' | 'failed'; message?: string }
 
+export interface DealStageChange {
+  stageId: string
+  changedAt: string
+}
+
 export interface Deal {
   id: string
   title: string
@@ -45,4 +50,9 @@ export interface Deal {
   createdAt: string
   updatedAt: string
   riskAssessment?: DealRiskAssessment
+  /** Every past stage transition, oldest first — the deal's CURRENT stage
+   *  (stageId, above) is not duplicated as the last entry; this is history
+   *  only. Absent/empty on deals that haven't changed stage since this field
+   *  was added. */
+  stageHistory?: DealStageChange[]
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Building2,
   CalendarClock,
@@ -17,6 +17,7 @@ import { useContactCallHistory } from '@renderer/features/contacts/useContactCal
 import { CallHistoryList } from '@renderer/features/contacts/CallHistoryList'
 import { formatRelative } from '@renderer/features/contacts/contactStats'
 import type { Contact } from '@renderer/features/contacts/types'
+import { recordRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import { formatValue, formatCloseDate } from './format'
 import { isDealStale, createFollowUpTask } from './staleness'
 import { RiskAssessmentCard } from './RiskAssessmentCard'
@@ -50,6 +51,10 @@ export function DealDetail({
   const { loading, linked } = useContactCallHistory(deal.contactId)
   const [creatingTask, setCreatingTask] = useState(false)
   const [taskCreated, setTaskCreated] = useState(false)
+
+  useEffect(() => {
+    recordRecentlyViewed('deal', deal.id, deal.title)
+  }, [deal.id, deal.title])
 
   const value = formatValue(deal.value)
   const closeDate = formatCloseDate(deal.expectedCloseDate)
@@ -107,7 +112,7 @@ export function DealDetail({
             <Building2 className="h-3.5 w-3.5" /> {contact?.name ?? 'Unknown contact'}
             {contact?.company ? ` · ${contact.company}` : ''}
           </span>
-          {value && <span className="font-medium text-ink">{value}</span>}
+          {value && <span className="font-medium tabular-nums text-ink">{value}</span>}
           {closeDate && (
             <span className="flex items-center gap-1.5">
               <CalendarClock className="h-3.5 w-3.5" /> Closes {closeDate}

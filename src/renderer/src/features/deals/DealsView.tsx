@@ -243,7 +243,7 @@ export function DealsView({
         </p>
       ) : (
         <ul className="space-y-2.5">
-          {visible.map((deal) => {
+          {visible.map((deal, index) => {
             const contact = contactById.get(deal.contactId)
             const stats = contactStats.get(deal.contactId)
             const stale = isDealStale(
@@ -257,6 +257,7 @@ export function DealsView({
               <DealRow
                 key={deal.id}
                 deal={deal}
+                index={index}
                 contactName={contact?.name ?? 'Unknown contact'}
                 contactCompany={contact?.company}
                 stageLabel={stageLabel.get(deal.stageId)?.label ?? '—'}
@@ -338,6 +339,7 @@ function FilterChip({
 
 interface DealRowProps {
   deal: Deal
+  index: number
   contactName: string
   contactCompany: string | undefined
   stageLabel: string
@@ -350,6 +352,7 @@ interface DealRowProps {
 
 function DealRow({
   deal,
+  index,
   contactName,
   contactCompany,
   stageLabel,
@@ -364,7 +367,7 @@ function DealRow({
   const tone = recencyTone(lastCallAt)
 
   return (
-    <li>
+    <li className="stagger-item" style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}>
       <div className="group flex items-start gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3.5 transition hover:border-line hover:bg-elevated">
         <button type="button" onClick={onView} className="min-w-0 flex-1 text-left">
           <div className="flex items-baseline justify-between gap-3">
@@ -391,7 +394,7 @@ function DealRow({
               <Building2 className="h-3 w-3" /> {contactName}
               {contactCompany ? ` · ${contactCompany}` : ''}
             </span>
-            {value && <span className="font-medium text-ink">{value}</span>}
+            {value && <span className="font-medium tabular-nums text-ink">{value}</span>}
             {closeDate && (
               <span className="flex items-center gap-1">
                 <CalendarClock className="h-3 w-3" /> Closes {closeDate}

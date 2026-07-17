@@ -1,9 +1,33 @@
-import { AudioLines, LogOut, Search } from 'lucide-react'
+import { AudioLines, Building2, Contact, LogOut, PhoneCall, Search } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { isMac } from '@renderer/lib/platform'
 import { IconButton } from '@renderer/components/IconButton'
+import { useRecentlyViewed } from '@renderer/lib/useRecentlyViewed'
+import type { RecentKind } from '@renderer/lib/recentlyViewed'
 import { NAV_ITEMS, type NavId } from './nav-items'
 import type { AuthUser } from '@renderer/features/auth/types'
+
+/** Number of "recently viewed" rows shown in the sidebar trail. */
+const MAX_RECENT_ROWS = 5
+
+/** Icon per recent-item kind — matches the icon already established for
+ *  that kind elsewhere in the app (Live Calls' PhoneCall, the CRM nav
+ *  item's Contact, and Building2 used throughout the deals feature). */
+const RECENT_KIND_ICON = {
+  call: PhoneCall,
+  contact: Contact,
+  deal: Building2
+} as const satisfies Record<RecentKind, typeof PhoneCall>
+
+/** The screen a recent item's kind lives on. `onSelect` only takes a
+ *  screen-level NavId, so clicking a recent contact/deal opens the CRM
+ *  screen (not the specific record — see Sidebar's recent-section comment
+ *  for why). */
+const RECENT_KIND_SCREEN: Record<RecentKind, NavId> = {
+  call: 'past-calls',
+  contact: 'crm',
+  deal: 'crm'
+}
 
 interface SidebarProps {
   active: NavId
@@ -23,6 +47,8 @@ export function Sidebar({
 }: SidebarProps): React.JSX.Element {
   const displayName = user.name?.trim() || user.email.split('@')[0]
   const initial = (user.name?.trim()?.[0] ?? user.email[0] ?? '?').toUpperCase()
+
+  const recentItems = useRecentlyViewed().slice(0, MAX_RECENT_ROWS)
 
   // Settings is pinned above the footer, not part of the scrolling list.
   const settingsItem = NAV_ITEMS.find((item) => item.id === 'settings')
@@ -115,6 +141,40 @@ export function Sidebar({
               <ul className="space-y-0.5">{group.items.map(renderNavButton)}</ul>
             </li>
           ))}
+
+          {/* Recent — a trail of the last few calls/contacts/deals opened
+              elsewhere in the app (lib/recentlyViewed.ts).
+              Only rendered once something's been visited. `onSelect` is
+              screen-level only, so a recent contact/deal opens the CRM
+              screen (defaulting to its Contacts tab) rather than the exact
+              record — true deep-linking would need CrmView/MainApp to
+              accept an initial record id from the sidebar, which is outside
+              this component's scope. */}
+          {recentItems.length > 0 && (
+            <li>
+              <p className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-faint uppercase">
+                Recent
+              </p>
+              <ul className="space-y-0.5">
+                {recentItems.map((item) => {
+                  const Icon = RECENT_KIND_ICON[item.kind]
+                  return (
+                    <li key={`${item.kind}-${item.id}`}>
+                      <button
+                        type="button"
+                        onClick={() => onSelect(RECENT_KIND_SCREEN[item.kind])}
+                        title={item.label}
+                        className="press no-drag flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-[12px] text-muted transition-colors hover:bg-elevated hover:text-ink"
+                      >
+                        <Icon className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
+                        <span className="truncate">{item.label}</span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </li>
+          )}
         </ul>
       </nav>
 

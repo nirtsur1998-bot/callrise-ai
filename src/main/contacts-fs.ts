@@ -3,6 +3,15 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from './atomic-write'
 
+/** A comment left on a contact — either the rep's own note, or an AI-drafted
+ *  one from a linked call (opt-in, see CrmSettings.autoGenerateNotes). */
+export interface ContactComment {
+  id: string
+  text: string
+  createdAt: string
+  source: 'user' | 'ai'
+}
+
 /** A saved contact (what's stored on disk: one JSON file per contact). */
 export interface Contact {
   id: string
@@ -30,6 +39,7 @@ export interface Contact {
   /** Tombstone: a deleted contact is kept (not erased) so the deletion can
    *  propagate to a future cloud backup. Hidden from every normal listing. */
   deleted?: boolean
+  comments?: ContactComment[]
 }
 
 /** Fields the renderer may send when creating a contact. */
@@ -314,6 +324,56 @@ async function deleteContactUnlocked(dir: string, id: string): Promise<{ ok: boo
     return { ok: false }
   }
   return { ok: true }
+}
+
+const MAX_COMMENT = 2000
+
+/** Leave a comment on a contact — either the rep's own note (source 'user')
+ *  or an AI-drafted one from a linked call (source 'ai', see
+ *  CrmSettings.autoGenerateNotes). */
+export function addComment(
+  dir: string,
+  id: string,
+  text: unknown,
+  source: 'user' | 'ai' = 'user'
+): Promise<Contact | null> {
+  if (!isSafeId(id)) return Promise.resolve(null)
+  return withContactLock(id, async () => {
+    const contact = await getContact(dir, id)
+    if (!contact) return null
+    const clean = sanitizeMultilineText(text, MAX_COMMENT)
+    if (!clean) return contact // nothing to add
+    const comment: ContactComment = {
+      id: randomUUID(),
+      text: clean,
+      createdAt: new Date().toISOString(),
+      source
+    }
+    contact.comments = [...(contact.comments ?? []), comment]
+    contact.updatedAt = new Date().toISOString()
+    try {
+      await writeContact(dir, contact)
+    } catch {
+      return null
+    }
+    return contact
+  })
+}
+
+export function removeComment(dir: string, id: string, commentId: string): Promise<Contact | null> {
+  if (!isSafeId(id)) return Promise.resolve(null)
+  return withContactLock(id, async () => {
+    const contact = await getContact(dir, id)
+    if (!contact) return null
+    contact.comments = (contact.comments ?? []).filter((c) => c.id !== commentId)
+    contact.updatedAt = new Date().toISOString()
+    try {
+      await writeContact(dir, contact)
+    } catch {
+      return null
+    }
+    return contact
+  })
 }
 
 /**

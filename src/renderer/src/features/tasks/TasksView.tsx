@@ -133,33 +133,44 @@ export function TasksView(): React.JSX.Element {
           description={filter === 'open' ? 'No open tasks right now.' : 'No completed tasks yet.'}
         />
       ) : filter === 'open' ? (
-        <ul className="space-y-2.5">
-          {bucketOpenTasks(visible).map(({ bucket, tasks: bucketTasks }) => (
-            <li key={bucket}>
-              <div className="mb-1.5 flex items-center gap-2 px-1 text-[11px] font-medium tracking-wide text-faint uppercase">
-                {BUCKET_LABEL[bucket]}
-                <span className="text-faint/70">{bucketTasks.length}</span>
-              </div>
-              <ul className="space-y-2.5">
-                {bucketTasks.map((task) => (
-                  <TaskRow
-                    key={task.id}
-                    task={task}
-                    onToggle={() => void toggle(task)}
-                    onEdit={() => setEditing(task)}
-                    onDelete={() => deleteTask(task)}
-                  />
-                ))}
-              </ul>
-            </li>
-          ))}
-        </ul>
+        (() => {
+          let rowIndex = 0
+          return (
+            <ul className="space-y-2.5">
+              {bucketOpenTasks(visible).map(({ bucket, tasks: bucketTasks }) => (
+                <li key={bucket}>
+                  <div className="mb-1.5 flex items-center gap-2 px-1 text-[11px] font-medium tracking-wide text-faint uppercase">
+                    {BUCKET_LABEL[bucket]}
+                    <span className="text-faint/70">{bucketTasks.length}</span>
+                  </div>
+                  <ul className="space-y-2.5">
+                    {bucketTasks.map((task) => {
+                      const index = rowIndex
+                      rowIndex += 1
+                      return (
+                        <TaskRow
+                          key={task.id}
+                          task={task}
+                          index={index}
+                          onToggle={() => void toggle(task)}
+                          onEdit={() => setEditing(task)}
+                          onDelete={() => deleteTask(task)}
+                        />
+                      )
+                    })}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          )
+        })()
       ) : (
         <ul className="space-y-2.5">
-          {visible.map((task) => (
+          {visible.map((task, index) => (
             <TaskRow
               key={task.id}
               task={task}
+              index={index}
               onToggle={() => void toggle(task)}
               onEdit={() => setEditing(task)}
               onDelete={() => deleteTask(task)}
@@ -193,12 +204,13 @@ export function TasksView(): React.JSX.Element {
 
 interface TaskRowProps {
   task: Task
+  index: number
   onToggle: () => void
   onEdit: () => void
   onDelete: () => void
 }
 
-function TaskRow({ task, onToggle, onEdit, onDelete }: TaskRowProps): React.JSX.Element {
+function TaskRow({ task, index, onToggle, onEdit, onDelete }: TaskRowProps): React.JSX.Element {
   const done = task.status === 'done'
   const typeMeta = TASK_TYPE_META[task.type]
   const TypeIcon = typeMeta.icon
@@ -214,7 +226,7 @@ function TaskRow({ task, onToggle, onEdit, onDelete }: TaskRowProps): React.JSX.
     : 'neutral'
 
   return (
-    <li>
+    <li className="stagger-item" style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}>
       <div
         className={cn(
           'group flex items-start gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3.5 transition hover:border-line hover:bg-elevated',

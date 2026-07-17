@@ -25,6 +25,11 @@ export interface CrmSettings {
   /** A deal is flagged once its contact's last call is older than this many
    *  days (or there's never been a call at all). */
   staleAfterDays: number
+  /** Opt-in: when a call gets linked to a contact (and has a transcript),
+   *  send it to Claude for a short CRM note appended to that contact —
+   *  same "sends data to Claude automatically" cost/privacy tradeoff as
+   *  auto-summarize, so default OFF. */
+  autoGenerateNotes: boolean
 }
 
 export const EMPTY_CRM_SETTINGS: CrmSettings = {
@@ -36,7 +41,8 @@ export const EMPTY_CRM_SETTINGS: CrmSettings = {
   cidPrefix: 'CUST-',
   cidNextNumber: 1,
   staleFollowUpEnabled: true,
-  staleAfterDays: 14
+  staleAfterDays: 14,
+  autoGenerateNotes: false
 }
 
 const SENSITIVITIES = new Set<MatchSensitivity>(['tight', 'normal', 'loose'])
@@ -83,7 +89,8 @@ export function sanitizeCrmSettings(value: unknown): CrmSettings {
     cidPrefix: sanitizePrefix(v.cidPrefix),
     cidNextNumber: sanitizeNextNumber(v.cidNextNumber),
     staleFollowUpEnabled: v.staleFollowUpEnabled !== false, // default true
-    staleAfterDays: sanitizeStaleDays(v.staleAfterDays)
+    staleAfterDays: sanitizeStaleDays(v.staleAfterDays),
+    autoGenerateNotes: v.autoGenerateNotes === true // default false
   }
 }
 
@@ -107,7 +114,9 @@ export function mergeCrmSettings(current: CrmSettings, patch: unknown): CrmSetti
     staleFollowUpEnabled:
       'staleFollowUpEnabled' in p ? p.staleFollowUpEnabled !== false : current.staleFollowUpEnabled,
     staleAfterDays:
-      'staleAfterDays' in p ? sanitizeStaleDays(p.staleAfterDays) : current.staleAfterDays
+      'staleAfterDays' in p ? sanitizeStaleDays(p.staleAfterDays) : current.staleAfterDays,
+    autoGenerateNotes:
+      'autoGenerateNotes' in p ? p.autoGenerateNotes === true : current.autoGenerateNotes
   }
 }
 

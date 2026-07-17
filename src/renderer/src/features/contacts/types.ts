@@ -2,6 +2,15 @@
 // bridge (see src/preload/index.d.ts); kept local so the feature is
 // self-contained, matching the tasks/calls convention.
 
+/** A comment left on a contact — either the rep's own note, or an AI-drafted
+ *  one from a linked call (opt-in, Settings → CRM → "Auto-generate notes"). */
+export interface ContactComment {
+  id: string
+  text: string
+  createdAt: string
+  source: 'user' | 'ai'
+}
+
 export interface Contact {
   id: string
   name: string
@@ -15,4 +24,5 @@ export interface Contact {
   notes?: string
   createdAt: string
   updatedAt: string
+  comments?: ContactComment[]
 }

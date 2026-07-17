@@ -74,10 +74,11 @@ export function KnowledgeView(): React.JSX.Element {
         <EmptyCategory category={category} onAdd={() => setAdding(true)} />
       ) : (
         <ul className="space-y-2.5">
-          {visible.map((entry) => (
+          {visible.map((entry, index) => (
             <EntryRow
               key={entry.id}
               entry={entry}
+              index={index}
               onEdit={() => setEditing(entry)}
               onDelete={() => void remove(entry.id)}
             />
@@ -112,15 +113,16 @@ export function KnowledgeView(): React.JSX.Element {
 
 interface EntryRowProps {
   entry: KnowledgeEntry
+  index: number
   onEdit: () => void
   onDelete: () => void
 }
 
-function EntryRow({ entry, onEdit, onDelete }: EntryRowProps): React.JSX.Element {
+function EntryRow({ entry, index, onEdit, onDelete }: EntryRowProps): React.JSX.Element {
   const [confirm, setConfirm] = useState(false)
 
   return (
-    <li>
+    <li className="stagger-item" style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}>
       <div className="group flex items-start gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3.5 transition hover:border-line hover:bg-elevated">
         <div className="min-w-0 flex-1">
           {entry.category === 'objection' ? (

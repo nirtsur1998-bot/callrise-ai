@@ -50,7 +50,19 @@ export function EventDialog({
   const { stages } = useDealStages()
 
   const set = (patch: Partial<EventDraft>): void => setDraft((d) => ({ ...d, ...patch }))
-  const canSave = draft.title.trim().length > 0 && !busy
+
+  // Same-day events can still be backwards (e.g. Start 3:00 PM / End 9:00 AM)
+  // even though start/end dates are already clamped so the end date never
+  // precedes the start date. All-day events don't carry meaningful times, so
+  // skip this check for those.
+  const timeError = useMemo(() => {
+    if (draft.allDay) return null
+    if (draft.startDate !== draft.endDate) return null
+    if (!draft.startTime || !draft.endTime) return null
+    return draft.endTime <= draft.startTime ? 'End time must be after start time.' : null
+  }, [draft.allDay, draft.startDate, draft.endDate, draft.startTime, draft.endTime])
+
+  const canSave = draft.title.trim().length > 0 && !busy && !timeError
 
   // Only the linked contact's OPEN deals make sense to tie a meeting to.
   const openStageIds = useMemo(
@@ -171,6 +183,7 @@ export function EventDialog({
             </Field>
           </div>
         )}
+        {!draft.allDay && timeError && <p className="text-[12px] text-danger">{timeError}</p>}
         <Field label="Notes (optional)">
           <textarea
             value={draft.notes}

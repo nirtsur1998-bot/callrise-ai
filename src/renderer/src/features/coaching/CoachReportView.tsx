@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Award,
   Wrench,
@@ -8,12 +8,17 @@ import {
   ListPlus,
   Check,
   Sparkles,
-  Trophy
+  Trophy,
+  TrendingUp,
+  FileDown,
+  Loader2
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { ScoreGauge } from '@renderer/components/ScoreGauge'
 import { Skeleton } from '@renderer/components/Skeleton'
 import { Badge } from '@renderer/components/Badge'
+import { Button } from '@renderer/components/Button'
+import { useToast } from '@renderer/features/notifications/useToast'
 import type { CoachingReport, CoachDimension, CoachEvidence } from './types'
 import {
   DIMENSION_ORDER,
@@ -44,9 +49,84 @@ export function CoachReportView({
   const dims = DIMENSION_ORDER.map((k) => report.dimensions.find((d) => d.key === k)).filter(
     (d): d is CoachDimension => Boolean(d)
   )
+  const toast = useToast()
+  const [exporting, setExporting] = useState(false)
+  // A personalized "earned" milestone: how much this call improved on the
+  // rep's own immediately-preceding coached call with the SAME contact (not
+  // an average, not an absolute threshold). Client-side only, over data the
+  // call list already carries (contactId/hasCoaching/coachScore/createdAt) —
+  // no new IPC, no new storage. Stays null (renders nothing) while loading,
+  // if this call isn't linked to a contact, if there's no prior coached call
+  // for that contact, or if the trend isn't an improvement.
+  const [scoreDelta, setScoreDelta] = useState<number | null>(null)
+
+  useEffect(() => {
+    let active = true
+    // Reset for the newly-scored call before the async fetch resolves,
+    // matching the pattern used by useContactCallHistory.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setScoreDelta(null)
+    void (async () => {
+      try {
+        const summaries = await window.api.calls.list()
+        const current = summaries.find((c) => c.id === callId)
+        if (!current?.contactId) return
+        const previous = summaries
+          .filter(
+            (c) =>
+              c.id !== callId &&
+              c.contactId === current.contactId &&
+              c.hasCoaching &&
+              typeof c.coachScore === 'number' &&
+              c.createdAt < current.createdAt
+          )
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+        if (!previous || typeof previous.coachScore !== 'number') return
+        const delta = report.overallScore - previous.coachScore
+        if (!active) return
+        if (delta > 0) setScoreDelta(delta)
+      } catch {
+        /* no milestone badge is fine — this is a bonus, not the main render */
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [callId, report.overallScore])
+
+  const exportPdf = async (): Promise<void> => {
+    setExporting(true)
+    try {
+      const result = await window.api.calls.exportCoachingPdf(callId)
+      if (result.ok) {
+        toast.success('Coaching report saved as PDF')
+      } else if (result.error !== 'canceled') {
+        toast.error('Could not export the PDF. Please try again.')
+      }
+    } catch {
+      toast.error('Could not export the PDF. Please try again.')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   return (
     <div className="space-y-4">
+      {/* Toolbar */}
+      <div className="flex justify-end">
+        <Button variant="secondary" size="sm" onClick={() => void exportPdf()} disabled={exporting}>
+          {exporting ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Exporting…
+            </>
+          ) : (
+            <>
+              <FileDown className="h-3.5 w-3.5" /> Export PDF
+            </>
+          )}
+        </Button>
+      </div>
+
       {/* Overall + deal context */}
       <div
         className={cn(
@@ -61,6 +141,11 @@ export function CoachReportView({
             {report.overallScore >= 85 && (
               <Badge tone="positive" icon={Trophy}>
                 Great call
+              </Badge>
+            )}
+            {scoreDelta !== null && (
+              <Badge tone="positive" icon={TrendingUp}>
+                +{scoreDelta} pts since your last call with this contact
               </Badge>
             )}
           </div>

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { Mic, Square, Pause, Play, AlertTriangle, MicOff, Loader2 } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Mic, Square, Pause, Play, AlertTriangle, MicOff, Loader2, Bookmark } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { isMac } from '@renderer/lib/platform'
 import { IconButton } from '@renderer/components/IconButton'
@@ -7,6 +7,7 @@ import { Button } from '@renderer/components/Button'
 import type { ConsentMethod } from '@renderer/features/calls/types'
 import { useTranscription } from './useTranscription'
 import { useLiveCues } from './useLiveCues'
+import { useLiveClips } from './useLiveClips'
 import { useCueSettings } from './useCueSettings'
 import { useConsent } from '@renderer/features/consent/useConsent'
 import { useAutoStartListening } from '@renderer/features/settings/useAutoStartListening'
@@ -20,6 +21,7 @@ import { TranscriptView } from './components/TranscriptView'
 import { CueCard } from './components/CueCard'
 import { CueControls } from './components/CueControls'
 import { AskCoach } from './components/AskCoach'
+import { EngagementGauge } from './components/EngagementGauge'
 import {
   IdleHero,
   CenteredState,
@@ -56,6 +58,21 @@ export function LiveView({
   const consent = useConsent()
   const [consentOpen, setConsentOpen] = useState(false)
 
+  // "Clip this" — a local, in-memory clip buffer (no callId exists yet for a
+  // live-in-progress call). Flushed to real bookmarks once the call is saved.
+  const clips = useLiveClips()
+
+  // Wrap the parent's onSaved so every clip captured this call is flushed to
+  // window.api.calls.addBookmark against the now-real callId, fire-and-forget,
+  // before handing off to whatever the parent wants to do with the saved id.
+  const handleSaved = useCallback(
+    (callId: string) => {
+      clips.flush(callId)
+      onSaved?.(callId)
+    },
+    [clips, onSaved]
+  )
+
   const {
     status,
     segments,
@@ -71,13 +88,33 @@ export function LiveView({
     togglePause,
     enableOtherParty,
     disableOtherParty
-  } = useTranscription(consent.recordRef, consent.reset, onSaved)
+  } = useTranscription(consent.recordRef, consent.reset, handleSaved)
+
+  // Elapsed-time clock for clips: no callId (or playback position) exists yet
+  // for a live call, so track wall-clock elapsed-since-start locally instead.
+  // Resets whenever the call goes back to idle; starts on the first non-idle
+  // status of a fresh session (also clears any clips left from a prior call).
+  const callStartRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (status === 'idle') {
+      callStartRef.current = null
+    } else if (callStartRef.current === null) {
+      callStartRef.current = Date.now()
+      clips.reset()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- clips' identity is stable (useCallback-memoized); only `status` should retrigger this
+  }, [status])
+
+  const handleClip = useCallback(() => {
+    const elapsed = callStartRef.current !== null ? Date.now() - callStartRef.current : 0
+    clips.captureClip(elapsed, segments, interimText)
+  }, [clips, segments, interimText])
 
   // Live coaching cues (hooks must run before any early return).
   const { enabled, setEnabled, sensitivity, setSensitivity } = useCueSettings()
   // When buyer capture is live, the rep is channel 0 — tell the cues so they
   // don't have to guess who the rep is.
-  const { cue, dismiss, repSpeaker } = useLiveCues(
+  const { cue, dismiss, repSpeaker, engagementScore } = useLiveCues(
     status === 'listening',
     enabled,
     sensitivity,
@@ -255,6 +292,9 @@ export function LiveView({
             sensitivity={sensitivity}
             onSensitivity={setSensitivity}
           />
+          {status === 'listening' && engagementScore !== null && (
+            <EngagementGauge score={engagementScore} />
+          )}
           <StatusBadge status={status} />
           <div className="flex min-w-[70px] items-center gap-1.5 text-[13px]">
             {latencyMs !== null && (status === 'listening' || status === 'paused') && (
@@ -386,6 +426,21 @@ export function LiveView({
           paused={status === 'paused'}
         />
         {cue && <CueCard key={cue.id} cue={cue} onDismiss={dismiss} />}
+        {(status === 'listening' || status === 'paused') && hasTranscript && (
+          <div className="pointer-events-none absolute right-3 top-3 flex items-center gap-2">
+            {clips.justClipped && (
+              <span className="rounded-lg bg-accent-soft px-2 py-1 text-xs font-medium text-accent">
+                Clipped
+              </span>
+            )}
+            <IconButton
+              icon={Bookmark}
+              label="Clip this moment"
+              onClick={handleClip}
+              className="no-drag pointer-events-auto border border-line-soft bg-surface/90 backdrop-blur"
+            />
+          </div>
+        )}
       </div>
 
       <AskCoach segments={segments} interimText={interimText} />

@@ -28,6 +28,10 @@ export interface Deal {
   /** Tombstone: a deleted deal is kept (not erased) so the deletion can
    *  propagate to a future cloud backup. Hidden from every normal listing. */
   deleted?: boolean
+  /** Every past stage transition, oldest first (current stageId isn't
+   *  duplicated as the last entry) — powers the contact-timeline feature.
+   *  Absent/empty on deals that haven't changed stage since this was added. */
+  stageHistory?: { stageId: string; changedAt: string }[]
 }
 
 export interface DealCreateInput {
@@ -344,7 +348,13 @@ async function updateDealUnlocked(
     if (next) deal.title = next // never blank out the title
   }
   if ('contactId' in patch && isSafeId(patch.contactId)) deal.contactId = patch.contactId
-  if ('stageId' in patch && isSafeId(patch.stageId)) deal.stageId = patch.stageId
+  if ('stageId' in patch && isSafeId(patch.stageId) && patch.stageId !== deal.stageId) {
+    deal.stageHistory = [
+      ...(deal.stageHistory ?? []),
+      { stageId: deal.stageId, changedAt: new Date().toISOString() }
+    ]
+    deal.stageId = patch.stageId
+  }
   if ('value' in patch) deal.value = sanitizeValue(patch.value)
   if ('expectedCloseDate' in patch)
     deal.expectedCloseDate = sanitizeDateOnly(patch.expectedCloseDate)

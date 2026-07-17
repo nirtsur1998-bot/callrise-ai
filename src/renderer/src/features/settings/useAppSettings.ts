@@ -30,7 +30,8 @@ const DEFAULT_SETTINGS: AppSettings = {
     cidPrefix: 'CUST-',
     cidNextNumber: 1,
     staleFollowUpEnabled: true,
-    staleAfterDays: 14
+    staleAfterDays: 14,
+    autoGenerateNotes: false
   },
   objectionMining: { enabled: false }
 }

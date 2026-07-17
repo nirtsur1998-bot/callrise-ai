@@ -113,7 +113,9 @@ export function PastCallsView({
                     className="min-w-0 flex-1 text-left"
                   >
                     <div className="flex items-center gap-2">
-                      <p className="truncate font-medium">{call.title}</p>
+                      <p className="truncate font-medium" title={call.title}>
+                        {call.title}
+                      </p>
                       {call.hasCoaching && call.coachScore !== undefined && (
                         <Badge tone={TONE_TO_BADGE[overallTier(call.coachScore).tone]}>
                           <span className="tabular-nums">{call.coachScore}</span>

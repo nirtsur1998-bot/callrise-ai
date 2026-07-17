@@ -18,6 +18,18 @@ const GROUPS: ShortcutGroup[] = [
     shortcuts: [{ label: 'Jump to a screen', keys: '⌘K' }]
   },
   {
+    title: 'Command palette',
+    shortcuts: [
+      { label: 'Navigate results', keys: '↑↓' },
+      { label: 'Open selection', keys: '↵' },
+      { label: 'Close', keys: 'Esc' }
+    ]
+  },
+  {
+    title: 'Anywhere',
+    shortcuts: [{ label: 'Close any dialog', keys: 'Esc' }]
+  },
+  {
     title: 'Help',
     shortcuts: [{ label: 'Show keyboard shortcuts', keys: '?' }]
   }

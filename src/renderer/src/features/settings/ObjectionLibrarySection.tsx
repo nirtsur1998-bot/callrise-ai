@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { Card } from '@renderer/components/Card'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
+import { ObjectionHeatmap } from '@renderer/features/objection-library/ObjectionHeatmap'
 import { ReviewQueueView } from '@renderer/features/objection-library/ReviewQueueView'
 import { ScanPastCallsCard } from '@renderer/features/objection-library/ScanPastCallsCard'
 import { useAppSettings } from './useAppSettings'
@@ -49,6 +50,14 @@ export function ObjectionLibrarySection(): React.JSX.Element {
           only runs when you click the button, never automatically.
         </p>
         <ScanPastCallsCard enabled={enabled} onQueueChanged={onQueueChanged} />
+      </Card>
+
+      <Card className="mb-5">
+        <h3 className="mb-1 text-sm font-semibold">Objection heatmap</h3>
+        <p className="mb-4 text-[12px] text-muted">
+          Which objection types come up most often across your pending review-queue candidates.
+        </p>
+        <ObjectionHeatmap />
       </Card>
 
       <Card className="mb-5">

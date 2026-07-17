@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Building2,
   Mail,
@@ -10,19 +10,31 @@ import {
   GraduationCap,
   AlertTriangle,
   ListPlus,
-  CheckCircle2
+  CheckCircle2,
+  History,
+  MessageSquare,
+  Sparkles,
+  Trash2
 } from 'lucide-react'
 import { flagEmoji, countryDial, countryName } from '@renderer/lib/countries'
 import { TONE_TO_GAUGE, overallTier } from '@renderer/features/coaching/meta'
 import { ScoreGauge } from '@renderer/components/ScoreGauge'
 import { Button } from '@renderer/components/Button'
+import { IconButton } from '@renderer/components/IconButton'
 import { BackButton } from '@renderer/components/BackButton'
 import { StatCard } from '@renderer/components/StatCard'
+import { Badge } from '@renderer/components/Badge'
+import { fieldClass } from '@renderer/components/field'
+import { cn } from '@renderer/lib/cn'
 import { isContactStale, createContactFollowUpTask } from '@renderer/features/deals/staleness'
+import { useDeals } from '@renderer/features/deals/useDeals'
+import { useDealStages } from '@renderer/features/deals/useDealStages'
+import { recordRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import { useContactCallHistory } from './useContactCallHistory'
 import { CallHistoryList } from './CallHistoryList'
+import { ContactTimeline } from './ContactTimeline'
 import { formatRelative } from './contactStats'
-import type { Contact } from './types'
+import type { Contact, ContactComment } from './types'
 import { formatDateOnly } from '@renderer/lib/dateOnly'
 
 interface ContactDetailProps {
@@ -45,8 +57,47 @@ export function ContactDetail({
   onEdit
 }: ContactDetailProps): React.JSX.Element {
   const { loading, linked } = useContactCallHistory(contact.id)
+  const { deals } = useDeals()
+  const { stages } = useDealStages()
   const [creatingTask, setCreatingTask] = useState(false)
   const [taskCreated, setTaskCreated] = useState(false)
+  const [comments, setComments] = useState<ContactComment[]>(contact.comments ?? [])
+  const [commentDraft, setCommentDraft] = useState('')
+  const [postingComment, setPostingComment] = useState(false)
+
+  // Re-sync the locally-tracked comment list whenever a fresh contact record
+  // arrives (e.g. the parent refetches after an unrelated edit) — adjusted
+  // during render (React's recommended pattern for "reset state when a prop
+  // changes") rather than an effect, so it can't cause an extra render pass.
+  const [syncedContact, setSyncedContact] = useState(contact)
+  if (syncedContact.id !== contact.id || syncedContact.comments !== contact.comments) {
+    setSyncedContact(contact)
+    setComments(contact.comments ?? [])
+  }
+
+  useEffect(() => {
+    recordRecentlyViewed('contact', contact.id, contact.name)
+  }, [contact.id, contact.name])
+
+  const postComment = async (): Promise<void> => {
+    const text = commentDraft.trim()
+    if (!text) return
+    setPostingComment(true)
+    try {
+      const updated = await window.api.contacts.addComment(contact.id, text)
+      if (updated) {
+        setComments(updated.comments ?? [])
+        setCommentDraft('')
+      }
+    } finally {
+      setPostingComment(false)
+    }
+  }
+
+  const deleteComment = async (commentId: string): Promise<void> => {
+    const updated = await window.api.contacts.removeComment(contact.id, commentId)
+    if (updated) setComments(updated.comments ?? [])
+  }
 
   const registered = formatRegisteredDate(contact.registeredAt)
   const dial = countryDial(contact.phoneCountry)
@@ -193,6 +244,68 @@ export function ContactDetail({
         </div>
       )}
 
+      {/* Comments — the rep's own notes, plus any AI-drafted ones (opt-in,
+          Settings → CRM → "Auto-generate notes") appended after a linked call. */}
+      <div className="mb-4 rounded-2xl border border-line-soft bg-surface p-5">
+        <div className="mb-3 flex items-center gap-2">
+          <MessageSquare className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-semibold">Comments</h3>
+          {comments.length > 0 && <span className="text-[11px] text-faint">{comments.length}</span>}
+        </div>
+
+        <div className="mb-3 flex gap-2">
+          <textarea
+            value={commentDraft}
+            onChange={(e) => setCommentDraft(e.target.value)}
+            placeholder="Leave a note about this client…"
+            rows={2}
+            className={cn(fieldClass, 'flex-1 resize-y')}
+          />
+          <Button
+            size="sm"
+            onClick={() => void postComment()}
+            disabled={postingComment || !commentDraft.trim()}
+            className="self-end"
+          >
+            {postingComment ? 'Posting…' : 'Post'}
+          </Button>
+        </div>
+
+        {comments.length === 0 ? (
+          <p className="text-[13px] text-faint">No comments yet.</p>
+        ) : (
+          <ul className="space-y-2.5">
+            {[...comments]
+              .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+              .map((c) => (
+                <li
+                  key={c.id}
+                  className="group flex items-start gap-2 rounded-xl border border-line-soft bg-canvas px-3.5 py-2.5"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-1 flex items-center gap-2">
+                      {c.source === 'ai' && (
+                        <Badge tone="accent" icon={Sparkles}>
+                          AI-drafted
+                        </Badge>
+                      )}
+                      <span className="text-[11px] text-faint">{formatRelative(c.createdAt)}</span>
+                    </div>
+                    <p className="text-[13px] whitespace-pre-line text-ink">{c.text}</p>
+                  </div>
+                  <IconButton
+                    icon={Trash2}
+                    label="Delete comment"
+                    variant="danger"
+                    onClick={() => void deleteComment(c.id)}
+                    className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+                  />
+                </li>
+              ))}
+          </ul>
+        )}
+      </div>
+
       {/* Call history */}
       <div className="flex-1 overflow-y-auto pb-2">
         <div className="mb-3 flex items-center gap-2">
@@ -206,6 +319,18 @@ export function ContactDetail({
           linked={linked}
           emptyMessage={`No calls linked to ${contact.name} yet. Open a saved call and link it here.`}
         />
+
+        {/* Timeline — calls, deal stage moves, and tasks, merged chronologically */}
+        <div className="mt-6 mb-3 flex items-center gap-2">
+          <History className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-semibold">Timeline</h3>
+        </div>
+
+        {loading ? (
+          <p className="text-[13px] text-faint">Loading…</p>
+        ) : (
+          <ContactTimeline contactId={contact.id} linked={linked} deals={deals} stages={stages} />
+        )}
       </div>
     </div>
   )

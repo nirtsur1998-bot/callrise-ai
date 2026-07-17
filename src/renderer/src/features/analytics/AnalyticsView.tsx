@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import {
   BarChart3,
   Sparkles,
@@ -7,6 +8,7 @@ import {
   Scale,
   ListChecks,
   CheckCircle2,
+  TrendingUp,
   type LucideIcon
 } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
@@ -15,8 +17,14 @@ import { Skeleton } from '@renderer/components/Skeleton'
 import { EmptyState } from '@renderer/components/EmptyState'
 import { cn } from '@renderer/lib/cn'
 import { DIMENSION_LABEL, TONE_TEXT, type Tone } from '@renderer/features/coaching/meta'
+import { useDeals } from '@renderer/features/deals/useDeals'
+import { useDealStages } from '@renderer/features/deals/useDealStages'
 import { useAnalyticsData } from './useAnalyticsData'
-import type { DimensionTrend } from './aggregate'
+import {
+  buildPipelineForecast,
+  type DimensionTrend,
+  type PipelineForecastBucket
+} from './aggregate'
 import {
   pickHeadline,
   talkRatioTone,
@@ -31,7 +39,7 @@ import {
   THIN_DATA,
   type Headline
 } from './verdicts'
-import { MeterBar, ProgressBar, ActivityBars } from './charts'
+import { MeterBar, ProgressBar, ActivityBars, PipelineForecastBars } from './charts'
 
 function pct(ratio: number): string {
   return `${Math.round(ratio * 100)}%`
@@ -84,6 +92,40 @@ function CardHeading({
   )
 }
 
+/** Short "$48K"-style currency for the forecast verdict — mirrors the
+ *  (unexported) helper in `charts.tsx` used for the bar labels. */
+function formatCompactCurrency(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    notation: 'compact',
+    maximumFractionDigits: 1
+  }).format(value)
+}
+
+/** The "so what" line under the pipeline forecast: how much is expected to
+ *  close soon, or a nudge to check on stalled deals when nothing is. */
+function pipelineForecastVerdict(
+  buckets: PipelineForecastBucket[],
+  openDealCount: number
+): { text: string; tone: Tone } {
+  if (openDealCount === 0) {
+    return { text: 'No open deals yet — add one to see a forecast here.', tone: 'neutral' }
+  }
+  const nearTermMonths = buckets.filter((b) => b.monthKey !== 'later' && b.monthKey !== 'no-date')
+  const nearTerm = nearTermMonths.slice(0, 3).reduce((sum, b) => sum + b.totalValue, 0)
+  if (nearTerm > 0) {
+    return {
+      text: `${formatCompactCurrency(nearTerm)} expected to close in the next 3 months.`,
+      tone: 'good'
+    }
+  }
+  return {
+    text: 'Nothing scheduled to close soon — check in on stalled deals.',
+    tone: 'mid'
+  }
+}
+
 function HeadlineBanner({
   headline,
   caveat
@@ -129,8 +171,17 @@ function AnalyticsSkeleton(): React.JSX.Element {
 
 export function AnalyticsView(): React.JSX.Element {
   const { analytics, loading } = useAnalyticsData()
+  // Deals are read-only here too — reusing the existing hook, no new storage.
+  const { deals, loading: dealsLoading } = useDeals()
+  const { stages, loading: stagesLoading } = useDealStages()
 
-  if (loading) {
+  const forecast = useMemo(() => buildPipelineForecast(deals, stages), [deals, stages])
+  const openDealCount = useMemo(() => {
+    const stageById = new Map(stages.map((s) => [s.id, s]))
+    return deals.filter((d) => stageById.get(d.stageId)?.kind === 'open').length
+  }, [deals, stages])
+
+  if (loading || dealsLoading || stagesLoading) {
     return (
       <div className="mx-auto max-w-3xl">
         <AnalyticsSkeleton />
@@ -162,6 +213,7 @@ export function AnalyticsView(): React.JSX.Element {
   )
   const { strongest, weakest } = strongestWeakest(dimensions)
   const focus = focusAreas(analytics.improve)
+  const forecastVerdict = pipelineForecastVerdict(forecast, openDealCount)
 
   // Caveat the headline when it leans on thin data.
   const headlineCaveat =
@@ -388,6 +440,29 @@ export function AnalyticsView(): React.JSX.Element {
                 </>
               )}
               {thinTasks && <EarlyNote count={tasks.total} noun="task" />}
+            </>
+          )}
+        </Card>
+
+        {/* 6 — Pipeline forecast (deal data, reused from the CRM's own hook —
+            no new storage) */}
+        <Card>
+          <CardHeading
+            icon={TrendingUp}
+            title="Pipeline forecast"
+            hint="Open deal value by expected close month"
+            tone={forecastVerdict.tone}
+          />
+          {openDealCount === 0 ? (
+            <p className="mt-3 text-sm text-muted">
+              Add an open deal with an expected close date to see it forecasted here.
+            </p>
+          ) : (
+            <>
+              <div className="mt-3">
+                <PipelineForecastBars buckets={forecast} />
+              </div>
+              <p className="mt-3 text-sm text-muted">{forecastVerdict.text}</p>
             </>
           )}
         </Card>

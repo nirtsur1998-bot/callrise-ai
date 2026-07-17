@@ -5,20 +5,22 @@ import {
   ListChecks,
   ArrowRight,
   ArrowUpRight,
-  Sparkles
+  Sparkles,
+  Calendar
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { EmptyState } from '@renderer/components/EmptyState'
 import { Skeleton, SkeletonRows } from '@renderer/components/Skeleton'
 import { Badge } from '@renderer/components/Badge'
+import { StatCard } from '@renderer/components/StatCard'
 import { AudioSourcesCard } from '@renderer/features/audio/AudioSourcesCard'
 import { NoiseCancellationCard } from '@renderer/features/audio/NoiseCancellationCard'
 import type { NavId } from '@renderer/features/navigation/nav-items'
 import { useCalls } from '@renderer/features/calls/useCalls'
 import { useTasks } from '@renderer/features/tasks/useTasks'
 import { formatDate } from '@renderer/features/calls/format'
-import { computeHomeStats, formatDuration } from './stats'
+import { computeHomeStats, computeWeekRecap, weekRecapHeadline, formatDuration } from './stats'
 import { overallTier, TONE_TO_BADGE } from '@renderer/features/coaching/meta'
 
 /** Time-of-day greeting so Home feels personal rather than a static banner. */
@@ -39,12 +41,20 @@ export function HomeView({
   const { calls, loading: callsLoading } = useCalls()
   const { tasks, loading: tasksLoading } = useTasks()
   const stats = computeHomeStats(calls, tasks)
+  const weekRecap = computeWeekRecap(calls, tasks)
   const recentCalls = [...calls]
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, 4)
 
   const dataLoading = callsLoading || tasksLoading
-  const STATS: { label: string; value: string; icon: LucideIcon; nav?: NavId }[] = [
+  // Tasks-due urgency: danger if anything's overdue, warning if something's
+  // due today (and nothing overdue yet), neutral otherwise.
+  const tasksDueTone = stats.hasOverdueTasks
+    ? 'text-danger'
+    : stats.hasTasksDueToday
+      ? 'text-warning'
+      : 'text-faint'
+  const STATS: { label: string; value: string; icon: LucideIcon; nav?: NavId; tone?: string }[] = [
     {
       label: 'Calls today',
       value: String(stats.callsToday),
@@ -56,7 +66,13 @@ export function HomeView({
       value: formatDuration(stats.talkTimeTodayMs),
       icon: Clock
     },
-    { label: 'Tasks due', value: String(stats.tasksDue), icon: ListChecks, nav: 'tasks' }
+    {
+      label: 'Tasks due',
+      value: String(stats.tasksDue),
+      icon: ListChecks,
+      nav: 'tasks',
+      tone: tasksDueTone
+    }
   ]
 
   return (
@@ -69,6 +85,13 @@ export function HomeView({
         <p className="mt-1.5 text-sm text-muted">
           Here&rsquo;s your desk. Start a call, or pick up where you left off.
         </p>
+        {stats.callsToday > 0 && (
+          <p className="mt-1 text-[13px] text-muted">
+            {stats.callsToday === 1
+              ? "You've made 1 call today."
+              : `You've made ${stats.callsToday} calls today — nice momentum.`}
+          </p>
+        )}
       </header>
 
       {/* Primary action */}
@@ -91,11 +114,55 @@ export function HomeView({
         </span>
       </button>
 
+      {/* This week recap */}
+      <Card className="mb-5">
+        <div className="mb-3 flex items-center gap-2">
+          <Calendar className="h-4 w-4 text-accent" strokeWidth={2} />
+          <h3 className="text-sm font-medium">This week</h3>
+        </div>
+        {dataLoading ? (
+          <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-3">
+              <Skeleton className="h-14 w-full" />
+              <Skeleton className="h-14 w-full" />
+              <Skeleton className="h-14 w-full" />
+            </div>
+            <Skeleton className="h-4 w-2/3" />
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-3 gap-3">
+              <StatCard
+                icon={PhoneCall}
+                label="Calls last week"
+                value={String(weekRecap.callsLastWeek)}
+              />
+              <StatCard
+                icon={Sparkles}
+                label="Avg coach score"
+                value={
+                  weekRecap.avgCoachScoreLastWeek !== null
+                    ? String(weekRecap.avgCoachScoreLastWeek)
+                    : '—'
+                }
+              />
+              <StatCard
+                icon={ListChecks}
+                label="Due this week"
+                value={String(weekRecap.tasksDueThisWeek)}
+              />
+            </div>
+            <p className="mt-3 text-[13px] text-muted">{weekRecapHeadline(weekRecap)}</p>
+          </>
+        )}
+      </Card>
+
       {/* Stat row */}
       <div className="mb-5 grid grid-cols-3 gap-4">
         {STATS.map((stat) => {
           const Icon = stat.icon
           const clickable = Boolean(stat.nav)
+          const isUrgent = stat.tone === 'text-warning' || stat.tone === 'text-danger'
           const body = (
             <>
               {clickable && (
@@ -103,12 +170,16 @@ export function HomeView({
               )}
               <div className="mb-3 flex items-center justify-between">
                 <p className="text-[13px] text-muted">{stat.label}</p>
-                <Icon className="h-4 w-4 text-faint" strokeWidth={2} />
+                <Icon className={`h-4 w-4 ${stat.tone ?? 'text-faint'}`} strokeWidth={2} />
               </div>
               {dataLoading ? (
                 <Skeleton className="h-7 w-12" />
               ) : (
-                <p className="text-2xl font-semibold tracking-tight tabular-nums">{stat.value}</p>
+                <p
+                  className={`text-2xl font-semibold tracking-tight tabular-nums ${isUrgent ? stat.tone : ''}`}
+                >
+                  {stat.value}
+                </p>
               )}
             </>
           )
@@ -167,7 +238,9 @@ export function HomeView({
                   className="press flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition hover:bg-elevated"
                 >
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px] font-medium">{call.title}</p>
+                    <p className="truncate text-[13px] font-medium" title={call.title}>
+                      {call.title}
+                    </p>
                     <p className="mt-0.5 truncate text-[11px] text-faint">
                       {formatDate(call.createdAt)}
                     </p>

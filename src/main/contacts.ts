@@ -5,6 +5,8 @@ import {
   listContacts,
   updateContact,
   deleteContact,
+  addComment,
+  removeComment,
   type Contact,
   type ContactCreateInput,
   type ContactUpdateInput
@@ -67,5 +69,17 @@ export function registerContacts(): void {
     const res = await deleteContact(contactsDir(), id)
     if (res.ok) scheduleBackup() // propagate the (PII-stripped) tombstone
     return res
+  })
+
+  // --- Comments --------------------------------------------------------------
+  ipcMain.handle('contacts:addComment', async (_event, id: string, text: string) => {
+    const contact = await addComment(contactsDir(), id, text, 'user')
+    if (contact) scheduleBackup()
+    return contact
+  })
+  ipcMain.handle('contacts:removeComment', async (_event, id: string, commentId: string) => {
+    const contact = await removeComment(contactsDir(), id, commentId)
+    if (contact) scheduleBackup()
+    return contact
   })
 }

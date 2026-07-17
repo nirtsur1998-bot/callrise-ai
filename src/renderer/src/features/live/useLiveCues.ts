@@ -38,6 +38,18 @@ const DEBOUNCE_MS = 400 // wait after a client turn-end before calling the brain
 const AUTO_DISMISS_MS = 10_000 // a cue fades on its own if not dismissed
 const MIN_CHARS = 30 // not enough transcript to coach on yet
 
+// --- Engagement gauge (deterministic, no AI call) ---------------------------
+// A rough, client-side-only approximation of how "live" the conversation
+// feels right now. It is NOT a coaching signal and makes no claim about call
+// quality — see the formula comment on computeEngagementScore below.
+const ENGAGEMENT_WINDOW = 20 // turns considered for the talk-balance + question signals
+const GAP_WINDOW = 10 // most-recent turns considered for the pace signal (recency-weighted)
+const GAP_FAST_MS = 8_000 // a new turn arriving this quickly reads as brisk back-and-forth
+const GAP_SLOW_MS = 45_000 // a gap this long reads as a one-sided monologue
+const GAP_DECAY = 0.85 // per-step recency decay — the most recent gap counts most
+const QUESTION_IDEAL_RATIO = 0.3 // ~30%+ of turns being questions reads as fully engaged
+const MIN_TURNS_FOR_ENGAGEMENT = 4 // too little signal before this — stay null
+
 interface Turn {
   speaker: number
   text: string
@@ -49,12 +61,85 @@ function countWords(text: string): number {
   return m ? m.length : 0
 }
 
+/**
+ * Blends three deterministic, word-count-level signals from the same turn
+ * buffer the brain already uses — no extra AI call, no new data source:
+ *
+ *  (a) Talk-ratio balance (40%) — the rep shouldn't dominate. When the rep's
+ *      speaker id is already known, this scores their literal share of words
+ *      in the recent window; 50%/50% or less is full credit, and credit falls
+ *      off linearly as one side's share climbs past 50% toward 100%. Before
+ *      the rep is identified, it falls back to whichever speaker is more
+ *      talkative (a symmetric stand-in — we can't yet tell which side that is).
+ *  (b) Question-asking frequency (30%) — either side asking questions reads
+ *      as an exploratory conversation rather than a one-way pitch. Scored as
+ *      the share of recent turns ending in "?", reaching full credit at a
+ *      ~30% question-turn ratio.
+ *  (c) Recency-weighted response pace (30%) — the gap between consecutive
+ *      turns (a new turn starts on a speaker change or a 4s+ pause within one
+ *      speaker). Short gaps read as brisk back-and-forth; long ones read as a
+ *      monologue. Averaged with an exponential recency decay so the last
+ *      couple of exchanges matter more than older ones.
+ *
+ * This is a rough proxy for engagement, not sentiment or call quality — it
+ * only counts words, question marks, and timestamps already in the buffer.
+ */
+function computeEngagementScore(turns: Turn[], repSpeaker: number | null): number | null {
+  if (turns.length < MIN_TURNS_FOR_ENGAGEMENT) return null
+
+  const recent = turns.slice(-ENGAGEMENT_WINDOW)
+
+  const wordsBySpeaker = new Map<number, number>()
+  let totalWords = 0
+  for (const t of recent) {
+    const w = countWords(t.text)
+    wordsBySpeaker.set(t.speaker, (wordsBySpeaker.get(t.speaker) ?? 0) + w)
+    totalWords += w
+  }
+  let dominantShare = 0
+  if (totalWords > 0) {
+    if (repSpeaker !== null && wordsBySpeaker.has(repSpeaker)) {
+      dominantShare = (wordsBySpeaker.get(repSpeaker) ?? 0) / totalWords
+    } else {
+      dominantShare = Math.max(...wordsBySpeaker.values()) / totalWords
+    }
+  }
+  const balanceScore = Math.max(0, 100 - Math.max(0, dominantShare - 0.5) * 200)
+
+  const questionTurns = recent.filter((t) => t.text.trim().endsWith('?')).length
+  const questionScore = Math.min(100, (questionTurns / recent.length / QUESTION_IDEAL_RATIO) * 100)
+
+  const gapTurns = turns.slice(-GAP_WINDOW)
+  let gapWeighted = 0
+  let gapWeightTotal = 0
+  for (let i = 1; i < gapTurns.length; i++) {
+    const gap = gapTurns[i].t - gapTurns[i - 1].t
+    const gapScoreI =
+      gap <= GAP_FAST_MS
+        ? 100
+        : gap >= GAP_SLOW_MS
+          ? 0
+          : 100 * (1 - (gap - GAP_FAST_MS) / (GAP_SLOW_MS - GAP_FAST_MS))
+    const weight = GAP_DECAY ** (gapTurns.length - 1 - i) // most recent gap → weight 1
+    gapWeighted += gapScoreI * weight
+    gapWeightTotal += weight
+  }
+  const paceScore = gapWeightTotal > 0 ? gapWeighted / gapWeightTotal : 50 // not enough gaps yet — neutral
+
+  const blended = 0.4 * balanceScore + 0.3 * questionScore + 0.3 * paceScore
+  return Math.round(Math.max(0, Math.min(100, blended)))
+}
+
 export interface UseLiveCues {
   cue: LiveCue | null
   dismiss: () => void
   /** The rep's speaker id once identified (deterministic or brain-guessed), for
    *  labeling the transcript "You"/"Buyer". Null until known. */
   repSpeaker: number | null
+  /** Rolling 0–100 approximation of how "live" the conversation feels right
+   *  now (see computeEngagementScore) — NOT a coaching or AI-derived score.
+   *  Null until at least MIN_TURNS_FOR_ENGAGEMENT turns have been seen. */
+  engagementScore: number | null
 }
 
 /**
@@ -73,6 +158,7 @@ export function useLiveCues(
 ): UseLiveCues {
   const [cue, setCue] = useState<LiveCue | null>(null)
   const [repSpeaker, setRepSpeaker] = useState<number | null>(knownRepSpeaker)
+  const [engagementScore, setEngagementScore] = useState<number | null>(null)
 
   const cfgRef = useRef<Thresholds>(SENSITIVITY_THRESHOLDS[sensitivity])
   useEffect(() => {
@@ -139,6 +225,7 @@ export function useLiveCues(
       // eslint-disable-next-line react-hooks/set-state-in-effect -- clear a visible cue when cues mute / the call stops
       clearCue()
       setRepSpeaker(knownRepRef.current)
+      setEngagementScore(null)
       return
     }
 
@@ -150,6 +237,7 @@ export function useLiveCues(
     inFlightRef.current = false
     lastCallAtRef.current = 0
     setRepSpeaker(knownRepRef.current)
+    setEngagementScore(null)
 
     const emit = (kind: CueKind, text: string): boolean => {
       const now = Date.now()
@@ -274,6 +362,10 @@ export function useLiveCues(
         turnsRef.current = turnsRef.current.slice(-MAX_TURNS)
       }
 
+      // Recompute the deterministic engagement gauge on every finalized turn
+      // update — cheap (word-counting over ≤24 turns), no brain/AI call.
+      setEngagementScore(computeEngagementScore(turnsRef.current, repSpeakerRef.current))
+
       if (payload.speechFinal) onTurnEnd(now)
     })
 
@@ -286,5 +378,5 @@ export function useLiveCues(
     }
   }, [active, enabled, clearCue])
 
-  return { cue, dismiss: clearCue, repSpeaker }
+  return { cue, dismiss: clearCue, repSpeaker, engagementScore }
 }

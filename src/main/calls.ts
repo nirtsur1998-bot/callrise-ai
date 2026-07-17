@@ -15,6 +15,9 @@ import {
   setCallTitle,
   setCallContact,
   setCallObjectionsMined,
+  setCallCrmNoteGenerated,
+  addBookmark,
+  removeBookmark,
   type CallSaveInput,
   type CallSummary
 } from './calls-fs'
@@ -23,11 +26,17 @@ import { coachCall, type CoachResult } from './coach'
 import { generateCallTitle, type GenerateTitleResult } from './call-title'
 import { mineObjections, makeVerifier, type ObjectionMiningResult } from './objection-mining'
 import { addToQueue, purgeQueueForCall } from './objection-queue-fs'
-import { isObjectionMiningEnabled } from './app-settings'
+import { isObjectionMiningEnabled, loadAppSettings } from './app-settings'
 import { scheduleBackup, queueAttachmentBlobDeletes } from './backup'
+import { addComment } from './contacts-fs'
+import { generateCrmNote } from './crm-notes'
 
 function objectionQueueDir(): string {
   return join(app.getPath('userData'), 'objection-queue')
+}
+
+function contactsDir(): string {
+  return join(app.getPath('userData'), 'contacts')
 }
 
 function callsDir(): string {
@@ -61,6 +70,38 @@ async function mineCallIntoQueue(callId: string): Promise<{ ok: boolean; added: 
     return { ok: true, added: items.length }
   } finally {
     miningInFlight.delete(callId)
+  }
+}
+
+/** Calls with a CRM-note request currently in flight — same double-fire guard
+ *  as miningInFlight (the contact-link and summary-saved triggers can both
+ *  fire for the same call in close succession). */
+const crmNoteInFlight = new Set<string>()
+
+/** Draft a short AI CRM note from a call and append it to its linked
+ *  contact — opt-in (Settings → CRM → "Auto-generate notes"), fires from
+ *  BOTH the "call linked to a contact" and "call summarized" paths (whichever
+ *  happens second actually has enough context + the link). Only marks the
+ *  call as done on SUCCESS, so a transient failure (rate limit, no key)
+ *  leaves it eligible for the other trigger to retry. */
+async function maybeGenerateCrmNote(callId: string): Promise<void> {
+  if (!loadAppSettings().crm.autoGenerateNotes) return
+  if (crmNoteInFlight.has(callId)) return
+  crmNoteInFlight.add(callId)
+  try {
+    const call = await getCall(callsDir(), callId)
+    if (!call || call.crmNoteGeneratedAt || !call.contactId) return
+    const content = call.summary?.executive
+      ? [call.summary.executive, ...call.summary.keyPoints].join('\n')
+      : (call.segments ?? []).map((s) => `Speaker ${s.speaker + 1}: ${s.text}`).join('\n')
+    if (!content.trim()) return
+    const result = await generateCrmNote(content)
+    if (!result.ok) return
+    const contact = await addComment(contactsDir(), call.contactId, result.note, 'ai')
+    if (contact) scheduleBackup()
+    await setCallCrmNoteGenerated(callsDir(), callId)
+  } finally {
+    crmNoteInFlight.delete(callId)
   }
 }
 
@@ -157,6 +198,24 @@ export function registerCalls(): void {
   ipcMain.handle('calls:setContact', async (_event, callId: string, contactId: string | null) => {
     const call = await setCallContact(callsDir(), callId, contactId)
     scheduleBackup() // the link is metadata like a title edit
+    // Fire-and-forget: never block linking on an AI call. Only does anything
+    // when the call already has a summary or transcript to work from.
+    if (call && contactId) void maybeGenerateCrmNote(callId).catch(() => {})
+    return call
+  })
+
+  // --- Bookmarks ("clip this moment") ---------------------------------------
+  ipcMain.handle(
+    'calls:addBookmark',
+    async (_event, callId: string, atMs: number, text: string) => {
+      const call = await addBookmark(callsDir(), callId, atMs, text)
+      scheduleBackup()
+      return call
+    }
+  )
+  ipcMain.handle('calls:removeBookmark', async (_event, callId: string, bookmarkId: string) => {
+    const call = await removeBookmark(callsDir(), callId, bookmarkId)
+    scheduleBackup()
     return call
   })
 
@@ -174,6 +233,9 @@ export function registerCalls(): void {
         const saved = await setCallSummary(callsDir(), callId, result.summary)
         if (!saved) return SAVE_FAILED
         scheduleBackup() // the summary (paraphrase, not the transcript) syncs
+        // Fire-and-forget: only does anything if this call is ALREADY linked
+        // to a contact (the other trigger, above, covers the reverse order).
+        void maybeGenerateCrmNote(callId).catch(() => {})
       }
       return result
     } catch {

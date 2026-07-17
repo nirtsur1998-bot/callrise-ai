@@ -10,12 +10,14 @@ import {
   eachWeekOfInterval,
   eachMonthOfInterval,
   differenceInCalendarDays,
+  addMonths,
   format
 } from 'date-fns'
 import type { CallSummary } from '@renderer/features/calls/types'
 import type { Task } from '@renderer/features/tasks/types'
 import type { CoachDimensionKey } from '@renderer/features/coaching/types'
 import { DIMENSION_ORDER } from '@renderer/features/coaching/meta'
+import type { Deal, DealStage } from '@renderer/features/deals/types'
 
 // Weeks start Monday; ≤ ~12 weeks of history charts weekly, longer goes monthly.
 const WEEK_OPTS = { weekStartsOn: 1 } as const
@@ -25,6 +27,9 @@ const WEEKLY_SPAN_DAYS = 84
 export const MIN_TREND_POINTS = 2
 /** How many of the most recent coached calls feed "top areas to improve". */
 const RECENT_WINDOW = 5
+/** How many months ahead the pipeline forecast charts individually before
+ *  collapsing the rest into a single "Later" bucket. */
+const FORECAST_HORIZON_MONTHS = 6
 
 export type Granularity = 'week' | 'month'
 
@@ -84,6 +89,16 @@ export interface AnalyticsInput {
   calls: Pick<CallSummary, 'createdAt'>[]
   coached: CoachedCall[]
   tasks: Task[]
+}
+
+/** One bucket in the pipeline forecast — a month, or one of the two special
+ *  buckets ("Later" for anything past the horizon, "No date" for deals with
+ *  no `expectedCloseDate`). */
+export interface PipelineForecastBucket {
+  monthKey: string // 'yyyy-MM', or 'later' / 'no-date' — a stable React key
+  monthLabel: string // short axis label, e.g. "Jul 2026", "Later", "No date"
+  totalValue: number
+  dealCount: number
 }
 
 export interface Analytics {
@@ -256,6 +271,94 @@ function buildTaskStats(tasks: Task[]): TaskStats {
     manual: total - generatedByAi,
     weekly
   }
+}
+
+/**
+ * Projected deal value over time: OPEN-kind deals bucketed by the month of
+ * their `expectedCloseDate`. Charts the current month through
+ * `FORECAST_HORIZON_MONTHS - 1` months out; anything closing later collapses
+ * into a "Later" bucket (rather than being dropped), and anything overdue
+ * (a close date already in the past) is folded into the current month's
+ * bucket since it's effectively due now. Deals with no `expectedCloseDate`
+ * land in a distinct "No date" bucket, always last.
+ */
+export function buildPipelineForecast(
+  deals: Deal[],
+  stages: DealStage[]
+): PipelineForecastBucket[] {
+  const stageById = new Map(stages.map((s) => [s.id, s]))
+  const openDeals = deals.filter((d) => stageById.get(d.stageId)?.kind === 'open')
+
+  const now = new Date()
+  const currentMonth = startOfMonth(now)
+  const horizonMonths = eachMonthOfInterval({
+    start: currentMonth,
+    end: addMonths(currentMonth, FORECAST_HORIZON_MONTHS - 1)
+  })
+  const horizonEnd = horizonMonths[horizonMonths.length - 1]
+
+  const monthBuckets = new Map<string, PipelineForecastBucket>()
+  for (const m of horizonMonths) {
+    const monthKey = format(m, 'yyyy-MM')
+    monthBuckets.set(monthKey, {
+      monthKey,
+      monthLabel: format(m, 'MMM yyyy'),
+      totalValue: 0,
+      dealCount: 0
+    })
+  }
+
+  let laterValue = 0
+  let laterCount = 0
+  let noDateValue = 0
+  let noDateCount = 0
+
+  for (const deal of openDeals) {
+    const value = deal.value ?? 0
+    const parsed = deal.expectedCloseDate ? parseISO(deal.expectedCloseDate) : null
+
+    if (!parsed || !isValid(parsed)) {
+      noDateValue += value
+      noDateCount += 1
+      continue
+    }
+
+    // Overdue close dates are folded into the current month — they're due
+    // now, not "later".
+    const dealMonth = startOfMonth(parsed) < currentMonth ? currentMonth : startOfMonth(parsed)
+
+    if (dealMonth > horizonEnd) {
+      laterValue += value
+      laterCount += 1
+      continue
+    }
+
+    const monthKey = format(dealMonth, 'yyyy-MM')
+    const bucket = monthBuckets.get(monthKey)
+    if (bucket) {
+      bucket.totalValue += value
+      bucket.dealCount += 1
+    }
+  }
+
+  const result = Array.from(monthBuckets.values())
+  if (laterCount > 0) {
+    result.push({
+      monthKey: 'later',
+      monthLabel: 'Later',
+      totalValue: laterValue,
+      dealCount: laterCount
+    })
+  }
+  if (noDateCount > 0) {
+    result.push({
+      monthKey: 'no-date',
+      monthLabel: 'No date',
+      totalValue: noDateValue,
+      dealCount: noDateCount
+    })
+  }
+  return result
 }
 
 // --- entry point ------------------------------------------------------------

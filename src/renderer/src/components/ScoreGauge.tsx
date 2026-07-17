@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import { cn } from '@renderer/lib/cn'
 
 export type GaugeTone = 'positive' | 'warning' | 'danger' | 'neutral'
@@ -50,6 +51,52 @@ export function ScoreGauge({
   const offset = circumference * (1 - clamped / 100)
   const showCaption = size >= 72
 
+  // Counts the center number up alongside the ring's 700ms CSS transition.
+  // Continues from wherever the previous animation left off (rather than
+  // always resetting to 0), so a changed score keeps momentum the same way
+  // the ring's stroke-dashoffset continues from its current position.
+  const [displayValue, setDisplayValue] = useState(clamped)
+  const prevValueRef = useRef(clamped)
+
+  useEffect(() => {
+    const prefersReducedMotion =
+      typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+    const from = prevValueRef.current
+    const to = clamped
+
+    if (prefersReducedMotion || from === to) {
+      setDisplayValue(to)
+      prevValueRef.current = to
+      return
+    }
+
+    const duration = 700
+    const start = performance.now()
+    let raf = 0
+    let latest = from
+
+    const tick = (now: number): void => {
+      const progress = Math.min(1, (now - start) / duration)
+      const eased = 1 - Math.pow(1 - progress, 3) // ease-out cubic, matches the ring's ease-out
+      latest = from + (to - from) * eased
+      setDisplayValue(latest)
+      if (progress < 1) {
+        raf = requestAnimationFrame(tick)
+      } else {
+        prevValueRef.current = to
+      }
+    }
+
+    raf = requestAnimationFrame(tick)
+    return () => {
+      cancelAnimationFrame(raf)
+      // Preserve however far the count-up got, so an interrupted animation
+      // (rapid score changes) resumes from there instead of jumping back.
+      prevValueRef.current = latest
+    }
+  }, [clamped])
+
   return (
     <div
       className={cn('relative grid shrink-0 place-items-center', className)}
@@ -81,7 +128,7 @@ export function ScoreGauge({
           className={cn('font-semibold tabular-nums', TEXT[t])}
           style={{ fontSize: size * 0.28 }}
         >
-          {clamped}
+          {Math.round(displayValue)}
         </span>
         {showCaption && <span className="text-[10px] text-faint">/ 100</span>}
       </div>

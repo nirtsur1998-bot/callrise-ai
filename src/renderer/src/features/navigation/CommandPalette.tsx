@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Search, CornerDownLeft, type LucideIcon } from 'lucide-react'
+import {
+  Search,
+  CornerDownLeft,
+  PhoneCall,
+  Contact,
+  Building2,
+  type LucideIcon
+} from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { useRecentlyViewed } from '@renderer/lib/useRecentlyViewed'
+import type { RecentKind } from '@renderer/lib/recentlyViewed'
 import { NAV_ITEMS, type NavId } from './nav-items'
 
 export interface PaletteAction {
@@ -19,8 +28,30 @@ interface CommandPaletteProps {
   actions?: PaletteAction[]
 }
 
+/** Icon per recent-item kind — matches the icon already established for that
+ *  kind in the Sidebar's own "Recent" trail (Live Calls' PhoneCall, the CRM
+ *  nav item's Contact, and Building2 used throughout the deals feature). */
+const RECENT_KIND_ICON = {
+  call: PhoneCall,
+  contact: Contact,
+  deal: Building2
+} as const satisfies Record<RecentKind, LucideIcon>
+
+/** The screen a recent item's kind lives on. `onSelect` only takes a
+ *  screen-level NavId, so — same limitation as the Sidebar's recent
+ *  section — selecting a recent contact/deal opens the CRM screen (not the
+ *  specific record); true deep-linking would need MainApp to accept an
+ *  initial record id, which is outside this component's scope. */
+const RECENT_KIND_SCREEN: Record<RecentKind, NavId> = {
+  call: 'past-calls',
+  contact: 'crm',
+  deal: 'crm'
+}
+
 type Row =
-  { kind: 'nav'; id: NavId; label: string; icon: LucideIcon } | (PaletteAction & { kind: 'action' })
+  | { kind: 'nav'; id: NavId; label: string; icon: LucideIcon }
+  | (PaletteAction & { kind: 'action' })
+  | { kind: 'recent'; id: string; label: string; icon: LucideIcon; screen: NavId }
 
 /**
  * A ⌘K command palette for jumping to any screen — the Linear/Raycast/Arc
@@ -64,17 +95,30 @@ export function CommandPalette({
     () => actions.map((a) => ({ kind: 'action' as const, ...a })),
     [actions]
   )
+  const recentlyViewed = useRecentlyViewed()
+  const recentRows: Row[] = useMemo(
+    () =>
+      recentlyViewed.map((item) => ({
+        kind: 'recent' as const,
+        id: `${item.kind}-${item.id}`,
+        label: item.label,
+        icon: RECENT_KIND_ICON[item.kind],
+        screen: RECENT_KIND_SCREEN[item.kind]
+      })),
+    [recentlyViewed]
+  )
 
-  const { navResults, actionResults } = useMemo(() => {
+  const { navResults, actionResults, recentResults } = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return { navResults: navRows, actionResults: actionRows }
+    if (!q) return { navResults: navRows, actionResults: actionRows, recentResults: recentRows }
     return {
       navResults: navRows.filter((r) => r.label.toLowerCase().includes(q)),
-      actionResults: actionRows.filter((r) => r.label.toLowerCase().includes(q))
+      actionResults: actionRows.filter((r) => r.label.toLowerCase().includes(q)),
+      recentResults: recentRows.filter((r) => r.label.toLowerCase().includes(q))
     }
-  }, [query, navRows, actionRows])
+  }, [query, navRows, actionRows, recentRows])
 
-  const results: Row[] = [...navResults, ...actionResults]
+  const results: Row[] = [...navResults, ...actionResults, ...recentResults]
 
   // Clamp the highlighted row during render, so a filter that shrinks the
   // list never leaves the cursor out of range.
@@ -93,6 +137,8 @@ export function CommandPalette({
   const run = (row: Row): void => {
     if (row.kind === 'nav') {
       onSelect(row.id)
+    } else if (row.kind === 'recent') {
+      onSelect(row.screen)
     } else {
       row.onRun()
     }
@@ -208,6 +254,7 @@ export function CommandPalette({
             <>
               {renderSection('Go to', navResults, 0)}
               {renderSection('Actions', actionResults, navResults.length)}
+              {renderSection('Recent', recentResults, navResults.length + actionResults.length)}
             </>
           )}
         </div>

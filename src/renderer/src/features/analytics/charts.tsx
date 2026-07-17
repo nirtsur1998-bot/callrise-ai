@@ -4,7 +4,19 @@
 import { useEffect, useState } from 'react'
 import { cn } from '@renderer/lib/cn'
 import { type Tone, TONE_BAR } from '@renderer/features/coaching/meta'
-import type { PeriodBucket } from './aggregate'
+import type { PeriodBucket, PipelineForecastBucket } from './aggregate'
+
+/** Short "$48K"-style currency, for labels too small for full formatting.
+ *  Not exported — react-refresh requires component files to only export
+ *  components, so `AnalyticsView.tsx` keeps its own copy for the verdict. */
+function formatCompactCurrency(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    notation: 'compact',
+    maximumFractionDigits: 1
+  }).format(value)
+}
 
 /** Animates a 0..1 progress value from 0 to `target` on mount, via
  *  requestAnimationFrame — a subtle "filling in" entrance instead of the bar
@@ -148,6 +160,61 @@ export function ActivityBars({ buckets }: { buckets: PeriodBucket[] }): React.JS
           />
         </div>
       ))}
+    </div>
+  )
+}
+
+/** Projected open-deal value per month. Tone-colored (accent) like the rest
+ *  of the screen's non-graded volume bars, with a compact currency value
+ *  above each bar and the month/bucket label below — mirrors `ActivityBars`'
+ *  structure, accessibility treatment, and mount animation. */
+export function PipelineForecastBars({
+  buckets
+}: {
+  buckets: PipelineForecastBucket[]
+}): React.JSX.Element {
+  const [grown, setGrown] = useState(false)
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setGrown(true))
+    return () => cancelAnimationFrame(raf)
+  }, [])
+
+  const max = buckets.reduce((m, b) => Math.max(m, b.totalValue), 0) || 1
+  const total = buckets.reduce((sum, b) => sum + b.totalValue, 0)
+  const summary =
+    buckets.length === 0
+      ? 'No pipeline data'
+      : `Pipeline forecast: ${formatCompactCurrency(total)} total across ${buckets.length} bucket${buckets.length === 1 ? '' : 's'}, from ${buckets[0].monthLabel} to ${buckets[buckets.length - 1].monthLabel}`
+
+  return (
+    <div role="img" aria-label={summary}>
+      <div className="flex h-16 items-end gap-1.5">
+        {buckets.map((b) => (
+          <div key={b.monthKey} className="relative flex-1 self-stretch" aria-hidden="true">
+            {/* Faint full-height track so a zero-value column still reads. */}
+            <div className="absolute inset-0 rounded-t bg-line" />
+            <div
+              className="absolute inset-x-0 bottom-0 rounded-t bg-accent/70 transition-[height] duration-500 hover:brightness-125"
+              style={{
+                height: grown
+                  ? `${Math.max((b.totalValue / max) * 100, b.totalValue > 0 ? 6 : 2)}%`
+                  : 0
+              }}
+              title={`${b.monthLabel}: ${formatCompactCurrency(b.totalValue)} across ${b.dealCount} deal${b.dealCount === 1 ? '' : 's'}`}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="mt-1.5 flex gap-1.5" aria-hidden="true">
+        {buckets.map((b) => (
+          <div key={b.monthKey} className="flex-1 text-center">
+            <p className="text-[11px] font-medium tabular-nums text-muted">
+              {b.dealCount > 0 ? formatCompactCurrency(b.totalValue) : '—'}
+            </p>
+            <p className="text-[10px] text-faint">{b.monthLabel}</p>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

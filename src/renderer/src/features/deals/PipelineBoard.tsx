@@ -101,10 +101,11 @@ export function PipelineBoard({
             real stage.
           </p>
           <div className="space-y-2.5">
-            {orphaned.map((deal) => (
+            {orphaned.map((deal, index) => (
               <DealCard
                 key={deal.id}
                 deal={deal}
+                index={index}
                 contact={contactById.get(deal.contactId)}
                 stats={contactStats.get(deal.contactId)}
                 stale={false}
@@ -133,7 +134,9 @@ export function PipelineBoard({
               <h3 className={cn('text-sm font-semibold', KIND_HEADER_TEXT[stage.kind])}>
                 {stage.label}
               </h3>
-              <span className={cn('text-[11px] font-medium', KIND_COUNT_PILL[stage.kind])}>
+              <span
+                className={cn('text-[11px] font-medium tabular-nums', KIND_COUNT_PILL[stage.kind])}
+              >
                 {stageDeals.length}
                 {total > 0 ? ` · ${formatValue(total)}` : ''}
               </span>
@@ -144,10 +147,11 @@ export function PipelineBoard({
                   No deals here
                 </div>
               ) : (
-                stageDeals.map((deal) => (
+                stageDeals.map((deal, index) => (
                   <DealCard
                     key={deal.id}
                     deal={deal}
+                    index={index}
                     contact={contactById.get(deal.contactId)}
                     stats={contactStats.get(deal.contactId)}
                     stale={isDealStale(
@@ -176,6 +180,7 @@ export function PipelineBoard({
 
 interface DealCardProps {
   deal: Deal
+  index: number
   contact: Contact | undefined
   stats: ContactStats | undefined
   stale: boolean
@@ -189,6 +194,7 @@ interface DealCardProps {
 
 function DealCard({
   deal,
+  index,
   contact,
   stats,
   stale,
@@ -216,9 +222,10 @@ function DealCard({
         }
       }}
       className={cn(
-        'press group cursor-pointer rounded-xl border border-line-soft bg-surface p-3.5 transition hover:border-line hover:bg-elevated',
+        'press stagger-item group cursor-pointer rounded-xl border border-line-soft bg-surface p-3.5 transition hover:border-line hover:bg-elevated',
         flash && 'flash'
       )}
+      style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}
     >
       <div className="flex items-start justify-between gap-2">
         <p className="min-w-0 truncate text-sm font-medium">{deal.title}</p>
@@ -238,7 +245,7 @@ function DealCard({
       </p>
       <div className="mt-2 flex items-center justify-between gap-2">
         {value ? (
-          <span className="text-[13px] font-semibold text-ink">{value}</span>
+          <span className="text-[13px] font-semibold tabular-nums text-ink">{value}</span>
         ) : (
           <span className="text-[11px] text-faint">No value set</span>
         )}

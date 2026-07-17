@@ -161,6 +161,17 @@ export interface Attachment {
   summary?: Summary
 }
 
+/** A moment the rep bookmarked mid-call ("clip this") — a timestamp + the
+ *  transcript text at that point, so it's findable later without re-reading
+ *  the whole call. */
+export interface Bookmark {
+  id: string
+  /** Milliseconds from the start of the call. */
+  atMs: number
+  text: string
+  createdAt: string
+}
+
 interface CallBase {
   id: string
   title: string
@@ -202,6 +213,11 @@ export interface Call extends CallBase {
   /** Tombstone: a deleted call is kept as a minimal record (transcript dropped)
    *  so the deletion can propagate to a future cloud backup. Hidden everywhere. */
   deleted?: boolean
+  bookmarks?: Bookmark[]
+  /** When an AI CRM note was auto-drafted from this call, if ever — prevents
+   *  double-drafting when both the contact-link and the summary land (in
+   *  either order) with Settings → CRM → "Auto-generate notes" on. */
+  crmNoteGeneratedAt?: string
 }
 
 export interface CallSaveInput {
@@ -246,6 +262,24 @@ function sanitizeSegments(value: unknown): CallSegment[] {
     const speaker = Number.isFinite(speakerRaw) ? Math.max(0, Math.trunc(speakerRaw as number)) : 0
     const text = typeof textRaw === 'string' ? textRaw.slice(0, MAX_TEXT) : ''
     if (text.trim()) out.push({ speaker, text })
+  }
+  return out
+}
+
+const MAX_BOOKMARKS = 500
+const MAX_BOOKMARK_TEXT = 2000
+
+function sanitizeBookmarks(value: unknown): Bookmark[] {
+  if (!Array.isArray(value)) return []
+  const out: Bookmark[] = []
+  for (const item of value.slice(0, MAX_BOOKMARKS)) {
+    if (!item || typeof item !== 'object') continue
+    const v = item as Record<string, unknown>
+    const id = isSafeId(v.id) ? v.id : randomUUID()
+    const atMs = Number.isFinite(v.atMs) ? Math.max(0, Math.trunc(v.atMs as number)) : 0
+    const text = typeof v.text === 'string' ? v.text.slice(0, MAX_BOOKMARK_TEXT) : ''
+    const createdAt = isoOrUndefined(v.createdAt) ?? new Date().toISOString()
+    if (text.trim()) out.push({ id, atMs, text, createdAt })
   }
   return out
 }
@@ -547,7 +581,10 @@ export function callFullBackupPayload(call: Call): Record<string, unknown> {
     ...callBackupPayload(call),
     preview: call.preview,
     segments: call.segments,
-    coaching: call.coaching
+    coaching: call.coaching,
+    // Bookmarks are transcript excerpts, same sensitivity as segments — only
+    // included under this same opt-in transcripts scope, never the default.
+    bookmarks: call.bookmarks
   }
 }
 
@@ -684,6 +721,16 @@ export async function importCall(
         ? sanitizeSegments(v.segments)
         : []
     const segments = deleted ? [] : current?.segments?.length ? current.segments : cloudSegments
+
+    // Bookmarks are transcript excerpts — same "local copy always wins when
+    // it exists" rule as segments above, since they only ever leave the
+    // device under the same opt-in transcripts scope.
+    const cloudBookmarks =
+      !deleted && !current?.bookmarks?.length && Array.isArray(v.bookmarks)
+        ? sanitizeBookmarks(v.bookmarks)
+        : []
+    const bookmarks = deleted ? [] : current?.bookmarks?.length ? current.bookmarks : cloudBookmarks
+
     const preview = deleted
       ? ''
       : current?.segments?.length || !cloudSegments.length
@@ -734,6 +781,13 @@ export async function importCall(
       ...(!deleted && (isoOrUndefined(v.objectionsMinedAt) ?? current?.objectionsMinedAt)
         ? { objectionsMinedAt: isoOrUndefined(v.objectionsMinedAt) ?? current?.objectionsMinedAt }
         : {}),
+      // Never synced (see callBackupPayload) — preserved only across a
+      // same-device restore-merge onto an existing local record, so a
+      // restore can't re-trigger a duplicate AI CRM note.
+      ...(!deleted && current?.crmNoteGeneratedAt
+        ? { crmNoteGeneratedAt: current.crmNoteGeneratedAt }
+        : {}),
+      ...(!deleted && bookmarks.length ? { bookmarks } : {}),
       ...(deleted ? { deleted: true } : {})
     }
     // Mirror every other persister (saveCall/getCall/listCalls): strip buyer
@@ -857,6 +911,52 @@ export async function setCallContact(
   })
 }
 
+/** Bookmark a moment mid-call ("clip this") — clamps `atMs` into the call's
+ *  actual duration and caps the transcript snippet length defensively. */
+export async function addBookmark(
+  dir: string,
+  callId: string,
+  atMs: unknown,
+  text: unknown
+): Promise<Call | null> {
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    const cleanText = typeof text === 'string' ? text.trim().slice(0, 2000) : ''
+    if (!cleanText) return call // nothing to bookmark
+    const cleanAtMs =
+      typeof atMs === 'number' && Number.isFinite(atMs)
+        ? Math.max(0, Math.min(atMs, call.durationMs))
+        : 0
+    const bookmark: Bookmark = {
+      id: randomUUID(),
+      atMs: cleanAtMs,
+      text: cleanText,
+      createdAt: new Date().toISOString()
+    }
+    call.bookmarks = [...(call.bookmarks ?? []), bookmark]
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+/** Remove one bookmark by id — the "undo" for an accidental clip. */
+export async function removeBookmark(
+  dir: string,
+  callId: string,
+  bookmarkId: string
+): Promise<Call | null> {
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    call.bookmarks = (call.bookmarks ?? []).filter((b) => b.id !== bookmarkId)
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
 export async function setAttachmentSummary(
   dir: string,
   callId: string,
@@ -885,6 +985,17 @@ export async function setCallObjectionsMined(dir: string, callId: string): Promi
     const call = await getCall(dir, callId)
     if (!call) return null
     call.objectionsMinedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+/** Mark a call as having auto-drafted its one-time AI CRM note. */
+export async function setCallCrmNoteGenerated(dir: string, callId: string): Promise<Call | null> {
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    call.crmNoteGeneratedAt = new Date().toISOString()
     await writeCall(dir, call)
     return call
   })

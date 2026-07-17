@@ -204,10 +204,11 @@ export function ContactsView({
         </p>
       ) : (
         <ul className="space-y-2.5">
-          {visible.map((contact) => (
+          {visible.map((contact, index) => (
             <ContactRow
               key={contact.id}
               contact={contact}
+              index={index}
               stats={stats.get(contact.id)}
               stale={isContactStale(
                 openDealContactIds.has(contact.id),
@@ -249,6 +250,7 @@ export function ContactsView({
 
 interface ContactRowProps {
   contact: Contact
+  index: number
   stats: ContactStats | undefined
   stale: boolean
   onView: () => void
@@ -258,6 +260,7 @@ interface ContactRowProps {
 
 function ContactRow({
   contact,
+  index,
   stats,
   stale,
   onView,
@@ -270,7 +273,7 @@ function ContactRow({
   const tone = recencyTone(stats?.lastCallAt)
 
   return (
-    <li>
+    <li className="stagger-item" style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}>
       <div className="group flex items-start gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3.5 transition hover:border-line hover:bg-elevated">
         <div className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-full bg-accent-soft text-sm font-semibold text-accent">
           {contact.name.slice(0, 1).toUpperCase()}
@@ -278,7 +281,7 @@ function ContactRow({
 
         <button type="button" onClick={onView} className="min-w-0 flex-1 text-left">
           <div className="flex items-baseline justify-between gap-3">
-            <p className="truncate text-sm font-medium">
+            <p className="truncate text-sm font-medium" title={contact.name}>
               {contact.country && (
                 <span className="mr-1.5" title={contact.country}>
                   {flagEmoji(contact.country)}

@@ -503,7 +503,7 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
               <Building2 className="h-3 w-3" /> {contact.company}
             </span>
           )}
-          {value && <span className="font-medium text-ink">{value}</span>}
+          {value && <span className="font-medium tabular-nums text-ink">{value}</span>}
           {!deal && (
             <span className="rounded-full border border-line-soft bg-canvas px-1.5 py-0.5 text-faint">
               No open deal
