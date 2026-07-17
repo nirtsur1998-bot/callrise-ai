@@ -127,15 +127,9 @@ export function AINoteTakerSection(): React.JSX.Element {
           <div className="mb-3 flex items-start gap-2 rounded-xl border border-warning/30 bg-warning-soft px-3.5 py-2.5 text-[13px] text-warning">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <span className="flex-1">
-              CallRise AI needs the Accessibility permission to detect the app you&rsquo;re using.
+              CallRise AI can&rsquo;t detect which app you&rsquo;re using right now — exclusions
+              won&rsquo;t apply until it can.
             </span>
-            <button
-              type="button"
-              onClick={() => void window.api.app.openAccessibilitySettings()}
-              className="shrink-0 rounded-lg border border-warning/40 px-2.5 py-1 text-xs font-medium text-warning hover:bg-warning/20"
-            >
-              Open Settings
-            </button>
           </div>
         )}
 

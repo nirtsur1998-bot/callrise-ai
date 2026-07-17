@@ -1,17 +1,25 @@
 // Foreground-app detection for AI Note Taker's "exclude these apps" feature.
-// Needs macOS Accessibility permission (active-win's native helper fails
-// without it) — detection is always best-effort: any failure (permission
-// not granted, unsupported platform, helper crash) resolves to null, and
-// callers must fail OPEN (never block auto-start just because detection
-// itself didn't work).
-import { app, ipcMain, shell, BrowserWindow } from 'electron'
+// Only the frontmost app's NAME is used (never its window title or URL), and
+// active-win only needs macOS Accessibility/Screen Recording permission to
+// fetch those two extra fields — so both are explicitly disabled below. This
+// also stops macOS from repeatedly showing its own native permission prompt
+// (accessibilityPermission defaults to true, which re-prompts on every
+// unsigned/ad-hoc-signed rebuild, since each rebuild gets a new code-signing
+// identity that macOS's TCC treats as a different app). Detection is always
+// best-effort regardless: any failure (unsupported platform, helper crash)
+// resolves to null, and callers must fail OPEN (never block auto-start just
+// because detection itself didn't work).
+import { app, ipcMain, BrowserWindow } from 'electron'
 import activeWin from 'active-win'
 import { isKnownCallingApp } from './known-calling-apps'
 
 /** The frontmost app's name, or null if detection isn't available/failed. */
 export async function getActiveAppName(): Promise<string | null> {
   try {
-    const result = await activeWin()
+    const result = await activeWin({
+      accessibilityPermission: false,
+      screenRecordingPermission: false
+    })
     const name = result?.owner?.name
     return typeof name === 'string' && name ? name : null
   } catch {
@@ -93,16 +101,4 @@ export function registerActiveApp(): void {
   // Lets the renderer show the right "fix this" instructions — a packaged
   // install has no `npm run dev` to restart, it just needs relaunching.
   ipcMain.handle('app:isPackaged', (): boolean => app.isPackaged)
-
-  // Deep-link to the permission active-win needs, mirroring the mic/screen-
-  // recording settings links elsewhere in this app.
-  ipcMain.handle('app:openAccessibilitySettings', async () => {
-    if (process.platform !== 'darwin') {
-      return { ok: false as const, error: 'not applicable on this platform' }
-    }
-    await shell.openExternal(
-      'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'
-    )
-    return { ok: true as const }
-  })
 }

@@ -997,8 +997,6 @@ export interface AppControlApi {
    *  needs, since the frontmost app at check time is always this app itself.
    *  Null until anything was observed; same fail-open rule as getActiveApp. */
   getLastExternalApp: () => Promise<string | null>
-  /** Deep-link to the macOS Accessibility settings pane active-win needs. */
-  openAccessibilitySettings: () => Promise<{ ok: boolean }>
   /** Fires when the frontmost app (while our window is blurred) matches a
    *  known calling app (WhatsApp, Zoom, Teams, MicroSIP, …) — a best-effort
    *  heuristic, not a guarantee a call is actually happening. Payload is the
