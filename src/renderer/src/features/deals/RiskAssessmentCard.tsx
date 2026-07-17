@@ -73,7 +73,7 @@ export function RiskAssessmentCard({
 
       {noKey && (
         <p className="mb-3 text-[13px] text-warning">
-          Add your Anthropic API key (ANTHROPIC_API_KEY in .env) to use this feature.
+          Add your Anthropic API key in Settings → API keys to use this feature.
         </p>
       )}
 

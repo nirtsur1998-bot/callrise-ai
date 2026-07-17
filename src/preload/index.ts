@@ -153,6 +153,13 @@ const api = {
     pullEvents: () => ipcRenderer.invoke('outlook:pullEvents'),
     cachedEvents: () => ipcRenderer.invoke('outlook:cachedEvents')
   },
+  aiKeys: {
+    getStatus: () => ipcRenderer.invoke('aiKeys:getStatus'),
+    save: (name: 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY', value: string) =>
+      ipcRenderer.invoke('aiKeys:save', name, value),
+    clear: (name: 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY') =>
+      ipcRenderer.invoke('aiKeys:clear', name)
+  },
   virtualmic: {
     // App-managed noise cancellation: detect + start/stop the denoiser helper.
     getStatus: () => ipcRenderer.invoke('virtualmic:getStatus'),

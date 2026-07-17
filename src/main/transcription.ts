@@ -1,5 +1,6 @@
 import { ipcMain, BrowserWindow, systemPreferences, shell } from 'electron'
 import WebSocket from 'ws'
+import { keyRejectedHint } from './ai-keys'
 
 const DEEPGRAM_LISTEN_URL = 'wss://api.deepgram.com/v1/listen'
 const MAX_CHUNK_BYTES = 1 << 16 // 64 KB safety cap on a single audio frame
@@ -202,7 +203,7 @@ function connect(s: Session): void {
   ws.on('unexpected-response', (_req, res) => {
     const message =
       res.statusCode === 401
-        ? 'Your Deepgram API key was rejected. Check DEEPGRAM_API_KEY in your .env file.'
+        ? `Your Deepgram API key was rejected. ${keyRejectedHint('DEEPGRAM_API_KEY')}`
         : `Couldn't connect to Deepgram (HTTP ${res.statusCode ?? 'unknown'}).`
     try {
       res.destroy()

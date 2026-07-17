@@ -12,11 +12,13 @@ import {
   NotebookPen,
   Contact,
   MessageSquareQuote,
+  KeyRound,
   type LucideIcon
 } from 'lucide-react'
 
 export type SettingsPageId =
   | 'account'
+  | 'ai-setup'
   | 'ai-note-taker'
   | 'recording-consent'
   | 'audio'
@@ -46,6 +48,18 @@ export interface SettingsGroup {
 export const SETTINGS_GROUPS: SettingsGroup[] = [
   {
     items: [{ id: 'account', label: 'Account', icon: User }]
+  },
+  {
+    label: 'AI Setup',
+    items: [
+      {
+        id: 'ai-setup',
+        label: 'API keys',
+        icon: KeyRound,
+        description:
+          'Your own Deepgram (transcription) and Anthropic (coaching & summaries) keys — required for those features to work.'
+      }
+    ]
   },
   {
     label: 'Meeting Assistant',

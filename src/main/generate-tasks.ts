@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { TaskPriority, TaskType } from './tasks-fs'
+import { keyRejectedHint } from './ai-keys'
 
 const MODEL = 'claude-sonnet-4-6'
 const MAX_TEXT_CHARS = 200_000 // keep requests bounded
@@ -104,7 +105,7 @@ const ALLOWED_PRIORITIES = new Set<TaskPriority>(['low', 'medium', 'high'])
 
 function friendlyError(err: unknown): string {
   if (err instanceof Anthropic.AuthenticationError) {
-    return 'Your Anthropic API key was rejected. Check ANTHROPIC_API_KEY in your .env file.'
+    return `Your Anthropic API key was rejected. ${keyRejectedHint('ANTHROPIC_API_KEY')}`
   }
   if (err instanceof Anthropic.RateLimitError) {
     return 'Anthropic is rate-limiting requests right now. Wait a moment and try again.'

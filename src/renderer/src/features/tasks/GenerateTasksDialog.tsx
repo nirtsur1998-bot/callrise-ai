@@ -248,11 +248,8 @@ function ErrorState({
       <div className="rounded-xl border border-warning/30 bg-warning-soft p-4 text-sm text-warning">
         <p className="font-medium">Add your Anthropic API key</p>
         <p className="mt-1 opacity-90">
-          Generating tasks needs an Anthropic key. Get one at console.anthropic.com, paste it into
-          the
-          <code className="mx-1 rounded bg-canvas px-1 py-0.5">.env</code> file as
-          <code className="mx-1 rounded bg-canvas px-1 py-0.5">ANTHROPIC_API_KEY=…</code>, then
-          restart the app.
+          Generating tasks needs an Anthropic key. Get one at console.anthropic.com, paste it into{' '}
+          <span className="text-ink">Settings → API keys</span>, then restart the app.
         </p>
       </div>
     )

@@ -774,6 +774,23 @@ export interface VirtualMicStatus {
   helperPath: string | null
 }
 
+export type AiKeyName = 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY'
+
+export interface AiKeyStatus {
+  /** True once real API calls will succeed for this key — a Settings-saved
+   *  key, or a developer .env value, either way. */
+  configured: boolean
+  /** Masked preview ("sk-ant-…UD2I") for display only — never the raw key. */
+  hint: string | null
+}
+
+export interface AiKeysApi {
+  getStatus: () => Promise<Record<AiKeyName, AiKeyStatus>>
+  /** Saved key takes effect after the app is restarted. */
+  save: (name: AiKeyName, value: string) => Promise<{ ok: boolean; error?: string }>
+  clear: (name: AiKeyName) => Promise<{ ok: boolean; error?: string }>
+}
+
 export interface VirtualMicApi {
   /** Current driver/helper/denoise status. */
   getStatus: () => Promise<VirtualMicStatus>
@@ -1011,6 +1028,7 @@ declare global {
       objectionQueue: ObjectionQueueApi
       settings: AppSettingsApi
       app: AppControlApi
+      aiKeys: AiKeysApi
     }
   }
 }

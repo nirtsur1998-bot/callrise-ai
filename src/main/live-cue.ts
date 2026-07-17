@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import Anthropic from '@anthropic-ai/sdk'
 import { listEntries } from './knowledge-fs'
 import { assembleKnowledgeContext } from './knowledge-context'
+import { keyRejectedHint } from './ai-keys'
 
 // A fast, cheap "next question" suggestion for the live monologue cue. Uses
 // Haiku for low latency — this runs mid-call and must return quickly or not at
@@ -138,7 +139,7 @@ const ASK_PROMPT = `You are a live sales-call coach helping a rep mid-call. Belo
 
 function friendlyError(err: unknown): string {
   if (err instanceof Anthropic.AuthenticationError) {
-    return 'Your Anthropic API key was rejected. Check it in your .env file.'
+    return `Your Anthropic API key was rejected. ${keyRejectedHint('ANTHROPIC_API_KEY')}`
   }
   if (err instanceof Anthropic.APIError) {
     const msg = typeof err.message === 'string' ? err.message.toLowerCase() : ''

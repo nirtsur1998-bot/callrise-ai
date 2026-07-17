@@ -5,6 +5,7 @@ import { isMac } from '@renderer/lib/platform'
 import type { AuthUser } from '@renderer/features/auth/types'
 import { SETTINGS_GROUPS, ALL_SETTINGS_PAGES, type SettingsPageId } from './settings-nav'
 import { AccountSection } from './AccountSection'
+import { ApiKeysSection } from './ApiKeysSection'
 import { AINoteTakerSection } from './AINoteTakerSection'
 import { RecordingConsentSection } from './RecordingConsentSection'
 import { AudioSection } from './AudioSection'
@@ -20,6 +21,7 @@ import { PrivacyDataPage } from './PrivacyDataPage'
 
 const PAGE_CONTENT: Record<SettingsPageId, React.ComponentType> = {
   account: AccountSection,
+  'ai-setup': ApiKeysSection,
   'ai-note-taker': AINoteTakerSection,
   'recording-consent': RecordingConsentSection,
   audio: AudioSection,

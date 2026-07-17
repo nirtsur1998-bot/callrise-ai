@@ -8,12 +8,18 @@ import {
   Plus,
   FileText,
   RotateCw,
+  RefreshCw,
   ListChecks,
   GraduationCap,
   Contact as ContactIcon,
   Copy,
-  Check
+  Check,
+  Search,
+  ChevronUp,
+  ChevronDown,
+  Bookmark as BookmarkIcon
 } from 'lucide-react'
+import { cn } from '@renderer/lib/cn'
 import { SpeakerTranscript } from '@renderer/components/SpeakerTranscript'
 import { SummaryView, SummaryLoading } from '@renderer/components/SummaryView'
 import { IconButton } from '@renderer/components/IconButton'
@@ -21,6 +27,7 @@ import { Button } from '@renderer/components/Button'
 import { BackButton } from '@renderer/components/BackButton'
 import { Card } from '@renderer/components/Card'
 import { Skeleton } from '@renderer/components/Skeleton'
+import { fieldClass } from '@renderer/components/field'
 import { overallTier, TONE_TO_BADGE, speakerLabel } from '@renderer/features/coaching/meta'
 import { Badge } from '@renderer/components/Badge'
 import { GenerateTasksDialog } from '@renderer/features/tasks/GenerateTasksDialog'
@@ -41,8 +48,39 @@ import {
 } from '@renderer/features/contacts/calendarMatch'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import type { CalendarEvent } from '@renderer/features/calendar/types'
+import { recordRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import { formatDate, formatDuration, formatBytes } from './format'
+import { PracticeMode } from './PracticeMode'
 import type { Attachment, Call } from './types'
+
+/** mm:ss relative to call start — bookmarks store `atMs` as milliseconds. */
+function formatMmSs(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+// Local copy of the same escaping SpeakerTranscript uses internally for its
+// `<mark>` highlighting — kept in sync by hand since SpeakerTranscript.tsx
+// can't export a non-component helper (Fast Refresh only allows a component
+// file to export components).
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** Counts every case-insensitive occurrence of `query` across all segments,
+ *  in the same top-to-bottom order SpeakerTranscript renders them, so the
+ *  search box's "N of M" and up/down paging line up with what's highlighted. */
+function countTranscriptMatches(segments: { text: string }[], query: string): number {
+  const re = new RegExp(escapeRegExp(query), 'gi')
+  let count = 0
+  for (const seg of segments) {
+    const found = seg.text.match(re)
+    if (found) count += found.length
+  }
+  return count
+}
 
 const ACCEPT = '.pdf,.txt,.md,.docx'
 const SUPPORTED = ['pdf', 'txt', 'md', 'docx']
@@ -73,6 +111,11 @@ export function CallDetail({
   const [coaching, setCoaching] = useState(false)
   const [coachError, setCoachError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [practicing, setPracticing] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [activeMatch, setActiveMatch] = useState(0)
+  const bodyScrollRef = useRef<HTMLDivElement>(null)
+  const transcriptWrapperRef = useRef<HTMLDivElement>(null)
   const { contacts, create: createContact } = useContacts()
   const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([])
   const [matchDismissed, setMatchDismissed] = useState(() => isMatchDismissed(callId))
@@ -130,10 +173,44 @@ export function CallDetail({
     }
   }, [])
 
+  // Cross-screen "recently viewed" trail — record once the call has actually
+  // loaded (not on the initial null/loading render). Guarded via `call?.id`
+  // (a member expression, not the bare `call` variable) so exhaustive-deps
+  // is satisfied by the granular [call?.id, call?.title] dependency list.
+  useEffect(() => {
+    if (call?.id) recordRecentlyViewed('call', call.id, call.title)
+  }, [call?.id, call?.title])
+
   const reload = useCallback(async () => {
     const c = await window.api.calls.get(callId)
     if (mountedRef.current && c) setCall(c)
   }, [callId])
+
+  const removeBookmark = useCallback(
+    async (bookmarkId: string) => {
+      const updated = await window.api.calls.removeBookmark(callId, bookmarkId)
+      if (!mountedRef.current) return
+      if (updated) setCall(updated)
+      else await reload()
+    },
+    [callId, reload]
+  )
+
+  // Approximate seek: no per-segment timing is stored, so this scrolls the
+  // scrollable body proportionally (atMs / durationMs) against the
+  // transcript card's own height — close enough to "roughly that point"
+  // without segment-level timestamps to seek precisely.
+  const scrollToBookmark = useCallback(
+    (atMs: number) => {
+      const container = bodyScrollRef.current
+      const wrapper = transcriptWrapperRef.current
+      if (!container || !wrapper || !call || call.durationMs <= 0) return
+      const fraction = Math.min(1, Math.max(0, atMs / call.durationMs))
+      const target = wrapper.offsetTop + fraction * wrapper.clientHeight
+      container.scrollTo({ top: Math.max(0, target - 24), behavior: 'smooth' })
+    },
+    [call]
+  )
 
   const notifyChanged = useCallback(async () => {
     await reload()
@@ -378,30 +455,53 @@ export function CallDetail({
 
   const tier = call.coaching ? overallTier(call.coaching.overallScore) : null
 
+  if (practicing) {
+    return <PracticeMode call={call} onExit={() => setPracticing(false)} />
+  }
+
+  const trimmedSearch = searchQuery.trim()
+  const matchCount = trimmedSearch ? countTranscriptMatches(call.segments, trimmedSearch) : 0
+  const clampedActiveMatch = matchCount > 0 ? Math.min(activeMatch, matchCount - 1) : 0
+  const bookmarks = [...(call.bookmarks ?? [])].sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt)
+  )
+
   return (
     <div className="mx-auto flex h-full w-full max-w-3xl flex-col">
       {/* Top bar */}
       <div className="mb-4 flex items-center justify-between">
         <BackButton onClick={onBack} label="Past Calls" />
-        {confirmDelete ? (
-          <div className="flex items-center gap-1.5">
-            <Button variant="danger" size="sm" onClick={deleteCall}>
-              Delete call
+        <div className="flex items-center gap-1.5">
+          {!confirmDelete && call.segments.length > 0 && (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={RefreshCw}
+              onClick={() => setPracticing(true)}
+            >
+              Practice this call
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => setConfirmDelete(false)}>
-              Cancel
+          )}
+          {confirmDelete ? (
+            <>
+              <Button variant="danger" size="sm" onClick={deleteCall}>
+                Delete call
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setConfirmDelete(false)}>
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={Trash2}
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete
             </Button>
-          </div>
-        ) : (
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={Trash2}
-            onClick={() => setConfirmDelete(true)}
-          >
-            Delete
-          </Button>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Title + meta */}
@@ -425,7 +525,7 @@ export function CallDetail({
       </div>
 
       {/* Scrollable body */}
-      <div className="flex-1 space-y-4 overflow-y-auto pb-2">
+      <div ref={bodyScrollRef} className="flex-1 space-y-4 overflow-y-auto pb-2">
         {noKey && <NoKeyBanner />}
 
         {/* Linked contact */}
@@ -492,7 +592,10 @@ export function CallDetail({
         </Card>
 
         {/* Transcript */}
-        <div className="rounded-2xl border border-line-soft bg-surface px-7 py-6">
+        <div
+          ref={transcriptWrapperRef}
+          className="rounded-2xl border border-line-soft bg-surface px-7 py-6"
+        >
           <div className="mb-4 flex items-center justify-between">
             <h3 className="text-sm font-semibold">Transcript</h3>
             {call.segments.length > 0 && (
@@ -503,15 +606,94 @@ export function CallDetail({
               />
             )}
           </div>
+          {call.segments.length > 0 && (
+            <div className="mb-4 flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value)
+                    setActiveMatch(0)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' || matchCount === 0) return
+                    e.preventDefault()
+                    setActiveMatch((i) =>
+                      e.shiftKey ? (i - 1 + matchCount) % matchCount : (i + 1) % matchCount
+                    )
+                  }}
+                  placeholder="Search transcript…"
+                  className={cn(fieldClass, 'pl-8')}
+                />
+              </div>
+              {trimmedSearch && (
+                <div className="flex shrink-0 items-center gap-0.5 text-[12px] text-muted">
+                  <span className="mr-1 tabular-nums">
+                    {matchCount > 0 ? `${clampedActiveMatch + 1} of ${matchCount}` : 'No matches'}
+                  </span>
+                  <IconButton
+                    icon={ChevronUp}
+                    label="Previous match"
+                    disabled={matchCount === 0}
+                    onClick={() => setActiveMatch((i) => (i - 1 + matchCount) % matchCount)}
+                  />
+                  <IconButton
+                    icon={ChevronDown}
+                    label="Next match"
+                    disabled={matchCount === 0}
+                    onClick={() => setActiveMatch((i) => (i + 1) % matchCount)}
+                  />
+                </div>
+              )}
+            </div>
+          )}
           {call.segments.length > 0 ? (
             <SpeakerTranscript
               segments={call.segments}
               repSpeaker={call.coaching?.metrics.repSpeaker ?? null}
+              highlightQuery={trimmedSearch}
+              activeMatchIndex={matchCount > 0 ? clampedActiveMatch : undefined}
             />
           ) : (
             <p className="text-sm italic text-faint">This call has no transcript.</p>
           )}
         </div>
+
+        {/* Bookmarks */}
+        {bookmarks.length > 0 && (
+          <Card>
+            <div className="mb-4 flex items-center gap-2">
+              <BookmarkIcon className="h-4 w-4 text-accent" />
+              <h3 className="text-sm font-semibold">Bookmarks</h3>
+              <span className="text-[11px] text-faint">{bookmarks.length}</span>
+            </div>
+            <div className="space-y-2.5">
+              {bookmarks.map((bm) => (
+                <div
+                  key={bm.id}
+                  className="flex items-start gap-3 rounded-xl border border-line-soft bg-canvas p-3"
+                >
+                  <button
+                    type="button"
+                    onClick={() => scrollToBookmark(bm.atMs)}
+                    className="shrink-0 rounded-md bg-accent-soft px-2 py-1 text-[11px] font-semibold tabular-nums text-accent transition hover:brightness-110"
+                  >
+                    {formatMmSs(bm.atMs)}
+                  </button>
+                  <p className="min-w-0 flex-1 line-clamp-2 text-sm text-ink">{bm.text}</p>
+                  <IconButton
+                    icon={Trash2}
+                    label="Remove bookmark"
+                    variant="danger"
+                    onClick={() => void removeBookmark(bm.id)}
+                  />
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
 
         {/* Sales coaching */}
         <Card>
@@ -646,10 +828,8 @@ function NoKeyBanner(): React.JSX.Element {
     <div className="rounded-xl border border-warning/30 bg-warning-soft p-4 text-sm text-warning">
       <p className="font-medium">Add your Anthropic API key</p>
       <p className="mt-1 text-warning/80">
-        AI summaries need an Anthropic key. Get one at console.anthropic.com, paste it into the
-        <code className="mx-1 rounded bg-canvas px-1 py-0.5 text-warning">.env</code> file as
-        <code className="mx-1 rounded bg-canvas px-1 py-0.5 text-warning">ANTHROPIC_API_KEY=…</code>
-        , then restart the app.
+        AI summaries need an Anthropic key. Get one at console.anthropic.com, paste it into{' '}
+        <span className="text-warning">Settings → API keys</span>, then restart the app.
       </p>
     </div>
   )

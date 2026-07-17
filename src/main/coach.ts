@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { join } from 'node:path'
 import Anthropic from '@anthropic-ai/sdk'
+import { keyRejectedHint } from './ai-keys'
 import type {
   CallSegment,
   CoachingReport,
@@ -448,7 +449,7 @@ function assembleReport(
 
 function friendlyError(err: unknown): string {
   if (err instanceof Anthropic.AuthenticationError) {
-    return 'Your Anthropic API key was rejected. Check ANTHROPIC_API_KEY in your .env file.'
+    return `Your Anthropic API key was rejected. ${keyRejectedHint('ANTHROPIC_API_KEY')}`
   }
   if (err instanceof Anthropic.RateLimitError) {
     return 'Anthropic is rate-limiting requests right now. Wait a moment and try again.'

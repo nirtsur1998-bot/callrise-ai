@@ -3,6 +3,7 @@ import type { Summary } from './calls-fs'
 import { loadAppSettings } from './app-settings'
 import { assemblePersonalizationContext } from './personalization-context'
 import { summaryLanguageInstruction } from './summary-language'
+import { keyRejectedHint } from './ai-keys'
 
 const MODEL = 'claude-sonnet-4-6'
 const MAX_TEXT_CHARS = 200_000 // keep requests bounded
@@ -91,7 +92,7 @@ function toStringArray(value: unknown): string[] {
 
 function friendlyError(err: unknown): string {
   if (err instanceof Anthropic.AuthenticationError) {
-    return 'Your Anthropic API key was rejected. Check ANTHROPIC_API_KEY in your .env file.'
+    return `Your Anthropic API key was rejected. ${keyRejectedHint('ANTHROPIC_API_KEY')}`
   }
   if (err instanceof Anthropic.RateLimitError) {
     return 'Anthropic is rate-limiting requests right now. Wait a moment and try again.'

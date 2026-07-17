@@ -3,6 +3,7 @@ import { app, shell, BrowserWindow, session } from 'electron'
 import { join, dirname } from 'path'
 import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { DEFAULT_CONFIG } from './default-config'
 
 // Renamed "Sales OS" -> "CallRise AI" (rebrand), but the on-disk data folder
 // keeps its original name so existing calls/tasks/settings/consent/Google
@@ -21,6 +22,13 @@ const envPaths = [
   join(userDataDir, '.env')
 ].filter((p) => existsSync(p))
 if (envPaths.length > 0) loadEnv({ path: envPaths })
+
+// Fill in only what's still missing after any .env — a developer's own .env
+// (e.g. pointing at a different Supabase project) always wins. This is what
+// lets a fresh install log in and sync Google Calendar with zero setup.
+for (const [key, value] of Object.entries(DEFAULT_CONFIG)) {
+  if (!process.env[key]) process.env[key] = value
+}
 import icon from '../../resources/icon.png?asset'
 import { registerTranscription, disposeTranscription } from './transcription'
 import { registerCalls } from './calls'
@@ -41,6 +49,8 @@ import { registerObjectionQueue } from './objection-queue'
 import { registerAppSettings } from './app-settings'
 import { registerLaunchAtLogin } from './launch-at-login'
 import { registerActiveApp } from './active-app'
+import { registerCoachPdf } from './coach-pdf'
+import { registerAiKeys, loadStoredAiKeysIntoEnv } from './ai-keys'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -102,8 +112,13 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   electronApp.setAppUserModelId('ai.callrise.app')
+
+  // Before anything that might use Deepgram/Anthropic — a user's own
+  // Settings-entered key (if any) needs to be in process.env first.
+  await loadStoredAiKeysIntoEnv()
+  registerAiKeys()
 
   // In dev, Electron shows its own default dock icon on macOS unless we set
   // one explicitly (packaged builds pick it up automatically from build/icon.png).
@@ -122,6 +137,7 @@ app.whenReady().then(() => {
 
   registerTranscription()
   registerCalls()
+  registerCoachPdf()
   registerTasks()
   registerContacts()
   registerDeals()

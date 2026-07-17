@@ -112,14 +112,7 @@ export function NoKeyState({ onRetry }: { onRetry: () => void }): React.JSX.Elem
             Create a free key at <span className="text-accent">console.deepgram.com</span>
           </li>
           <li>
-            Open the <code className="rounded bg-canvas px-1 py-0.5 text-ink">.env</code> file in
-            your project
-          </li>
-          <li>
-            Paste it:{' '}
-            <code className="rounded bg-canvas px-1 py-0.5 text-ink">
-              DEEPGRAM_API_KEY=your_key
-            </code>
+            Paste it into <span className="text-ink">Settings → API keys</span>
           </li>
           <li>Restart the app, then click Try again</li>
         </ol>
