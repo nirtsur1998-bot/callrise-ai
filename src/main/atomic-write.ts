@@ -33,7 +33,9 @@ export async function writeJsonAtomic(path: string, value: unknown): Promise<voi
   try {
     await fs.writeFile(tmp, data, 'utf8')
     JSON.parse(await fs.readFile(tmp, 'utf8')) // verify it's complete before it replaces the good file
-    const tmpHandle = await fs.open(tmp, 'r')
+    // 'r+' (not 'r'): Windows refuses to fsync a handle that lacks write
+    // access, unlike macOS/Linux where any valid fd can be flushed.
+    const tmpHandle = await fs.open(tmp, 'r+')
     try {
       await tmpHandle.sync() // flush the data to disk before the rename makes it live
     } finally {
@@ -69,7 +71,9 @@ export function writeJsonAtomicSync(path: string, value: unknown): void {
   try {
     writeFileSync(tmp, data, 'utf8')
     JSON.parse(readFileSync(tmp, 'utf8')) // verify before it replaces the good file
-    let fd = openSync(tmp, 'r')
+    // 'r+' (not 'r'): Windows refuses to fsync a handle that lacks write
+    // access, unlike macOS/Linux where any valid fd can be flushed.
+    let fd = openSync(tmp, 'r+')
     try {
       fsyncSync(fd)
     } finally {
