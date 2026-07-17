@@ -165,6 +165,9 @@ const api = {
     getStatus: () => ipcRenderer.invoke('virtualmic:getStatus'),
     start: () => ipcRenderer.invoke('virtualmic:start'),
     stop: () => ipcRenderer.invoke('virtualmic:stop'),
+    // One-click install of the HAL driver — still needs the OS's own admin
+    // password prompt (unavoidable for a system audio device), but no terminal.
+    installDriver: () => ipcRenderer.invoke('virtualmic:installDriver'),
     // Fires when the helper's running/denoise state changes (started, stopped, crashed).
     onChanged: (cb: (status: unknown) => void) => subscribe('virtualmic:changed', cb)
   },

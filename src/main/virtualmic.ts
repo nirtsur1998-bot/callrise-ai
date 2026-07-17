@@ -26,9 +26,12 @@
 // seconds, since that's a real, likely-repeatable problem a blind restart
 // would just loop on.
 import { ipcMain, BrowserWindow, app, systemPreferences, Notification } from 'electron'
-import { spawn, execFileSync, type ChildProcess } from 'child_process'
+import { spawn, execFileSync, execFile, type ChildProcess } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
+import { promisify } from 'util'
+
+const execFileAsync = promisify(execFile)
 
 // The installed Core Audio driver bundle (system-level; put there by the
 // virtual-mic program's install step, which needs admin rights).
@@ -120,6 +123,50 @@ function resolveHelperPath(): string | null {
     if (existsSync(p)) return p
   }
   return null
+}
+
+// Resolve the .driver bundle to install — same search order as the helper
+// binary above (bundled resources first, then the dev sibling repo).
+function resolveDriverBundleSource(): string | null {
+  const candidates = [
+    join(process.resourcesPath ?? '', 'virtualmic', 'build', 'SalesOSMicrophone.driver'),
+    join(app.getAppPath(), '..', 'salesos-virtualmic', 'build', 'SalesOSMicrophone.driver')
+  ]
+  for (const p of candidates) {
+    if (existsSync(p)) return p
+  }
+  return null
+}
+
+/** Installs the Core Audio driver into /Library/Audio/Plug-Ins/HAL — a
+ *  system location, so this always needs the OS's own admin-password prompt
+ *  (osascript's "with administrator privileges"). There is no way around
+ *  that native prompt; this just removes the need to open a terminal and
+ *  type the copy/restart commands by hand. */
+async function installDriver(): Promise<{ ok: boolean; error?: string }> {
+  if (process.platform !== 'darwin') {
+    return { ok: false, error: 'noise cancellation is only available on macOS' }
+  }
+  const source = resolveDriverBundleSource()
+  if (!source) return { ok: false, error: 'driver bundle not found' }
+  if (existsSync(DRIVER_PATH)) return { ok: true } // already installed
+
+  // Single osascript call: remove any stale copy, copy the new one in, then
+  // restart coreaudiod so it picks up the new HAL plug-in — one admin prompt
+  // covers the whole sequence rather than one per shell command.
+  const script = `do shell script "rm -rf '${DRIVER_PATH}' && cp -R '${source}' '${DRIVER_PATH}' && killall coreaudiod" with administrator privileges`
+  try {
+    await execFileAsync('/usr/bin/osascript', ['-e', script])
+    broadcast()
+    return { ok: true }
+  } catch (err) {
+    // User cancelled the password prompt, or the copy/restart failed.
+    const message = err instanceof Error ? err.message : String(err)
+    if (message.includes('User canceled') || message.includes('-128')) {
+      return { ok: false, error: 'cancelled' }
+    }
+    return { ok: false, error: 'install failed' }
+  }
 }
 
 function getStatus(): VirtualMicStatus {
@@ -352,6 +399,7 @@ export function registerVirtualMic(): void {
   ipcMain.handle('virtualmic:getStatus', () => getStatus())
   ipcMain.handle('virtualmic:start', () => startHelper())
   ipcMain.handle('virtualmic:stop', () => stopHelper())
+  ipcMain.handle('virtualmic:installDriver', () => installDriver())
 }
 
 // Ensure the helper never outlives the app (it captures the mic).

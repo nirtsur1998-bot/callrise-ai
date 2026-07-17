@@ -798,6 +798,9 @@ export interface VirtualMicApi {
   start: () => Promise<{ ok: boolean; error?: string }>
   /** Stop the denoiser helper. */
   stop: () => Promise<{ ok: boolean }>
+  /** One-click install of the HAL driver (still shows the OS's own admin
+   *  password prompt — that part can't be automated away). */
+  installDriver: () => Promise<{ ok: boolean; error?: string }>
   /** Fires when the helper's running/denoise state changes. */
   onChanged: (cb: (status: VirtualMicStatus) => void) => () => void
 }

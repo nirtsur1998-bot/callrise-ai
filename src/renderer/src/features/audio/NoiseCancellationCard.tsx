@@ -16,6 +16,10 @@ function errorMessage(code: string): string {
       return "Couldn't turn on — the audio device isn't installed yet."
     case 'could not launch helper':
       return "Couldn't turn on — the noise-cancellation engine failed to start."
+    case 'driver bundle not found':
+      return "Couldn't install — the audio device wasn't found on disk."
+    case 'install failed':
+      return "Couldn't install — something went wrong copying the audio device. Try again."
     default:
       return `Couldn't turn on (${code}). Try again in a moment.`
   }
@@ -25,7 +29,7 @@ function errorMessage(code: string): string {
  *  cleans the mic and publishes it as the "Sales OS Microphone" device — which
  *  the user then selects in Zoom/Meet (or here) so the buyer hears clean audio. */
 export function NoiseCancellationCard(): React.JSX.Element | null {
-  const { status, busy, error, start, stop } = useVirtualMic()
+  const { status, busy, error, start, stop, installDriver } = useVirtualMic()
 
   // The noise-cancellation engine is a macOS Core Audio driver — it doesn't
   // exist on other platforms (a Windows version is its own future project), so
@@ -90,9 +94,19 @@ export function NoiseCancellationCard(): React.JSX.Element | null {
             The &ldquo;Sales OS Microphone&rdquo; audio device isn&rsquo;t installed yet.
           </p>
           <p className="mt-1.5 text-[11px] text-faint">
-            One-time setup installs a system audio device and needs your admin password. Once
-            it&rsquo;s in place, you can turn noise cancellation on here.
+            One-time setup installs a system audio device. macOS will ask for your admin
+            password — that part&rsquo;s unavoidable for any app installing a system audio
+            device, but there&rsquo;s nothing else to do.
           </p>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void installDriver()}
+            className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Install
+          </button>
         </div>
       )}
 

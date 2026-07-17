@@ -13,6 +13,9 @@ export interface UseVirtualMic {
   start: () => Promise<void>
   /** Stop the denoiser helper. */
   stop: () => Promise<void>
+  /** One-click driver install (still shows the OS's own admin-password
+   *  prompt — that part is a hard OS requirement, not something to remove). */
+  installDriver: () => Promise<void>
 }
 
 /**
@@ -68,5 +71,21 @@ export function useVirtualMic(): UseVirtualMic {
     }
   }, [refresh])
 
-  return { status, busy, error, start, stop }
+  const installDriver = useCallback(async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await window.api.virtualmic.installDriver()
+      if (!result.ok && mountedRef.current) {
+        // "cancelled" (user dismissed the password prompt) isn't a real
+        // failure worth alarming about — just quietly leave it not installed.
+        if (result.error !== 'cancelled') setError(result.error ?? 'install failed')
+      }
+      await refresh()
+    } finally {
+      if (mountedRef.current) setBusy(false)
+    }
+  }, [refresh])
+
+  return { status, busy, error, start, stop, installDriver }
 }

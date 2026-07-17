@@ -42,6 +42,21 @@ mac:
   notarize: false
   target:
     - dmg
+  # The noise-cancellation engine (michelper + DFN3 Standard model + the HAL
+  # driver bundle) lives in the separate salesos-virtualmic repo, built as a
+  # sibling checkout next to this one. This copies its ALREADY-BUILT output
+  # in — it does not build that repo. If that sibling repo isn't present at
+  # build time, this step fails loudly (a missing denoiser shouldn't ship
+  # silently). Only the Standard model ships, not the 36MB LL variant this
+  # app doesn't use. Layout mirrors what virtualmic.ts's resolveHelperPath /
+  # resolveDriverBundleSource expect under resourcesPath/virtualmic/.
+  extraResources:
+    - from: ../salesos-virtualmic/build/michelper
+      to: virtualmic/build/michelper
+    - from: ../salesos-virtualmic/build/SalesOSMicrophone.driver
+      to: virtualmic/build/SalesOSMicrophone.driver
+    - from: ../salesos-virtualmic/phase2/models/DeepFilterNet3_onnx.tar.gz
+      to: virtualmic/phase2/models/DeepFilterNet3_onnx.tar.gz
 dmg:
   artifactName: CallRise AI Mac (${arch}).${ext}
 linux:
