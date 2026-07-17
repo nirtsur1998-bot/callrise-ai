@@ -60,9 +60,10 @@ export function EntryFormDialog({
           : { title: title.trim(), body: body.trim() }
       )
       // Parent closes the dialog on success.
-    } catch {
+    } catch (err) {
+      console.error('Failed to save knowledge entry:', err)
       setSaving(false)
-      setError('Could not save. Please try again.')
+      setError(`Could not save. ${err instanceof Error ? err.message : 'Please try again.'}`)
     }
   }
 

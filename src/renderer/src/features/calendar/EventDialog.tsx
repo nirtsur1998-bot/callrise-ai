@@ -89,9 +89,12 @@ export function EventDialog({
     setError(null)
     try {
       await onSubmit(draft)
-    } catch {
+    } catch (err) {
+      console.error('Failed to save event:', err)
       setBusy(false)
-      setError('Could not save the event. Please try again.')
+      setError(
+        `Could not save the event. ${err instanceof Error ? err.message : 'Please try again.'}`
+      )
     }
   }
 

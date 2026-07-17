@@ -90,9 +90,12 @@ export function ContactFormDialog({
         notes: draft.notes.trim() || null
       })
       // Parent closes the dialog on success.
-    } catch {
+    } catch (err) {
+      console.error('Failed to save contact:', err)
       setSaving(false)
-      setError('Could not save the contact. Please try again.')
+      setError(
+        `Could not save the contact. ${err instanceof Error ? err.message : 'Please try again.'}`
+      )
     }
   }
 

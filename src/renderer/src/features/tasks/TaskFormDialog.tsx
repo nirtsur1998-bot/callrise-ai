@@ -66,9 +66,12 @@ export function TaskFormDialog({
         note: draft.note.trim() || null
       })
       // Parent closes the dialog on success.
-    } catch {
+    } catch (err) {
+      console.error('Failed to save task:', err)
       setSaving(false)
-      setError('Could not save the task. Please try again.')
+      setError(
+        `Could not save the task. ${err instanceof Error ? err.message : 'Please try again.'}`
+      )
     }
   }
 

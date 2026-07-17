@@ -71,9 +71,12 @@ export function DealFormDialog({
         notes: draft.notes.trim() || null
       })
       // Parent closes the dialog on success.
-    } catch {
+    } catch (err) {
+      console.error('Failed to save deal:', err)
       setSaving(false)
-      setError('Could not save the deal. Please try again.')
+      setError(
+        `Could not save the deal. ${err instanceof Error ? err.message : 'Please try again.'}`
+      )
     }
   }
 
