@@ -6,6 +6,9 @@ out
 *.log*
 *.tsbuildinfo
 
+# Native addon build output (run `npm run native:build:mac` to rebuild) - source (binding.gyp, src/*.mm) is tracked.
+native/*/build
+
 # Secrets — never commit your API keys
 .env
 .env.local

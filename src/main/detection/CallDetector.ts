@@ -1,5 +1,5 @@
 import { isOwnProcess } from './appRegistry'
-import { fuseSignals } from './fusion'
+import { fuseSignals, type FusedCandidate } from './fusion'
 import { initialFsmContext, step, type FsmCommand, type FsmContext } from './stateMachine'
 import {
   DETECTION_TUNING,
@@ -67,6 +67,19 @@ export class CallDetector {
 
   getState(): DetectorState {
     return this.fsmContext.state
+  }
+
+  /** Debug-only: the current fused candidates + state, for the headless debug command. Not used by production logic. */
+  getDebugSnapshot(now: number = this.now()): {
+    state: DetectorState
+    candidates: FusedCandidate[]
+  } {
+    const candidates = fuseSignals(
+      this.signalBuffer.filter((s) => now - s.observedAt <= this.tuning.signalWindowMs),
+      now,
+      this.tuning
+    )
+    return { state: this.fsmContext.state, candidates }
   }
 
   onEvent(callback: (event: DetectorEvent) => void): () => void {

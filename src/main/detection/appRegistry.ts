@@ -123,6 +123,16 @@ export const CONFERENCING_APPS: ConferencingAppEntry[] = [
 /** Process names that identify one of OUR OWN processes - never a call, and must never self-trigger detection. */
 export const OWN_PROCESS_NAMES = ['callrise ai', 'callrise', 'salesos-virtualmic']
 
+/**
+ * Our own app's bundle id (electron-builder.yml `appId`). Electron is
+ * multi-process (main/renderer/GPU/utility all have distinct pids), so a
+ * single "our pid" check misses child processes - e.g. the renderer process
+ * that actually holds `getUserMedia`. Matching by bundle id catches every one
+ * of our own processes regardless of which one CoreAudio reports as the
+ * active input, without needing to enumerate Electron's child pids.
+ */
+export const OWN_BUNDLE_IDS = ['ai.callrise.app']
+
 const byAppId = new Map(CONFERENCING_APPS.map((entry) => [entry.appId, entry]))
 
 export function getConferencingApp(appId: string): ConferencingAppEntry | undefined {
@@ -170,13 +180,15 @@ export function matchTitle(title: string): ConferencingAppEntry | undefined {
   )
 }
 
-/** True if this process (by pid or name) is one of our own - must be excluded before it ever reaches fusion. */
+/** True if this process (by pid, bundle id, or name) is one of our own - must be excluded before it ever reaches fusion. */
 export function isOwnProcess(input: {
   pid?: number
   ourPid?: number
+  bundleId?: string
   processName?: string
 }): boolean {
   if (input.pid != null && input.ourPid != null && input.pid === input.ourPid) return true
+  if (input.bundleId && OWN_BUNDLE_IDS.includes(input.bundleId.toLowerCase())) return true
   if (input.processName) {
     const lower = input.processName.toLowerCase()
     return OWN_PROCESS_NAMES.some((name) => lower.includes(name))
