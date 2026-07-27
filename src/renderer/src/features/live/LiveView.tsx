@@ -47,12 +47,27 @@ interface LiveViewProps {
   /** Called once autoStartFromDetection has been acted on, so the parent can
    *  clear the flag (otherwise a later plain visit would auto-start again). */
   onAutoStartFromDetectionConsumed?: () => void
+  /** Ambient call detection (M15): one-shot, set when the main process's
+   *  CallDetector decided to start capturing a call it noticed on its own.
+   *  `mode` is informational only here - 'full' vs 'mic-only' is entirely
+   *  governed by the existing per-call consent flow below, unchanged. */
+  ambientAutoStart?: { callId: string; mode: 'full' | 'mic-only' } | null
+  /** Called once ambientAutoStart has been acted on, so the parent can clear it. */
+  onAmbientAutoStartConsumed?: () => void
+  /** Reports back whether the ambient-triggered start actually succeeded, so
+   *  the parent can ack detection-service.ts via window.api.detection.captureStarted/captureFailed. */
+  onAmbientAutoStartResult?: (
+    result: { callId: string } & ({ ok: true; sessionId: number } | { ok: false })
+  ) => void
 }
 
 export function LiveView({
   onSaved,
   autoStartFromDetection = false,
-  onAutoStartFromDetectionConsumed
+  onAutoStartFromDetectionConsumed,
+  ambientAutoStart = null,
+  onAmbientAutoStartConsumed,
+  onAmbientAutoStartResult
 }: LiveViewProps): React.JSX.Element {
   // Recording consent for the current call (gates future other-party capture).
   const consent = useConsent()
@@ -84,6 +99,7 @@ export function LiveView({
     otherPartyLive,
     otherPartyError,
     start,
+    getSessionId,
     stop,
     togglePause,
     enableOtherParty,
@@ -184,6 +200,36 @@ export function LiveView({
     autoStartedRef.current = true
     start()
   }, [autoStartFromDetection, onAutoStartFromDetectionConsumed, status, start])
+
+  // Ambient call detection (M15) auto-start — same shared autoStartedRef, so
+  // this can never double-start alongside either source above. Unlike those,
+  // main process (detection-service.ts) is waiting on an ack: it can't tell
+  // on its own whether getUserMedia actually succeeded here, so we report
+  // back explicitly via onAmbientAutoStartResult.
+  useEffect(() => {
+    if (!ambientAutoStart) return
+    const { callId } = ambientAutoStart
+    onAmbientAutoStartConsumed?.()
+    if (status !== 'idle' || autoStartedRef.current) {
+      onAmbientAutoStartResult?.({ callId, ok: false })
+      return
+    }
+    autoStartedRef.current = true
+    void (async () => {
+      await start()
+      const sessionId = getSessionId()
+      onAmbientAutoStartResult?.(
+        sessionId != null ? { callId, ok: true, sessionId } : { callId, ok: false }
+      )
+    })()
+  }, [
+    ambientAutoStart,
+    onAmbientAutoStartConsumed,
+    onAmbientAutoStartResult,
+    status,
+    start,
+    getSessionId
+  ])
 
   // "They said yes": record consent, then — still inside the click gesture —
   // open buyer capture (getDisplayMedia requires a user gesture).

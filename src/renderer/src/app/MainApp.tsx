@@ -61,6 +61,37 @@ export function MainApp({
     })
   }, [autoTranscribeCalls])
 
+  // Ambient call detection (M15) - feature-flagged off by default
+  // (app-settings.ts's detection.enabled), so this never fires until that's
+  // turned on. Reuses the exact same "jump to Live Calls + auto-start" path
+  // as the app-name-only detection above, just from a different source and
+  // with an ack back to main (which is waiting to know whether the renderer
+  // actually managed to start recording).
+  const [ambientAutoStart, setAmbientAutoStart] = useState<{
+    callId: string
+    mode: 'full' | 'mic-only'
+  } | null>(null)
+
+  useEffect(() => {
+    return window.api.detection.onStartCapture(({ call, mode }) => {
+      setActive('live-calls')
+      setAmbientAutoStart({ callId: call.id, mode })
+    })
+  }, [])
+
+  const handleAmbientAutoStartResult = (
+    result: { callId: string } & ({ ok: true; sessionId: number } | { ok: false })
+  ): void => {
+    if (result.ok) {
+      void window.api.detection.captureStarted({
+        callId: result.callId,
+        sessionId: String(result.sessionId)
+      })
+    } else {
+      void window.api.detection.captureFailed({ callId: result.callId })
+    }
+  }
+
   const startTranscribingDetectedCall = (): void => {
     setDetectedCallApp(null)
     setActive('live-calls')
@@ -201,6 +232,9 @@ export function MainApp({
             onSaved={handleCallSaved}
             autoStartFromDetection={pendingCallAutoStart}
             onAutoStartFromDetectionConsumed={() => setPendingCallAutoStart(false)}
+            ambientAutoStart={ambientAutoStart}
+            onAmbientAutoStartConsumed={() => setAmbientAutoStart(null)}
+            onAmbientAutoStartResult={handleAmbientAutoStartResult}
           />
         ) : active === 'past-calls' ? (
           <PastCallsView

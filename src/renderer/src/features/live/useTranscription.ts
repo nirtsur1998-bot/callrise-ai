@@ -27,6 +27,11 @@ interface UseTranscription {
   /** Last buyer-capture problem, if any (drives a recovery banner). */
   otherPartyError: OtherPartyError
   start: () => Promise<void>
+  /** The main-process transcription session id for the call in progress, or
+   *  null before a session exists / after a failed start. A function (not a
+   *  plain value) so callers always read the freshest ref, regardless of
+   *  whether a re-render has happened since the last change. */
+  getSessionId: () => number | null
   stop: () => Promise<void>
   togglePause: () => void
   /** Begin capturing the other party (call from a user gesture — opens
@@ -287,6 +292,8 @@ export function useTranscription(
     }
   }, [armSave, flushPendingSave, onStartReset])
 
+  const getSessionId = useCallback(() => sessionIdRef.current, [])
+
   const stop = useCallback(async () => {
     armSave()
     recorderRef.current?.stop() // also detaches any loopback
@@ -461,6 +468,7 @@ export function useTranscription(
     otherPartyLive,
     otherPartyError,
     start,
+    getSessionId,
     stop,
     togglePause,
     enableOtherParty,
