@@ -243,10 +243,17 @@ export function step(
       const confidence = match?.confidence ?? 0
 
       if (confidence < tuning.endThreshold) {
+        // Clear any in-progress switch candidate: its `since` is a sustain timer
+        // for the OTHER call, not this one - left untouched across an ending
+        // detour, it would credit however long the detour lasted (up to just
+        // under endSustainMs) toward that timer, so a switch-offer could fire
+        // the instant this call recovers, from wall-clock time that elapsed
+        // during an unrelated dip rather than genuine continuous re-sustain.
         return {
           context: {
             ...context,
             state: { name: 'ending', call: mergeCandidateIntoCall(state.call, match), since: now },
+            otherCandidate: undefined,
             recentlyEnded
           },
           events: []

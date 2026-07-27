@@ -15,6 +15,14 @@ files:
   - '!.claude/**'
 asarUnpack:
   - resources/**
+  # mac-audio-activity/win-audio-sessions native addons - a .node binary can't
+  # be require()'d from inside an asar archive at all, so without this the
+  # packaged app would silently degrade to "detection unavailable" on every
+  # install (isSupported() just returns false; see MacAdapter.ts/
+  # WindowsAdapter.ts's resolveAddonPath, which checks the mirrored
+  # app.asar.unpacked path this produces). Must be built with `npm run
+  # native:build:mac`/`:win` BEFORE packaging - build:mac/build:win do this.
+  - native/*/build/Release/*.node
 win:
   executableName: CallRiseAI
   target:

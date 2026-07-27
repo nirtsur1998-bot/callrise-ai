@@ -1,3 +1,4 @@
+import { app } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import {
@@ -50,14 +51,29 @@ interface NativeAddon {
 /** How often MacAdapter samples the OS. The FSM's own tick cadence (DETECTION_TUNING.pollIdleMs/pollCandidateMs) is separate - this just needs to keep the signal buffer fresh within the 10s fusion window. */
 const SAMPLE_INTERVAL_MS = 1_000
 
+const ADDON_RELATIVE_PATH = 'native/mac-audio-activity/build/Release/mac_audio_activity.node'
+
 function resolveAddonPath(): string {
-  const candidates = [
-    // Dev: running via electron-vite from the project root.
-    join(process.cwd(), 'native/mac-audio-activity/build/Release/mac_audio_activity.node'),
-    // Packaged: shipped as an extraResource (see electron-builder.yml) - wiring TBD, see docs/detection.md.
-    join(__dirname, '../../../../native/mac-audio-activity/build/Release/mac_audio_activity.node')
-  ]
-  return candidates.find((p) => existsSync(p)) ?? candidates[0]
+  // Dev: running via electron-vite from the project root.
+  const devPath = join(process.cwd(), ADDON_RELATIVE_PATH)
+  if (existsSync(devPath)) return devPath
+
+  // Packaged: electron-builder.yml's asarUnpack keeps this out of app.asar (a
+  // .node file can't be require()'d from inside an asar archive at all) at
+  // the mirrored app.asar.unpacked path alongside it. Guarded separately -
+  // `app` isn't a real Electron App instance outside a full app process (e.g.
+  // the headless debug CLI run via ELECTRON_RUN_AS_NODE), so this must never
+  // throw before the dev path above gets a chance.
+  try {
+    const packagedPath = join(
+      app.getAppPath().replace(/app\.asar$/, 'app.asar.unpacked'),
+      ADDON_RELATIVE_PATH
+    )
+    if (existsSync(packagedPath)) return packagedPath
+  } catch {
+    /* not running inside a ready Electron app process - fall through */
+  }
+  return devPath
 }
 
 function loadNativeAddon(): { addon: NativeAddon | null; error: unknown } {

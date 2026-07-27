@@ -183,6 +183,54 @@ describe('capturing -> ending -> idle', () => {
     expect((recovered.context.state as { sessionId: string }).sessionId).toBe('s1')
   })
 
+  it("does not credit an ending detour toward a switch candidate's sustain timer", () => {
+    // Regression: a stale otherCandidate.since surviving an ending->capturing
+    // recovery let wall-clock time from an unrelated dip count toward the
+    // OTHER call's 3s sustain requirement, firing a switch-offer the instant
+    // the original call recovered instead of requiring genuine re-sustain.
+    const zoom = candidate({ appId: 'zoom', pid: 1, confidence: 0.65 })
+    let context = detectedContext(zoom)
+    let now = T0 + DETECTION_TUNING.startSustainMs
+    context = step(context, {
+      now,
+      candidates: [zoom],
+      command: { type: 'start-capture', sessionId: 's1', mode: 'mic-only' }
+    }).context
+
+    // Teams starts accumulating sustain toward a switch-offer, but only 1s in.
+    const teams = candidate({ appId: 'teams', pid: 2, confidence: 0.7 })
+    now += 1_000
+    context = step(context, { now, candidates: [zoom, teams] }).context
+    expect(context.otherCandidate?.call.appId).toBe('teams')
+
+    // Zoom dips below endThreshold -> 'ending'. Stay there for 4s (teams absent
+    // from candidates entirely, so it's never re-evaluated during the detour).
+    now += 500
+    context = step(context, { now, candidates: [] }).context
+    expect(context.state.name).toBe('ending')
+    now += 4_000
+    context = step(context, { now, candidates: [] }).context
+    expect(context.state.name).toBe('ending')
+
+    // Zoom recovers - elapsed wall-clock since teams was first seen is now
+    // well past startSustainMs (3s), purely from the ending detour.
+    now += 100
+    const recovered = step(context, { now, candidates: [zoom, teams] })
+    expect(recovered.context.state.name).toBe('capturing')
+    // No switch-offer should fire on this very next tick - the fix clears
+    // otherCandidate across the ending detour, so teams must sustain fresh.
+    expect(recovered.events.some((e) => e.type === 'switch-offered')).toBe(false)
+    expect(recovered.context.otherCandidate).toBeUndefined()
+
+    // The following 'capturing' tick picks teams back up as a FRESH candidate
+    // (since = this tick, not the stale pre-detour timestamp) - a real switch
+    // offer now correctly requires its own full 3s of continuous sustain.
+    now += 100
+    const next = step(recovered.context, { now, candidates: [zoom, teams] })
+    expect(next.context.otherCandidate?.call.appId).toBe('teams')
+    expect(next.context.otherCandidate?.since).toBe(now)
+  })
+
   it('stopping manually ends the capture with reason user-stopped', () => {
     const zoom = candidate({ appId: 'zoom', pid: 1, confidence: 0.65 })
     let context = detectedContext(zoom)

@@ -1,3 +1,4 @@
+import { app } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { isOwnProcess, matchTitle, normalizeAppIdentity } from '../appRegistry'
@@ -28,12 +29,29 @@ interface NativeAddon {
 /** Same rationale as MacAdapter: a plain poll loop, no OS push notifications. See win-audio-sessions/src/addon.cc's header comment. */
 const SAMPLE_INTERVAL_MS = 1_000
 
+const ADDON_RELATIVE_PATH = 'native/win-audio-sessions/build/Release/win_audio_sessions.node'
+
 function resolveAddonPath(): string {
-  const candidates = [
-    join(process.cwd(), 'native/win-audio-sessions/build/Release/win_audio_sessions.node'),
-    join(__dirname, '../../../../native/win-audio-sessions/build/Release/win_audio_sessions.node')
-  ]
-  return candidates.find((p) => existsSync(p)) ?? candidates[0]
+  // Dev: running via electron-vite from the project root.
+  const devPath = join(process.cwd(), ADDON_RELATIVE_PATH)
+  if (existsSync(devPath)) return devPath
+
+  // Packaged: electron-builder.yml's asarUnpack keeps this out of app.asar (a
+  // .node file can't be require()'d from inside an asar archive at all) at
+  // the mirrored app.asar.unpacked path alongside it. Guarded separately -
+  // `app` isn't a real Electron App instance outside a full app process (e.g.
+  // the headless debug CLI run via ELECTRON_RUN_AS_NODE), so this must never
+  // throw before the dev path above gets a chance.
+  try {
+    const packagedPath = join(
+      app.getAppPath().replace(/app\.asar$/, 'app.asar.unpacked'),
+      ADDON_RELATIVE_PATH
+    )
+    if (existsSync(packagedPath)) return packagedPath
+  } catch {
+    /* not running inside a ready Electron app process - fall through */
+  }
+  return devPath
 }
 
 function loadNativeAddon(): { addon: NativeAddon | null; error: unknown } {
