@@ -92,6 +92,25 @@ export function MainApp({
     }
   }
 
+  // Overlay banner's Stop/Pause buttons act on a DIFFERENT window (the
+  // always-on-top overlay) than the one actually holding the recording (this
+  // main window's LiveView) - these requests get forwarded down as nonce
+  // tokens so LiveView's effect can act on each one exactly once.
+  const [remoteStopToken, setRemoteStopToken] = useState(0)
+  const [remotePauseToken, setRemotePauseToken] = useState(0)
+  useEffect(() => {
+    const offStop = window.api.detection.onRequestStopCapture(() =>
+      setRemoteStopToken((n) => n + 1)
+    )
+    const offPause = window.api.detection.onRequestTogglePause(() =>
+      setRemotePauseToken((n) => n + 1)
+    )
+    return () => {
+      offStop()
+      offPause()
+    }
+  }, [])
+
   const startTranscribingDetectedCall = (): void => {
     setDetectedCallApp(null)
     setActive('live-calls')
@@ -235,6 +254,8 @@ export function MainApp({
             ambientAutoStart={ambientAutoStart}
             onAmbientAutoStartConsumed={() => setAmbientAutoStart(null)}
             onAmbientAutoStartResult={handleAmbientAutoStartResult}
+            remoteStopToken={remoteStopToken}
+            remotePauseToken={remotePauseToken}
           />
         ) : active === 'past-calls' ? (
           <PastCallsView

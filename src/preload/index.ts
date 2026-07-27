@@ -223,7 +223,12 @@ const api = {
     getKnownApps: () =>
       ipcRenderer.invoke('detection:getKnownApps') as Promise<
         { appId: string; displayName: string }[]
-      >
+      >,
+    openMainWindow: () => ipcRenderer.invoke('detection:openMainWindow'),
+    requestStopCapture: () => ipcRenderer.invoke('detection:requestStopCapture'),
+    requestTogglePause: () => ipcRenderer.invoke('detection:requestTogglePause'),
+    onRequestStopCapture: (cb: () => void) => subscribe('detection:requestStopCapture', cb),
+    onRequestTogglePause: (cb: () => void) => subscribe('detection:requestTogglePause', cb)
   }
 }
 

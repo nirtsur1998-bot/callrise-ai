@@ -1063,6 +1063,14 @@ export interface DetectionApi {
   ) => () => void
   /** Known conferencing apps (id + display name only) for the per-app override editor. */
   getKnownApps: () => Promise<{ appId: string; displayName: string }[]>
+  /** Overlay banner's "Open CallRise AI" button - brings the main window to front. */
+  openMainWindow: () => Promise<void>
+  /** Overlay banner's Stop button - broadcasts a request; the main window's LiveView acts on it. */
+  requestStopCapture: () => Promise<void>
+  /** Overlay banner's Pause/Resume button - broadcasts a request; the main window's LiveView acts on it. */
+  requestTogglePause: () => Promise<void>
+  onRequestStopCapture: (cb: () => void) => () => void
+  onRequestTogglePause: (cb: () => void) => () => void
 }
 
 declare global {

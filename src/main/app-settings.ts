@@ -328,6 +328,18 @@ export function setSyncScopeDisabledListener(fn: (keys: SyncScopeKey[]) => void)
   onSyncScopeDisabled = fn
 }
 
+/**
+ * Called whenever a save flips `detection.enabled` - detection-service.ts
+ * registers this so toggling the Settings switch starts/stops the live
+ * CallDetector immediately, instead of only taking effect on next launch.
+ * Same callback-registration shape as onSyncScopeDisabled, for the same
+ * reason (detection-service.ts already imports this module - no cycle).
+ */
+let onDetectionEnabledChanged: (() => void) | null = null
+export function setDetectionEnabledChangedListener(fn: () => void): void {
+  onDetectionEnabledChanged = fn
+}
+
 export function saveAppSettings(patch: unknown): AppSettings {
   const current = loadAppSettings()
   const next = mergeSettings(current, patch)
@@ -341,6 +353,13 @@ export function saveAppSettings(patch: unknown): AppSettings {
       onSyncScopeDisabled(disabled)
     } catch {
       /* a scrub failure must never fail the settings save */
+    }
+  }
+  if (current.detection.enabled !== next.detection.enabled && onDetectionEnabledChanged) {
+    try {
+      onDetectionEnabledChanged()
+    } catch {
+      /* never fail the settings save over this */
     }
   }
   return next

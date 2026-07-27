@@ -1,29 +1,36 @@
-// Main-process glue for ambient call detection (M15 Phase 4): owns the one
+// Main-process glue for ambient call detection (M15 Phases 4-5): owns the one
 // CallDetector instance, turns its events into policy decisions
-// (detected -> policy.decideCaptureAction -> start/ask/ignore), and exposes
-// the renderer-facing IPC surface. Gated end-to-end behind the ff_ambient_detection
-// feature flag (app-settings.ts's `detection.enabled`, default OFF) - with it
-// off, this module never starts an adapter and every handler is a no-op.
+// (detected -> policy.decideCaptureAction -> start/ask/ignore), drives the
+// live-capture overlay window (banner/toast/switch-prompt) and the tray icon,
+// and exposes the renderer-facing IPC surface. Gated end-to-end behind the
+// ff_ambient_detection feature flag (app-settings.ts's `detection.enabled`,
+// default OFF) - with it off, this module never starts an adapter and every
+// handler is a no-op.
 //
-// IMPORTANT - what this file does NOT do yet: it cannot itself start audio
-// capture. Capture is renderer-initiated today (getUserMedia/getDisplayMedia
+// Capture itself is still renderer-initiated (getUserMedia/getDisplayMedia
 // live in src/renderer/src/features/live/audio/recorder.ts; there is no
-// main-process audio API - see transcription.ts). So a `start` decision here
-// only broadcasts `detection:startCapture` to the renderer and waits for an
-// ack; nothing listens for that event yet. See docs/detection.md for the
-// open architecture question (which session ambient-triggered capture shares
-// with the manual Live Calls flow) that Phase 5's UI work needs to resolve
-// before this does anything a user can see.
+// main-process audio API) - a `start` decision here only broadcasts
+// `detection:startCapture` and waits for MainApp's ack (see
+// MainApp.tsx/LiveView.tsx's ambientAutoStart wiring). Pause/Stop requested
+// from the overlay banner or the tray menu work the same way: broadcast a
+// request, the main window's LiveView is the one that actually calls
+// stop()/togglePause().
 import { BrowserWindow, ipcMain } from 'electron'
-import { isAmbientDetectionEnabled, loadAppSettings } from './app-settings'
+import {
+  isAmbientDetectionEnabled,
+  loadAppSettings,
+  setDetectionEnabledChangedListener
+} from './app-settings'
 import { CONFERENCING_APPS } from './detection/appRegistry'
 import { CallDetector } from './detection/CallDetector'
 import { MacAdapter } from './detection/adapters/MacAdapter'
 import { NullAdapter } from './detection/adapters/NullAdapter'
 import { WindowsAdapter } from './detection/adapters/WindowsAdapter'
+import { hideOverlay, showOverlay } from './detection-overlay'
+import { disposeTray, registerDetectionTray, updateTray } from './detection-tray'
 import { decideCaptureAction, type CaptureAction } from './detection/policy'
 import type { ICallDetectorAdapter } from './detection/adapters/ICallDetectorAdapter'
-import type { DetectedCall, DetectorEvent } from './detection/types'
+import { DETECTION_TUNING, type DetectedCall, type DetectorEvent } from './detection/types'
 
 function pickAdapter(): ICallDetectorAdapter {
   if (process.platform === 'darwin') return new MacAdapter()
@@ -38,12 +45,58 @@ function broadcast(channel: string, payload: unknown): void {
 }
 
 let detector: CallDetector | null = null
+let mainWindowRef: BrowserWindow | null = null
+/** Whether the detector is actually running right now - distinct from the
+ *  ff_ambient_detection setting, since Pause/Resume (tray/overlay) toggle
+ *  this without touching the persisted setting. */
+let running = false
+
 /** Calls we've already run a policy decision for - a switch or a natural end-while-pending
  *  lands the FSM back in 'detected' WITHOUT a fresh 'call-detected' event, so this dedupes
  *  against re-deciding (and re-prompting) for the same call twice. */
 const handledCallIds = new Set<string>()
 /** The mode we decided on `detection:startCapture`, looked up when the renderer's ack arrives. */
 const pendingStartModes = new Map<string, 'full' | 'mic-only'>()
+/** The one 'ask' policy toast currently up, if any, and its auto-dismiss timer. */
+let pendingAskCallId: string | null = null
+let askTimeout: ReturnType<typeof setTimeout> | undefined
+
+function clearAskTimeout(): void {
+  clearTimeout(askTimeout)
+  askTimeout = undefined
+}
+
+const trayActions = {
+  openMainWindow: () => openMainWindow(),
+  pauseDetection: () => pauseDetection(),
+  resumeDetection: () => resumeDetection(),
+  stopCapture: () => stopCapture(),
+  snoozeDetection: (minutes: number) => snoozeDetection(minutes)
+}
+
+/**
+ * The tray icon's existence tracks the ff_ambient_detection SETTING (not the
+ * transient `running`/paused state) - pausing detection via the tray must
+ * only change its label/menu, never make the tray icon (and its own Resume
+ * item) disappear. Everyone with the feature off keeps zero footprint: no
+ * new persistent tray icon just because this milestone's code exists.
+ */
+function syncTrayPresence(): void {
+  if (isAmbientDetectionEnabled()) registerDetectionTray(trayActions)
+  else disposeTray()
+}
+
+/** The overlay window + tray are refreshed together, every time - whenever anything relevant changes. */
+function syncUi(): void {
+  const state = detector?.getState()
+  const showingCapture =
+    state?.name === 'capturing' ||
+    state?.name === 'capturing-with-pending' ||
+    state?.name === 'ending'
+  if (showingCapture || pendingAskCallId != null) showOverlay()
+  else hideOverlay()
+  updateTray({ running, stateName: state?.name }, trayActions)
+}
 
 function evaluateDetectedCall(call: DetectedCall): void {
   if (handledCallIds.has(call.id)) return
@@ -61,7 +114,16 @@ function evaluateDetectedCall(call: DetectedCall): void {
 
   if (action.type === 'ignore') return
   if (action.type === 'ask-user') {
+    pendingAskCallId = call.id
     broadcast('detection:call-detected', call)
+    clearAskTimeout()
+    askTimeout = setTimeout(() => {
+      if (pendingAskCallId !== call.id) return
+      pendingAskCallId = null
+      detector?.applyCommand({ type: 'decline-detection' })
+      syncUi()
+    }, DETECTION_TUNING.detectionToastTimeoutMs)
+    syncUi()
     return
   }
   pendingStartModes.set(call.id, action.mode)
@@ -81,32 +143,93 @@ function handleDetectorEvent(event: DetectorEvent): void {
   if (event.type === 'switch-offered') {
     broadcast('detection:switch-offered', { current: event.current, pending: event.pending })
   }
+  if (
+    (event.type === 'capture-started' || event.type === 'call-lost') &&
+    pendingAskCallId === event.call.id
+  ) {
+    clearAskTimeout()
+    pendingAskCallId = null
+  }
   checkForNewDetection()
+  syncUi()
+}
+
+function openMainWindow(): void {
+  mainWindowRef?.show()
+  mainWindowRef?.focus()
+}
+
+function pauseDetection(): void {
+  detector?.stop()
+  running = false
+  syncUi()
+}
+
+function resumeDetection(): void {
+  detector?.start()
+  running = true
+  syncUi()
+}
+
+function stopCapture(): void {
+  detector?.applyCommand({ type: 'stop' })
+  syncUi()
+}
+
+let snoozeTimer: ReturnType<typeof setTimeout> | undefined
+function snoozeDetection(minutes: number): void {
+  pauseDetection()
+  clearTimeout(snoozeTimer)
+  snoozeTimer = setTimeout(() => resumeDetection(), Math.max(1, minutes) * 60_000)
 }
 
 export function startDetectionService(): void {
   if (detector) return
   detector = new CallDetector({ adapter: pickAdapter(), ourPid: process.pid })
   detector.onEvent(handleDetectorEvent)
-  if (isAmbientDetectionEnabled()) detector.start()
+  if (isAmbientDetectionEnabled()) {
+    detector.start()
+    running = true
+  }
+  setDetectionEnabledChangedListener(refreshDetectionServiceEnablement)
+  syncTrayPresence()
 }
 
 export function stopDetectionService(): void {
   detector?.stop()
   detector = null
+  running = false
   handledCallIds.clear()
   pendingStartModes.clear()
+  clearAskTimeout()
+  clearTimeout(snoozeTimer)
+  pendingAskCallId = null
+  hideOverlay()
+  disposeTray()
 }
 
-/** Call after a settings change flips `detection.enabled` - Phase 5's Settings toggle wires to these. */
+/** Call after a settings change flips `detection.enabled` - the Settings toggle wires to this via app-settings.ts. */
 export function refreshDetectionServiceEnablement(): void {
   if (!detector) return
-  if (isAmbientDetectionEnabled()) detector.start()
-  else detector.stop()
+  if (isAmbientDetectionEnabled()) {
+    detector.start()
+    running = true
+  } else {
+    detector.stop()
+    running = false
+  }
+  syncTrayPresence()
+  syncUi()
+}
+
+/** So the overlay's/tray's "Open CallRise AI" action (and future main-window-targeted actions) can reach the real app window. */
+export function setMainWindow(win: BrowserWindow | null): void {
+  mainWindowRef = win
 }
 
 export function registerDetectionService(): void {
   startDetectionService()
+  syncUi()
 
   ipcMain.handle(
     'detection:captureStarted',
@@ -114,37 +237,42 @@ export function registerDetectionService(): void {
       const mode = pendingStartModes.get(payload.callId) ?? 'mic-only'
       pendingStartModes.delete(payload.callId)
       detector?.applyCommand({ type: 'start-capture', sessionId: payload.sessionId, mode })
+      syncUi()
     }
   )
 
   ipcMain.handle('detection:captureFailed', (_event, payload: { callId: string }) => {
     pendingStartModes.delete(payload.callId)
     detector?.applyCommand({ type: 'error' })
+    syncUi()
   })
 
   ipcMain.handle('detection:respondToDetection', (_event, decision: 'accept' | 'decline') => {
     if (decision === 'decline') {
+      clearAskTimeout()
+      pendingAskCallId = null
       detector?.applyCommand({ type: 'decline-detection' })
-      return
+    } else {
+      const state = detector?.getState()
+      if (state?.name === 'detected') {
+        clearAskTimeout()
+        pendingAskCallId = null
+        pendingStartModes.set(state.call.id, 'mic-only')
+        broadcast('detection:startCapture', { call: state.call, mode: 'mic-only' })
+      }
     }
-    const state = detector?.getState()
-    if (state?.name === 'detected') {
-      pendingStartModes.set(state.call.id, 'mic-only')
-      broadcast('detection:startCapture', { call: state.call, mode: 'mic-only' })
-    }
+    syncUi()
   })
 
   ipcMain.handle('detection:respondToSwitch', (_event, decision: 'switch' | 'keep') => {
     detector?.applyCommand({ type: 'respond-to-switch', decision })
+    syncUi()
   })
 
-  ipcMain.handle('detection:pause', () => detector?.stop())
-  ipcMain.handle('detection:resume', () => detector?.start())
-  ipcMain.handle('detection:stop', () => detector?.applyCommand({ type: 'stop' }))
-  ipcMain.handle('detection:snooze', (_event, minutes: number) => {
-    detector?.stop()
-    setTimeout(() => detector?.start(), Math.max(1, minutes) * 60_000)
-  })
+  ipcMain.handle('detection:pause', () => pauseDetection())
+  ipcMain.handle('detection:resume', () => resumeDetection())
+  ipcMain.handle('detection:stop', () => stopCapture())
+  ipcMain.handle('detection:snooze', (_event, minutes: number) => snoozeDetection(minutes))
 
   ipcMain.handle('detection:getState', () => detector?.getState())
 
@@ -153,6 +281,15 @@ export function registerDetectionService(): void {
   // different tsconfig) always matches the exact appIds policy.ts checks.
   ipcMain.handle('detection:getKnownApps', () =>
     CONFERENCING_APPS.map((a) => ({ appId: a.appId, displayName: a.displayName }))
+  )
+
+  // Overlay banner actions that need the MAIN window/session, not this module.
+  ipcMain.handle('detection:openMainWindow', () => openMainWindow())
+  ipcMain.handle('detection:requestStopCapture', () =>
+    broadcast('detection:requestStopCapture', undefined)
+  )
+  ipcMain.handle('detection:requestTogglePause', () =>
+    broadcast('detection:requestTogglePause', undefined)
   )
 }
 

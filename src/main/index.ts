@@ -49,7 +49,13 @@ import { registerObjectionQueue } from './objection-queue'
 import { registerAppSettings } from './app-settings'
 import { registerLaunchAtLogin } from './launch-at-login'
 import { registerActiveApp } from './active-app'
-import { registerDetectionService, disposeDetectionService } from './detection-service'
+import {
+  registerDetectionService,
+  disposeDetectionService,
+  setMainWindow
+} from './detection-service'
+import { disposeOverlay } from './detection-overlay'
+import { disposeTray } from './detection-tray'
 import { registerCoachPdf } from './coach-pdf'
 import { registerAiKeys, loadStoredAiKeysIntoEnv } from './ai-keys'
 
@@ -102,7 +108,10 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     disposeTranscription()
     mainWindow = null
+    setMainWindow(null)
   })
+
+  setMainWindow(mainWindow)
 
   // In development, load the Vite dev server (with hot reload).
   // In production, load the built HTML file.
@@ -174,6 +183,8 @@ app.on('before-quit', () => {
   disposeTranscription()
   disposeVirtualMic()
   disposeDetectionService()
+  disposeOverlay()
+  disposeTray()
 })
 
 // Quit when all windows are closed, except on macOS.

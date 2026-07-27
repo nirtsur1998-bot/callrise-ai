@@ -59,6 +59,11 @@ interface LiveViewProps {
   onAmbientAutoStartResult?: (
     result: { callId: string } & ({ ok: true; sessionId: number } | { ok: false })
   ) => void
+  /** Nonces (increment on each request) from the ambient-detection overlay banner's
+   *  Stop/Pause buttons - a different window than this one, so it can't call stop()/
+   *  togglePause() directly. Each change is acted on exactly once. */
+  remoteStopToken?: number
+  remotePauseToken?: number
 }
 
 export function LiveView({
@@ -67,7 +72,9 @@ export function LiveView({
   onAutoStartFromDetectionConsumed,
   ambientAutoStart = null,
   onAmbientAutoStartConsumed,
-  onAmbientAutoStartResult
+  onAmbientAutoStartResult,
+  remoteStopToken = 0,
+  remotePauseToken = 0
 }: LiveViewProps): React.JSX.Element {
   // Recording consent for the current call (gates future other-party capture).
   const consent = useConsent()
@@ -230,6 +237,23 @@ export function LiveView({
     start,
     getSessionId
   ])
+
+  // Ambient-detection overlay banner's Stop/Pause buttons live in a different
+  // (always-on-top) window, so they can't call stop()/togglePause() directly -
+  // main process rebroadcasts each click as an incrementing token here.
+  const lastStopToken = useRef(remoteStopToken)
+  useEffect(() => {
+    if (remoteStopToken === lastStopToken.current) return
+    lastStopToken.current = remoteStopToken
+    if (status !== 'idle') void stop()
+  }, [remoteStopToken, status, stop])
+
+  const lastPauseToken = useRef(remotePauseToken)
+  useEffect(() => {
+    if (remotePauseToken === lastPauseToken.current) return
+    lastPauseToken.current = remotePauseToken
+    if (status === 'listening' || status === 'paused' || status === 'reconnecting') togglePause()
+  }, [remotePauseToken, status, togglePause])
 
   // "They said yes": record consent, then — still inside the click gesture —
   // open buyer capture (getDisplayMedia requires a user gesture).
