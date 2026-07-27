@@ -15,7 +15,7 @@ interface ShortcutGroup {
 const GROUPS: ShortcutGroup[] = [
   {
     title: 'Navigation',
-    shortcuts: [{ label: 'Jump to a screen', keys: '⌘K' }]
+    shortcuts: [{ label: 'Jump to a screen, contact, deal, or call', keys: '⌘K' }]
   },
   {
     title: 'Command palette',

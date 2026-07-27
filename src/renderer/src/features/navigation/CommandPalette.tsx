@@ -26,6 +26,19 @@ interface CommandPaletteProps {
   /** Quick actions shown below the screen-jump results (e.g. "Start a live
    *  call", "Toggle theme"). Optional — the palette works with just nav. */
   actions?: PaletteAction[]
+  /** Jump straight to a specific contact/deal/call, not just its screen —
+   *  only shown once the user types (searching the whole database on an
+   *  empty query would be noise, not a shortcut). Optional so the palette
+   *  still works standalone (e.g. in a context with no CRM/calls data). */
+  onOpenContact?: (id: string) => void
+  onOpenDeal?: (id: string) => void
+  onOpenCall?: (id: string) => void
+}
+
+interface EntityRow {
+  id: string
+  label: string
+  sublabel?: string
 }
 
 /** Icon per recent-item kind — matches the icon already established for that
@@ -52,6 +65,27 @@ type Row =
   | { kind: 'nav'; id: NavId; label: string; icon: LucideIcon }
   | (PaletteAction & { kind: 'action' })
   | { kind: 'recent'; id: string; label: string; icon: LucideIcon; screen: NavId }
+  | { kind: 'contact'; id: string; label: string; sublabel?: string }
+  | { kind: 'deal'; id: string; label: string; sublabel?: string }
+  | { kind: 'call'; id: string; label: string; sublabel?: string }
+
+const ENTITY_ICON = {
+  contact: Contact,
+  deal: Building2,
+  call: PhoneCall
+} as const satisfies Record<'contact' | 'deal' | 'call', LucideIcon>
+
+const ENTITY_SECTION_LABEL: Record<'contact' | 'deal' | 'call', string> = {
+  contact: 'Contacts',
+  deal: 'Deals',
+  call: 'Calls'
+}
+
+const MAX_ENTITY_RESULTS = 5
+
+function formatCallDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
 
 /**
  * A ⌘K command palette for jumping to any screen — the Linear/Raycast/Arc
@@ -63,7 +97,10 @@ export function CommandPalette({
   open,
   onClose,
   onSelect,
-  actions = []
+  actions = [],
+  onOpenContact,
+  onOpenDeal,
+  onOpenCall
 }: CommandPaletteProps): React.JSX.Element | null {
   const [query, setQuery] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -71,6 +108,43 @@ export function CommandPalette({
   const activeRowRef = useRef<HTMLLIElement>(null)
   const previouslyFocused = useRef<HTMLElement | null>(null)
   const listId = 'command-palette-listbox'
+
+  // Entity data for search-by-name — loaded lazily on first open (not on
+  // mount, since the palette can open long before the user ever searches),
+  // then cached for the session. A stale list between saves is an acceptable
+  // trade for not re-fetching on every keystroke; reopening the palette
+  // refreshes it.
+  const [contactRows, setContactRows] = useState<EntityRow[]>([])
+  const [dealRows, setDealRows] = useState<EntityRow[]>([])
+  const [callRows, setCallRows] = useState<EntityRow[]>([])
+  useEffect(() => {
+    if (!open) return
+    let active = true
+    if (onOpenContact) {
+      void window.api.contacts.list().then((list) => {
+        if (active) {
+          setContactRows(list.map((c) => ({ id: c.id, label: c.name, sublabel: c.company })))
+        }
+      })
+    }
+    if (onOpenDeal) {
+      void window.api.deals.list().then((list) => {
+        if (active) setDealRows(list.map((d) => ({ id: d.id, label: d.title })))
+      })
+    }
+    if (onOpenCall) {
+      void window.api.calls.list().then((list) => {
+        if (active) {
+          setCallRows(
+            list.map((c) => ({ id: c.id, label: c.title, sublabel: formatCallDate(c.createdAt) }))
+          )
+        }
+      })
+    }
+    return () => {
+      active = false
+    }
+  }, [open, onOpenContact, onOpenDeal, onOpenCall])
 
   // Reset each time it opens, and focus the input; restore focus to whatever
   // triggered the palette when it closes.
@@ -108,17 +182,42 @@ export function CommandPalette({
     [recentlyViewed]
   )
 
-  const { navResults, actionResults, recentResults } = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return { navResults: navRows, actionResults: actionRows, recentResults: recentRows }
-    return {
-      navResults: navRows.filter((r) => r.label.toLowerCase().includes(q)),
-      actionResults: actionRows.filter((r) => r.label.toLowerCase().includes(q)),
-      recentResults: recentRows.filter((r) => r.label.toLowerCase().includes(q))
-    }
-  }, [query, navRows, actionRows, recentRows])
+  const { navResults, actionResults, recentResults, contactResults, dealResults, callResults } =
+    useMemo(() => {
+      const q = query.trim().toLowerCase()
+      if (!q) {
+        return {
+          navResults: navRows,
+          actionResults: actionRows,
+          recentResults: recentRows,
+          contactResults: [] as Row[],
+          dealResults: [] as Row[],
+          callResults: [] as Row[]
+        }
+      }
+      const matchEntity = (kind: 'contact' | 'deal' | 'call', rows: EntityRow[]): Row[] =>
+        rows
+          .filter((r) => r.label.toLowerCase().includes(q))
+          .slice(0, MAX_ENTITY_RESULTS)
+          .map((r) => ({ kind, id: r.id, label: r.label, sublabel: r.sublabel }))
+      return {
+        navResults: navRows.filter((r) => r.label.toLowerCase().includes(q)),
+        actionResults: actionRows.filter((r) => r.label.toLowerCase().includes(q)),
+        recentResults: recentRows.filter((r) => r.label.toLowerCase().includes(q)),
+        contactResults: matchEntity('contact', contactRows),
+        dealResults: matchEntity('deal', dealRows),
+        callResults: matchEntity('call', callRows)
+      }
+    }, [query, navRows, actionRows, recentRows, contactRows, dealRows, callRows])
 
-  const results: Row[] = [...navResults, ...actionResults, ...recentResults]
+  const results: Row[] = [
+    ...navResults,
+    ...actionResults,
+    ...contactResults,
+    ...dealResults,
+    ...callResults,
+    ...recentResults
+  ]
 
   // Clamp the highlighted row during render, so a filter that shrinks the
   // list never leaves the cursor out of range.
@@ -139,8 +238,14 @@ export function CommandPalette({
       onSelect(row.id)
     } else if (row.kind === 'recent') {
       onSelect(row.screen)
-    } else {
+    } else if (row.kind === 'action') {
       row.onRun()
+    } else if (row.kind === 'contact') {
+      onOpenContact?.(row.id)
+    } else if (row.kind === 'deal') {
+      onOpenDeal?.(row.id)
+    } else {
+      onOpenCall?.(row.id)
     }
     onClose()
   }
@@ -174,7 +279,10 @@ export function CommandPalette({
             const idx = offset + i
             const isCurrent = idx === cur
             const rowId = `command-palette-option-${row.kind}-${row.id}`
-            const Icon = row.icon
+            const Icon =
+              row.kind === 'contact' || row.kind === 'deal' || row.kind === 'call'
+                ? ENTITY_ICON[row.kind]
+                : row.icon
             return (
               <li key={rowId} ref={isCurrent ? activeRowRef : undefined}>
                 <button
@@ -193,8 +301,13 @@ export function CommandPalette({
                     className={cn('h-[18px] w-[18px]', isCurrent ? 'text-accent' : 'text-faint')}
                     strokeWidth={2}
                   />
-                  <span className="flex-1 font-medium">{row.label}</span>
-                  {isCurrent && <CornerDownLeft className="h-3.5 w-3.5 text-faint" />}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{row.label}</span>
+                    {'sublabel' in row && row.sublabel && (
+                      <span className="block truncate text-[11px] text-faint">{row.sublabel}</span>
+                    )}
+                  </span>
+                  {isCurrent && <CornerDownLeft className="h-3.5 w-3.5 shrink-0 text-faint" />}
                 </button>
               </li>
             )
@@ -254,7 +367,33 @@ export function CommandPalette({
             <>
               {renderSection('Go to', navResults, 0)}
               {renderSection('Actions', actionResults, navResults.length)}
-              {renderSection('Recent', recentResults, navResults.length + actionResults.length)}
+              {renderSection(
+                ENTITY_SECTION_LABEL.contact,
+                contactResults,
+                navResults.length + actionResults.length
+              )}
+              {renderSection(
+                ENTITY_SECTION_LABEL.deal,
+                dealResults,
+                navResults.length + actionResults.length + contactResults.length
+              )}
+              {renderSection(
+                ENTITY_SECTION_LABEL.call,
+                callResults,
+                navResults.length +
+                  actionResults.length +
+                  contactResults.length +
+                  dealResults.length
+              )}
+              {renderSection(
+                'Recent',
+                recentResults,
+                navResults.length +
+                  actionResults.length +
+                  contactResults.length +
+                  dealResults.length +
+                  callResults.length
+              )}
             </>
           )}
         </div>
