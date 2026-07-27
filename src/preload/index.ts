@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import type { DetectedCall, DetectorEvent, DetectorState } from '../main/detection/types'
 
 type Unsubscribe = () => void
 
@@ -196,6 +197,29 @@ const api = {
     getLastExternalApp: () => ipcRenderer.invoke('app:getLastExternalApp'),
     onCallDetected: (cb: (appName: string) => void) => subscribe('app:callDetected', cb),
     isPackaged: () => ipcRenderer.invoke('app:isPackaged')
+  },
+  detection: {
+    getState: () => ipcRenderer.invoke('detection:getState') as Promise<DetectorState | undefined>,
+    captureStarted: (payload: { callId: string; sessionId: string }) =>
+      ipcRenderer.invoke('detection:captureStarted', payload),
+    captureFailed: (payload: { callId: string }) =>
+      ipcRenderer.invoke('detection:captureFailed', payload),
+    respondToDetection: (decision: 'accept' | 'decline') =>
+      ipcRenderer.invoke('detection:respondToDetection', decision),
+    respondToSwitch: (decision: 'switch' | 'keep') =>
+      ipcRenderer.invoke('detection:respondToSwitch', decision),
+    pause: () => ipcRenderer.invoke('detection:pause'),
+    resume: () => ipcRenderer.invoke('detection:resume'),
+    stop: () => ipcRenderer.invoke('detection:stop'),
+    snooze: (minutes: number) => ipcRenderer.invoke('detection:snooze', minutes),
+    onStateChanged: (cb: (payload: { state: DetectorState }) => void) =>
+      subscribe('detection:state-changed', cb),
+    onEvent: (cb: (event: DetectorEvent) => void) => subscribe('detection:event', cb),
+    onCallDetected: (cb: (call: DetectedCall) => void) => subscribe('detection:call-detected', cb),
+    onSwitchOffered: (cb: (payload: { current: DetectedCall; pending: DetectedCall }) => void) =>
+      subscribe('detection:switch-offered', cb),
+    onStartCapture: (cb: (payload: { call: DetectedCall; mode: 'full' | 'mic-only' }) => void) =>
+      subscribe('detection:startCapture', cb)
   }
 }
 

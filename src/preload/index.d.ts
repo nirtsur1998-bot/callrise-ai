@@ -1,4 +1,5 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
+import type { DetectedCall, DetectorEvent, DetectorState } from '../main/detection/types'
 
 export type MicAccessStatus = 'granted' | 'denied' | 'restricted' | 'not-determined'
 
@@ -1008,6 +1009,40 @@ export interface AppControlApi {
   isPackaged: () => Promise<boolean>
 }
 
+/**
+ * Ambient call detection (M15). Feature-flagged off by default
+ * (app-settings.ts's `detection.enabled`) - with it off, every event here
+ * simply never fires and every command is a safe no-op.
+ */
+export interface DetectionApi {
+  getState: () => Promise<DetectorState | undefined>
+  /** Ack a `onStartCapture` command once the renderer has actually started recording. */
+  captureStarted: (payload: { callId: string; sessionId: string }) => Promise<void>
+  /** Tell main the renderer couldn't start recording (mic busy, permission denied, …). */
+  captureFailed: (payload: { callId: string }) => Promise<void>
+  /** Response to an 'ask' policy's detection toast. */
+  respondToDetection: (decision: 'accept' | 'decline') => Promise<void>
+  /** Response to the second-call switch prompt. */
+  respondToSwitch: (decision: 'switch' | 'keep') => Promise<void>
+  pause: () => Promise<void>
+  resume: () => Promise<void>
+  /** Manually stop the current capture (reason: 'user-stopped'). */
+  stop: () => Promise<void>
+  /** Pause detection for N minutes, then resume automatically. */
+  snooze: (minutes: number) => Promise<void>
+  onStateChanged: (cb: (payload: { state: DetectorState }) => void) => () => void
+  onEvent: (cb: (event: DetectorEvent) => void) => () => void
+  /** 'ask' policy: show a detection toast for this call. */
+  onCallDetected: (cb: (call: DetectedCall) => void) => () => void
+  onSwitchOffered: (
+    cb: (payload: { current: DetectedCall; pending: DetectedCall }) => void
+  ) => () => void
+  /** Main has decided to start capturing this call - the renderer must actually begin recording and ack via captureStarted/captureFailed. */
+  onStartCapture: (
+    cb: (payload: { call: DetectedCall; mode: 'full' | 'mic-only' }) => void
+  ) => () => void
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -1030,6 +1065,7 @@ declare global {
       settings: AppSettingsApi
       app: AppControlApi
       aiKeys: AiKeysApi
+      detection: DetectionApi
     }
   }
 }

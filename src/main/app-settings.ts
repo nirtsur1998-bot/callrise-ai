@@ -22,6 +22,12 @@ import {
   mergeCrmSettings,
   type CrmSettings
 } from './crm-settings'
+import {
+  DEFAULT_CAPTURE_POLICY_SETTINGS,
+  type CapturePolicySettings,
+  type CapturePolicyValue,
+  type AppOverride
+} from './detection/policy'
 
 /**
  * Objection Library mining — reads call transcripts to suggest reusable
@@ -50,6 +56,90 @@ function mergeObjectionMining(
   if (!patch || typeof patch !== 'object') return current
   const p = patch as Record<string, unknown>
   return { enabled: 'enabled' in p ? p.enabled === true : current.enabled }
+}
+
+/**
+ * Ambient call detection (M15). HARD RULE: `enabled` is the feature flag
+ * (ff_ambient_detection) - off by default, so this milestone ships inert
+ * until a later phase adds a Settings toggle. `capturePolicy` maps straight
+ * onto detection/policy.ts's `CapturePolicySettings` - this file only
+ * sanitizes/persists it, the actual full/mic-only/ask/ignore decision logic
+ * lives in exactly one place (policy.ts), not duplicated here.
+ */
+export interface DetectionSettings {
+  enabled: boolean
+  capturePolicy: CapturePolicySettings
+}
+
+const EMPTY_DETECTION_SETTINGS: DetectionSettings = {
+  enabled: false,
+  capturePolicy: DEFAULT_CAPTURE_POLICY_SETTINGS
+}
+
+function sanitizeCapturePolicyValue(
+  value: unknown,
+  fallback: CapturePolicyValue
+): CapturePolicyValue {
+  return value === 'full' || value === 'mic-only' || value === 'ask' ? value : fallback
+}
+
+function sanitizeAppOverride(value: unknown): AppOverride | undefined {
+  return value === 'full' || value === 'mic-only' || value === 'ask' || value === 'never'
+    ? value
+    : undefined
+}
+
+function sanitizeAppOverrides(value: unknown): Record<string, AppOverride> {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  const result: Record<string, AppOverride> = {}
+  for (const [appId, override] of Object.entries(v)) {
+    const sanitized = sanitizeAppOverride(override)
+    if (sanitized) result[appId] = sanitized
+  }
+  return result
+}
+
+function sanitizeCapturePolicy(value: unknown): CapturePolicySettings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return {
+    autoCapturePolicy: sanitizeCapturePolicyValue(
+      v.autoCapturePolicy,
+      DEFAULT_CAPTURE_POLICY_SETTINGS.autoCapturePolicy
+    ),
+    appOverrides: sanitizeAppOverrides(v.appOverrides)
+  }
+}
+
+function sanitizeDetectionSettings(value: unknown): DetectionSettings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return {
+    enabled: v.enabled === true,
+    capturePolicy: sanitizeCapturePolicy(v.capturePolicy)
+  }
+}
+
+function mergeCapturePolicy(current: CapturePolicySettings, patch: unknown): CapturePolicySettings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return {
+    autoCapturePolicy:
+      'autoCapturePolicy' in p
+        ? sanitizeCapturePolicyValue(p.autoCapturePolicy, current.autoCapturePolicy)
+        : current.autoCapturePolicy,
+    appOverrides: 'appOverrides' in p ? sanitizeAppOverrides(p.appOverrides) : current.appOverrides
+  }
+}
+
+function mergeDetectionSettings(current: DetectionSettings, patch: unknown): DetectionSettings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return {
+    enabled: 'enabled' in p ? p.enabled === true : current.enabled,
+    capturePolicy:
+      'capturePolicy' in p
+        ? mergeCapturePolicy(current.capturePolicy, p.capturePolicy)
+        : current.capturePolicy
+  }
 }
 
 /** Which optional categories back up to the cloud, on top of the always-on
@@ -103,6 +193,8 @@ export interface AppSettings {
   crm: CrmSettings
   /** Objection Library mining master switch. Defaults OFF. */
   objectionMining: ObjectionMiningSettings
+  /** Ambient call detection (M15) - feature flag + capture policy. Defaults OFF. */
+  detection: DetectionSettings
 }
 
 const EPOCH = new Date(0).toISOString()
@@ -116,7 +208,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   googleCalendarConnected: false,
   outlookCalendarConnected: false,
   crm: EMPTY_CRM_SETTINGS,
-  objectionMining: EMPTY_OBJECTION_MINING
+  objectionMining: EMPTY_OBJECTION_MINING,
+  detection: EMPTY_DETECTION_SETTINGS
 }
 
 function settingsPath(): string {
@@ -175,14 +268,16 @@ export function loadAppSettings(): AppSettings {
       googleCalendarConnected: parsed.googleCalendarConnected === true,
       outlookCalendarConnected: parsed.outlookCalendarConnected === true,
       crm: sanitizeCrmSettings(parsed.crm),
-      objectionMining: sanitizeObjectionMining(parsed.objectionMining)
+      objectionMining: sanitizeObjectionMining(parsed.objectionMining),
+      detection: sanitizeDetectionSettings(parsed.detection)
     }
   } catch {
     return {
       ...DEFAULT_SETTINGS,
       personalization: { ...EMPTY_PERSONALIZATION },
       crm: { ...EMPTY_CRM_SETTINGS },
-      objectionMining: { ...EMPTY_OBJECTION_MINING }
+      objectionMining: { ...EMPTY_OBJECTION_MINING },
+      detection: { ...EMPTY_DETECTION_SETTINGS }
     }
   }
 }
@@ -208,7 +303,8 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
         ? p.outlookCalendarConnected === true
         : current.outlookCalendarConnected,
     crm: mergeCrmSettings(current.crm, p.crm),
-    objectionMining: mergeObjectionMining(current.objectionMining, p.objectionMining)
+    objectionMining: mergeObjectionMining(current.objectionMining, p.objectionMining),
+    detection: mergeDetectionSettings(current.detection, p.detection)
   }
 }
 
@@ -281,6 +377,11 @@ export function applyPulledSettings(payload: unknown, cloudUpdatedAt: string): A
  */
 export function isObjectionMiningEnabled(): boolean {
   return loadAppSettings().objectionMining.enabled
+}
+
+/** The ff_ambient_detection gate - detection-service.ts must check this before starting any adapter. */
+export function isAmbientDetectionEnabled(): boolean {
+  return loadAppSettings().detection.enabled
 }
 
 let registered = false

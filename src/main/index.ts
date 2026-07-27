@@ -49,6 +49,7 @@ import { registerObjectionQueue } from './objection-queue'
 import { registerAppSettings } from './app-settings'
 import { registerLaunchAtLogin } from './launch-at-login'
 import { registerActiveApp } from './active-app'
+import { registerDetectionService, disposeDetectionService } from './detection-service'
 import { registerCoachPdf } from './coach-pdf'
 import { registerAiKeys, loadStoredAiKeysIntoEnv } from './ai-keys'
 
@@ -155,6 +156,7 @@ app.whenReady().then(async () => {
   registerAppSettings()
   registerLaunchAtLogin()
   registerActiveApp()
+  registerDetectionService()
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -171,6 +173,7 @@ app.whenReady().then(async () => {
 app.on('before-quit', () => {
   disposeTranscription()
   disposeVirtualMic()
+  disposeDetectionService()
 })
 
 // Quit when all windows are closed, except on macOS.
