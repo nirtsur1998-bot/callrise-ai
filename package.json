@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "native:build:mac": "node-gyp rebuild --directory native/mac-audio-activity",
+    "native:build:win": "node-gyp rebuild --directory native/win-audio-sessions",
     "detect:debug": "tsx src/main/detection/debug-cli.ts",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",

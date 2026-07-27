@@ -10,11 +10,13 @@
  */
 import { MacAdapter } from './adapters/MacAdapter'
 import { NullAdapter } from './adapters/NullAdapter'
+import { WindowsAdapter } from './adapters/WindowsAdapter'
 import { CallDetector } from './CallDetector'
 import type { ICallDetectorAdapter } from './adapters/ICallDetectorAdapter'
 
 function pickAdapter(): ICallDetectorAdapter {
   if (process.platform === 'darwin') return new MacAdapter()
+  if (process.platform === 'win32') return new WindowsAdapter()
   console.log(
     `[detect-debug] No adapter for platform "${process.platform}" yet - using NullAdapter (no real signals).`
   )
@@ -42,12 +44,15 @@ function main(): void {
   const adapter = pickAdapter()
   const detector = new CallDetector({ adapter, ourPid: process.pid })
 
-  console.log('--- mac-audio-activity / detection debug ---')
+  console.log('--- ambient call detection debug ---')
   console.log(`platform: ${process.platform}`)
   console.log(`adapter supported: ${adapter.isSupported()}`)
-  if ('loadError' in adapter && (adapter as MacAdapter).loadError) {
-    console.log(`native addon load error: ${String((adapter as MacAdapter).loadError)}`)
-    console.log('Build it first with: npm run native:build:mac')
+  const loadError =
+    'loadError' in adapter ? (adapter as MacAdapter | WindowsAdapter).loadError : undefined
+  if (loadError) {
+    console.log(`native addon load error: ${String(loadError)}`)
+    const buildScript = process.platform === 'darwin' ? 'native:build:mac' : 'native:build:win'
+    console.log(`Build it first with: npm run ${buildScript}`)
   }
   console.log(
     'Listening for signals. Open a conferencing app to see confidence climb. Ctrl+C to quit.\n'

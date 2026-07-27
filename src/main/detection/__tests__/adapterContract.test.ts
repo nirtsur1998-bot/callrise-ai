@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { NullAdapter } from '../adapters/NullAdapter'
 import type { ICallDetectorAdapter } from '../adapters/ICallDetectorAdapter'
 import { MacAdapter } from '../adapters/MacAdapter'
+import { WindowsAdapter } from '../adapters/WindowsAdapter'
 import type { DetectionSignal } from '../types'
 
 /** Every adapter (Mac/Windows/Null) must satisfy this, regardless of platform specifics. */
@@ -74,6 +75,19 @@ macDescribe('MacAdapter (darwin only)', () => {
     const adapter = new MacAdapter()
     // isSupported() reflects whether native/mac-audio-activity/build/Release/mac_audio_activity.node
     // was found and loaded - false (not a failure) if it hasn't been built yet.
+    expect(typeof adapter.isSupported()).toBe('boolean')
+  })
+})
+
+// WindowsAdapter's native addon (win-audio-sessions) has not been compiled or run on a real
+// Windows machine - see addon.cc's header comment. Everything below is skipped here (this
+// session runs on macOS), same conformance suite Phase 3 promises to satisfy once it's built.
+const winDescribe = process.platform === 'win32' ? describe : describe.skip
+winDescribe('WindowsAdapter (win32 only)', () => {
+  runAdapterContractTests('WindowsAdapter', () => new WindowsAdapter())
+
+  it('reports whether the native addon loaded, without throwing either way', () => {
+    const adapter = new WindowsAdapter()
     expect(typeof adapter.isSupported()).toBe('boolean')
   })
 })
