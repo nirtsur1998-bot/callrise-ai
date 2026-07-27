@@ -19,6 +19,11 @@ function candidate(
   }
 }
 
+function detectedCallId(context: FsmContext): string {
+  if (context.state.name !== 'detected') throw new Error('expected detected state')
+  return context.state.call.id
+}
+
 /** Drive the FSM through a plain list of {now, candidates, command?} ticks, returning every result. */
 function run(
   ticks: Array<{
@@ -94,7 +99,12 @@ describe('capturing -> ending -> idle', () => {
     const result = step(detected, {
       now,
       candidates: [zoom],
-      command: { type: 'start-capture', sessionId: 's1', mode: 'mic-only' }
+      command: {
+        type: 'start-capture',
+        callId: detectedCallId(detected),
+        sessionId: 's1',
+        mode: 'mic-only'
+      }
     })
     expect(result.context.state.name).toBe('capturing')
     expect(result.events).toEqual([
@@ -114,7 +124,12 @@ describe('capturing -> ending -> idle', () => {
     context = step(context, {
       now,
       candidates: [zoom],
-      command: { type: 'start-capture', sessionId: 's1', mode: 'mic-only' }
+      command: {
+        type: 'start-capture',
+        callId: detectedCallId(context),
+        sessionId: 's1',
+        mode: 'mic-only'
+      }
     }).context
 
     // Confidence drops
@@ -166,7 +181,12 @@ describe('capturing -> ending -> idle', () => {
     context = step(context, {
       now,
       candidates: [zoom],
-      command: { type: 'start-capture', sessionId: 's1', mode: 'mic-only' }
+      command: {
+        type: 'start-capture',
+        callId: detectedCallId(context),
+        sessionId: 's1',
+        mode: 'mic-only'
+      }
     }).context
 
     now += 1_000
@@ -194,7 +214,12 @@ describe('capturing -> ending -> idle', () => {
     context = step(context, {
       now,
       candidates: [zoom],
-      command: { type: 'start-capture', sessionId: 's1', mode: 'mic-only' }
+      command: {
+        type: 'start-capture',
+        callId: detectedCallId(context),
+        sessionId: 's1',
+        mode: 'mic-only'
+      }
     }).context
 
     // Teams starts accumulating sustain toward a switch-offer, but only 1s in.
@@ -238,7 +263,12 @@ describe('capturing -> ending -> idle', () => {
     context = step(context, {
       now,
       candidates: [zoom],
-      command: { type: 'start-capture', sessionId: 's1', mode: 'full' }
+      command: {
+        type: 'start-capture',
+        callId: detectedCallId(context),
+        sessionId: 's1',
+        mode: 'full'
+      }
     }).context
 
     const stopped = step(context, {
@@ -292,6 +322,32 @@ describe('detected without a decision', () => {
     const stillBlocked = step(declined.context, { now: now + 1_000, candidates: [zoom] })
     expect(stillBlocked.context.state.name).toBe('idle')
   })
+
+  it('rejects a start-capture command whose callId does not match the currently-detected call', () => {
+    // Regression: a slow renderer ack (e.g. a mic-permission prompt outlasting
+    // the call it was decided for) must never be misapplied to a DIFFERENT
+    // call that has since taken over 'detected'.
+    const zoom = candidate({ appId: 'zoom', pid: 1, confidence: 0.65 })
+    const { context } = run([
+      { now: T0, candidates: [zoom] },
+      { now: T0 + DETECTION_TUNING.startSustainMs, candidates: [zoom] }
+    ])
+    expect(context.state.name).toBe('detected')
+
+    const now = T0 + DETECTION_TUNING.startSustainMs + 1_000
+    const result = step(context, {
+      now,
+      candidates: [zoom],
+      command: {
+        type: 'start-capture',
+        callId: 'some-other-stale-call-id',
+        sessionId: 's1',
+        mode: 'mic-only'
+      }
+    })
+    // Ignored - stays in 'detected' for the real current call, not 'capturing'.
+    expect(result.context.state.name).toBe('detected')
+  })
 })
 
 describe('second-call switch prompt', () => {
@@ -304,7 +360,12 @@ describe('second-call switch prompt', () => {
     context = step(context, {
       now,
       candidates: [zoom],
-      command: { type: 'start-capture', sessionId: 's-zoom', mode: 'mic-only' }
+      command: {
+        type: 'start-capture',
+        callId: detectedCallId(context),
+        sessionId: 's-zoom',
+        mode: 'mic-only'
+      }
     }).context
     return { context, now }
   }
@@ -392,7 +453,12 @@ describe('second-call switch prompt', () => {
     expect(timedOut.events).toEqual([{ type: 'switch-resolved', decision: 'timed-out' }])
   })
 
-  it('if the original call ends naturally while a switch is pending, moves straight to the pending call', () => {
+  it('a confidence dip while a switch is pending gets the same ending grace period as plain capturing (not an immediate end)', () => {
+    // Regression: this used to declare the primary call over on the very
+    // first low-confidence tick just because a switch happened to be
+    // pending - the exact same dip fully recovers with no consequence at
+    // all when there's no pending switch (see the plain 'capturing' tests
+    // above). The pending offer is dropped, not preserved, through the detour.
     let { context, now } = capturingContext()
     const zoom = candidate({ appId: 'zoom', pid: 1, confidence: 0.7 })
     const teams = candidate({ appId: 'teams', pid: 2, confidence: 0.65 })
@@ -404,8 +470,29 @@ describe('second-call switch prompt', () => {
 
     now += 1_000
     const result = step(context, { now, candidates: [teams] }) // zoom vanished
-    expect(result.context.state.name).toBe('detected')
-    expect(result.events).toEqual([
+    expect(result.context.state.name).toBe('ending')
+    expect(result.context.otherCandidate).toBeUndefined()
+    expect(result.events).toEqual([{ type: 'switch-resolved', decision: 'kept-current' }])
+  })
+
+  it('ends the call for real if it never recovers through the full grace period after a pending-switch dip', () => {
+    let { context, now } = capturingContext()
+    const zoom = candidate({ appId: 'zoom', pid: 1, confidence: 0.7 })
+    const teams = candidate({ appId: 'teams', pid: 2, confidence: 0.65 })
+    now += 1_000
+    context = step(context, { now, candidates: [zoom, teams] }).context
+    now += DETECTION_TUNING.startSustainMs
+    context = step(context, { now, candidates: [zoom, teams] }).context
+    expect(context.state.name).toBe('capturing-with-pending')
+
+    now += 1_000
+    context = step(context, { now, candidates: [] }).context
+    expect(context.state.name).toBe('ending')
+
+    now += DETECTION_TUNING.endSustainMs + 1
+    const ended = step(context, { now, candidates: [] })
+    expect(ended.context.state.name).toBe('idle')
+    expect(ended.events).toEqual([
       {
         type: 'capture-ended',
         sessionId: 's-zoom',

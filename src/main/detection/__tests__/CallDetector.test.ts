@@ -80,9 +80,15 @@ describe('CallDetector', () => {
     })
     detector.tick(T0)
     detector.tick(T0 + DETECTION_TUNING.startSustainMs)
-    expect(detector.getState().name).toBe('detected')
+    const detectedState = detector.getState()
+    expect(detectedState.name).toBe('detected')
 
-    detector.applyCommand({ type: 'start-capture', sessionId: 's1', mode: 'full' })
+    detector.applyCommand({
+      type: 'start-capture',
+      callId: detectedState.name === 'detected' ? detectedState.call.id : '',
+      sessionId: 's1',
+      mode: 'full'
+    })
     expect(detector.getState().name).toBe('capturing')
     expect(events.some((e) => e.type === 'capture-started')).toBe(true)
 

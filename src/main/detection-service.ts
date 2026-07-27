@@ -172,7 +172,14 @@ function resumeDetection(): void {
 }
 
 function stopCapture(): void {
+  // Both halves of "stop", always together: tell the FSM the capture ended
+  // AND tell the renderer to actually stop the mic/Deepgram session. Each UI
+  // surface (tray, overlay banner) only used to do one half - the tray's
+  // "Stop capturing" left the real recording running silently, and the
+  // overlay's Stop button left the FSM/tray/banner stuck showing a live
+  // capture that had already stopped.
   detector?.applyCommand({ type: 'stop' })
+  broadcast('detection:requestStopCapture', undefined)
   syncUi()
 }
 
@@ -227,6 +234,25 @@ export function setMainWindow(win: BrowserWindow | null): void {
   mainWindowRef = win
 }
 
+/**
+ * Call when the main window closes - if a capture was in progress, ends it
+ * the same way any other Stop does (FSM command + renderer broadcast, via
+ * stopCapture()). Without this, closing the window mid-capture left the FSM
+ * stuck in 'capturing' forever: the overlay (a separate, independent window)
+ * kept showing a live capture banner with dead Stop/Pause buttons (their
+ * requests broadcast to BrowserWindow.getAllWindows(), which no longer
+ * included the destroyed main window), and no new call could be tracked
+ * since only 'idle' starts a fresh candidate.
+ */
+export function handleMainWindowClosed(): void {
+  const state = detector?.getState()
+  const wasCapturing =
+    state?.name === 'capturing' ||
+    state?.name === 'capturing-with-pending' ||
+    state?.name === 'ending'
+  if (wasCapturing) stopCapture()
+}
+
 export function registerDetectionService(): void {
   startDetectionService()
   syncUi()
@@ -236,7 +262,17 @@ export function registerDetectionService(): void {
     (_event, payload: { callId: string; sessionId: string }) => {
       const mode = pendingStartModes.get(payload.callId) ?? 'mic-only'
       pendingStartModes.delete(payload.callId)
-      detector?.applyCommand({ type: 'start-capture', sessionId: payload.sessionId, mode })
+      // callId ties this ack to the call it was decided for - if the FSM has
+      // since moved on to a different call (this one's signals faded during a
+      // slow mic-permission prompt, and a new one was detected meanwhile), the
+      // FSM itself rejects a mismatched callId rather than misapplying a stale
+      // ack to whatever call currently occupies 'detected'.
+      detector?.applyCommand({
+        type: 'start-capture',
+        callId: payload.callId,
+        sessionId: payload.sessionId,
+        mode
+      })
       syncUi()
     }
   )
@@ -285,9 +321,12 @@ export function registerDetectionService(): void {
 
   // Overlay banner actions that need the MAIN window/session, not this module.
   ipcMain.handle('detection:openMainWindow', () => openMainWindow())
-  ipcMain.handle('detection:requestStopCapture', () =>
-    broadcast('detection:requestStopCapture', undefined)
-  )
+  // Reuses stopCapture() - both the FSM command AND the renderer broadcast,
+  // same as the tray's "Stop capturing" - so however the user stops a
+  // capture, the FSM and the real session always end together.
+  ipcMain.handle('detection:requestStopCapture', () => stopCapture())
+  // Pause has no FSM-side state (the FSM tracks "capturing" regardless of
+  // whether the underlying recording is paused) - just forward the request.
   ipcMain.handle('detection:requestTogglePause', () =>
     broadcast('detection:requestTogglePause', undefined)
   )

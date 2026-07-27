@@ -994,8 +994,17 @@ export interface AppSettingsPatch {
   /** Partial — only the keys present are changed; others are left as-is. */
   objectionMining?: Partial<ObjectionMiningSettings>
   /** Partial — only the keys present are changed; others are left as-is.
-   *  `capturePolicy.appOverrides`, if present, REPLACES the whole map (not a per-key merge) - always send the full merged object. */
-  detection?: { enabled?: boolean; capturePolicy?: Partial<CapturePolicySettings> }
+   *  `capturePolicy.appOverrides` merges KEY BY KEY - send only the single
+   *  changed `{appId: value}`, never the whole map (a stale full-map replacement
+   *  from your own possibly-outdated copy would silently drop a concurrent
+   *  change). Use `'default'` (or `null`) as the value to remove an override. */
+  detection?: {
+    enabled?: boolean
+    capturePolicy?: {
+      autoCapturePolicy?: CapturePolicyValue
+      appOverrides?: Record<string, AppOverride | 'default' | null>
+    }
+  }
 }
 
 export interface AppSettingsApi {

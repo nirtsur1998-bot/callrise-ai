@@ -52,7 +52,8 @@ import { registerActiveApp } from './active-app'
 import {
   registerDetectionService,
   disposeDetectionService,
-  setMainWindow
+  setMainWindow,
+  handleMainWindowClosed
 } from './detection-service'
 import { disposeOverlay } from './detection-overlay'
 import { disposeTray } from './detection-tray'
@@ -107,6 +108,7 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     disposeTranscription()
+    handleMainWindowClosed()
     mainWindow = null
     setMainWindow(null)
   })

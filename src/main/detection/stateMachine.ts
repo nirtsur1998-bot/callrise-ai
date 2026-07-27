@@ -25,7 +25,11 @@ export interface FsmContext {
 export const initialFsmContext: FsmContext = { state: { name: 'idle' }, recentlyEnded: [] }
 
 export type FsmCommand =
-  | { type: 'start-capture'; sessionId: string; mode: 'full' | 'mic-only' }
+  // callId ties this ack to the specific call it was decided for - a late ack
+  // that arrives after that call was lost/replaced (e.g. a slow OS mic-permission
+  // prompt outlasting the call's own signals) must never be misapplied to
+  // whatever different call now occupies 'detected'.
+  | { type: 'start-capture'; callId: string; sessionId: string; mode: 'full' | 'mic-only' }
   | { type: 'decline-detection' }
   | { type: 'respond-to-switch'; decision: 'switch' | 'keep' }
   | { type: 'stop' }
@@ -185,7 +189,7 @@ export function step(
     }
 
     case 'detected': {
-      if (command?.type === 'start-capture') {
+      if (command?.type === 'start-capture' && command.callId === state.call.id) {
         return {
           context: {
             ...context,
@@ -203,7 +207,14 @@ export function step(
           ]
         }
       }
-      if (command?.type === 'decline-detection') {
+      if (command?.type === 'decline-detection' || command?.type === 'error') {
+        // 'error' arrives here when the renderer's ambient auto-start actually
+        // failed (mic denied, no device, transcription.start rejected - see
+        // detection-service.ts's captureFailed handler) - WHILE still in
+        // 'detected', since start-capture was never applied. Treat it exactly
+        // like a decline: back to idle, with hysteresis, so the FSM doesn't
+        // stay parked here forever (a single global state means no other call
+        // could ever be noticed while stuck).
         return {
           context: {
             ...context,
@@ -365,29 +376,28 @@ export function step(
       const match = findMatch(candidates, state.call)
       const confidence = match?.confidence ?? 0
 
-      // The original call ended naturally while a switch was pending - move straight to the pending call
-      // (it goes through the normal detected -> policy -> start-capture flow, same as any fresh detection).
+      // A confidence dip gets the SAME grace period plain 'capturing' gives it
+      // (-> 'ending', recoverable within endSustainMs) rather than
+      // unconditionally declaring the call over the instant a switch happens
+      // to be pending - a one-tick mic-session/window-title blip on the
+      // primary call shouldn't permanently end it and force a switch just
+      // because a second app was also active. The pending switch offer is
+      // dropped rather than preserved through the detour (simplest safe
+      // choice - 'respond-to-switch' has no handler outside this state, and
+      // silently letting a stale offer sit in the renderer would let a click
+      // on it do nothing); if the other app is still around once the primary
+      // recovers, plain 'capturing' will naturally re-offer a switch after a
+      // fresh sustain window.
       if (confidence < tuning.endThreshold) {
         return {
           context: {
             ...context,
-            state: { name: 'detected', call: state.pending },
-            activeSessionId: undefined,
+            state: { name: 'ending', call: mergeCandidateIntoCall(state.call, match), since: now },
+            otherCandidate: undefined,
             pendingOfferedAt: undefined,
-            recentlyEnded: pruneRecentlyEnded(
-              [...recentlyEnded, { appId: state.call.appId, pid: state.call.pid, endedAt: now }],
-              now,
-              tuning
-            )
+            recentlyEnded
           },
-          events: [
-            {
-              type: 'capture-ended',
-              sessionId: state.sessionId,
-              call: state.call,
-              reason: 'call-ended'
-            }
-          ]
+          events: [{ type: 'switch-resolved', decision: 'kept-current' }]
         }
       }
 

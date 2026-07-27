@@ -41,10 +41,11 @@ export function DetectionSection(): React.JSX.Element {
   }
 
   const setOverride = (appId: string, value: AppOverride): void => {
-    const next = { ...detection.capturePolicy.appOverrides }
-    if (value === 'default') delete next[appId]
-    else next[appId] = value
-    patchDetection({ capturePolicy: { appOverrides: next } })
+    // Send only the single changed key - appOverrides merges key-by-key on
+    // the main side now, so this can never race a concurrent change to a
+    // DIFFERENT app's override the way replacing the whole (renderer-local,
+    // possibly stale) map used to.
+    patchDetection({ capturePolicy: { appOverrides: { [appId]: value } } })
   }
 
   return (

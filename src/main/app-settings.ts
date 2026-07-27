@@ -118,6 +118,33 @@ function sanitizeDetectionSettings(value: unknown): DetectionSettings {
   }
 }
 
+/**
+ * Merges appOverrides KEY BY KEY (send just the one changed {appId: value}),
+ * not by replacing the whole map. A caller sending a full-map replacement
+ * built from its own possibly-stale copy of the current overrides (e.g. two
+ * quick per-app changes racing their own IPC round-trips) used to silently
+ * drop whichever change's response came back first, once the second one's
+ * save replaced the entire map with a map that never saw the first change.
+ * `'default'` (or `null`) removes an override rather than setting one.
+ */
+function mergeAppOverridesPatch(
+  current: Record<string, AppOverride>,
+  patch: unknown
+): Record<string, AppOverride> {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  const next = { ...current }
+  for (const [appId, value] of Object.entries(p)) {
+    if (value === 'default' || value === null) {
+      delete next[appId]
+      continue
+    }
+    const sanitized = sanitizeAppOverride(value)
+    if (sanitized) next[appId] = sanitized
+  }
+  return next
+}
+
 function mergeCapturePolicy(current: CapturePolicySettings, patch: unknown): CapturePolicySettings {
   if (!patch || typeof patch !== 'object') return current
   const p = patch as Record<string, unknown>
@@ -126,7 +153,10 @@ function mergeCapturePolicy(current: CapturePolicySettings, patch: unknown): Cap
       'autoCapturePolicy' in p
         ? sanitizeCapturePolicyValue(p.autoCapturePolicy, current.autoCapturePolicy)
         : current.autoCapturePolicy,
-    appOverrides: 'appOverrides' in p ? sanitizeAppOverrides(p.appOverrides) : current.appOverrides
+    appOverrides:
+      'appOverrides' in p
+        ? mergeAppOverridesPatch(current.appOverrides, p.appOverrides)
+        : current.appOverrides
   }
 }
 
@@ -386,6 +416,18 @@ export function applyPulledSettings(payload: unknown, cloudUpdatedAt: string): A
       ? cloudUpdatedAt
       : current.settingsUpdatedAt
   persistSettings(next)
+  // A cloud-pulled change to detection.enabled must take effect on this
+  // device immediately too, same as a local edit (saveAppSettings, above) -
+  // otherwise a pulled "on" (or "off") sits correctly on disk and in the
+  // Settings UI while the live CallDetector silently keeps its old
+  // running/stopped state until the app is next restarted.
+  if (current.detection.enabled !== next.detection.enabled && onDetectionEnabledChanged) {
+    try {
+      onDetectionEnabledChanged()
+    } catch {
+      /* never fail the pull over this */
+    }
+  }
   return next
 }
 
