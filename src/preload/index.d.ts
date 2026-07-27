@@ -938,6 +938,21 @@ export interface CrmSettings {
   autoGenerateNotes: boolean
 }
 
+export type CapturePolicyValue = 'full' | 'mic-only' | 'ask'
+export type AppOverride = 'full' | 'mic-only' | 'ask' | 'never'
+
+/** Maps 1:1 onto main/detection/policy.ts's CapturePolicySettings. */
+export interface CapturePolicySettings {
+  autoCapturePolicy: CapturePolicyValue
+  appOverrides: Record<string, AppOverride>
+}
+
+/** Ambient call detection (M15). `enabled` is the ff_ambient_detection feature flag — OFF by default. */
+export interface DetectionSettings {
+  enabled: boolean
+  capturePolicy: CapturePolicySettings
+}
+
 export interface AppSettings {
   /** Master switch: OFF removes all buyer/other-party recording capability.
    *  Can only remove capability, never grant it — per-call consent still
@@ -961,6 +976,8 @@ export interface AppSettings {
   crm: CrmSettings
   /** Objection Library mining master switch. Defaults OFF. */
   objectionMining: ObjectionMiningSettings
+  /** Ambient call detection (M15). Defaults OFF. */
+  detection: DetectionSettings
 }
 
 export interface AppSettingsPatch {
@@ -976,6 +993,9 @@ export interface AppSettingsPatch {
   crm?: Partial<CrmSettings>
   /** Partial — only the keys present are changed; others are left as-is. */
   objectionMining?: Partial<ObjectionMiningSettings>
+  /** Partial — only the keys present are changed; others are left as-is.
+   *  `capturePolicy.appOverrides`, if present, REPLACES the whole map (not a per-key merge) - always send the full merged object. */
+  detection?: { enabled?: boolean; capturePolicy?: Partial<CapturePolicySettings> }
 }
 
 export interface AppSettingsApi {
@@ -1041,6 +1061,8 @@ export interface DetectionApi {
   onStartCapture: (
     cb: (payload: { call: DetectedCall; mode: 'full' | 'mic-only' }) => void
   ) => () => void
+  /** Known conferencing apps (id + display name only) for the per-app override editor. */
+  getKnownApps: () => Promise<{ appId: string; displayName: string }[]>
 }
 
 declare global {

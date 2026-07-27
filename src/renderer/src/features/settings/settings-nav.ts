@@ -13,6 +13,7 @@ import {
   Contact,
   MessageSquareQuote,
   KeyRound,
+  Radar,
   type LucideIcon
 } from 'lucide-react'
 
@@ -20,6 +21,7 @@ export type SettingsPageId =
   | 'account'
   | 'ai-setup'
   | 'ai-note-taker'
+  | 'call-detection'
   | 'recording-consent'
   | 'audio'
   | 'coaching'
@@ -70,6 +72,13 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         icon: NotebookPen,
         description:
           'What happens automatically around a call — starting, opening, summarizing, titling — and which apps to skip auto-start for.'
+      },
+      {
+        id: 'call-detection',
+        label: 'Call detection',
+        icon: Radar,
+        description:
+          'Notice on its own when you’re on a call and start capturing without a click — capture policy and per-app overrides.'
       }
     ]
   },

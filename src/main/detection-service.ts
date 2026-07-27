@@ -16,6 +16,7 @@
 // before this does anything a user can see.
 import { BrowserWindow, ipcMain } from 'electron'
 import { isAmbientDetectionEnabled, loadAppSettings } from './app-settings'
+import { CONFERENCING_APPS } from './detection/appRegistry'
 import { CallDetector } from './detection/CallDetector'
 import { MacAdapter } from './detection/adapters/MacAdapter'
 import { NullAdapter } from './detection/adapters/NullAdapter'
@@ -146,6 +147,13 @@ export function registerDetectionService(): void {
   })
 
   ipcMain.handle('detection:getState', () => detector?.getState())
+
+  // For Settings' per-app override editor - id+displayName only, so the
+  // renderer (which can't import main/detection/appRegistry.ts directly,
+  // different tsconfig) always matches the exact appIds policy.ts checks.
+  ipcMain.handle('detection:getKnownApps', () =>
+    CONFERENCING_APPS.map((a) => ({ appId: a.appId, displayName: a.displayName }))
+  )
 }
 
 export function disposeDetectionService(): void {

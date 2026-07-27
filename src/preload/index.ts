@@ -219,7 +219,11 @@ const api = {
     onSwitchOffered: (cb: (payload: { current: DetectedCall; pending: DetectedCall }) => void) =>
       subscribe('detection:switch-offered', cb),
     onStartCapture: (cb: (payload: { call: DetectedCall; mode: 'full' | 'mic-only' }) => void) =>
-      subscribe('detection:startCapture', cb)
+      subscribe('detection:startCapture', cb),
+    getKnownApps: () =>
+      ipcRenderer.invoke('detection:getKnownApps') as Promise<
+        { appId: string; displayName: string }[]
+      >
   }
 }
 

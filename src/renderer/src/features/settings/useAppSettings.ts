@@ -33,7 +33,8 @@ const DEFAULT_SETTINGS: AppSettings = {
     staleAfterDays: 14,
     autoGenerateNotes: false
   },
-  objectionMining: { enabled: false }
+  objectionMining: { enabled: false },
+  detection: { enabled: false, capturePolicy: { autoCapturePolicy: 'mic-only', appOverrides: {} } }
 }
 
 export interface UseAppSettings {
