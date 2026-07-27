@@ -9,6 +9,11 @@ name: Build Windows demo installer
 # Windows hardware for this project so far (see docs/detection.md); building
 # arm64 too would require cross-arch compilation of the win-audio-sessions
 # native addon that has never been attempted or verified.
+#
+# Steps are split (rather than one big `run:` block) and each captures its
+# own log file, so a failure's actual output can be read from the job
+# summary - full step logs require a GitHub login even on a public repo, but
+# the Summary tab does not.
 on:
   push:
     tags:
@@ -29,15 +34,38 @@ jobs:
           node-version: "22"
 
       - name: Install dependencies
-        run: npm ci
-
-      - name: Build Windows installer (x64)
-        run: |
-          npm run native:build:win
-          npm run typecheck
-          npx electron-vite build
-          npx electron-builder --win --x64
         shell: bash
+        run: npm ci > install.log 2>&1
+
+      - name: Build native addon (win-audio-sessions)
+        shell: bash
+        run: npm run native:build:win > native-build.log 2>&1
+
+      - name: Typecheck
+        shell: bash
+        run: npm run typecheck > typecheck.log 2>&1
+
+      - name: Build renderer/main (electron-vite)
+        shell: bash
+        run: npx electron-vite build > vite-build.log 2>&1
+
+      - name: Package installer (electron-builder)
+        shell: bash
+        run: npx electron-builder --win --x64 > electron-builder.log 2>&1
+
+      - name: Surface failure details in the job summary
+        if: failure()
+        shell: bash
+        run: |
+          echo "## Build failure diagnostics" >> "$GITHUB_STEP_SUMMARY"
+          for f in install.log native-build.log typecheck.log vite-build.log electron-builder.log; do
+            if [ -f "$f" ]; then
+              echo "### $f (last 150 lines)" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              tail -n 150 "$f" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
 
       - name: Rename installer for the demo
         shell: bash
