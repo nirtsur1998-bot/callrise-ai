@@ -42,5 +42,8 @@ execFileSync(
     '--dist-url=https://electronjs.org/headers',
     `--target=${electronVersion}`
   ],
-  { stdio: 'inherit' }
+  // Windows .cmd files aren't directly executable - they must go through a
+  // shell (cmd.exe) to run at all. Without this, spawnSync fails immediately
+  // with EINVAL before node-gyp ever starts (confirmed in CI on windows-latest).
+  { stdio: 'inherit', shell: process.platform === 'win32' }
 )
