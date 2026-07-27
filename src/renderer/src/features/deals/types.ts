@@ -50,6 +50,11 @@ export interface Deal {
   createdAt: string
   updatedAt: string
   riskAssessment?: DealRiskAssessment
+  /** Every PAST risk assessment, oldest first — the current one (above) is
+   *  not duplicated as the last entry. Same "history alongside a current
+   *  value" shape as stageHistory below. Absent/empty until a deal's risk
+   *  has been re-assessed at least once. */
+  riskAssessmentHistory?: DealRiskAssessment[]
   /** Every past stage transition, oldest first — the deal's CURRENT stage
    *  (stageId, above) is not duplicated as the last entry; this is history
    *  only. Absent/empty on deals that haven't changed stage since this field

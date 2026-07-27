@@ -14,6 +14,8 @@ import {
 import { loadDealStages } from './deal-stages'
 import { listCalls, getCall } from './calls-fs'
 import { assessDealRisk, type DealRiskResult, type DealRiskCallInput } from './deal-risk'
+import { getContact } from './contacts-fs'
+import { listTasks, createTask } from './tasks-fs'
 import { scheduleBackup } from './backup'
 
 function dealsDir(): string {
@@ -22,6 +24,40 @@ function dealsDir(): string {
 
 function callsDir(): string {
   return join(app.getPath('userData'), 'calls')
+}
+
+function contactsDir(): string {
+  return join(app.getPath('userData'), 'contacts')
+}
+
+function tasksDir(): string {
+  return join(app.getPath('userData'), 'tasks')
+}
+
+/** Auto-suggest a follow-up task the moment a fresh assessment comes back
+ *  High — mirrors the exact title/shape the manual "Create task" button on
+ *  the follow-up digest already produces (staleness.ts's createFollowUpTask),
+ *  so the two never produce visibly different tasks for the same situation.
+ *  Best-effort: a failure here must never fail the risk assessment itself. */
+async function autoCreateHighRiskTask(deal: Deal): Promise<void> {
+  try {
+    const contact = await getContact(contactsDir(), deal.contactId)
+    const title = `Follow up with ${contact?.name ?? 'contact'} — ${deal.title}`
+    const existing = await listTasks(tasksDir())
+    if (existing.some((t) => t.title === title && t.status === 'open')) return
+    await createTask(tasksDir(), {
+      title,
+      type: 'follow-up',
+      priority: 'high',
+      clientName: contact?.name ?? null,
+      note: `Deal flagged High risk: ${deal.title}`,
+      contactId: deal.contactId,
+      dealId: deal.id,
+      source: 'ai'
+    })
+  } catch {
+    /* best-effort — the assessment itself already saved successfully */
+  }
 }
 
 /** A deal's stageId must reference a real, current stage — falls back to the
@@ -106,6 +142,7 @@ export function registerDeals(): void {
             message: 'The assessment could not be saved. Please try again.'
           }
         }
+        if (result.assessment.level === 'high') void autoCreateHighRiskTask(saved)
       }
       return result
     } catch {

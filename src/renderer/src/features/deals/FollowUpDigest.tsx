@@ -73,6 +73,11 @@ function formatOverdue(days: number): string {
   return `${whole} day${whole === 1 ? '' : 's'} since last call`
 }
 
+function formatRiskCheckAge(days: number): string {
+  const whole = Math.floor(days)
+  return `Last risk check was ${whole} day${whole === 1 ? '' : 's'} ago — worth a fresh look.`
+}
+
 function formatUpcoming(iso: string): string {
   const d = new Date(iso)
   return d.toLocaleDateString('en-US', {
@@ -189,7 +194,9 @@ export function FollowUpDigest({
       const reason =
         tier === 'stale'
           ? formatOverdue(daysSinceLastCall(lastCallAt))
-          : (deal.riskAssessment?.summary ?? '')
+          : tier === 'risk-stale'
+            ? formatRiskCheckAge(daysSinceLastCall(deal.riskAssessment?.createdAt))
+            : (deal.riskAssessment?.summary ?? '')
       dealItems.push({
         key: `deal-${deal.id}`,
         title: deal.title,
@@ -465,7 +472,7 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
   const created = result === 'created' || result === 'exists'
   const { deal, contact, title, days, tier, reason, upcomingAt } = item
   const value = deal ? formatValue(deal.value) : null
-  const isRiskTier = tier === 'risk-high' || tier === 'risk-medium'
+  const isRiskTier = tier === 'risk-high' || tier === 'risk-medium' || tier === 'risk-stale'
 
   const handleCreate = async (): Promise<void> => {
     setCreating(true)
@@ -486,8 +493,8 @@ function FollowUpRow({ item, onOpen }: FollowUpRowProps): React.JSX.Element {
         <div className="flex flex-wrap items-center gap-2">
           <p className="truncate text-sm font-medium">{title}</p>
           {isRiskTier && (
-            <Badge tone={RISK_TIER_TONE[tier as 'risk-high' | 'risk-medium']}>
-              {RISK_TIER_LABEL[tier as 'risk-high' | 'risk-medium']}
+            <Badge tone={RISK_TIER_TONE[tier as 'risk-high' | 'risk-medium' | 'risk-stale']}>
+              {RISK_TIER_LABEL[tier as 'risk-high' | 'risk-medium' | 'risk-stale']}
             </Badge>
           )}
         </div>

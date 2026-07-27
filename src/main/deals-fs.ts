@@ -25,6 +25,11 @@ export interface Deal {
   /** Phase 5 Step 1 — the last AI risk assessment run on this deal, if any.
    *  Manually triggered, cached until re-run (never auto-computed). */
   riskAssessment?: DealRiskAssessment
+  /** Every PAST risk assessment, oldest first — pushed here right before
+   *  `riskAssessment` above gets overwritten with a fresh one, so re-running
+   *  the assessment builds a timeline instead of losing the previous read.
+   *  Capped at MAX_RISK_HISTORY entries. */
+  riskAssessmentHistory?: DealRiskAssessment[]
   /** Tombstone: a deleted deal is kept (not erased) so the deletion can
    *  propagate to a future cloud backup. Hidden from every normal listing. */
   deleted?: boolean
@@ -148,6 +153,17 @@ function sanitizeRiskAssessment(value: unknown): DealRiskAssessment | undefined 
   }
 }
 
+const MAX_RISK_HISTORY = 20
+
+function sanitizeRiskAssessmentHistory(value: unknown): DealRiskAssessment[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const clean = value
+    .map((v) => sanitizeRiskAssessment(v))
+    .filter((v): v is DealRiskAssessment => v !== undefined)
+    .slice(-MAX_RISK_HISTORY)
+  return clean.length ? clean : undefined
+}
+
 async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true })
 }
@@ -184,6 +200,7 @@ function sanitizeDealRecord(value: unknown): Deal | null {
     createdAt,
     updatedAt,
     riskAssessment: sanitizeRiskAssessment(v.riskAssessment),
+    riskAssessmentHistory: sanitizeRiskAssessmentHistory(v.riskAssessmentHistory),
     deleted: v.deleted === true ? true : undefined
   }
 }
@@ -407,6 +424,11 @@ async function setDealRiskAssessmentUnlocked(
   if (!deal) return null
   const clean = sanitizeRiskAssessment(assessment)
   if (!clean) return null
+  if (deal.riskAssessment) {
+    deal.riskAssessmentHistory = [...(deal.riskAssessmentHistory ?? []), deal.riskAssessment].slice(
+      -MAX_RISK_HISTORY
+    )
+  }
   deal.riskAssessment = clean
   deal.updatedAt = new Date().toISOString()
   try {
