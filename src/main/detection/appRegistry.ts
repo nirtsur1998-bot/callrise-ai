@@ -100,6 +100,11 @@ export const CONFERENCING_APPS: ConferencingAppEntry[] = [
   {
     appId: 'whatsapp',
     displayName: 'WhatsApp',
+    // Confirmed on real Windows hardware (detect:debug, 2026-07-27): the modern
+    // Store-packaged WhatsApp Windows app's actual process is 'WhatsApp.root.exe',
+    // not 'whatsapp' - without this it silently never matched, capping every
+    // WhatsApp call at the unknown-app 0.25 weight forever (never detectable).
+    windowsExeNames: ['whatsapp.exe', 'whatsapp.root.exe'],
     processNames: ['whatsapp']
   },
   {
