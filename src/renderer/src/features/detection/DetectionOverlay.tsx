@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Mic, Pause, Square, ExternalLink } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Mic, Pause, Square, ExternalLink, PhoneIncoming, ArrowLeftRight } from 'lucide-react'
 
 // Derived from the preload-declared API rather than imported from
 // main/detection/types.ts directly - this file is under tsconfig.web.json's
@@ -18,6 +18,80 @@ function formatElapsed(ms: number): string {
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60
   return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+/** Shared glass-capsule shell for every overlay state — a Dynamic-Island /
+ *  Live-Activity-style floating HUD: blurred translucent surface, a subtle
+ *  top sheen, and a soft indigo-tinted glow instead of the app's normal flat
+ *  card treatment. The window behind this is already fully transparent
+ *  (main/detection-overlay.ts), so this IS the visible shape. */
+function OverlayShell({ children }: { children: ReactNode }): React.JSX.Element {
+  return (
+    <div
+      style={DRAG}
+      className="animate-pop relative flex h-full flex-col justify-center gap-2.5 overflow-hidden rounded-[26px] border border-white/10 bg-surface/75 p-4 shadow-[0_0_0_1px_rgba(110,123,242,0.12),0_16px_40px_-12px_rgba(0,0,0,0.55)] backdrop-blur-2xl"
+    >
+      <div className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
+      {children}
+    </div>
+  )
+}
+
+/** Small circular glyph badge, matching the "live activity" icon-in-a-ring look. */
+function IconBadge({ icon: Icon }: { icon: typeof Mic }): React.JSX.Element {
+  return (
+    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-soft ring-1 ring-inset ring-accent/25">
+      <Icon className="h-3.5 w-3.5 text-accent" strokeWidth={2.25} />
+    </span>
+  )
+}
+
+function PrimaryPill({
+  children,
+  onClick
+}: {
+  children: ReactNode
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      style={NO_DRAG}
+      onClick={onClick}
+      className="press flex-1 rounded-full bg-brand px-3 py-1.5 text-[12px] font-semibold text-white shadow-[0_4px_14px_-4px_rgba(110,123,242,0.6)]"
+    >
+      {children}
+    </button>
+  )
+}
+
+function SecondaryPill({
+  children,
+  onClick
+}: {
+  children: ReactNode
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      style={NO_DRAG}
+      onClick={onClick}
+      className="press flex-1 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] font-medium text-ink hover:bg-white/[0.08]"
+    >
+      {children}
+    </button>
+  )
+}
+
+/** The breathing "live" dot — a solid center dot with a softly expanding
+ *  halo behind it (the .pulse-ring utility), the same "unmistakably live"
+ *  language as the honest recording indicator elsewhere in the app. */
+function LiveDot(): React.JSX.Element {
+  return (
+    <span className="relative flex h-2.5 w-2.5 shrink-0 items-center justify-center">
+      <span className="pulse-ring absolute inset-0 rounded-full bg-danger" />
+      <span className="relative h-2 w-2 rounded-full bg-danger" />
+    </span>
+  )
 }
 
 /**
@@ -83,29 +157,25 @@ export function DetectionOverlay(): React.JSX.Element | null {
   if (switchOffer) {
     const { current, pending } = switchOffer
     return (
-      <div
-        style={DRAG}
-        className="flex h-full flex-col justify-center gap-2.5 rounded-2xl border border-line bg-surface p-4 shadow-xl"
-      >
-        <p className="text-[13px] font-medium text-ink">
-          New call detected in {pending.displayName}
-        </p>
-        <p className="text-[12px] text-muted">
-          You&rsquo;re currently capturing {current.displayName}.
-        </p>
-        <div style={NO_DRAG} className="mt-1 flex gap-2">
-          <button
-            className="press flex-1 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white"
-            onClick={() => void window.api.detection.respondToSwitch('switch')}
-          >
+      <OverlayShell>
+        <div className="flex items-start gap-2.5">
+          <IconBadge icon={ArrowLeftRight} />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[13px] font-semibold text-ink">
+              New call detected in {pending.displayName}
+            </p>
+            <p className="mt-0.5 truncate text-[12px] text-muted">
+              Currently capturing {current.displayName}
+            </p>
+          </div>
+        </div>
+        <div className="mt-1 flex gap-2">
+          <PrimaryPill onClick={() => void window.api.detection.respondToSwitch('switch')}>
             Switch capture
-          </button>
-          <button
-            className="press flex-1 rounded-lg border border-line px-3 py-1.5 text-[12px] font-medium text-ink"
-            onClick={() => void window.api.detection.respondToSwitch('keep')}
-          >
+          </PrimaryPill>
+          <SecondaryPill onClick={() => void window.api.detection.respondToSwitch('keep')}>
             Keep current
-          </button>
+          </SecondaryPill>
         </div>
         <button
           style={NO_DRAG}
@@ -117,30 +187,26 @@ export function DetectionOverlay(): React.JSX.Element | null {
         >
           Never ask for {pending.displayName}
         </button>
-      </div>
+      </OverlayShell>
     )
   }
 
   if (toastCall) {
     return (
-      <div
-        style={DRAG}
-        className="flex h-full flex-col justify-center gap-2.5 rounded-2xl border border-line bg-surface p-4 shadow-xl"
-      >
-        <p className="text-[13px] font-medium text-ink">Call detected in {toastCall.displayName}</p>
-        <div style={NO_DRAG} className="mt-1 flex gap-2">
-          <button
-            className="press flex-1 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white"
-            onClick={() => void window.api.detection.respondToDetection('accept')}
-          >
+      <OverlayShell>
+        <div className="flex items-start gap-2.5">
+          <IconBadge icon={PhoneIncoming} />
+          <p className="min-w-0 flex-1 truncate text-[13px] font-semibold text-ink">
+            Call detected in {toastCall.displayName}
+          </p>
+        </div>
+        <div className="mt-1 flex gap-2">
+          <PrimaryPill onClick={() => void window.api.detection.respondToDetection('accept')}>
             Start capturing
-          </button>
-          <button
-            className="press flex-1 rounded-lg border border-line px-3 py-1.5 text-[12px] font-medium text-ink"
-            onClick={() => void window.api.detection.respondToDetection('decline')}
-          >
+          </PrimaryPill>
+          <SecondaryPill onClick={() => void window.api.detection.respondToDetection('decline')}>
             Not now
-          </button>
+          </SecondaryPill>
         </div>
         <button
           style={NO_DRAG}
@@ -152,7 +218,7 @@ export function DetectionOverlay(): React.JSX.Element | null {
         >
           Never for {toastCall.displayName}
         </button>
-      </div>
+      </OverlayShell>
     )
   }
 
@@ -171,46 +237,45 @@ export function DetectionOverlay(): React.JSX.Element | null {
           ? 'Capturing your side only — waiting for consent'
           : 'Capturing this call live'
     return (
-      <div
-        style={DRAG}
-        className="flex h-full flex-col justify-center gap-2.5 rounded-2xl border border-line bg-surface p-4 shadow-xl"
-      >
-        <div className="flex items-center gap-2">
-          <span className="flex h-2 w-2 shrink-0 rounded-full bg-danger" />
-          <p className="flex-1 text-[13px] font-medium text-ink">{label}</p>
-          <span className="tabular-nums text-[12px] text-muted">{elapsed}</span>
+      <OverlayShell>
+        <div className="flex items-center gap-2.5">
+          <LiveDot />
+          <p className="flex-1 truncate text-[13px] font-semibold text-ink">{label}</p>
+          <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 text-[12px] font-semibold tabular-nums text-ink">
+            {elapsed}
+          </span>
         </div>
-        <p className="text-[12px] text-muted">{call.displayName}</p>
-        <div style={NO_DRAG} className="mt-1 flex gap-2">
+        <p className="truncate pl-5 text-[12px] text-muted">{call.displayName}</p>
+        <div style={NO_DRAG} className="mt-0.5 flex items-center gap-2">
           <button
-            className="press flex items-center justify-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-[12px] font-medium text-ink"
+            className="press flex flex-1 items-center justify-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] font-medium text-ink hover:bg-white/[0.08]"
             onClick={() => void window.api.detection.requestTogglePause()}
           >
             <Pause className="h-3.5 w-3.5" /> Pause
           </button>
           <button
-            className="press flex items-center justify-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-[12px] font-medium text-danger"
+            className="press flex flex-1 items-center justify-center gap-1.5 rounded-full bg-danger-soft px-3 py-1.5 text-[12px] font-semibold text-danger ring-1 ring-inset ring-danger/25"
             onClick={() => void window.api.detection.requestStopCapture()}
           >
             <Square className="h-3.5 w-3.5" /> Stop
           </button>
           <button
-            className="press flex items-center justify-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-[12px] font-medium text-ink"
+            className="press flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-ink hover:bg-white/[0.08]"
             onClick={() => void window.api.detection.openMainWindow()}
+            aria-label="Open CallRise AI"
           >
             <ExternalLink className="h-3.5 w-3.5" />
           </button>
         </div>
-      </div>
+      </OverlayShell>
     )
   }
 
   return (
-    <div
-      style={DRAG}
-      className="flex h-full items-center justify-center gap-2 rounded-2xl border border-line bg-surface p-4 text-[12px] text-faint shadow-xl"
-    >
-      <Mic className="h-3.5 w-3.5" /> CallRise AI
-    </div>
+    <OverlayShell>
+      <div className="flex h-full items-center justify-center gap-2 text-[12px] text-faint">
+        <Mic className="h-3.5 w-3.5" /> CallRise AI
+      </div>
+    </OverlayShell>
   )
 }
