@@ -94,23 +94,38 @@ Napi::Value IsMacOS14OrLater(const Napi::CallbackInfo& info) {
   return Napi::Boolean::New(info.Env(), ok);
 }
 
-// Finds our own virtual mic's CoreAudio device UID by name.
-//
-// ASSUMPTION FLAGGED FOR REVIEW: the salesos-virtualmic driver lives in a
-// separate repo not present in this checkout, so its exact registered
-// CoreAudio device name could not be confirmed here. This matches on
-// "salesos microphone" (derived from the known driver bundle name
-// SalesOSMicrophone.driver, see src/main/virtualmic.ts) - confirm against
-// the real device name shown in Audio MIDI Setup once that repo is
-// available, and update the match below if it differs.
+// Substrings the salesos-virtualmic driver's CoreAudio device name might
+// plausibly use. STILL UNCONFIRMED - that repo isn't present in this
+// checkout, so none of these has been checked against the real device name in
+// Audio MIDI Setup. Broadened to several minor-spelling variants (rather than
+// one exact guess) since a false negative here (own-virtual-device, our
+// STRONGEST fusion signal, silently never firing) is worse than a false
+// positive would be - these are specific enough that an accidental collision
+// with unrelated real hardware is very unlikely. The app's "Sales OS ->
+// CallRise AI" rebrand deliberately did NOT rename this device (see
+// CLAUDE.md / src/main/virtualmic.ts), so a "salesos"-based name is still
+// the best available guess. Confirm the real name and delete the rest once
+// that repo is available.
+static NSArray<NSString*>* VirtualMicNameCandidates() {
+  return @[ @"salesos microphone", @"salesos mic", @"sales os microphone", @"sales os mic" ];
+}
+
+// Finds our own virtual mic's CoreAudio device UID by name (see
+// VirtualMicNameCandidates()'s caveat above).
 Napi::Value GetVirtualMicDeviceUID(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   @autoreleasepool {
+    NSArray<NSString*>* candidates = VirtualMicNameCandidates();
     for (AudioObjectID device : GetPropertyIdList(kAudioObjectSystemObject, kAudioHardwarePropertyDevices)) {
       NSString* name = GetStringProperty(device, kAudioObjectPropertyName);
-      if (name && [name.lowercaseString containsString:@"salesos microphone"]) {
-        NSString* uid = GetStringProperty(device, kAudioDevicePropertyDeviceUID);
-        if (uid) return Napi::String::New(env, uid.UTF8String);
+      if (!name) continue;
+      NSString* lower = name.lowercaseString;
+      for (NSString* candidate in candidates) {
+        if ([lower containsString:candidate]) {
+          NSString* uid = GetStringProperty(device, kAudioDevicePropertyDeviceUID);
+          if (uid) return Napi::String::New(env, uid.UTF8String);
+          break;
+        }
       }
     }
   }
@@ -191,24 +206,34 @@ Napi::Value GetAudioInputActivity(const Napi::CallbackInfo& info) {
   return result;
 }
 
-// On-screen window titles, or null if Screen Recording permission is absent
-// (every kCGWindowName comes back nil in that case). Never prompts for the
-// permission - that decision belongs to the user, in System Settings.
+// On-screen window titles, or null if Screen Recording permission is absent.
+// Never prompts for the permission - that decision belongs to the user, in
+// System Settings.
+//
+// Queries the actual TCC authorization via CGPreflightScreenCaptureAccess()
+// (macOS 10.15+, no prompt, no side effects) rather than inferring permission
+// from whether any on-screen window happened to have a title this tick. The
+// previous version's inference (sawAnyName / kCGWindowName all being empty)
+// couldn't tell "permission denied" apart from "genuinely zero titled windows
+// right now" (e.g. right after login, or everything minimized/on another
+// Space) - background system windows (Dock, wallpaper, menu-bar extras) are
+// always title-less regardless of permission, so a quiet moment with no other
+// titled windows open would misreport as a permission denial.
 Napi::Value GetWindowTitles(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
+  if (!CGPreflightScreenCaptureAccess()) return env.Null();
+
   @autoreleasepool {
     CFArrayRef windowListRef = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
-    if (!windowListRef) return env.Null();
+    if (!windowListRef) return Napi::Array::New(env);
     NSArray* windows = (__bridge_transfer NSArray*)windowListRef;
 
-    bool sawAnyName = false;
     Napi::Array result = Napi::Array::New(env);
     uint32_t idx = 0;
     for (NSDictionary* w in windows) {
       NSNumber* pidNum = w[(NSString*)kCGWindowOwnerPID];
       NSString* ownerName = w[(NSString*)kCGWindowOwnerName];
       NSString* title = w[(NSString*)kCGWindowName];
-      if (title.length > 0) sawAnyName = true;
       if (!pidNum) continue;
 
       Napi::Object entry = Napi::Object::New(env);
@@ -217,8 +242,6 @@ Napi::Value GetWindowTitles(const Napi::CallbackInfo& info) {
       entry.Set("title", Napi::String::New(env, title ? title.UTF8String : ""));
       result.Set(idx++, entry);
     }
-
-    if (!sawAnyName && windows.count > 0) return env.Null();
     return result;
   }
 }

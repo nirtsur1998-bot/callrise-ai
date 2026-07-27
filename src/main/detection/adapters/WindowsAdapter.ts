@@ -1,7 +1,12 @@
 import { app } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
-import { isOwnProcess, matchTitle, normalizeAppIdentity } from '../appRegistry'
+import {
+  isKnownConferencingApp,
+  isOwnProcess,
+  matchTitle,
+  normalizeAppIdentity
+} from '../appRegistry'
 import type { DetectionSignal } from '../types'
 import type { ICallDetectorAdapter } from './ICallDetectorAdapter'
 
@@ -72,10 +77,10 @@ function loadNativeAddon(): { addon: NativeAddon | null; error: unknown } {
  * yet (see the "Windows virtual mic program" work, currently paused), so that
  * signal simply never fires on this platform in this milestone.
  *
- * NOTE: the native addon this wraps has not been compiled or run on a real
- * Windows machine (written on macOS, see addon.cc's header comment) - this
- * class itself typechecks and passes its adapter-contract tests here, but the
- * actual WASAPI behavior is unverified until built on Windows.
+ * NOTE: confirmed working on real Windows hardware - process enumeration and
+ * WASAPI mic-session detection correctly detected a live WhatsApp call end to
+ * end via `npm run detect:debug` (see addon.cc's header comment for exactly
+ * what's verified vs. still unexercised, e.g. the window-title path).
  */
 export class WindowsAdapter implements ICallDetectorAdapter {
   private readonly addon: NativeAddon | null
@@ -181,6 +186,24 @@ export class WindowsAdapter implements ICallDetectorAdapter {
         observedAt: now,
         weight: 0
       })
+      // Mirrors MacAdapter: a matched title on a process not already flagged
+      // as a known app (the browser-hosted case - e.g. Google Meet in Chrome,
+      // which has no windowsExeNames/bundleId entry, only a titlePattern) is
+      // still useful as a weak corroborating `process` signal.
+      const exeApp = byPid.get(w.pid)
+      if (
+        exeApp &&
+        !isKnownConferencingApp(normalizeAppIdentity({ windowsExeName: exeApp.exeName }).appId)
+      ) {
+        this.emit({
+          kind: 'process',
+          appId: match.appId,
+          displayName: match.displayName,
+          pid: w.pid,
+          observedAt: now,
+          weight: 0
+        })
+      }
     }
   }
 }

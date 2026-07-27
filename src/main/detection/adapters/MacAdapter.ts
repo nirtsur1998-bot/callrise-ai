@@ -118,7 +118,8 @@ export class MacAdapter implements ICallDetectorAdapter {
 
   start(): void {
     if (!this.addon || this.pollTimer) return
-    this.virtualMicUID = this.safeCall(() => this.addon!.getVirtualMicDeviceUID(), null)
+    // sample() itself resolves virtualMicUID on its first call (and keeps
+    // re-checking on every later call for as long as it stays null).
     this.sample()
     this.pollTimer = setInterval(() => this.sample(), SAMPLE_INTERVAL_MS)
   }
@@ -150,6 +151,15 @@ export class MacAdapter implements ICallDetectorAdapter {
   private sample(): void {
     if (!this.addon) return
     const now = this.now()
+
+    // Re-check if we haven't found it yet - the virtual mic device may not
+    // exist yet when detection starts (e.g. noise cancellation turned on
+    // only later, mid-run). CoreAudio device enumeration is cheap and
+    // safeCall already tolerates failure, so this costs nothing once found
+    // (never re-checked again) and nothing extra if it never appears.
+    if (this.virtualMicUID == null) {
+      this.virtualMicUID = this.safeCall(() => this.addon!.getVirtualMicDeviceUID(), null)
+    }
 
     const runningApps = this.safeCall(
       () => this.addon!.getRunningConferencingProcesses(),

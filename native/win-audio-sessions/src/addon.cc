@@ -8,16 +8,22 @@
 // free (no stale device handles to invalidate), which is the specific thing
 // IMMNotificationClient would otherwise have been needed for.
 //
-// *** NOT COMPILED OR TESTED ***
-// This was written on macOS with no Windows machine, MSVC toolchain, or
-// Windows SDK available in this environment - every API call, HRESULT
-// pattern, and header path below is written from documented Win32/COM/WASAPI
-// behavior, not verified against a real compile the way mac-audio-activity's
-// addon.mm was (that one built and ran live on this machine; see
-// docs/detection.md). Build and smoke-test this on an actual Windows box
-// (`npm run native:build:win`) before trusting it - expect to fix at least
-// minor issues (a missing #include, an off-by-one in a COM call) on first
-// real build.
+// VERIFICATION STATUS (updated after a real-hardware test session, not just
+// written-on-macOS guesswork - see docs/detection.md):
+// - Process enumeration (SnapshotProcesses/CreateToolhelp32Snapshot) and
+//   WASAPI capture-session enumeration (GetAudioInputActivity) are BOTH
+//   confirmed working: a live Windows test correctly detected a real
+//   WhatsApp call (process signal, then mic-session confidence climbing to
+//   'detected') via `npm run detect:debug`, and caught/fixed a real bug
+//   (WhatsApp's actual exe name, WhatsApp.root.exe, wasn't in the app
+//   registry) in the process.
+// - GetWindowTitles/EnumWindowsCallback has compiled and linked successfully
+//   but has NOT been observed to actually fire a match in that test session
+//   (no titled window matching a known pattern happened to be open) - treat
+//   this path, and the newer corroborating-process-signal logic in
+//   WindowsAdapter.ts's window-title loop, as still unexercised on real
+//   hardware until specifically verified (e.g. open a Google Meet tab in a
+//   browser and confirm a window-title signal appears in detect:debug).
 
 #include <napi.h>
 #include <windows.h>
