@@ -53,31 +53,41 @@ jobs:
         shell: bash
         run: npx electron-builder --win --x64 > electron-builder.log 2>&1
 
-      - name: Surface failure details in the job summary
+      - name: Bundle failure diagnostics into one file
         if: failure()
         shell: bash
         run: |
-          echo "## Build failure diagnostics" >> "$GITHUB_STEP_SUMMARY"
-          for f in install.log native-build.log typecheck.log vite-build.log electron-builder.log; do
-            if [ -f "$f" ]; then
-              echo "### $f (last 150 lines)" >> "$GITHUB_STEP_SUMMARY"
-              echo '```' >> "$GITHUB_STEP_SUMMARY"
-              tail -n 150 "$f" >> "$GITHUB_STEP_SUMMARY"
-              echo '```' >> "$GITHUB_STEP_SUMMARY"
-            fi
-          done
+          {
+            echo "# Build failure diagnostics"
+            for f in install.log native-build.log typecheck.log vite-build.log electron-builder.log; do
+              if [ -f "$f" ]; then
+                echo "## $f (last 300 lines)"
+                echo '```'
+                tail -n 300 "$f"
+                echo '```'
+              fi
+            done
+          } > FAILURE-DIAGNOSTICS.md
 
       - name: Rename installer for the demo
+        if: success()
         shell: bash
         run: |
           mv "dist/CallRise AI Windows.exe" "dist/CallRise-AI-DEMO-Windows.exe"
           ls -la dist/*.exe
 
-      - name: Publish as a GitHub Release
+      # Runs on both success (ships the installer) and failure (ships the
+      # diagnostics log) - a public Release asset is downloadable by anyone
+      # without a GitHub login, unlike step logs and job summaries which this
+      # public repo still requires sign-in to view.
+      - name: Publish result as a GitHub Release
+        if: always()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: "CallRise AI - Windows demo build"
-          body: "Automated Windows demo build (x64) from commit ${{ github.sha }}. Unsigned - Windows SmartScreen will warn on first run (More info -> Run anyway)."
-          files: dist/CallRise-AI-DEMO-Windows.exe
+          name: "CallRise AI - Windows demo build (${{ job.status }})"
+          body: "Automated Windows demo build (x64) from commit ${{ github.sha }}. Status: ${{ job.status }}. Unsigned - Windows SmartScreen will warn on first run (More info -> Run anyway)."
+          files: |
+            dist/CallRise-AI-DEMO-Windows.exe
+            FAILURE-DIAGNOSTICS.md
           prerelease: true
