@@ -54,6 +54,28 @@ describe('DriftMeter', () => {
     expect(m.read().ppm).toBe(0)
   })
 
+  // Frames are timed by ARRIVAL. A burst — a reconnect replay, or a stalled
+  // thread catching up — delivers seconds of audio across milliseconds, which
+  // says everything about delivery and nothing about the clock. An integration
+  // run reported 25,062,197,486 ppm before this guard existed.
+  it('reports nothing rather than nonsense when audio arrives in a burst', () => {
+    const m = new DriftMeter(RATE, CHANNELS)
+    let t = 0
+    for (let i = 0; i < 300; i++) {
+      t += 0.1 // 30 seconds of audio delivered across 30 milliseconds
+      m.onFrame(t, FRAME_BYTES)
+    }
+    expect(m.read().ppm).toBe(0)
+  })
+
+  it('starts reporting once the window spans real time', () => {
+    const m = new DriftMeter(RATE, CHANNELS)
+    feed(m, 4, 1.001) // under the minimum fit window
+    expect(m.read().ppm).toBe(0)
+    feed(m, 20, 1.001, 4_000)
+    expect(m.read().ppm).toBeGreaterThan(500)
+  })
+
   // A discontinuity is a device event or a sleep, not accumulated drift.
   // Letting a controller absorb it is how a sync bug becomes a latency bug.
   it('reports a jump rather than folding a discontinuity into the slope', () => {

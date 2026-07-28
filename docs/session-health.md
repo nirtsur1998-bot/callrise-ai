@@ -18,7 +18,7 @@ That is not an accident, it is a property of the stack:
 - **A machine that slept looks like a machine that was busy**, unless you
   compare two different clocks.
 
-So the health layer measures the things that *do* differ, and turns each one
+So the health layer measures the things that _do_ differ, and turns each one
 into a number a human can act on.
 
 ## The three measurements
@@ -34,7 +34,7 @@ lag = X − Y
 The important word is **cumulative**. Deepgram restarts its own audio clock on
 every connection, so a naive counter has to reset to 0 on each socket open —
 which is exactly what the old implementation did, and it meant the metric was
-*structurally incapable* of observing lag carried across a reconnect. That is
+_structurally incapable_ of observing lag carried across a reconnect. That is
 the case it existed to catch.
 
 `LagTracker` instead records where the cumulative cursor stood when the current
@@ -44,12 +44,12 @@ acknowledgement back onto the session-wide scale.
 Sampled at 1Hz. **The watchdog always acts on a 5-sample median, never an
 instantaneous reading** — one late interim result is not a sick pipeline.
 
-| Median lag | Tier | Action |
-| --- | --- | --- |
-| < 2s | healthy | nothing |
-| 2–5s | warn | surfaced only |
-| 5–15s | shed | trim the queue to the replay cap |
-| ≥ 15s | reset | drop the backlog, rebuild the socket at the live edge |
+| Median lag | Tier    | Action                                                |
+| ---------- | ------- | ----------------------------------------------------- |
+| < 2s       | healthy | nothing                                               |
+| 2–5s       | warn    | surfaced only                                         |
+| 5–15s      | shed    | trim the queue to the replay cap                      |
+| ≥ 15s      | reset   | drop the backlog, rebuild the socket at the live edge |
 
 **Plus the ratchet guard.** Lag that only ever climbs never self-heals: Deepgram
 ingests at 1.25× realtime, so a realtime producer claws back **0.25× per
@@ -95,11 +95,11 @@ suspend — so it trips a resync instead of being folded into the estimate.
 
 Three independent clocks, because they fail independently:
 
-| Signal | Meaning | Response |
-| --- | --- | --- |
-| No audio callback for 10s | capture device is gone | `capture-dead` → reacquire |
-| Callbacks arriving, all digital silence for 10s | suspicious, not fatal | `silent` → log and surface **only** |
-| No server message for 10s while actively sending | socket is dead, TCP hasn't noticed | `socket-dead` → rebuild |
+| Signal                                           | Meaning                            | Response                            |
+| ------------------------------------------------ | ---------------------------------- | ----------------------------------- |
+| No audio callback for 10s                        | capture device is gone             | `capture-dead` → reacquire          |
+| Callbacks arriving, all digital silence for 10s  | suspicious, not fatal              | `silent` → log and surface **only** |
+| No server message for 10s while actively sending | socket is dead, TCP hasn't noticed | `socket-dead` → rebuild             |
 
 The middle row is deliberately non-fatal. Tearing down a working session because
 nobody spoke for twelve seconds would be far worse than the bug it guards
@@ -132,8 +132,36 @@ Three rules, two of them counter-intuitive:
 
 Backpressure comes from `ws.bufferedAmount`. Previously every frame went
 straight to `ws.send()`, which never blocks and never refuses — it just queues
-internally, without bound. That internal queue is the real 90-second bug: on a
-half-open socket it grows for minutes and then floods Deepgram on recovery.
+internally, without bound.
+
+### `bufferedAmount` is a real signal, but a late one — measured
+
+It is tempting to treat `bufferedAmount` as _the_ backpressure fix. It is not,
+and the gap matters enough to have been measured on loopback:
+
+| Audio pushed into a black-holed socket | `bufferedAmount` |
+| -------------------------------------- | ---------------- |
+| 60s (1.92 MB)                          | **0**            |
+| +300s (11.5 MB total)                  | 7.5 MB           |
+
+The kernel socket buffer absorbs the first several megabytes, and data sitting
+there is invisible to `bufferedAmount` and already beyond the queue's reach. At
+16kHz mono that blind spot is roughly **two minutes of audio** — which means
+`bufferedAmount` alone would **not** have caught the original 90-second bug.
+
+So the defences are layered, and it is worth being precise about which one
+covers which failure:
+
+| Failure                          | What actually catches it                      |
+| -------------------------------- | --------------------------------------------- |
+| Clean disconnect (socket closes) | Bounded queue + replay cap                    |
+| Slow-but-alive socket            | `bufferedAmount` high-water mark              |
+| **Half-open socket (no FIN)**    | **Liveness watchdog — 10s of server silence** |
+| Gradual degradation              | Lag ratchet guard (rising slope)              |
+
+The half-open row is the original bug, and the watchdog is what bounds it: at
+most ~10s of audio can disappear into the kernel before the session is rebuilt
+at the live edge, which discards the kernel buffer along with the socket.
 
 ## Gaps are shown, not hidden
 
@@ -153,13 +181,13 @@ skewing every derived metric.
 timeline source**; wall clock is recorded once at session start, as metadata.
 
 `Date.now()` can step backwards (NTP), forwards (user edit), and stalls across
-sleep differently per platform. Anything deriving an *elapsed* value from it
+sleep differently per platform. Anything deriving an _elapsed_ value from it
 produces a wrong answer no test catches, because the wrongness only appears on
 the machine whose clock moved.
 
 `SleepDetector` uses the divergence between the two clocks to notice a suspend,
 rather than Electron's `powerMonitor` (which fires twice on macOS and sometimes
-not at all). `powerMonitor` remains useful as a faster *hint*, never as the
+not at all). `powerMonitor` remains useful as a faster _hint_, never as the
 mechanism.
 
 ## Reading a health snapshot
@@ -168,16 +196,16 @@ The main process emits `transcription:health` at 1Hz:
 
 ```jsonc
 {
-  "submittedSec": 412.3,     // X — cumulative audio handed to the socket
-  "acknowledgedSec": 411.8,  // Y — same scale, silence-fill subtracted out
-  "lagSec": 0.5,             // instantaneous X − Y
-  "medianLagSec": 0.4,       // what the watchdog acts on
-  "tier": "none",            // none | warn | shed | reset
-  "queuedSec": 0.04,         // waiting in the bounded queue
-  "shedSec": 27.1,           // deliberately dropped this session
+  "submittedSec": 412.3, // X — cumulative audio handed to the socket
+  "acknowledgedSec": 411.8, // Y — same scale, silence-fill subtracted out
+  "lagSec": 0.5, // instantaneous X − Y
+  "medianLagSec": 0.4, // what the watchdog acts on
+  "tier": "none", // none | warn | shed | reset
+  "queuedSec": 0.04, // waiting in the bounded queue
+  "shedSec": 27.1, // deliberately dropped this session
   "resets": 1,
   "gaps": [{ "atMs": 130400, "durationMs": 27100, "reason": "reconnect" }],
-  "liveness": "ok"           // ok | silent | capture-dead | socket-dead
+  "liveness": "ok" // ok | silent | capture-dead | socket-dead
 }
 ```
 

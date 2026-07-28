@@ -60,6 +60,17 @@ export interface DriftJump {
 const WINDOW_MS = 60_000
 /** Beyond this, a single-frame discontinuity is an event, not accumulated drift. */
 const JUMP_MS = 200
+/**
+ * The fit needs this much wall time behind it before its slope means anything.
+ *
+ * Frames are timed by ARRIVAL, and arrival only equals capture while audio is
+ * flowing in real time. Any burst — a reconnect replay, a stalled thread
+ * catching up — delivers seconds of audio across milliseconds, which is a
+ * perfectly real measurement of arrival and a meaningless one about the clock.
+ * Without this guard an integration run reported 25,062,197,486 ppm, which is
+ * not a drifting clock, it is a burst.
+ */
+const MIN_FIT_MS = 5_000
 /** Differential/aggregate offset beyond this is worth surfacing. */
 export const DRIFT_ALERT_MS = 100
 
@@ -112,6 +123,11 @@ export class DriftMeter {
     const n = this.points.length
     const offsetMs = Math.round(this.lastOffsetMs ?? 0)
     if (n < 2) return { ppm: 0, offsetMs, points: n }
+    // A window that spans no time can only produce a slope about delivery, not
+    // about the clock. Report nothing rather than something spectacular.
+    if (this.points[n - 1].atMs - this.points[0].atMs < MIN_FIT_MS) {
+      return { ppm: 0, offsetMs, points: n }
+    }
 
     let sumT = 0
     let sumS = 0

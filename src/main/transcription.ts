@@ -9,6 +9,15 @@ import { DriftMeter } from './session-health/drift'
 import { HEALTH_TUNING, type GapReason, type HealthSnapshot } from './session-health/types'
 
 const DEEPGRAM_LISTEN_URL = 'wss://api.deepgram.com/v1/listen'
+
+/** Where the streaming socket connects. Overridable so a self-hosted Deepgram
+ *  deployment (which lives on a different host) works without a code change —
+ *  and so the regression suite can point the real pipeline at a local mock
+ *  that enforces Deepgram's 1.25x ingest cap. Read per connection, never
+ *  cached, so it can't go stale across a restart. */
+function listenUrlBase(): string {
+  return process.env.DEEPGRAM_LISTEN_URL?.trim() || DEEPGRAM_LISTEN_URL
+}
 const MAX_CHUNK_BYTES = 1 << 16 // 64 KB safety cap on a single audio frame
 const CONNECT_TIMEOUT_MS = 8000 // give up if we never reach 'open'
 const STABLE_AFTER_MS = 4000 // connection considered healthy after this long
@@ -93,7 +102,7 @@ function buildUrl(s: Session): string {
   // fall back to diarization to guess speakers within the single channel.
   if (s.multichannel) params.set('multichannel', 'true')
   else params.set('diarize', 'true')
-  return `${DEEPGRAM_LISTEN_URL}?${params.toString()}`
+  return `${listenUrlBase()}?${params.toString()}`
 }
 
 /** Bytes we let the socket hold before we stop feeding it — one second of
