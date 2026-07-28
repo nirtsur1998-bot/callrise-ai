@@ -17,6 +17,7 @@ import { MustAskStrip } from './components/MustAskStrip'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import { getExcludedApps, addSeenApp } from '@renderer/features/settings/prefs'
 import { OtherPartyControl } from '@renderer/features/consent/OtherPartyControl'
+import { capturedJustWentLive, playCaptureLiveChime } from './audio/capture-chime'
 import { ConsentModal } from '@renderer/features/consent/ConsentModal'
 import { RecordingIndicator } from '@renderer/features/consent/RecordingIndicator'
 import { Waveform } from './components/Waveform'
@@ -211,6 +212,17 @@ export function LiveView({
     getSessionId,
     consent.recordRef
   ])
+
+  // Audible confirmation the instant buyer capture actually goes live — for a
+  // rep who isn't looking at the screen when the other party picks up. Fires
+  // only on the true→ transition, never on every render where it's already on.
+  const otherPartyLiveRef = useRef(false)
+  useEffect(() => {
+    if (capturedJustWentLive(otherPartyLiveRef.current, otherPartyLive)) {
+      playCaptureLiveChime()
+    }
+    otherPartyLiveRef.current = otherPartyLive
+  }, [otherPartyLive])
 
   // Settings master switch: when off, the whole other-party recording feature
   // is unavailable — no control to open the modal, the modal itself never
