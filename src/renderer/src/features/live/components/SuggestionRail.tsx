@@ -1,10 +1,13 @@
-import { MessageCircleQuestion, Search, AlertTriangle, TrendingUp, X } from 'lucide-react'
+import { MessageCircleQuestion, Search, AlertTriangle, TrendingUp, Zap, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { IconButton } from '@renderer/components/IconButton'
 import type { CueKind, LiveCue } from '../useLiveCues'
 
 const META: Partial<Record<CueKind, { icon: LucideIcon; label: string; tint: string }>> = {
+  // Deterministic, so it lands in ~400ms — but still reference material rather
+  // than a nudge, which is why it shares the rail instead of interrupting.
+  battlecard: { icon: Zap, label: 'Battlecard', tint: 'text-accent' },
   objection: { icon: AlertTriangle, label: 'Objection', tint: 'text-warning' },
   discovery: { icon: Search, label: 'Discovery', tint: 'text-accent' },
   'next-question': { icon: MessageCircleQuestion, label: 'Ask', tint: 'text-accent' },

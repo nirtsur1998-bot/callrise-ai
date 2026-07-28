@@ -22,7 +22,20 @@ interface CueStyle {
   bar: string
 }
 
-const META: Record<CueKind, CueStyle> = {
+// Partial on purpose: this component renders the INTERRUPT channel, and most
+// kinds (battlecards, model suggestions) can only ever reach the side rail.
+// A kind with no entry here falls back to the neutral treatment rather than
+// crashing — a missing style is not worth losing the cue over.
+const NEUTRAL: CueStyle = {
+  icon: Gauge,
+  label: 'Cue',
+  ring: 'ring-line',
+  iconBg: 'bg-elevated',
+  iconText: 'text-muted',
+  bar: 'bg-muted'
+}
+
+const META: Partial<Record<CueKind, CueStyle>> = {
   objection: {
     icon: AlertTriangle,
     label: 'Objection',
@@ -90,7 +103,7 @@ export function CueCard({
     return () => cancelAnimationFrame(id)
   }, [])
 
-  const meta = META[cue.kind]
+  const meta = META[cue.kind] ?? NEUTRAL
   const Icon = meta.icon
 
   return (

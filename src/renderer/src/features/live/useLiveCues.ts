@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CueLatencyTracker, type CueLatencyReport } from './cue-latency'
+import { BattlecardMatcher, type Battlecard } from './battlecards/match'
+import { STARTER_TRIGGERS } from './battlecards/library'
 
 // Live in-call coaching cues. The substance comes from a conversation-aware
 // Claude call (window.api.transcription.liveCue) over a SPEAKER-LABELED
@@ -7,7 +9,8 @@ import { CueLatencyTracker, type CueLatencyReport } from './cue-latency'
 // about what the client just said. The only deterministic cue is a rep-only
 // "slow down" (so it can never fire on the client).
 
-export type CueKind = 'pace' | 'objection' | 'discovery' | 'next-question' | 'buying-signal'
+export type CueKind =
+  'pace' | 'battlecard' | 'objection' | 'discovery' | 'next-question' | 'buying-signal'
 export type Sensitivity = 'low' | 'medium' | 'high'
 
 /**
@@ -23,7 +26,6 @@ export type Sensitivity = 'low' | 'medium' | 'high'
  * derives the tier from the kind, so there is no code path that can put an
  * LLM cue on the interrupt channel.
  */
-export type { CueTier } from './cue-latency'
 
 export interface LiveCue {
   id: number
@@ -33,12 +35,19 @@ export interface LiveCue {
   at: number
 }
 
-/** The one deterministic cue we generate today. Everything else comes from the
- *  model and therefore cannot interrupt. */
-const DETERMINISTIC_KINDS: ReadonlySet<CueKind> = new Set<CueKind>(['pace'])
+/**
+ * Which kinds may take over the rep's attention.
+ *
+ * Note that being deterministic is NECESSARY but not sufficient. A battlecard
+ * is produced by phrase match and lands just as fast as the pace cue, yet it
+ * belongs in the rail: it is reference material the rep consults, not a nudge
+ * about something they are doing wrong right now. Speed earns the right to
+ * interrupt; it does not create the reason to.
+ */
+const INTERRUPT_KINDS: ReadonlySet<CueKind> = new Set<CueKind>(['pace'])
 
 export function tierFor(kind: CueKind): 'interrupt' | 'suggestion' {
-  return DETERMINISTIC_KINDS.has(kind) ? 'interrupt' : 'suggestion'
+  return INTERRUPT_KINDS.has(kind) ? 'interrupt' : 'suggestion'
 }
 
 export const SENSITIVITIES: Sensitivity[] = ['low', 'medium', 'high']
@@ -230,6 +239,7 @@ export function useLiveCues(
   // previous listening session is discarded instead of leaking into this one.
   const generationRef = useRef(0)
   const latencyRef = useRef(new CueLatencyTracker())
+  const battlecardsRef = useRef(new BattlecardMatcher(STARTER_TRIGGERS))
   // When the turn that a cue is answering ended — the clock §1.7 measures from.
   const lastTurnEndAtRef = useRef<number | null>(null)
 
@@ -281,6 +291,7 @@ export function useLiveCues(
       clearCue()
       setSuggestions([])
       latencyRef.current.reset()
+      battlecardsRef.current.reset()
       setLatency(latencyRef.current.report())
       lastTurnEndAtRef.current = null
       setRepSpeaker(knownRepRef.current)
@@ -296,11 +307,12 @@ export function useLiveCues(
     inFlightRef.current = false
     lastCallAtRef.current = 0
     lastTurnEndAtRef.current = null
+    battlecardsRef.current.reset()
     setRepSpeaker(knownRepRef.current)
     setEngagementScore(null)
 
     // Record turn-end → rendered for whichever tier just delivered (§1.7).
-    const noteLatency = (tier: 'interrupt' | 'suggestion'): void => {
+    const noteLatency = (tier: 'deterministic' | 'model'): void => {
       const startedAt = lastTurnEndAtRef.current
       if (startedAt === null) return
       latencyRef.current.record(tier, performance.now() - startedAt)
@@ -322,7 +334,7 @@ export function useLiveCues(
       const next: LiveCue = { id: ++idRef.current, kind, text, at: performance.now() }
       cueRef.current = next
       setCue(next)
-      noteLatency('interrupt')
+      noteLatency('deterministic')
       if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current)
       dismissTimerRef.current = setTimeout(() => {
         if (mountedRef.current) clearCue()
@@ -342,13 +354,23 @@ export function useLiveCues(
     // Bounded and aged instead: three at most, newest first, and anything
     // older than the TTL is dropped on the way in, because advice about a
     // moment that has already passed is noise wearing the clothes of help.
-    const pushSuggestion = (kind: CueKind, text: string): void => {
+    const pushSuggestion = (
+      kind: CueKind,
+      text: string,
+      source: 'deterministic' | 'model'
+    ): void => {
       const at = performance.now()
       const next: LiveCue = { id: ++idRef.current, kind, text, at }
       setSuggestions((prev) =>
         [next, ...prev.filter((s) => at - s.at < SUGGESTION_TTL_MS)].slice(0, MAX_SUGGESTIONS)
       )
-      noteLatency('suggestion')
+      noteLatency(source)
+    }
+
+    // A battlecard is deterministic and therefore fast, but it is reference
+    // material rather than a nudge — so it takes the rail, not the interrupt.
+    const pushBattlecard = (card: Battlecard): void => {
+      pushSuggestion('battlecard', `${card.label} — ${card.say}`, 'deterministic')
     }
 
     const windowText = (): string => {
@@ -411,7 +433,7 @@ export function useLiveCues(
           // Side rail, always. This is the line §4.3 exists to enforce: a
           // model response arrives 1.5-2.5s after the moment it describes,
           // which is too late to justify taking over the rep's attention.
-          if (res.cue !== 'none' && res.text) pushSuggestion(res.cue, res.text)
+          if (res.cue !== 'none' && res.text) pushSuggestion(res.cue, res.text, 'model')
         })
         .catch(() => {
           /* ignore — try again on the next turn */
@@ -445,6 +467,29 @@ export function useLiveCues(
 
     const offTranscript = window.api.transcription.onTranscript((payload) => {
       const now = Date.now()
+
+      // Battlecards match the ROLLING PARTIAL buffer, before the isFinal gate
+      // below. That is the whole ~400ms budget: waiting for a finalized turn
+      // would add a second or more, by which point the moment to answer the
+      // objection has usually gone.
+      //
+      // Skipped while the REP is the one talking — a rep restating an
+      // objection back to the buyer should not fire a card at themselves. The
+      // clock also starts here rather than at turn-end, because this cue is
+      // answering the words as they arrive, not the turn.
+      const partial = payload.transcript.trim()
+      if (partial) {
+        const rep = repSpeakerRef.current
+        const lastSpeaker = payload.words[payload.words.length - 1]?.speaker ?? null
+        if (rep === null || lastSpeaker !== rep) {
+          const cards = battlecardsRef.current.match(partial, now)
+          if (cards.length > 0) {
+            lastTurnEndAtRef.current = performance.now()
+            for (const card of cards) pushBattlecard(card)
+          }
+        }
+      }
+
       if (!payload.isFinal) return
 
       if (payload.words.length > 0) {
