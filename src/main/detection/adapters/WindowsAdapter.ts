@@ -83,26 +83,45 @@ function loadNativeAddon(): { addon: NativeAddon | null; error: unknown } {
  * what's verified vs. still unexercised, e.g. the window-title path).
  */
 export class WindowsAdapter implements ICallDetectorAdapter {
-  private readonly addon: NativeAddon | null
-  readonly loadError: unknown
+  // Deliberately NOT loaded in the constructor — a WindowsAdapter is created
+  // unconditionally at every app startup (detection-service.ts's
+  // startDetectionService(), regardless of the ff_ambient_detection setting),
+  // so an eager require() here means a bad/incompatible .node file on the
+  // user's machine (e.g. a missing VC++ runtime DLL) could crash the WHOLE
+  // APP on every single launch, for every user, even ones who never touched
+  // this feature — confirmed as the real-world cause of "installs fine, then
+  // never opens, no error" on multiple Windows testers' machines. Loading is
+  // deferred to the first isSupported()/start() call, both of which only
+  // happen once the feature is actually enabled — so a broken addon can only
+  // ever break detection, never the app's ability to open.
+  private addon: NativeAddon | null = null
+  private addonLoadAttempted = false
+  loadError: unknown = null
   private readonly now: () => number
 
   private listeners = new Set<(signal: DetectionSignal) => void>()
   private pollTimer?: ReturnType<typeof setInterval>
 
   constructor(options: { now?: () => number } = {}) {
-    const { addon, error } = loadNativeAddon()
-    this.addon = addon
-    this.loadError = error
     this.now = options.now ?? Date.now
   }
 
+  private ensureAddonLoaded(): NativeAddon | null {
+    if (!this.addonLoadAttempted) {
+      this.addonLoadAttempted = true
+      const { addon, error } = loadNativeAddon()
+      this.addon = addon
+      this.loadError = error
+    }
+    return this.addon
+  }
+
   isSupported(): boolean {
-    return process.platform === 'win32' && this.addon != null
+    return process.platform === 'win32' && this.ensureAddonLoaded() != null
   }
 
   start(): void {
-    if (!this.addon || this.pollTimer) return
+    if (!this.ensureAddonLoaded() || this.pollTimer) return
     this.sample()
     this.pollTimer = setInterval(() => this.sample(), SAMPLE_INTERVAL_MS)
   }

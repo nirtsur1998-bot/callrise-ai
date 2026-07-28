@@ -94,8 +94,14 @@ function loadNativeAddon(): { addon: NativeAddon | null; error: unknown } {
  * back to manual capture.
  */
 export class MacAdapter implements ICallDetectorAdapter {
-  private readonly addon: NativeAddon | null
-  readonly loadError: unknown
+  // Deliberately NOT loaded in the constructor — see WindowsAdapter's
+  // identical comment. A MacAdapter is created unconditionally at every app
+  // startup regardless of the ff_ambient_detection setting, so loading stays
+  // deferred to the first isSupported()/start() call so a broken addon can
+  // never prevent the app itself from opening.
+  private addon: NativeAddon | null = null
+  private addonLoadAttempted = false
+  loadError: unknown = null
   private readonly now: () => number
   private readonly onUnavailableWindowTitles?: () => void
 
@@ -105,19 +111,26 @@ export class MacAdapter implements ICallDetectorAdapter {
   private warnedNoScreenRecording = false
 
   constructor(options: { now?: () => number; onUnavailableWindowTitles?: () => void } = {}) {
-    const { addon, error } = loadNativeAddon()
-    this.addon = addon
-    this.loadError = error
     this.now = options.now ?? Date.now
     this.onUnavailableWindowTitles = options.onUnavailableWindowTitles
   }
 
+  private ensureAddonLoaded(): NativeAddon | null {
+    if (!this.addonLoadAttempted) {
+      this.addonLoadAttempted = true
+      const { addon, error } = loadNativeAddon()
+      this.addon = addon
+      this.loadError = error
+    }
+    return this.addon
+  }
+
   isSupported(): boolean {
-    return process.platform === 'darwin' && this.addon != null
+    return process.platform === 'darwin' && this.ensureAddonLoaded() != null
   }
 
   start(): void {
-    if (!this.addon || this.pollTimer) return
+    if (!this.ensureAddonLoaded() || this.pollTimer) return
     // sample() itself resolves virtualMicUID on its first call (and keeps
     // re-checking on every later call for as long as it stays null).
     this.sample()
