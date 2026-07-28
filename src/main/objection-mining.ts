@@ -3,14 +3,11 @@
 // (a later step). This file only produces SUGGESTIONS — nothing here saves
 // anything or reaches live coaching. Every caller MUST check
 // isObjectionMiningEnabled() first (the settings toggle is the one gate).
-import Anthropic from '@anthropic-ai/sdk'
+import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
 import type { CallSegment } from './calls-fs'
-import { keyRejectedHint } from './ai-keys'
 
-const MODEL = 'claude-sonnet-4-6'
 const MAX_TEXT_CHARS = 200_000
 const MIN_QUOTE_CHARS = 6
-const REQUEST_TIMEOUT_MS = 60_000
 const MAX_CANDIDATES = 8
 
 export type MinedObjectionType = 'price' | 'timing' | 'competitor' | 'approval' | 'trust' | 'other'
@@ -40,20 +37,11 @@ export type ObjectionMiningResult =
   | { ok: true; candidates: MinedObjectionCandidate[] }
   | { ok: false; error: 'no-key' | 'disabled' | 'failed'; message?: string }
 
-let client: Anthropic | null = null
-
-function getClient(): Anthropic | null {
-  const key = process.env.ANTHROPIC_API_KEY?.trim()
-  if (!key) return null
-  if (!client) client = new Anthropic({ apiKey: key })
-  return client
-}
-
-const MINE_TOOL: Anthropic.Tool = {
+const MINE_TOOL: AITool = {
   name: 'record_objection_candidates',
   description:
     'Record candidate objection-handling moments found in a sales call transcript, for a human to review.',
-  input_schema: {
+  inputSchema: {
     type: 'object',
     properties: {
       candidates: {
@@ -213,15 +201,7 @@ function assembleCandidates(
 }
 
 function friendlyError(err: unknown): string {
-  if (err instanceof Anthropic.AuthenticationError) {
-    return `Your Anthropic API key was rejected. ${keyRejectedHint('ANTHROPIC_API_KEY')}`
-  }
-  if (err instanceof Anthropic.RateLimitError) {
-    return 'Anthropic is rate-limiting requests right now. Wait a moment and try again.'
-  }
-  if (err instanceof Anthropic.APIConnectionError) {
-    return 'Could not reach Anthropic. Check your internet connection and try again.'
-  }
+  if (err instanceof AIProviderError) return err.message
   return 'Something went wrong while mining this call for objections. Please try again.'
 }
 
@@ -230,8 +210,8 @@ function friendlyError(err: unknown): string {
  *  so it stays a pure "given a transcript, propose candidates" building
  *  block for both the new-call hook and the manual scan (later steps). */
 export async function mineObjections(segments: CallSegment[]): Promise<ObjectionMiningResult> {
-  const anthropic = getClient()
-  if (!anthropic) return { ok: false, error: 'no-key' }
+  const provider = getActiveAIProvider()
+  if (!provider) return { ok: false, error: 'no-key' }
   if (!segments.length) {
     return { ok: false, error: 'failed', message: 'This call has no transcript to mine.' }
   }
@@ -242,36 +222,14 @@ export async function mineObjections(segments: CallSegment[]): Promise<Objection
     .slice(0, MAX_TEXT_CHARS)
 
   try {
-    const response = await anthropic.messages.create(
-      {
-        model: MODEL,
-        max_tokens: 4096,
-        tools: [MINE_TOOL],
-        tool_choice: { type: 'tool', name: 'record_objection_candidates' },
-        messages: [
-          {
-            role: 'user',
-            content: [{ type: 'text', text: `${PROMPT}\n\n--- TRANSCRIPT ---\n${transcript}` }]
-          }
-        ]
-      },
-      { timeout: REQUEST_TIMEOUT_MS }
-    )
+    const result = await provider.complete({
+      purpose: 'other',
+      maxTokens: 4096,
+      tool: MINE_TOOL,
+      messages: [{ role: 'user', content: `${PROMPT}\n\n--- TRANSCRIPT ---\n${transcript}` }]
+    })
 
-    if (response.stop_reason === 'max_tokens') {
-      return {
-        ok: false,
-        error: 'failed',
-        message: 'The result was too long to finish. Try a shorter call.'
-      }
-    }
-
-    const block = response.content.find((b) => b.type === 'tool_use')
-    if (!block || block.type !== 'tool_use') {
-      return { ok: false, error: 'failed', message: 'The model did not return a result.' }
-    }
-
-    const candidates = assembleCandidates(block.input as Record<string, unknown>, segments)
+    const candidates = assembleCandidates(result.toolInput ?? {}, segments)
     return { ok: true, candidates }
   } catch (err) {
     return { ok: false, error: 'failed', message: friendlyError(err) }

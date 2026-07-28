@@ -225,6 +225,20 @@ export interface AppSettings {
   objectionMining: ObjectionMiningSettings
   /** Ambient call detection (M15) - feature flag + capture policy. Defaults OFF. */
   detection: DetectionSettings
+  /** Which text-AI provider coaching/summaries/tasks/etc. use - see
+   *  src/main/ai/. Defaults to 'anthropic' (unchanged behavior for every
+   *  existing install). The actual API key lives separately, encrypted, in
+   *  ai-keys.ts - this is just which one is active, not a secret. */
+  aiProvider: AIProviderId
+}
+
+/** Kept as a plain local union (not imported from src/main/ai/) so this
+ *  settings module never depends on the AI layer - only the AI layer reads
+ *  this setting, never the other way around. */
+export type AIProviderId = 'anthropic' | 'openai'
+
+function sanitizeAIProvider(value: unknown): AIProviderId {
+  return value === 'openai' ? 'openai' : 'anthropic'
 }
 
 const EPOCH = new Date(0).toISOString()
@@ -239,7 +253,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   outlookCalendarConnected: false,
   crm: EMPTY_CRM_SETTINGS,
   objectionMining: EMPTY_OBJECTION_MINING,
-  detection: EMPTY_DETECTION_SETTINGS
+  detection: EMPTY_DETECTION_SETTINGS,
+  aiProvider: 'anthropic'
 }
 
 function settingsPath(): string {
@@ -299,7 +314,8 @@ export function loadAppSettings(): AppSettings {
       outlookCalendarConnected: parsed.outlookCalendarConnected === true,
       crm: sanitizeCrmSettings(parsed.crm),
       objectionMining: sanitizeObjectionMining(parsed.objectionMining),
-      detection: sanitizeDetectionSettings(parsed.detection)
+      detection: sanitizeDetectionSettings(parsed.detection),
+      aiProvider: sanitizeAIProvider(parsed.aiProvider)
     }
   } catch {
     return {
@@ -334,7 +350,8 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
         : current.outlookCalendarConnected,
     crm: mergeCrmSettings(current.crm, p.crm),
     objectionMining: mergeObjectionMining(current.objectionMining, p.objectionMining),
-    detection: mergeDetectionSettings(current.detection, p.detection)
+    detection: mergeDetectionSettings(current.detection, p.detection),
+    aiProvider: 'aiProvider' in p ? sanitizeAIProvider(p.aiProvider) : current.aiProvider
   }
 }
 

@@ -1,7 +1,6 @@
 import { app } from 'electron'
 import { join } from 'node:path'
-import Anthropic from '@anthropic-ai/sdk'
-import { keyRejectedHint } from './ai-keys'
+import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
 import type {
   CallSegment,
   CoachingReport,
@@ -16,10 +15,8 @@ import { assembleKnowledgeContext } from './knowledge-context'
 import { loadAppSettings } from './app-settings'
 import { assemblePersonalizationContext } from './personalization-context'
 
-const MODEL = 'claude-sonnet-4-6'
 const MAX_TEXT_CHARS = 200_000
 const MIN_QUOTE_CHARS = 8 // too-short quotes can't be meaningfully verified
-const REQUEST_TIMEOUT_MS = 60_000 // fail fast instead of spinning on a stalled connection
 
 // Coaching runs once per call (not per turn like live cues), so the knowledge
 // base can afford a far more generous cap here — this is just a defensive
@@ -74,24 +71,15 @@ const DIMENSION_KEYS = new Set<CoachDimensionKey>([
   'control'
 ])
 
-let client: Anthropic | null = null
-
-function getClient(): Anthropic | null {
-  const key = process.env.ANTHROPIC_API_KEY?.trim()
-  if (!key) return null
-  if (!client) client = new Anthropic({ apiKey: key })
-  return client
-}
-
 export type CoachResult =
   { ok: true; report: CoachingReport } | { ok: false; error: 'no-key' | 'failed'; message?: string }
 
 // --- The structured tool ----------------------------------------------------
 
-const COACH_TOOL: Anthropic.Tool = {
+const COACH_TOOL: AITool = {
   name: 'record_coaching',
   description: 'Record a structured, evidence-grounded coaching assessment of the sales call.',
-  input_schema: {
+  inputSchema: {
     type: 'object',
     properties: {
       repSpeaker: {
@@ -367,7 +355,8 @@ function str(value: unknown, max = 1500): string {
 function assembleReport(
   raw: Record<string, unknown>,
   segments: CallSegment[],
-  durationMs: number
+  durationMs: number,
+  model: string
 ): CoachingReport | null {
   const repSpeaker =
     typeof raw.repSpeaker === 'number' && Number.isFinite(raw.repSpeaker)
@@ -440,7 +429,7 @@ function assembleReport(
     improvements,
     nextAction: scrub(str(raw.nextAction, 500)),
     metrics: computeMetrics(segments, durationMs, repSpeaker),
-    model: MODEL,
+    model,
     createdAt: new Date().toISOString()
   }
 }
@@ -448,34 +437,15 @@ function assembleReport(
 // --- Friendly errors --------------------------------------------------------
 
 function friendlyError(err: unknown): string {
-  if (err instanceof Anthropic.AuthenticationError) {
-    return `Your Anthropic API key was rejected. ${keyRejectedHint('ANTHROPIC_API_KEY')}`
-  }
-  if (err instanceof Anthropic.RateLimitError) {
-    return 'Anthropic is rate-limiting requests right now. Wait a moment and try again.'
-  }
-  if (err instanceof Anthropic.APIConnectionError) {
-    return 'Could not reach Anthropic. Check your internet connection and try again.'
-  }
-  if (err instanceof Anthropic.APIError) {
-    const msg = typeof err.message === 'string' ? err.message.toLowerCase() : ''
-    if (
-      msg.includes('credit balance') ||
-      msg.includes('plans & billing') ||
-      msg.includes('billing')
-    ) {
-      return 'Your Anthropic account is out of credits. Add credits at console.anthropic.com (Plans & Billing), then try again.'
-    }
-    return `Anthropic returned an error (${err.status ?? 'unknown'}). Please try again.`
-  }
+  if (err instanceof AIProviderError) return err.message
   return 'Something went wrong while coaching this call. Please try again.'
 }
 
 // --- Public entry point -----------------------------------------------------
 
 export async function coachCall(segments: CallSegment[], durationMs: number): Promise<CoachResult> {
-  const anthropic = getClient()
-  if (!anthropic) return { ok: false, error: 'no-key' }
+  const provider = getActiveAIProvider()
+  if (!provider) return { ok: false, error: 'no-key' }
   if (!segments.length) {
     return { ok: false, error: 'failed', message: 'This call has no transcript to coach.' }
   }
@@ -489,41 +459,19 @@ export async function coachCall(segments: CallSegment[], durationMs: number): Pr
   const personalization = loadCoachPersonalization()
 
   try {
-    const response = await anthropic.messages.create(
-      {
-        model: MODEL,
-        max_tokens: 8192,
-        tools: [COACH_TOOL],
-        tool_choice: { type: 'tool', name: 'record_coaching' },
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: `${PROMPT}${knowledgeSection(knowledge)}${personalizationSection(personalization)}\n\n--- TRANSCRIPT ---\n${transcript}`
-              }
-            ]
-          }
-        ]
-      },
-      { timeout: REQUEST_TIMEOUT_MS }
-    )
+    const result = await provider.complete({
+      purpose: 'scorecard',
+      maxTokens: 8192,
+      tool: COACH_TOOL,
+      messages: [
+        {
+          role: 'user',
+          content: `${PROMPT}${knowledgeSection(knowledge)}${personalizationSection(personalization)}\n\n--- TRANSCRIPT ---\n${transcript}`
+        }
+      ]
+    })
 
-    if (response.stop_reason === 'max_tokens') {
-      return {
-        ok: false,
-        error: 'failed',
-        message: 'The coaching report was too long to finish. Try a shorter call.'
-      }
-    }
-
-    const block = response.content.find((b) => b.type === 'tool_use')
-    if (!block || block.type !== 'tool_use') {
-      return { ok: false, error: 'failed', message: 'The model did not return a coaching report.' }
-    }
-
-    const report = assembleReport(block.input as Record<string, unknown>, segments, durationMs)
+    const report = assembleReport(result.toolInput ?? {}, segments, durationMs, result.model)
     if (!report) {
       return {
         ok: false,

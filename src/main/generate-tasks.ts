@@ -1,25 +1,13 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
 import type { TaskPriority, TaskType } from './tasks-fs'
-import { keyRejectedHint } from './ai-keys'
 
-const MODEL = 'claude-sonnet-4-6'
 const MAX_TEXT_CHARS = 200_000 // keep requests bounded
-const REQUEST_TIMEOUT_MS = 60_000 // fail fast instead of spinning on a stalled connection
 const MAX_TASKS = 25 // cap how many proposals we surface at once
 const MAX_DUE_DAYS = 365
 // The model returns -1 to mean "no deadline"; dueAtFromDays() drops anything < 0.
 const DAY_MS = 24 * 60 * 60 * 1000
 
-let client: Anthropic | null = null
-
-function getClient(): Anthropic | null {
-  const key = process.env.ANTHROPIC_API_KEY?.trim()
-  if (!key) return null
-  if (!client) client = new Anthropic({ apiKey: key })
-  return client
-}
-
-/** A task Claude proposes. Not yet saved — the user reviews/edits these first. */
+/** A task the model proposes. Not yet saved — the user reviews/edits these first. */
 export interface ProposedTask {
   title: string
   type: TaskType
@@ -33,11 +21,11 @@ export interface ProposedTask {
 export type GenerateTasksResult =
   { ok: true; tasks: ProposedTask[] } | { ok: false; error: 'no-key' | 'failed'; message?: string }
 
-// Force Claude to return its tasks via this tool, so we always get clean JSON.
-const TASKS_TOOL: Anthropic.Tool = {
+// Force the model to return its tasks via this tool, so we always get clean JSON.
+const TASKS_TOOL: AITool = {
   name: 'record_tasks',
   description: 'Record the suggested follow-up tasks for the salesperson.',
-  input_schema: {
+  inputSchema: {
     type: 'object',
     properties: {
       tasks: {
@@ -104,26 +92,7 @@ const ALLOWED_TYPES = new Set<TaskType>(['follow-up', 'email', 'meeting', 'resea
 const ALLOWED_PRIORITIES = new Set<TaskPriority>(['low', 'medium', 'high'])
 
 function friendlyError(err: unknown): string {
-  if (err instanceof Anthropic.AuthenticationError) {
-    return `Your Anthropic API key was rejected. ${keyRejectedHint('ANTHROPIC_API_KEY')}`
-  }
-  if (err instanceof Anthropic.RateLimitError) {
-    return 'Anthropic is rate-limiting requests right now. Wait a moment and try again.'
-  }
-  if (err instanceof Anthropic.APIConnectionError) {
-    return 'Could not reach Anthropic. Check your internet connection and try again.'
-  }
-  if (err instanceof Anthropic.APIError) {
-    const msg = typeof err.message === 'string' ? err.message.toLowerCase() : ''
-    if (
-      msg.includes('credit balance') ||
-      msg.includes('plans & billing') ||
-      msg.includes('billing')
-    ) {
-      return 'Your Anthropic account is out of credits. Add credits at console.anthropic.com (Plans & Billing), then try again.'
-    }
-    return `Anthropic returned an error (${err.status ?? 'unknown'}). Please try again.`
-  }
+  if (err instanceof AIProviderError) return err.message
   return 'Something went wrong while generating tasks. Please try again.'
 }
 
@@ -160,42 +129,21 @@ function toProposedTask(value: unknown): ProposedTask | null {
   }
 }
 
-/** Ask Claude for suggested tasks from a call's text. Does not save anything. */
+/** Ask the model for suggested tasks from a call's text. Does not save anything. */
 export async function generateTasks(text: string): Promise<GenerateTasksResult> {
-  const anthropic = getClient()
-  if (!anthropic) return { ok: false, error: 'no-key' }
+  const provider = getActiveAIProvider()
+  if (!provider) return { ok: false, error: 'no-key' }
 
   const trimmed = text.slice(0, MAX_TEXT_CHARS)
   try {
-    const response = await anthropic.messages.create(
-      {
-        model: MODEL,
-        max_tokens: 4096,
-        tools: [TASKS_TOOL],
-        tool_choice: { type: 'tool', name: 'record_tasks' },
-        messages: [
-          {
-            role: 'user',
-            content: [{ type: 'text', text: `${PROMPT}\n\n--- CALL ---\n${trimmed}` }]
-          }
-        ]
-      },
-      { timeout: REQUEST_TIMEOUT_MS }
-    )
+    const result = await provider.complete({
+      purpose: 'tasks',
+      maxTokens: 4096,
+      tool: TASKS_TOOL,
+      messages: [{ role: 'user', content: `${PROMPT}\n\n--- CALL ---\n${trimmed}` }]
+    })
 
-    if (response.stop_reason === 'max_tokens') {
-      return {
-        ok: false,
-        error: 'failed',
-        message: 'There were too many tasks to finish the list. Try a shorter call.'
-      }
-    }
-
-    const block = response.content.find((b) => b.type === 'tool_use')
-    if (!block || block.type !== 'tool_use') {
-      return { ok: false, error: 'failed', message: 'The model did not return any tasks.' }
-    }
-    const raw = block.input as Record<string, unknown>
+    const raw = result.toolInput ?? {}
     const list = Array.isArray(raw.tasks) ? raw.tasks : []
     const tasks = list
       .slice(0, MAX_TASKS)

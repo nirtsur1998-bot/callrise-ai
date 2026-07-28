@@ -34,7 +34,8 @@ const DEFAULT_SETTINGS: AppSettings = {
     autoGenerateNotes: false
   },
   objectionMining: { enabled: false },
-  detection: { enabled: false, capturePolicy: { autoCapturePolicy: 'mic-only', appOverrides: {} } }
+  detection: { enabled: false, capturePolicy: { autoCapturePolicy: 'mic-only', appOverrides: {} } },
+  aiProvider: 'anthropic'
 }
 
 export interface UseAppSettings {

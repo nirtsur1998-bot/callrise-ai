@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Eye, EyeOff, ExternalLink, Loader2 } from 'lucide-react'
+import { CheckCircle2, Eye, EyeOff, ExternalLink, Loader2, FlaskConical } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { fieldClass } from '@renderer/components/field'
 import { IconButton } from '@renderer/components/IconButton'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { cn } from '@renderer/lib/cn'
+import { useAppSettings } from './useAppSettings'
 
 // Derive the key/status shapes straight from the preload bridge so they can
 // never drift from what the main process actually returns.
 type StatusMap = Awaited<ReturnType<typeof window.api.aiKeys.getStatus>>
 type AiKeyName = Parameters<typeof window.api.aiKeys.save>[0]
 type AiKeyStatus = StatusMap[AiKeyName]
+type AiProviderId = Parameters<typeof window.api.aiKeys.validate>[0]
 
 interface KeyCardConfig {
   name: AiKeyName
@@ -18,6 +21,8 @@ interface KeyCardConfig {
   getKeyUrl: string
   getKeyLabel: string
   placeholder: string
+  /** Set only for the two text-AI providers — Deepgram has no "Test key" flow. */
+  providerId?: AiProviderId
 }
 
 const KEYS: KeyCardConfig[] = [
@@ -31,15 +36,29 @@ const KEYS: KeyCardConfig[] = [
   },
   {
     name: 'ANTHROPIC_API_KEY',
-    title: 'Anthropic (coaching & summaries)',
+    title: 'Claude (Anthropic)',
     blurb: 'Writes call summaries, coaching feedback, and live cues.',
     getKeyUrl: 'https://console.anthropic.com/',
     getKeyLabel: 'Get an Anthropic key',
-    placeholder: 'Paste your Anthropic API key'
+    placeholder: 'Paste your Anthropic API key',
+    providerId: 'anthropic'
+  },
+  {
+    name: 'OPENAI_API_KEY',
+    title: 'ChatGPT (OpenAI)',
+    blurb: 'An alternative to Claude for summaries, coaching feedback, and live cues.',
+    getKeyUrl: 'https://platform.openai.com/api-keys',
+    getKeyLabel: 'Get an OpenAI key',
+    placeholder: 'Paste your OpenAI API key',
+    providerId: 'openai'
   }
 ]
 
-function KeyCard({ config, status, onChanged }: {
+function KeyCard({
+  config,
+  status,
+  onChanged
+}: {
   config: KeyCardConfig
   status: AiKeyStatus | undefined
   onChanged: () => void
@@ -48,6 +67,8 @@ function KeyCard({ config, status, onChanged }: {
   const [showValue, setShowValue] = useState(false)
   const [busy, setBusy] = useState(false)
   const [savedNotice, setSavedNotice] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
 
   const save = async (): Promise<void> => {
     if (!value.trim() || busy) return
@@ -57,6 +78,7 @@ function KeyCard({ config, status, onChanged }: {
       if (res.ok) {
         setValue('')
         setSavedNotice(true)
+        setTestResult(null)
         onChanged()
         setTimeout(() => setSavedNotice(false), 4000)
       }
@@ -70,9 +92,24 @@ function KeyCard({ config, status, onChanged }: {
     setBusy(true)
     try {
       await window.api.aiKeys.clear(config.name)
+      setTestResult(null)
       onChanged()
     } finally {
       setBusy(false)
+    }
+  }
+
+  const testKey = async (): Promise<void> => {
+    if (!config.providerId || !value.trim() || testing) return
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const res = await window.api.aiKeys.validate(config.providerId, value.trim())
+      setTestResult(
+        res.ok ? { ok: true, message: 'Key works.' } : { ok: false, message: res.reason }
+      )
+    } finally {
+      setTesting(false)
     }
   }
 
@@ -82,7 +119,8 @@ function KeyCard({ config, status, onChanged }: {
         <h3 className="text-sm font-medium">{config.title}</h3>
         {status?.configured && (
           <span className="flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-200">
-            <CheckCircle2 className="h-3.5 w-3.5" /> Configured{status.hint ? ` · ${status.hint}` : ''}
+            <CheckCircle2 className="h-3.5 w-3.5" /> Configured
+            {status.hint ? ` · ${status.hint}` : ''}
           </span>
         )}
       </div>
@@ -93,7 +131,10 @@ function KeyCard({ config, status, onChanged }: {
           <input
             type={showValue ? 'text' : 'password'}
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={(e) => {
+              setValue(e.target.value)
+              setTestResult(null)
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') void save()
             }}
@@ -109,6 +150,21 @@ function KeyCard({ config, status, onChanged }: {
             className="absolute right-1 top-1/2 -translate-y-1/2"
           />
         </div>
+        {config.providerId && (
+          <button
+            type="button"
+            onClick={() => void testKey()}
+            disabled={!value.trim() || testing}
+            className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-2 text-sm font-medium text-muted transition hover:bg-elevated hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {testing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <FlaskConical className="h-4 w-4" />
+            )}
+            Test key
+          </button>
+        )}
         <button
           type="button"
           onClick={() => void save()}
@@ -129,10 +185,13 @@ function KeyCard({ config, status, onChanged }: {
         )}
       </div>
 
-      {savedNotice && (
-        <p className="mt-2 text-[13px] text-emerald-300">
-          Saved — quit and reopen the app for it to take effect.
+      {testResult && (
+        <p className={cn('mt-2 text-[13px]', testResult.ok ? 'text-emerald-300' : 'text-danger')}>
+          {testResult.message}
         </p>
+      )}
+      {savedNotice && (
+        <p className="mt-2 text-[13px] text-emerald-300">Saved — takes effect immediately.</p>
       )}
 
       <a
@@ -147,10 +206,37 @@ function KeyCard({ config, status, onChanged }: {
   )
 }
 
-/** Lets each user bring their own Deepgram + Anthropic keys instead of the
- *  app shipping (and billing) one key for every customer. Keys are stored
- *  encrypted on this device only — never sent anywhere but the provider
- *  itself, and never shown back in full once saved. */
+const PROVIDER_OPTIONS = [
+  { id: 'anthropic' as const, label: 'Claude' },
+  { id: 'openai' as const, label: 'ChatGPT' }
+]
+
+/** Which text-AI provider is active — coaching, summaries, tasks, deal-risk,
+ *  and live cues all switch together; Deepgram (transcription) is separate
+ *  and unaffected by this choice. */
+function ProviderSelector(): React.JSX.Element {
+  const { settings, update } = useAppSettings()
+
+  return (
+    <Card className="mb-5">
+      <h3 className="mb-1 text-sm font-medium">Text AI provider</h3>
+      <p className="mb-3 text-[13px] text-muted">
+        Which AI writes your coaching feedback, summaries, and live cues. Switching takes effect
+        immediately — make sure the provider&apos;s key below is configured first.
+      </p>
+      <SegmentedControl
+        options={PROVIDER_OPTIONS}
+        value={settings.aiProvider}
+        onChange={(id) => void update({ aiProvider: id })}
+      />
+    </Card>
+  )
+}
+
+/** Lets each user bring their own Deepgram + Claude/ChatGPT keys instead of
+ *  the app shipping (and billing) one key for every customer. Keys are
+ *  stored encrypted on this device only — never sent anywhere but the
+ *  provider itself, and never shown back in full once saved. */
 export function ApiKeysSection(): React.JSX.Element {
   const [status, setStatus] = useState<StatusMap | null>(null)
 
@@ -163,10 +249,11 @@ export function ApiKeysSection(): React.JSX.Element {
   return (
     <>
       <p className="mb-4 text-[13px] text-muted">
-        CallRise AI needs a Deepgram key for live transcription and an Anthropic key for coaching
-        and summaries. Both have their own free or pay-as-you-go tiers — sign up, copy the key,
-        and paste it below.
+        CallRise AI needs a Deepgram key for live transcription, and either a Claude or ChatGPT key
+        for coaching and summaries. Each has its own free or pay-as-you-go tier — sign up, copy the
+        key, and paste it below.
       </p>
+      <ProviderSelector />
       {KEYS.map((k) => (
         <KeyCard key={k.name} config={k} status={status?.[k.name]} onChanged={refresh} />
       ))}

@@ -1,28 +1,16 @@
-import Anthropic from '@anthropic-ai/sdk'
 import type { Summary } from './calls-fs'
 import { loadAppSettings } from './app-settings'
 import { assemblePersonalizationContext } from './personalization-context'
 import { summaryLanguageInstruction } from './summary-language'
-import { keyRejectedHint } from './ai-keys'
+import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
 
-const MODEL = 'claude-sonnet-4-6'
 const MAX_TEXT_CHARS = 200_000 // keep requests bounded
-const REQUEST_TIMEOUT_MS = 60_000 // fail fast instead of spinning on a stalled connection
 
-let client: Anthropic | null = null
-
-function getClient(): Anthropic | null {
-  const key = process.env.ANTHROPIC_API_KEY?.trim()
-  if (!key) return null
-  if (!client) client = new Anthropic({ apiKey: key })
-  return client
-}
-
-// Force Claude to return its summary via this tool, so we always get clean JSON.
-const SUMMARY_TOOL: Anthropic.Tool = {
+// Force the model to return its summary via this tool, so we always get clean JSON.
+const SUMMARY_TOOL: AITool = {
   name: 'record_summary',
   description: 'Record a concise, structured summary of the content.',
-  input_schema: {
+  inputSchema: {
     type: 'object',
     properties: {
       executive: {
@@ -67,7 +55,7 @@ function loadSummaryPersonalization(): string {
 }
 
 /** Best-effort: a settings read failure should never block summarizing.
- *  Empty for 'auto' (Claude already matches the source language on its own). */
+ *  Empty for 'auto' (the model already matches the source language on its own). */
 function loadSummaryLanguageInstruction(): string {
   try {
     return summaryLanguageInstruction(loadAppSettings().summaryLanguage)
@@ -91,80 +79,39 @@ function toStringArray(value: unknown): string[] {
 }
 
 function friendlyError(err: unknown): string {
-  if (err instanceof Anthropic.AuthenticationError) {
-    return `Your Anthropic API key was rejected. ${keyRejectedHint('ANTHROPIC_API_KEY')}`
-  }
-  if (err instanceof Anthropic.RateLimitError) {
-    return 'Anthropic is rate-limiting requests right now. Wait a moment and try again.'
-  }
-  if (err instanceof Anthropic.APIConnectionError) {
-    return 'Could not reach Anthropic. Check your internet connection and try again.'
-  }
-  if (err instanceof Anthropic.APIError) {
-    const msg = typeof err.message === 'string' ? err.message.toLowerCase() : ''
-    if (
-      msg.includes('credit balance') ||
-      msg.includes('plans & billing') ||
-      msg.includes('billing')
-    ) {
-      return 'Your Anthropic account is out of credits. Add credits at console.anthropic.com (Plans & Billing), then try again.'
-    }
-    return `Anthropic returned an error (${err.status ?? 'unknown'}). Please try again.`
-  }
+  if (err instanceof AIProviderError) return err.message
   return 'Something went wrong while generating the summary. Please try again.'
 }
 
 export async function summarize(input: SummarizeInput): Promise<SummaryResult> {
-  const anthropic = getClient()
-  if (!anthropic) return { ok: false, error: 'no-key' }
+  const provider = getActiveAIProvider()
+  if (!provider) return { ok: false, error: 'no-key' }
 
   const personalization = loadSummaryPersonalization()
   const language = loadSummaryLanguageInstruction()
   const promptWithPersonalization = `${PROMPT}${language ? ` ${language}` : ''}${personalizationSection(personalization)}`
 
-  const content: Anthropic.ContentBlockParam[] = []
-  if (input.kind === 'pdf') {
-    content.push({
-      type: 'document',
-      source: { type: 'base64', media_type: 'application/pdf', data: input.base64 }
-    })
-    content.push({ type: 'text', text: promptWithPersonalization })
-  } else {
-    const text = input.text.slice(0, MAX_TEXT_CHARS)
-    content.push({ type: 'text', text: `${promptWithPersonalization}\n\n--- CONTENT ---\n${text}` })
-  }
+  const promptText =
+    input.kind === 'pdf'
+      ? promptWithPersonalization
+      : `${promptWithPersonalization}\n\n--- CONTENT ---\n${input.text.slice(0, MAX_TEXT_CHARS)}`
 
   try {
-    const response = await anthropic.messages.create(
-      {
-        model: MODEL,
-        max_tokens: 4096,
-        tools: [SUMMARY_TOOL],
-        tool_choice: { type: 'tool', name: 'record_summary' },
-        messages: [{ role: 'user', content }]
-      },
-      { timeout: REQUEST_TIMEOUT_MS }
-    )
+    const result = await provider.complete({
+      purpose: 'summary',
+      maxTokens: 4096,
+      tool: SUMMARY_TOOL,
+      document: input.kind === 'pdf' ? { base64: input.base64 } : undefined,
+      messages: [{ role: 'user', content: promptText }]
+    })
 
-    if (response.stop_reason === 'max_tokens') {
-      return {
-        ok: false,
-        error: 'failed',
-        message: 'The summary was too long to finish. Try a shorter call or file.'
-      }
-    }
-
-    const block = response.content.find((b) => b.type === 'tool_use')
-    if (!block || block.type !== 'tool_use') {
-      return { ok: false, error: 'failed', message: 'The model did not return a summary.' }
-    }
-    const raw = block.input as Record<string, unknown>
+    const raw = result.toolInput ?? {}
     const summary: Summary = {
       executive: typeof raw.executive === 'string' ? raw.executive : '',
       keyPoints: toStringArray(raw.keyPoints),
       actionItems: toStringArray(raw.actionItems),
       questions: toStringArray(raw.questions),
-      model: MODEL,
+      model: result.model,
       createdAt: new Date().toISOString()
     }
     if (!summary.executive && summary.keyPoints.length === 0) {

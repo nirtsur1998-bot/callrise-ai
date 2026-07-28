@@ -12,9 +12,10 @@
 import { app, ipcMain, safeStorage } from 'electron'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
+import { buildProviderForValidation, type AIProviderId } from './ai'
 
-export type AiKeyName = 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY'
-const KEY_NAMES: AiKeyName[] = ['DEEPGRAM_API_KEY', 'ANTHROPIC_API_KEY']
+export type AiKeyName = 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY'
+const KEY_NAMES: AiKeyName[] = ['DEEPGRAM_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']
 
 function keysDir(): string {
   return join(app.getPath('userData'), 'ai-keys')
@@ -70,16 +71,15 @@ function maskedHint(value: string): string {
 /** "Your key was rejected" follow-up, pointing at wherever the key actually
  *  comes from — Settings for an installed app, .env for a developer. */
 export function keyRejectedHint(name: AiKeyName): string {
-  return app.isPackaged
-    ? 'Check it in Settings → API keys.'
-    : `Check ${name} in your .env file.`
+  return app.isPackaged ? 'Check it in Settings → API keys.' : `Check ${name} in your .env file.`
 }
 
 export function registerAiKeys(): void {
   ipcMain.handle('aiKeys:getStatus', async () => {
     const status: Record<AiKeyName, { configured: boolean; hint: string | null }> = {
       DEEPGRAM_API_KEY: { configured: false, hint: null },
-      ANTHROPIC_API_KEY: { configured: false, hint: null }
+      ANTHROPIC_API_KEY: { configured: false, hint: null },
+      OPENAI_API_KEY: { configured: false, hint: null }
     }
     for (const name of KEY_NAMES) {
       status[name].configured = isConfigured(name)
@@ -98,8 +98,29 @@ export function registerAiKeys(): void {
     return { ok: true as const }
   })
 
+  // "Test key" - the cheapest possible round-trip against a key the user
+  // just pasted (not necessarily saved yet), so a bad key is caught before
+  // it's relied on mid-call. Only anthropic/openai are real AI providers;
+  // Deepgram has no equivalent flow here (transcription, not text AI).
+  ipcMain.handle('aiKeys:validate', async (_event, providerId: unknown, value: unknown) => {
+    if (
+      (providerId !== 'anthropic' && providerId !== 'openai') ||
+      typeof value !== 'string' ||
+      !value.trim()
+    ) {
+      return { ok: false as const, reason: 'Enter a key first.' }
+    }
+    try {
+      const provider = buildProviderForValidation(providerId as AIProviderId, value.trim())
+      return await provider.validateKey(value.trim())
+    } catch {
+      return { ok: false as const, reason: 'Could not validate the key. Please try again.' }
+    }
+  })
+
   ipcMain.handle('aiKeys:clear', async (_event, name: unknown) => {
-    if (!KEY_NAMES.includes(name as AiKeyName)) return { ok: false as const, error: 'invalid-input' }
+    if (!KEY_NAMES.includes(name as AiKeyName))
+      return { ok: false as const, error: 'invalid-input' }
     await clearKey(name as AiKeyName)
     delete process.env[name as AiKeyName]
     return { ok: true as const }

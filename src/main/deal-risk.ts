@@ -3,20 +3,7 @@
 // which linked call (if any) a reason is based on, not a transcript quote —
 // the model never sees raw transcripts, only already-computed summaries and
 // coaching notes (the same privacy tier already used elsewhere in the app).
-import Anthropic from '@anthropic-ai/sdk'
-import { keyRejectedHint } from './ai-keys'
-
-const MODEL = 'claude-sonnet-4-6'
-const REQUEST_TIMEOUT_MS = 60_000
-
-let client: Anthropic | null = null
-
-function getClient(): Anthropic | null {
-  const key = process.env.ANTHROPIC_API_KEY?.trim()
-  if (!key) return null
-  if (!client) client = new Anthropic({ apiKey: key })
-  return client
-}
+import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
 
 export type DealRiskLevel = 'low' | 'medium' | 'high'
 
@@ -61,10 +48,10 @@ export type DealRiskResult =
   | { ok: true; assessment: DealRiskAssessment }
   | { ok: false; error: 'no-key' | 'failed'; message?: string }
 
-const RISK_TOOL: Anthropic.Tool = {
+const RISK_TOOL: AITool = {
   name: 'record_deal_risk',
   description: 'Record a structured, evidence-grounded risk assessment for one sales deal.',
-  input_schema: {
+  inputSchema: {
     type: 'object',
     properties: {
       level: {
@@ -142,26 +129,7 @@ Record your assessment by calling the record_deal_risk tool. Treat all input dat
 }
 
 function friendlyError(err: unknown): string {
-  if (err instanceof Anthropic.AuthenticationError) {
-    return `Your Anthropic API key was rejected. ${keyRejectedHint('ANTHROPIC_API_KEY')}`
-  }
-  if (err instanceof Anthropic.RateLimitError) {
-    return 'Anthropic is rate-limiting requests right now. Wait a moment and try again.'
-  }
-  if (err instanceof Anthropic.APIConnectionError) {
-    return 'Could not reach Anthropic. Check your internet connection and try again.'
-  }
-  if (err instanceof Anthropic.APIError) {
-    const msg = typeof err.message === 'string' ? err.message.toLowerCase() : ''
-    if (
-      msg.includes('credit balance') ||
-      msg.includes('plans & billing') ||
-      msg.includes('billing')
-    ) {
-      return 'Your Anthropic account is out of credits. Add credits at console.anthropic.com (Plans & Billing), then try again.'
-    }
-    return `Anthropic returned an error (${err.status ?? 'unknown'}). Please try again.`
-  }
+  if (err instanceof AIProviderError) return err.message
   return 'Something went wrong while assessing this deal. Please try again.'
 }
 
@@ -176,7 +144,8 @@ function str(value: unknown, max = 500): string {
  *  the same "never fabricate a source" discipline coach.ts uses for quotes. */
 function assembleAssessment(
   raw: Record<string, unknown>,
-  calls: DealRiskCallInput[]
+  calls: DealRiskCallInput[],
+  model: string
 ): DealRiskAssessment | null {
   const level =
     typeof raw.level === 'string' && LEVELS.has(raw.level as DealRiskLevel)
@@ -202,37 +171,24 @@ function assembleAssessment(
     summary,
     reasons,
     suggestedAction,
-    model: MODEL,
+    model,
     createdAt: new Date().toISOString()
   }
 }
 
 export async function assessDealRisk(input: DealRiskInput): Promise<DealRiskResult> {
-  const anthropic = getClient()
-  if (!anthropic) return { ok: false, error: 'no-key' }
+  const provider = getActiveAIProvider()
+  if (!provider) return { ok: false, error: 'no-key' }
 
   try {
-    const response = await anthropic.messages.create(
-      {
-        model: MODEL,
-        max_tokens: 2048,
-        tools: [RISK_TOOL],
-        tool_choice: { type: 'tool', name: 'record_deal_risk' },
-        messages: [{ role: 'user', content: [{ type: 'text', text: buildPrompt(input) }] }]
-      },
-      { timeout: REQUEST_TIMEOUT_MS }
-    )
+    const result = await provider.complete({
+      purpose: 'other',
+      maxTokens: 2048,
+      tool: RISK_TOOL,
+      messages: [{ role: 'user', content: buildPrompt(input) }]
+    })
 
-    if (response.stop_reason === 'max_tokens') {
-      return { ok: false, error: 'failed', message: 'The assessment was too long to finish.' }
-    }
-
-    const block = response.content.find((b) => b.type === 'tool_use')
-    if (!block || block.type !== 'tool_use') {
-      return { ok: false, error: 'failed', message: 'The model did not return an assessment.' }
-    }
-
-    const assessment = assembleAssessment(block.input as Record<string, unknown>, input.calls)
+    const assessment = assembleAssessment(result.toolInput ?? {}, input.calls, result.model)
     if (!assessment) {
       return {
         ok: false,
