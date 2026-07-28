@@ -4,6 +4,7 @@ import { join, dirname } from 'path'
 import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { DEFAULT_CONFIG } from './default-config'
+import { clearActiveConsent } from './consent-gate'
 
 // Renamed "Sales OS" -> "CallRise AI" (rebrand), but the on-disk data folder
 // keeps its original name so existing calls/tasks/settings/consent/Google
@@ -131,6 +132,11 @@ app.whenReady().then(async () => {
   // Settings-entered key (if any) needs to be in process.env first.
   await loadStoredAiKeysIntoEnv()
   registerAiKeys()
+
+  // Any consent record still on disk belongs to a call that is already over —
+  // this process has not started one. A crash mid-call must never leave behind
+  // a grant that authorises the NEXT launch's first call.
+  clearActiveConsent()
 
   // In dev, Electron shows its own default dock icon on macOS unless we set
   // one explicitly (packaged builds pick it up automatically from build/icon.png).

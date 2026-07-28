@@ -128,6 +128,15 @@ const api = {
     },
     openScreenSettings: () => ipcRenderer.invoke('loopback:openScreenSettings')
   },
+  consent: {
+    // Synchronous, like arm/disarm: this runs inside the click that opens
+    // getDisplayMedia, and an async hop would spend the user activation.
+    persist: (sessionId: number, consent: unknown): boolean =>
+      ipcRenderer.sendSync('consent:persist', { sessionId, consent }) === true,
+    clear: (): void => {
+      ipcRenderer.sendSync('consent:clear')
+    }
+  },
   backup: {
     // Force a backup now (the "Back up now" button uses this).
     pushNow: () => ipcRenderer.invoke('backup:pushNow'),

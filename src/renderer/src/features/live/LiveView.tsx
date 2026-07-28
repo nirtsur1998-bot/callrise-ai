@@ -169,7 +169,12 @@ export function LiveView({
   // on every consent change, including the double reset on save + start.
   const canRecordOther = consent.canRecord
   useEffect(() => {
-    if (!canRecordOther) void disableOtherParty()
+    if (!canRecordOther) {
+      // Revoked, declined, or reset for the next call — drop the durable grant
+      // too, or a record from a finished call would still satisfy the gate.
+      window.api.consent.clear()
+      void disableOtherParty()
+    }
   }, [canRecordOther, disableOtherParty])
 
   // Standing consent means nobody clicks "they said yes" on this call, so the
@@ -188,8 +193,20 @@ export function LiveView({
     if (autoBuyerAttemptedRef.current) return
     if (status !== 'listening' || !canRecordOther || otherPartyLive || otherPartyError) return
     autoBuyerAttemptedRef.current = true
+    // Standing consent still has to be written before capture can be armed —
+    // the gate does not care WHERE the consent came from, only that a record
+    // for this call exists on disk.
+    window.api.consent.persist(getSessionId() ?? -1, consent.recordRef.current)
     void enableOtherParty()
-  }, [status, canRecordOther, otherPartyLive, otherPartyError, enableOtherParty])
+  }, [
+    status,
+    canRecordOther,
+    otherPartyLive,
+    otherPartyError,
+    enableOtherParty,
+    getSessionId,
+    consent.recordRef
+  ])
 
   // Settings master switch: when off, the whole other-party recording feature
   // is unavailable — no control to open the modal, the modal itself never
@@ -365,6 +382,11 @@ export function LiveView({
   // open buyer capture (getDisplayMedia requires a user gesture).
   const handleEnableOtherParty = (method: ConsentMethod): void => {
     consent.markConsented(method)
+    // Persist BEFORE arming. Main reads the consent back from disk at both the
+    // arm and the grant and refuses without it, so this is not bookkeeping —
+    // it is the step that makes capture possible at all. Synchronous, so the
+    // click's user activation survives into getDisplayMedia.
+    window.api.consent.persist(getSessionId() ?? -1, consent.recordRef.current)
     void enableOtherParty()
   }
 

@@ -42,6 +42,15 @@ export type PostCallBriefEvent =
   | { ok: true; brief: PostCallBrief; copied: boolean }
   | { ok: false; error: 'no-key' | 'failed' | 'empty-call'; message?: string }
 
+/** The durable consent gate: main reads capture permission from disk, never
+ *  from the renderer's word for it (acceptance criterion 11). */
+export interface ConsentGateApi {
+  /** Write this call's consent. Returns false when it does not permit capture. */
+  persist: (sessionId: number, consent: ConsentRecord) => boolean
+  /** Drop the record — call ended, or consent revoked. */
+  clear: () => void
+}
+
 export interface TranscriptionGapEvent {
   /** How much audio was lost. */
   durationMs: number
@@ -1163,6 +1172,7 @@ declare global {
       events: EventsApi
       auth: AuthApi
       loopback: LoopbackApi
+      consent: ConsentGateApi
       google: GoogleApi
       outlook: OutlookApi
       backup: BackupApi

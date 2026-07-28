@@ -60,6 +60,41 @@ Dev is deliberately excluded — Vite's HMR client needs inline scripts and a
 websocket to the dev server, and breaking `npm run dev` to harden a build that
 does not exist yet is a bad trade. The meta tag still covers dev.
 
+### The durable consent gate — criterion 11
+
+Buyer capture was already triple-gated (a renderer check, a one-shot arm in
+main, the Settings master switch) but all three were **process state**. The
+consent record lived in renderer memory for the length of the call and only
+reached disk when the call was saved.
+
+That distinction is the entire point of the criterion. "Capture cannot start
+without consent" has to be provable from something that outlives the process
+claiming it, because the failure being guarded against is a banner reading
+"recording in progress" while audio is already being written — and a flag in
+memory cannot tell that story afterwards, to anyone, ever.
+
+`src/main/consent-gate.ts` writes the consent to disk **before** capture is
+armed, and both the arm and the grant read it back:
+
+- `sanitizeConsent` runs on write **and** on read, so the same hard invariant
+  as a saved call applies to this file: `recordOtherParty` is only ever
+  honoured alongside an explicit `consented` status. A hand-edited file
+  claiming consent it never had collapses on read.
+- Only the sanitized record is written — an unrecognised `method`, or any
+  extra field the renderer attached, does not reach disk.
+- The record is scoped to a **session id**, so consent recorded on call A can
+  never authorise call B. That is the case that actually matters: a rep who
+  consented, hung up, and started another call without being asked again.
+- Turning consent off deletes the grant, rather than merely failing to renew it.
+- Cleared on **every app start**, so a record left behind by a crash mid-call
+  cannot authorise the next launch's first call.
+- Written synchronously, because the renderer calls it inside the click that
+  opens `getDisplayMedia`; an async round-trip there would spend the user
+  activation and the capture prompt would never appear.
+
+20 unit tests, including every "confident-looking object a compromised or buggy
+renderer might send" case. Main never asks the renderer whether consent exists.
+
 ---
 
 ## Verified here
@@ -205,11 +240,7 @@ ELECTRON_RUN_AS_NODE=1 "/Applications/CallRise AI.app/Contents/MacOS/CallRise AI
   filename containing one quote caused a PowerShell parse error, the check
   returned null, and the update installed anyway. Any validation error must
   reject, never fail open. Treat `latest.yml` as untrusted input.
-- **Criterion 11 — capture cannot start without a _persisted_ consent record.**
-  Today the consent record lives in renderer memory for the duration of a call
-  and only reaches disk on save. The retention guard means unconsented buyer
-  turns can never be stored, and buyer capture is triple-gated, but the gate
-  itself is process state rather than a durable record. Not met.
+- ~~**Criterion 11**~~ — **met.** See "The durable consent gate" above.
 - **Audible in-call announcement.** The remote party cannot see an Electron
   window, so a UI banner is worth nothing to them. Twelve US states require
   all-party consent; Massachusetts and Pennsylvania carry criminal penalties.
