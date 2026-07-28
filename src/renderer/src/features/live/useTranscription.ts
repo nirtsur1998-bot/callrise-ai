@@ -13,6 +13,12 @@ import {
 
 type LivePhase = Exclude<LiveStatus, 'paused'>
 
+/** Starting takes longer than this → show an interstitial rather than leaving
+ *  the rep staring at an unchanged screen. */
+const SLOW_START_MS = 400
+/** The microphone check is still pending after this → a real OS prompt is up. */
+const MIC_PROMPT_MS = 250
+
 export type OtherPartyError = 'denied' | 'no-audio' | 'interrupted' | null
 
 interface UseTranscription {
@@ -29,6 +35,8 @@ interface UseTranscription {
   otherPartyError: OtherPartyError
   /** 1Hz session-health snapshot, or null before the first tick. */
   health: TranscriptionHealthEvent | null
+  /** True only while the OS microphone permission prompt is actually showing. */
+  micPrompting: boolean
   start: () => Promise<void>
   /** The main-process transcription session id for the call in progress, or
    *  null before a session exists / after a failed start. A function (not a
@@ -68,6 +76,9 @@ export function useTranscription(
   const [otherPartyLive, setOtherPartyLive] = useState(false)
   const [otherPartyError, setOtherPartyError] = useState<OtherPartyError>(null)
   const [health, setHealth] = useState<TranscriptionHealthEvent | null>(null)
+  /** True only while the OS microphone prompt is genuinely pending, so the
+   *  startup copy can name it instead of guessing. */
+  const [micPrompting, setMicPrompting] = useState(false)
 
   const recorderRef = useRef<Recorder | null>(null)
   // Id of the main-process session THIS call owns. Passed as expectedSessionId
@@ -76,6 +87,7 @@ export function useTranscription(
   const sessionIdRef = useRef<number | null>(null)
   // Re-entrancy guard: a rapid double-click on Try again/Resume must not run
   // two arm-then-getDisplayMedia sequences concurrently.
+  const startingRef = useRef(false)
   const enablingOtherPartyRef = useRef(false)
   // Same guard, mirrored for the disable path — defense in depth alongside
   // the natural isLoopbackAttached() idempotency check below.
@@ -227,7 +239,7 @@ export function useTranscription(
     }
   }, [flushPendingSave])
 
-  const start = useCallback(async () => {
+  const beginSession = useCallback(async (): Promise<void> => {
     // If a previous call is still waiting to be saved, save it before we reset.
     flushPendingSave()
     // Each new call starts with consent reset to off — it never carries over.
@@ -255,10 +267,41 @@ export function useTranscription(
     latencySamples.current = []
     savePendingRef.current = false
     sessionIdRef.current = null
-    setPhase('requesting')
 
-    const access = await window.api.transcription.ensureMicAccess()
+    // Starting a call used to swap the whole screen twice in under a second:
+    // hero → a full-page "Requesting microphone access… Approve the prompt to
+    // begin." → the call UI. On the overwhelmingly common path the permission
+    // is ALREADY granted, so no prompt ever appears and that middle screen was
+    // both a flash and a lie.
+    //
+    // So it is now earned rather than assumed: nothing changes for the first
+    // 400ms, and the interstitial only appears if starting genuinely takes long
+    // enough to need feedback. Its copy names the microphone prompt only when a
+    // prompt is really pending.
+    const settleTimer = setTimeout(() => setPhase('requesting'), SLOW_START_MS)
+    const promptTimer = setTimeout(() => {
+      setMicPrompting(true)
+      setPhase('requesting')
+    }, MIC_PROMPT_MS)
+    const finishStartup = (): void => {
+      clearTimeout(settleTimer)
+      clearTimeout(promptTimer)
+      setMicPrompting(false)
+    }
+
+    let access: { status: string }
+    try {
+      access = await window.api.transcription.ensureMicAccess()
+    } catch {
+      finishStartup()
+      setPhase('error')
+      setErrorMessage('Could not check microphone access. Please try again.')
+      return
+    }
+    clearTimeout(promptTimer)
+    setMicPrompting(false)
     if (access.status !== 'granted') {
+      finishStartup()
       setPhase('denied')
       return
     }
@@ -279,6 +322,7 @@ export function useTranscription(
         }
       )
     } catch (err) {
+      finishStartup()
       const name = err instanceof DOMException ? err.name : ''
       if (name === 'NotAllowedError' || name === 'SecurityError') setPhase('denied')
       else if (name === 'NotFoundError' || name === 'OverconstrainedError') setPhase('no-device')
@@ -293,6 +337,7 @@ export function useTranscription(
       return
     }
 
+    finishStartup()
     recorderRef.current = recorder
     setAnalyser(recorder.analyser)
     startedAtRef.current = new Date().toISOString()
@@ -317,6 +362,20 @@ export function useTranscription(
       setPhase('error')
     }
   }, [armSave, flushPendingSave, onStartReset])
+
+  const start = useCallback(async () => {
+    // The screen no longer changes the instant Start is pressed (see the
+    // startup-interstitial note below), so the button that triggered this is
+    // still on screen and still clickable. Without this guard a double-click
+    // would open two microphones and two sockets.
+    if (startingRef.current) return
+    startingRef.current = true
+    try {
+      await beginSession()
+    } finally {
+      startingRef.current = false
+    }
+  }, [beginSession])
 
   const getSessionId = useCallback(() => sessionIdRef.current, [])
 
@@ -494,6 +553,7 @@ export function useTranscription(
     otherPartyLive,
     otherPartyError,
     health,
+    micPrompting,
     start,
     getSessionId,
     stop,

@@ -114,6 +114,7 @@ export function LiveView({
     savedNotice,
     otherPartyLive,
     otherPartyError,
+    micPrompting,
     start,
     getSessionId,
     stop,
@@ -319,11 +320,16 @@ export function LiveView({
   if (!hasTranscript) {
     if (status === 'idle') return <IdleHero onStart={start} />
     if (status === 'requesting') {
+      // Only names the microphone prompt when one is genuinely up. Otherwise
+      // this is just "startup is taking a moment", and claiming a prompt the
+      // rep cannot see would send them hunting for it.
       return (
         <CenteredState
           icon={<Loader2 className="h-6 w-6 animate-spin text-accent" />}
-          title="Requesting microphone access…"
-          subtitle="Approve the prompt to begin."
+          title={micPrompting ? 'Requesting microphone access…' : 'Starting…'}
+          subtitle={
+            micPrompting ? 'Approve the prompt to begin.' : 'Getting your microphone ready.'
+          }
         />
       )
     }
