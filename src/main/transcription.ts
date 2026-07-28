@@ -429,6 +429,11 @@ function connect(s: Session): void {
         : null
       const channel =
         channelIndex && typeof channelIndex[0] === 'number' ? (channelIndex[0] as number) : null
+      // The channel is stamped alongside the speaker because `speaker` alone
+      // is ambiguous: in mono it is a diarized guess, in multichannel it is
+      // the channel index. Without this, "speaker 0" means two different
+      // people either side of a mid-call switch to buyer capture, and the
+      // saved transcript cannot say which. Identity is the PAIR.
       const words = (alt?.words ?? []).map((w) => ({
         speaker:
           s.multichannel && (channel === 0 || channel === 1)
@@ -436,6 +441,7 @@ function connect(s: Session): void {
             : typeof w.speaker === 'number'
               ? w.speaker
               : 0,
+        ...(s.multichannel && (channel === 0 || channel === 1) ? { channel } : {}),
         text: w.punctuated_word ?? w.word ?? ''
       }))
       const start = typeof msg.start === 'number' ? msg.start : 0

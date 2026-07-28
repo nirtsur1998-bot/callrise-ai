@@ -6,6 +6,15 @@ import { writeJsonAtomic } from './atomic-write'
 export interface CallSegment {
   speaker: number
   text: string
+  /** Which capture channel this came from: 0 = the rep's mic, 1 = the other
+   *  party's loopback. Undefined for mono (mic-only) calls and for anything
+   *  saved before this existed.
+   *
+   *  Present because `speaker` ALONE is ambiguous. In mono it is a diarized
+   *  guess; in multichannel it is the channel index — so "speaker 0" means two
+   *  different people either side of a mid-call switch to buyer capture, and a
+   *  saved transcript could not tell you which. Identity is the PAIR. */
+  channel?: number
   /** A `[gap: Ns]` marker rather than someone's words — audio that was shed,
    *  discarded to rejoin the live edge, or lost to a suspend. Marked so it is
    *  never counted as a speaker and never attributed to anyone. */
@@ -266,7 +275,12 @@ function sanitizeSegments(value: unknown): CallSegment[] {
     const speaker = Number.isFinite(speakerRaw) ? Math.max(0, Math.trunc(speakerRaw as number)) : 0
     const text = typeof textRaw === 'string' ? textRaw.slice(0, MAX_TEXT) : ''
     const isGap = (item as { kind?: unknown }).kind === 'gap'
-    if (text.trim()) out.push(isGap ? { speaker, text, kind: 'gap' } : { speaker, text })
+    const channelRaw = (item as { channel?: unknown }).channel
+    const channel = channelRaw === 0 || channelRaw === 1 ? (channelRaw as 0 | 1) : undefined
+    if (!text.trim()) continue
+    const seg: CallSegment = isGap ? { speaker, text, kind: 'gap' } : { speaker, text }
+    if (channel !== undefined) seg.channel = channel
+    out.push(seg)
   }
   return out
 }

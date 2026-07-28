@@ -11,6 +11,8 @@ export interface TranscriptionStateEvent {
 export interface TranscriptWord {
   speaker: number
   text: string
+  /** 0 = the rep's mic, 1 = the other party. Absent on mono calls. */
+  channel?: number
 }
 
 export interface TranscriptResultEvent {
@@ -127,6 +129,10 @@ export interface TranscriptionApi {
 export interface CallSegment {
   speaker: number
   text: string
+  /** 0 = the rep's mic, 1 = the other party. Absent on mono calls. Identity is
+   *  the (channel, speaker) PAIR — `speaker` alone means different things on
+   *  either side of a mid-call switch to buyer capture. */
+  channel?: number
   /** A `[gap: Ns]` marker — audio that was never transcribed. Never counted as
    *  speech and never attributed to a speaker. */
   kind?: 'gap'

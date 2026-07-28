@@ -3,6 +3,15 @@ import type { CoachingReport } from '@renderer/features/coaching/types'
 export interface CallSegment {
   speaker: number
   text: string
+  /** Which capture channel this came from: 0 = the rep's mic, 1 = the other
+   *  party's loopback. Undefined for mono (mic-only) calls and for anything
+   *  saved before this existed.
+   *
+   *  Present because `speaker` ALONE is ambiguous. In mono it is a diarized
+   *  guess; in multichannel it is the channel index — so "speaker 0" means two
+   *  different people either side of a mid-call switch to buyer capture, and a
+   *  saved transcript could not tell you which. Identity is the PAIR. */
+  channel?: number
   /** A `[gap: Ns]` marker rather than someone's words — audio that was shed,
    *  discarded to rejoin the live edge, or lost to a suspend. Rendered as a
    *  divider, never attributed to a speaker. */
