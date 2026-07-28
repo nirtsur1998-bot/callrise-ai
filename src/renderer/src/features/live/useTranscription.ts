@@ -40,6 +40,10 @@ interface UseTranscription {
   micPrompting: boolean
   /** True once the post-call brief + follow-up email are on the clipboard. */
   briefCopied: boolean
+  /** True once main has spotted "mic live, buyer bit-silent" long enough to
+   *  look like the Windows endpoint bug (docs/windows-capture.md, §7). */
+  buyerSilentWarning: boolean
+  dismissBuyerSilentWarning: () => void
   start: () => Promise<void>
   /** The main-process transcription session id for the call in progress, or
    *  null before a session exists / after a failed start. A function (not a
@@ -79,6 +83,10 @@ export function useTranscription(
   const [otherPartyLive, setOtherPartyLive] = useState(false)
   const [otherPartyError, setOtherPartyError] = useState<OtherPartyError>(null)
   const [health, setHealth] = useState<TranscriptionHealthEvent | null>(null)
+  // The zero-native-code Windows endpoint-bug mitigation (§7): main flags
+  // "mic live, buyer bit-silent" and this is what turns it into a banner. Null
+  // once dismissed OR once the underlying condition clears — see onClosed.
+  const [buyerSilentWarning, setBuyerSilentWarning] = useState(false)
   /** True only while the OS microphone prompt is genuinely pending, so the
    *  startup copy can name it instead of guessing. */
   const [micPrompting, setMicPrompting] = useState(false)
@@ -239,6 +247,10 @@ export function useTranscription(
       setHealth(payload)
     })
 
+    const offBuyerSilent = window.api.transcription.onBuyerSilent(() => {
+      setBuyerSilentWarning(true)
+    })
+
     // The session fully closed after a stop — the final flushed words are in,
     // so save now.
     const offClosed = window.api.transcription.onClosed(() => {
@@ -251,6 +263,7 @@ export function useTranscription(
       offError()
       offGap()
       offHealth()
+      offBuyerSilent()
       offClosed()
     }
   }, [flushPendingSave])
@@ -279,6 +292,7 @@ export function useTranscription(
     setOtherPartyLive(false)
     setOtherPartyError(null)
     setHealth(null)
+    setBuyerSilentWarning(false)
     setBriefCopied(false)
     segmentsRef.current = []
     latencySamples.current = []
@@ -573,6 +587,8 @@ export function useTranscription(
     health,
     micPrompting,
     briefCopied,
+    buyerSilentWarning,
+    dismissBuyerSilentWarning: useCallback(() => setBuyerSilentWarning(false), []),
     start,
     getSessionId,
     stop,

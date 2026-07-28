@@ -7,6 +7,7 @@ import { AudioQueue, frameRms, frameSeconds } from './session-health/queue'
 import { LivenessWatchdog, silenceFrame } from './session-health/liveness'
 import { DriftMeter } from './session-health/drift'
 import { HEALTH_TUNING, type GapReason, type HealthSnapshot } from './session-health/types'
+import { BuyerSilenceWatcher } from './windows-capture/buyer-silence'
 
 const DEEPGRAM_LISTEN_URL = 'wss://api.deepgram.com/v1/listen'
 
@@ -65,6 +66,10 @@ interface Session {
   liveness: LivenessWatchdog
   drift: DriftMeter
   sleep: SleepDetector
+  /** Zero-native-code mitigation for the Windows endpoint bug (§7, different
+   *  angle) — flags "mic live, buyer bit-silent" while the real per-process
+   *  addon is blocked. Only meaningful when `multichannel` is true. */
+  buyerSilence: BuyerSilenceWatcher
   /** Shed audio waiting to be reported as ONE gap marker, rather than one
    *  marker per 40ms frame. Flushed the moment audio flows again. */
   pendingShedMs: number
@@ -547,6 +552,11 @@ function ingestAudio(s: Session, chunk: unknown): void {
   const rms = frameRms(bytes)
   s.liveness.onAudio(at, rms)
 
+  if (s.multichannel) {
+    const verdict = s.buyerSilence.observe({ atMs: at, bytes })
+    if (verdict.shouldWarn) emit(s, 'transcription:buyerSilent', { reason: verdict.reason })
+  }
+
   // A discontinuity is a device event or a suspend, not accumulated drift.
   // Resync rather than letting it be absorbed into the clock estimate.
   if (s.drift.onFrame(at, bytes.byteLength)) s.drift.resync()
@@ -679,6 +689,7 @@ export function registerTranscription(): void {
       liveness: new LivenessWatchdog(),
       drift: new DriftMeter(sampleRate, channels),
       sleep: new SleepDetector(),
+      buyerSilence: new BuyerSilenceWatcher(),
       pendingShedMs: 0,
       pendingShedReason: 'shed',
       connectedOnce: false,

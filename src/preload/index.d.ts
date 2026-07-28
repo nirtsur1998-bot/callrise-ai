@@ -106,6 +106,7 @@ export interface TranscriptionApi {
   onHealth: (cb: (payload: TranscriptionHealthEvent) => void) => () => void
   /** No audio callbacks for ~10s: the capture device is gone, reacquire. */
   onCaptureLost: (cb: (payload: { forMs: number }) => void) => () => void
+  onBuyerSilent: (cb: (payload: { reason: string }) => void) => () => void
   /** Async, non-blocking: a short next-question suggestion for live cues. */
   suggestQuestion: (text: string) => Promise<{ ok: true; question: string } | { ok: false }>
   /** Manual mid-call help: sends the running transcript + the rep's question. */
@@ -740,6 +741,8 @@ export interface LoopbackApi {
   disarm: () => void
   /** Open the macOS Screen & System Audio Recording settings pane. */
   openScreenSettings: () => Promise<{ ok: boolean }>
+  /** Open Windows's sound settings — the fix for the endpoint bug. */
+  openWindowsSoundSettings: () => Promise<{ ok: boolean }>
 }
 
 export interface GoogleCalendarSummary {

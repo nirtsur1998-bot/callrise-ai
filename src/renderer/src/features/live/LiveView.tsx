@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Mic, Square, Pause, Play, AlertTriangle, MicOff, Loader2, Bookmark } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
-import { isMac } from '@renderer/lib/platform'
+import { isMac, isWindows } from '@renderer/lib/platform'
 import { IconButton } from '@renderer/components/IconButton'
 import { Button } from '@renderer/components/Button'
 import type { ConsentMethod } from '@renderer/features/calls/types'
@@ -120,6 +120,8 @@ export function LiveView({
     otherPartyError,
     micPrompting,
     briefCopied,
+    buyerSilentWarning,
+    dismissBuyerSilentWarning,
     start,
     getSessionId,
     stop,
@@ -601,6 +603,36 @@ export function LiveView({
               )}
             >
               {otherPartyError === 'interrupted' ? 'Resume' : 'Try again'}
+            </button>
+          </span>
+        </InlineBanner>
+      )}
+      {buyerSilentWarning && (
+        <InlineBanner tone="warning">
+          <span>
+            {isWindows
+              ? "The other party's audio looks silent while yours is coming through — Windows " +
+                'may be playing the call to a different device than the one we record. Try ' +
+                'setting your headset as both Default Device and Default Communication Device.'
+              : "The other party's audio has been silent for a while — check that your call app " +
+                'is actually routed through the device being captured.'}
+          </span>
+          <span className="flex shrink-0 gap-2">
+            {isWindows && (
+              <button
+                type="button"
+                onClick={() => void window.api.loopback.openWindowsSoundSettings()}
+                className="no-drag rounded-lg bg-warning-soft px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/20"
+              >
+                Open Sound Settings
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={dismissBuyerSilentWarning}
+              className="no-drag rounded-lg bg-warning-soft px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/20"
+            >
+              Dismiss
             </button>
           </span>
         </InlineBanner>

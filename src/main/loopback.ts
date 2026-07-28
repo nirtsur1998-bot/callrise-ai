@@ -40,6 +40,19 @@ export function registerLoopbackCapture(): void {
     return { ok: true as const }
   })
 
+  // Deep-link to Windows's sound settings — the fix for the endpoint bug
+  // (docs/windows-capture.md): a headset set as Default Communication Device
+  // while speakers stay the Default Device sends the call to one and our
+  // capture to the other. `transcription:buyerSilent` detects the symptom
+  // with no native code; this is the one-step remedy it points at.
+  ipcMain.handle('loopback:openWindowsSoundSettings', async () => {
+    if (process.platform !== 'win32') {
+      return { ok: false as const, error: 'not applicable on this platform' }
+    }
+    await shell.openExternal('ms-settings:sound')
+    return { ok: true as const }
+  })
+
   // Synchronous arm/disarm so the renderer can flip this in the same tick as the
   // click gesture, right before getDisplayMedia (an async IPC would race).
   // Write the consent for the call about to capture. Synchronous because the

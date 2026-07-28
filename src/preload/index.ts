@@ -36,6 +36,7 @@ const api = {
     onGap: (cb: (payload: unknown) => void) => subscribe('transcription:gap', cb),
     onHealth: (cb: (payload: unknown) => void) => subscribe('transcription:health', cb),
     onCaptureLost: (cb: (payload: unknown) => void) => subscribe('transcription:captureLost', cb),
+    onBuyerSilent: (cb: (payload: unknown) => void) => subscribe('transcription:buyerSilent', cb),
     suggestQuestion: (text: string) => ipcRenderer.invoke('live:suggestQuestion', text),
     askCoach: (transcript: string, question: string) =>
       ipcRenderer.invoke('live:askCoach', { transcript, question }),
@@ -132,7 +133,8 @@ const api = {
     disarm: (): void => {
       ipcRenderer.sendSync('loopback:disarm')
     },
-    openScreenSettings: () => ipcRenderer.invoke('loopback:openScreenSettings')
+    openScreenSettings: () => ipcRenderer.invoke('loopback:openScreenSettings'),
+    openWindowsSoundSettings: () => ipcRenderer.invoke('loopback:openWindowsSoundSettings')
   },
   consent: {
     // Synchronous, like arm/disarm: this runs inside the click that opens
