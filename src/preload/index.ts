@@ -21,6 +21,12 @@ const api = {
     start: (options: { sampleRate: number; multichannel?: boolean; expectedSessionId?: number }) =>
       ipcRenderer.invoke('transcription:start', options),
     sendAudio: (chunk: ArrayBuffer) => ipcRenderer.send('transcription:audio', chunk),
+    /** Ask main for a direct port for the audio worker (§1.4). The port itself
+     *  arrives as a window message, not through this bridge — see below. */
+    requestAudioPort: () => ipcRenderer.send('audio-port:request'),
+    /** Ring overrun — audio the worker could not drain in time. Reported so it
+     *  shows up as a gap marker instead of words that silently never existed. */
+    reportAudioDropped: (frames: number) => ipcRenderer.send('transcription:audioDropped', frames),
     stop: () => ipcRenderer.invoke('transcription:stop'),
     onState: (cb: (payload: unknown) => void) => subscribe('transcription:state', cb),
     onTranscript: (cb: (payload: unknown) => void) => subscribe('transcription:transcript', cb),
@@ -246,6 +252,23 @@ const api = {
     onRequestTogglePause: (cb: () => void) => subscribe('detection:requestTogglePause', cb)
   }
 }
+
+// A MessagePort cannot cross contextBridge — it is a transferable, not a
+// clonable value — so the audio port (§1.4) is handed to the page the way
+// Electron documents: re-post it into the main world with window.postMessage.
+// The page then transfers it on to the audio worker, which streams PCM straight
+// to the main process without ever waking the renderer's main thread.
+//
+// The `*` target origin is safe here in the way it usually is not: this window
+// only ever loads the app's own bundle, never remote content, and the port
+// carries no authority by itself — main accepts audio on it only while the
+// window that requested it owns the live session.
+export const AUDIO_PORT_MESSAGE = 'callrise:audio-port'
+ipcRenderer.on('audio-port:granted', (event: IpcRendererEvent) => {
+  const port = event.ports[0]
+  if (!port) return
+  window.postMessage({ type: AUDIO_PORT_MESSAGE }, '*', [port])
+})
 
 if (process.contextIsolated) {
   try {

@@ -20,7 +20,7 @@
 import { app } from 'electron'
 import { runChannelSelfTest } from './session-health/channel-test'
 import { HEALTH_TUNING } from './session-health/types'
-import { transcriptionHealth } from './transcription'
+import { transcriptionAudioPath, transcriptionHealth } from './transcription'
 import { readActiveConsent } from './consent-gate'
 import { loadAppSettings } from './app-settings'
 import { isTrustedFeed } from './updater/policy'
@@ -95,6 +95,19 @@ export function buildDiagnoseReport(): string {
   push()
 
   push('SESSION HEALTH')
+  // Which route the audio took, observed rather than assumed — the fast path
+  // degrades silently by design, so this is the only way to tell a machine that
+  // is on it from one that quietly fell back.
+  const path = safe(() => transcriptionAudioPath(), 'none')
+  push(
+    `  audio path        : ${
+      path === 'direct'
+        ? 'direct worker port (shared memory — bypasses the renderer main thread)'
+        : path === 'renderer'
+          ? 'renderer main thread (fallback — shared memory unavailable)'
+          : 'no audio seen yet this run'
+    }`
+  )
   const health = safe(() => transcriptionHealth(), null)
   if (!health) {
     push('  no call in progress — start one and re-run to capture a live trace')

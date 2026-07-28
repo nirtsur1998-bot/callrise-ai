@@ -336,7 +336,8 @@ export function useTranscription(
           setOtherPartyLive(false)
           void window.api.transcription.stop()
           setPhase('no-device')
-        }
+        },
+        (frames) => window.api.transcription.reportAudioDropped(frames)
       )
     } catch (err) {
       finishStartup()

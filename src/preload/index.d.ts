@@ -89,6 +89,8 @@ export interface TranscriptionApi {
     expectedSessionId?: number
   }) => Promise<{ ok: boolean; error?: 'no-key' | 'stale'; sessionId?: number }>
   sendAudio: (chunk: ArrayBuffer) => void
+  requestAudioPort: () => void
+  reportAudioDropped: (frames: number) => void
   stop: () => Promise<{ ok: boolean }>
   onState: (cb: (payload: TranscriptionStateEvent) => void) => () => void
   onTranscript: (cb: (payload: TranscriptResultEvent) => void) => () => void

@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, systemPreferences, shell } from 'electron'
+import { ipcMain, BrowserWindow, MessageChannelMain, systemPreferences, shell } from 'electron'
 import WebSocket from 'ws'
 import { keyRejectedHint } from './ai-keys'
 import { SessionTimeline, SleepDetector, formatGapMarker } from './session-health/timeline'
@@ -78,6 +78,16 @@ interface Session {
 
 let session: Session | null = null
 let nextSessionId = 1
+
+/**
+ * Which route the last audio frame actually took (§1.4).
+ *
+ * Recorded rather than assumed. The fast path degrades silently by design —
+ * no shared memory, no port, no worker and the recorder quietly uses the old
+ * route — which is right for the user and useless for debugging unless the
+ * machine can be asked afterwards which one it ended up on.
+ */
+let audioPath: 'none' | 'renderer' | 'direct' = 'none'
 
 function emit(s: Session, channel: string, payload: unknown): void {
   if (!s.window.isDestroyed()) {
@@ -521,6 +531,78 @@ function connect(s: Session): void {
  * than sent immediately, holding such a view would let later traffic overwrite
  * audio we haven't sent yet. So this always produces an independent copy.
  */
+/**
+ * One audio frame into the session, wherever it came from.
+ *
+ * Shared by the classic IPC path and the direct worker port (§1.4) so the two
+ * can never drift apart — the health accounting below is the thing that
+ * detects the lag ratchet, and a second copy of it that quietly skipped the
+ * drift resync would leave one of the two paths unmonitored.
+ */
+function ingestAudio(s: Session, chunk: unknown): void {
+  const bytes = toBytes(chunk)
+  if (!bytes || bytes.byteLength <= 0 || bytes.byteLength > MAX_CHUNK_BYTES) return
+
+  const at = s.timeline.elapsedMs()
+  const rms = frameRms(bytes)
+  s.liveness.onAudio(at, rms)
+
+  // A discontinuity is a device event or a suspend, not accumulated drift.
+  // Resync rather than letting it be absorbed into the clock estimate.
+  if (s.drift.onFrame(at, bytes.byteLength)) s.drift.resync()
+
+  const shed = s.queue.push({
+    bytes,
+    seconds: frameSeconds(bytes.byteLength, s.channels, s.sampleRate),
+    rms
+  })
+  queueShed(s, shed.droppedSec, 'shed')
+  drain(s)
+}
+
+/**
+ * Hands each window a private MessagePort straight to this process, so the
+ * audio worker can stream without ever touching the renderer's main thread.
+ *
+ * The port is the security boundary as well as the fast path: it is created
+ * here, for one webContents, and audio arriving on it is only accepted while
+ * that same window owns the live session. A port from a window that has since
+ * been replaced carries no authority at all.
+ */
+function registerAudioPort(): void {
+  const ports = new Map<number, Electron.MessagePortMain>()
+
+  ipcMain.on('audio-port:request', (event) => {
+    const wcId = event.sender.id
+    // Re-requesting replaces the old port rather than stacking a second one;
+    // a call that restarts must not leave a live pipe from the previous take.
+    ports.get(wcId)?.close()
+    ports.delete(wcId)
+
+    const { port1, port2 } = new MessageChannelMain()
+    ports.set(wcId, port1)
+
+    port1.on('message', (msg) => {
+      const s = session
+      if (!s) return
+      if (s.window.isDestroyed()) return
+      if (s.window.webContents.id !== wcId) return
+      audioPath = 'direct'
+      ingestAudio(s, msg.data)
+    })
+    port1.on('close', () => {
+      if (ports.get(wcId) === port1) ports.delete(wcId)
+    })
+    port1.start()
+
+    event.sender.once('destroyed', () => {
+      ports.get(wcId)?.close()
+      ports.delete(wcId)
+    })
+    event.sender.postMessage('audio-port:granted', null, [port2])
+  })
+}
+
 function toBytes(chunk: unknown): ArrayBuffer | null {
   if (chunk instanceof ArrayBuffer) return chunk
   if (ArrayBuffer.isView(chunk)) {
@@ -541,6 +623,11 @@ export function disposeTranscription(): void {
 export function transcriptionHealth(): (HealthSnapshot & { driftPpm: number }) | null {
   if (!session) return null
   return { ...snapshot(session), driftPpm: session.drift.read().ppm }
+}
+
+/** Which route audio last took. See `audioPath`. */
+export function transcriptionAudioPath(): 'none' | 'renderer' | 'direct' {
+  return audioPath
 }
 
 let registered = false
@@ -614,25 +701,22 @@ export function registerTranscription(): void {
     if (!s) return
     // Only the window that owns the session may stream audio.
     if (BrowserWindow.fromWebContents(event.sender) !== s.window) return
-    const bytes = toBytes(chunk)
-    if (!bytes || bytes.byteLength <= 0 || bytes.byteLength > MAX_CHUNK_BYTES) return
-
-    const at = s.timeline.elapsedMs()
-    const rms = frameRms(bytes)
-    s.liveness.onAudio(at, rms)
-
-    // A discontinuity is a device event or a suspend, not accumulated drift.
-    // Resync rather than letting it be absorbed into the clock estimate.
-    if (s.drift.onFrame(at, bytes.byteLength)) s.drift.resync()
-
-    const shed = s.queue.push({
-      bytes,
-      seconds: frameSeconds(bytes.byteLength, s.channels, s.sampleRate),
-      rms
-    })
-    queueShed(s, shed.droppedSec, 'shed')
-    drain(s)
+    audioPath = 'renderer'
+    ingestAudio(s, chunk)
   })
+
+  // The ring dropped audio because the worker fell behind. Same user-visible
+  // meaning as a shed queue — a stretch that will never be transcribed — so it
+  // gets the same marker rather than a new vocabulary word.
+  ipcMain.on('transcription:audioDropped', (event, frames: unknown) => {
+    const s = session
+    if (!s) return
+    if (BrowserWindow.fromWebContents(event.sender) !== s.window) return
+    if (typeof frames !== 'number' || !Number.isFinite(frames) || frames <= 0) return
+    queueShed(s, frames / s.sampleRate, 'shed')
+  })
+
+  registerAudioPort()
 
   ipcMain.handle('transcription:stop', () => {
     const s = session

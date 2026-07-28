@@ -13,6 +13,16 @@ app.setName('CallRise AI')
 const userDataDir = join(app.getPath('appData'), 'sales-os')
 app.setPath('userData', userDataDir)
 
+// Lets the audio worklet hand PCM to its worker through shared memory (§1.4),
+// so audio never waits on the renderer's main thread. Chromium otherwise gates
+// SharedArrayBuffer behind cross-origin isolation, which exists to keep a
+// *hostile page* from timing the Spectre side channel — a threat that needs
+// third-party content to exploit, and this window only ever loads the app's own
+// bundle from disk. Nothing depends on the switch working: startAudioPump()
+// constructs a SharedArrayBuffer to test for it and falls back to the original
+// postMessage path if it throws.
+app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer')
+
 // Dev reads the project's .env from the working directory. A packaged app has
 // no project folder (and its working directory is arbitrary), so also look
 // next to the executable and in the app's data folder — installs get their
