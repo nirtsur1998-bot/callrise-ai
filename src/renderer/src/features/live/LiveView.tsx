@@ -12,6 +12,8 @@ import { useCueSettings } from './useCueSettings'
 import { useConsent } from '@renderer/features/consent/useConsent'
 import { useAutoStartListening } from '@renderer/features/settings/useAutoStartListening'
 import { IdleStopWatcher, idleStopNotice } from './auto-stop'
+import { MustAskChecklist, emptyChecklistState, preHangupWarning } from './checklist/must-ask'
+import { MustAskStrip } from './components/MustAskStrip'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import { getExcludedApps, addSeenApp } from '@renderer/features/settings/prefs'
 import { OtherPartyControl } from '@renderer/features/consent/OtherPartyControl'
@@ -233,8 +235,17 @@ export function LiveView({
   // Armed only for calls the app started itself: a rep who pressed Start is
   // present and in control, and timing them out mid-thought would be a
   // surprise rather than a rescue.
+  // The must-ask checklist (§4.5). Ambient: it fills in as the call goes and
+  // says nothing until the rep is about to hang up.
+  const checklistRef = useRef(new MustAskChecklist())
+  // Seeded from the module, not from the ref — reading a ref during render is
+  // exactly the pattern that makes concurrent rendering tear.
+  const [checklist, setChecklist] = useState(emptyChecklistState)
+
   const idleWatcherRef = useRef(new IdleStopWatcher())
   const [autoStopNotice, setAutoStopNotice] = useState<string | null>(null)
+  /** What the rep never asked, captured at the moment they hang up. */
+  const [hangupWarning, setHangupWarning] = useState<string | null>(null)
 
   // Reset-on-change, adjusted during render rather than in an effect (React's
   // documented pattern for exactly this): the moment a new call leaves 'idle',
@@ -242,17 +253,49 @@ export function LiveView({
   const [noticeStatus, setNoticeStatus] = useState(status)
   if (status !== noticeStatus) {
     setNoticeStatus(status)
-    if (status !== 'idle' && autoStopNotice !== null) setAutoStopNotice(null)
+    if (status !== 'idle') {
+      if (autoStopNotice !== null) setAutoStopNotice(null)
+      if (hangupWarning !== null) setHangupWarning(null)
+    }
   }
 
   const armIdleStop = useCallback(() => {
     idleWatcherRef.current.arm(performance.now())
   }, [])
 
+  // A new call starts from an empty checklist.
+  useEffect(() => {
+    if (status !== 'idle') return
+    checklistRef.current.reset()
+    // The rendered checklist has to follow the instance it mirrors; leaving it
+    // stale would show the previous call's ticks against the next call.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setChecklist(emptyChecklistState())
+  }, [status])
+
+  // The one moment the checklist speaks: the rep is hanging up, and there is
+  // still time to ask. Captured BEFORE stop() runs, because stop() resets the
+  // transcript state the checklist was built from.
+  const stopWithChecklist = useCallback(() => {
+    setHangupWarning(preHangupWarning(checklistRef.current.state()))
+    void stop()
+  }, [stop])
+
   // Any transcribed words mean the conversation is still alive.
   useEffect(() => {
     if (segments.length > 0 || interimText) {
       idleWatcherRef.current.noteSpeech(performance.now())
+    }
+  }, [segments, interimText])
+
+  // Score the newest words against the checklist. Only the tail is scored:
+  // coverage is sticky and observe() is idempotent, so re-reading the whole
+  // transcript on every update would burn work to reach the same answer.
+  useEffect(() => {
+    const tail = `${segments.at(-1)?.text ?? ''} ${interimText}`.trim()
+    if (!tail) return
+    if (checklistRef.current.observe(tail).length > 0) {
+      setChecklist(checklistRef.current.state())
     }
   }, [segments, interimText])
 
@@ -457,7 +500,7 @@ export function LiveView({
         {stoppable ? (
           <button
             type="button"
-            onClick={stop}
+            onClick={stopWithChecklist}
             className="no-drag flex items-center gap-2 rounded-xl bg-danger-soft px-4 py-2.5 text-sm font-semibold text-danger ring-1 ring-inset ring-danger/30 transition hover:bg-danger/20"
           >
             <Square className="h-4 w-4 fill-current" /> Stop
@@ -471,6 +514,8 @@ export function LiveView({
             <Mic className="h-4 w-4" /> Start
           </button>
         )}
+
+        {recording && <MustAskStrip state={checklist} />}
 
         {(status === 'listening' || status === 'paused') && (
           <IconButton
@@ -570,6 +615,7 @@ export function LiveView({
                 has to be said out loud — an unannounced clipboard write is
                 indistinguishable from losing whatever they had copied. */}
             {briefCopied && ' Brief + follow-up email copied to your clipboard.'}
+            {hangupWarning && <span className="block text-warning">{hangupWarning}</span>}
           </span>
         </InlineBanner>
       )}
