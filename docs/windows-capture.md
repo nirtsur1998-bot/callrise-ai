@@ -228,6 +228,9 @@ the sync problem the current architecture was designed to avoid.
 
 - `switch-policy.ts` — the auto-switch heuristic, 12 unit tests, no native code.
 - This document, including the §3.1 evaluation above.
+- `buyer-silence.ts` — a zero-native-code mitigation for the exact symptom
+  this bug produces (see below). Shipping today, on every existing install,
+  while the addon stays blocked.
 
 **Not built**
 
@@ -242,3 +245,36 @@ rejected with 403. Writing several hundred lines of untestable, unbuildable
 COM code in that state would produce a deliverable whose only honest
 description is "unverified". The decisions above are the ones worth locking in
 first, and they are the ones that survive whichever way the addon is built.
+
+Note that this repo already ships one small native addon
+(`native/win-audio-sessions`, ambient call detection) with a working CI build
+step (`npm run native:build:win`, wired into `build-windows-demo.yml`). That
+addon does not help here — it reads session-level meter/activity data, not
+audio — but it is the proof that this repo's CI pipeline CAN build and package
+a Windows native addon once it can reach it. The blocker is exclusively repo
+write access, not anything about the toolchain.
+
+## Zero-native-code mitigation: `buyer-silence.ts`
+
+While the addon is blocked, the bug's SYMPTOM is fully detectable without any
+native code, and that is enough to turn an unexplainable failure into a
+one-step fix.
+
+The tell: on the existing (shipped, not addon-based) capture path, a rep whose
+headset is the Default Communication Device but not the Default Device will
+have a mic that carries real speech — they are clearly on a call — while the
+buyer channel is bit-exact digital silence for the whole thing. That shape
+does not happen in an ordinarily quiet moment; nobody sits through a live
+sales call in total silence on both sides.
+
+`BuyerSilenceWatcher` (`src/main/windows-capture/buyer-silence.ts`) watches
+for exactly that: mic speaking at least 15% of a 45-second window while the
+buyer channel stays silent throughout. It fires once per call (never
+re-nagging), and the Live view shows a banner with a one-click deep-link to
+Windows's sound settings (`loopback:openWindowsSoundSettings` →
+`ms-settings:sound`) — the actual fix is setting the same physical device as
+both Default Device and Default Communication Device.
+
+This is not a substitute for the addon — it cannot recover the audio, only
+point at the fix — but it means no Windows rep has to file a bug report
+that reads as "the buyer side just doesn't work" before this ships.
