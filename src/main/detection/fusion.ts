@@ -38,7 +38,14 @@ export function weightForSignal(
     case 'process':
       return w.process
     case 'window-title':
-      return w['window-title']
+      // Same known/unknown split as mic-session, and for the same reason: a
+      // window-title signal for a registered app (an exact per-app pattern
+      // match, e.g. /zoom meeting/i) is stronger evidence than one for an
+      // unrecognized app (matched only by appRegistry's generic
+      // looksLikeCallTitle() heuristic — see MacAdapter/WindowsAdapter).
+      return isKnownConferencingApp(signal.appId)
+        ? w['window-title-known']
+        : w['window-title-generic']
     case 'output-activity':
       return w['output-activity']
     case 'calendar':

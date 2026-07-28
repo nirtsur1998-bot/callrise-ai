@@ -111,13 +111,29 @@ export const DETECTION_TUNING = {
   /** Adapter poll interval (ms) while a candidate is being evaluated - tighter loop until sustain resolves. */
   pollCandidateMs: 1_000,
 
-  /** Per-signal-kind confidence weight, keyed by DetectionSignalKind (+ a known/unknown split for mic-session). */
+  /**
+   * Per-signal-kind confidence weight, keyed by DetectionSignalKind (+ a
+   * known/unknown split for mic-session AND window-title — see fusion.ts's
+   * weightForSignal). An "unknown" app is anything not in appRegistry's
+   * CONFERENCING_APPS — detection must still work for it (no registry entry
+   * required to ever reach 'capturing'), just at reduced confidence per
+   * signal than a recognized app gets. mic-session-unknown was raised from
+   * 0.25 to 0.35 specifically so that an unrecognized app with an active mic
+   * session PLUS one weak corroborating signal (process, or a generic
+   * call-sounding window title) can cross startThreshold - previously it
+   * structurally could not (0.25 + process 0.1 + window-title 0.2 = 0.55,
+   * always short of 0.6), which meant unlisted apps were undetectable no
+   * matter what signals fired. Deliberately still short of mic-session-known
+   * (0.55) and still can't cross the threshold alone (0.35 < 0.6) — an
+   * unknown app needs real corroboration, not just any mic activity.
+   */
   weights: {
     'own-virtual-device': 0.7,
     'mic-session-known': 0.55,
-    'mic-session-unknown': 0.25,
+    'mic-session-unknown': 0.35,
     process: 0.1,
-    'window-title': 0.2,
+    'window-title-known': 0.2,
+    'window-title-generic': 0.15,
     'output-activity': 0.15,
     calendar: 0.15
   }

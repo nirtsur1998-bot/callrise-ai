@@ -4,6 +4,7 @@ import { join } from 'path'
 import {
   isKnownConferencingApp,
   isOwnProcess,
+  looksLikeCallTitle,
   matchTitle,
   normalizeAppIdentity
 } from '../appRegistry'
@@ -160,10 +161,12 @@ export class WindowsAdapter implements ICallDetectorAdapter {
     )
     const byPid = new Map(runningApps.map((p) => [p.pid, p]))
 
+    // M17 §2.2: emit for every running app, not just registry-known ones —
+    // see MacAdapter's identical comment. A `process` signal alone (weight
+    // 0.1) is far too weak to trigger detection by itself.
     for (const app of runningApps) {
       if (isOwnProcess({ pid: app.pid, processName: app.exeName })) continue
       const identity = normalizeAppIdentity({ windowsExeName: app.exeName })
-      if (!identity.known) continue
       this.emit({
         kind: 'process',
         appId: identity.appId,
@@ -194,31 +197,51 @@ export class WindowsAdapter implements ICallDetectorAdapter {
     const windows = this.safeCall(() => this.addon!.getWindowTitles(), [] as NativeWindowInfo[])
     for (const w of windows) {
       if (!w.title || isOwnProcess({ pid: w.pid })) continue
-      const match = matchTitle(w.title)
-      if (!match) continue
-      this.emit({
-        kind: 'window-title',
-        appId: match.appId,
-        displayName: match.displayName,
-        pid: w.pid,
-        title: w.title,
-        observedAt: now,
-        weight: 0
-      })
-      // Mirrors MacAdapter: a matched title on a process not already flagged
-      // as a known app (the browser-hosted case - e.g. Google Meet in Chrome,
-      // which has no windowsExeNames/bundleId entry, only a titlePattern) is
-      // still useful as a weak corroborating `process` signal.
       const exeApp = byPid.get(w.pid)
-      if (
-        exeApp &&
-        !isKnownConferencingApp(normalizeAppIdentity({ windowsExeName: exeApp.exeName }).appId)
-      ) {
+      const match = matchTitle(w.title)
+
+      if (match) {
         this.emit({
-          kind: 'process',
+          kind: 'window-title',
           appId: match.appId,
           displayName: match.displayName,
           pid: w.pid,
+          title: w.title,
+          observedAt: now,
+          weight: 0
+        })
+        // Mirrors MacAdapter: a matched title on a process not already
+        // flagged as a known app (the browser-hosted case - e.g. Google Meet
+        // in Chrome, which has no windowsExeNames/bundleId entry, only a
+        // titlePattern) is still useful as a weak corroborating `process` signal.
+        if (
+          exeApp &&
+          !isKnownConferencingApp(normalizeAppIdentity({ windowsExeName: exeApp.exeName }).appId)
+        ) {
+          this.emit({
+            kind: 'process',
+            appId: match.appId,
+            displayName: match.displayName,
+            pid: w.pid,
+            observedAt: now,
+            weight: 0
+          })
+        }
+        continue
+      }
+
+      // M17 §2.2: no per-app pattern matched — fall back to the generic
+      // "does this look like a call" heuristic (see MacAdapter's identical
+      // comment) so a totally unlisted Windows app's window title can still
+      // contribute a (deliberately weaker) signal.
+      if (looksLikeCallTitle(w.title)) {
+        const identity = normalizeAppIdentity({ windowsExeName: exeApp?.exeName })
+        this.emit({
+          kind: 'window-title',
+          appId: identity.appId,
+          displayName: identity.displayName,
+          pid: w.pid,
+          title: w.title,
           observedAt: now,
           weight: 0
         })
