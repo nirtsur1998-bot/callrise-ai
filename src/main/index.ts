@@ -147,6 +147,55 @@ app.whenReady().then(async () => {
     (wc, permission) => permission === 'media' && isOurWindow(wc)
   )
 
+  // Content-Security-Policy as a real response HEADER, not only the <meta> tag
+  // in index.html (§5.3).
+  //
+  // The meta tag is a fallback, not equivalent: several directives are ignored
+  // when delivered that way (frame-ancestors among them), and a meta tag only
+  // applies once the document has parsed far enough to reach it. A header
+  // applies to the response itself.
+  //
+  // This matters here specifically because transcripts are ATTACKER-INFLUENCED
+  // TEXT — the person on the other end of the call chooses the words that get
+  // rendered in this window — and so is every model response derived from
+  // them. Nothing renders that text as HTML today (audited: no innerHTML, no
+  // dangerouslySetInnerHTML anywhere in the renderer), so this is defence in
+  // depth against a future component that does.
+  //
+  // Packaged builds only. In development the renderer is served by Vite, whose
+  // HMR client needs inline scripts and a websocket back to the dev server;
+  // applying the production policy there would break `npm run dev`, which is
+  // how this app is actually developed. The <meta> tag still covers dev.
+  if (app.isPackaged) {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [
+            [
+              "default-src 'self'",
+              "script-src 'self'",
+              // Tailwind injects styles at runtime, so inline styles stay.
+              "style-src 'self' 'unsafe-inline'",
+              "img-src 'self' data:",
+              "font-src 'self' data:",
+              // The renderer talks to main over IPC, never over the network —
+              // every outbound call (Deepgram, the AI providers, Supabase,
+              // Google, Outlook) is made from the main process. So the
+              // renderer needs no network origins at all, and saying so means
+              // injected script has nowhere to send what it steals.
+              "connect-src 'self'",
+              "object-src 'none'",
+              "base-uri 'none'",
+              "frame-ancestors 'none'",
+              "form-action 'none'"
+            ].join('; ')
+          ]
+        }
+      })
+    })
+  }
+
   registerTranscription()
   registerCalls()
   registerCoachPdf()

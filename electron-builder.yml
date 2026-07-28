@@ -13,6 +13,10 @@ files:
   - '!docs/**'
   - '!supabase/**'
   - '!.claude/**'
+# Lock the Electron fuses on every packaged binary (see scripts/apply-fuses.js).
+# Runs before signing, because flipping a fuse invalidates a signature.
+afterPack: scripts/apply-fuses.js
+
 asarUnpack:
   - resources/**
   # mac-audio-activity/win-audio-sessions native addons - a .node binary can't
