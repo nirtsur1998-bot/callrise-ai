@@ -96,6 +96,69 @@ call-sounding title all corroborate") and
   authoritative-event integration, e.g. a dialer's own webhook/API) — not
   started.
 
+## The overlay's visual/interaction design (M17 Phase 3)
+
+`src/renderer/src/features/detection/DetectionOverlay.tsx` (renderer) +
+`src/main/detection-overlay.ts` (the window). Redesigned as a glass HUD
+capsule — see the earlier commit for the base treatment. On top of that,
+Phase 3 added:
+
+- **Pre-created at boot** (`initOverlay()`, called from
+  `detection-service.ts`'s `startDetectionService()`, unconditionally,
+  regardless of whether the feature is enabled) instead of lazily on first
+  `showOverlay()` — window creation + first content load is far slower than
+  the <100ms show budget on its own.
+- **Native translucent material** — `vibrancy: 'under-window'` on macOS,
+  `backgroundMaterial: 'acrylic'` on Windows, alongside the existing CSS
+  `backdrop-blur`.
+- **Shadow room** — the window is 32px larger than the visible card in each
+  dimension (`CARD_INSET` in `detection-overlay.ts`), with matching
+  transparent padding in `OverlayShell` — without this the card's own drop
+  shadow was clipped flush at the window's edge and simply didn't render.
+- **Source identity as the hero element** — `SourceMonogram` (a
+  colour-hashed 2-letter monogram, deterministic per `appId`) +
+  `SourceNameChip` (an uppercase pill). This is the ONLY identity tier
+  implemented — no real per-app logos, no OS-extracted icons (both would
+  slot in ahead of the monogram in the same resolution order; icon
+  extraction needs native code, not started). Applied uniformly, so an
+  app with no registry entry looks exactly as finished as one that has one.
+- **"Not a call"** — a one-click quick action on the capturing card
+  (blocklists the app via the same `appOverrides: 'never'` mechanism the
+  toast/switch states' "Never for X" links already used, then stops the
+  capture) — the release valve for how permissive Phase 2's detection now is.
+- **Auto-dismiss countdown** — a thin linear bar (reusing the existing
+  `.cue-countdown` CSS utility, not a literal ring around the button as
+  originally sketched) on the toast/switch-prompt states, timed to match
+  `DETECTION_TUNING.detectionToastTimeoutMs`/`switchPromptTimeoutMs`
+  (duplicated as constants in the renderer file with a keep-in-sync comment
+  — it can't import from `src/main`).
+- **Global shortcuts** — Cmd/Ctrl+Shift+S (stop) / Cmd/Ctrl+Shift+P
+  (pause/resume), registered only while the feature is enabled (same
+  zero-footprint-when-off rule the tray already followed), with a graceful
+  no-op (logged, not thrown) if another app already holds the combo.
+- **Right-click context menu** on the overlay window itself — Open CallRise
+  AI / Pause-or-Resume / Snooze 1h, reusing the exact same `trayActions`
+  object the tray menu already used (no new action plumbing).
+
+### Explicitly NOT done in Phase 3 (real gaps, not silently skipped)
+
+- **Live audio meter** (spec: a 60fps canvas waveform) — no audio-level data
+  is piped from the actual recording graph (`LiveView`'s audio pipeline) to
+  this separate overlay window at all; building that pipe (new IPC channel +
+  sampling) wasn't attempted. The pulsing `LiveDot` remains the only "it's
+  live" motion.
+- **Collapsed pill mode** (a 132×36 compact state, auto-collapsing after
+  idle) — not implemented; the card is always shown at full size.
+- **Learn/correct flow UI** ("Keep capturing calls from X?" after a
+  successful unknown-app capture) — this needs a per-app "seen/auto/always/
+  never" history model that Phase 2 didn't build; a UI without that backing
+  data would be hollow, so neither was attempted.
+- **Screenshot verification across every state, light + dark** — not
+  possible from this environment (no way to run the packaged app's GUI and
+  trigger a real detected call here); verified by typecheck/lint/existing
+  test suite + careful code review only. Treat this UI as code-reviewed, not
+  visually confirmed, until someone actually looks at it running.
+
 ## Adding a known app to the registry
 
 Add an entry to `CONFERENCING_APPS` in `appRegistry.ts` — `appId`,

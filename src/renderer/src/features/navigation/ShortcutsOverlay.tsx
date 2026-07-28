@@ -30,6 +30,13 @@ const GROUPS: ShortcutGroup[] = [
     shortcuts: [{ label: 'Close any dialog', keys: 'Esc' }]
   },
   {
+    title: 'Call detection (works even when CallRise AI is in the background)',
+    shortcuts: [
+      { label: 'Stop capturing', keys: '⌘⇧S' },
+      { label: 'Pause / resume detection', keys: '⌘⇧P' }
+    ]
+  },
+  {
     title: 'Help',
     shortcuts: [{ label: 'Show keyboard shortcuts', keys: '?' }]
   }

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Mic, Pause, Square, ExternalLink, PhoneIncoming, ArrowLeftRight } from 'lucide-react'
+import { Mic, Pause, Square, ExternalLink, PhoneIncoming, ArrowLeftRight, X } from 'lucide-react'
 
 // Derived from the preload-declared API rather than imported from
 // main/detection/types.ts directly - this file is under tsconfig.web.json's
@@ -24,25 +24,23 @@ function formatElapsed(ms: number): string {
  *  Live-Activity-style floating HUD: blurred translucent surface, a subtle
  *  top sheen, and a soft indigo-tinted glow instead of the app's normal flat
  *  card treatment. The window behind this is already fully transparent
- *  (main/detection-overlay.ts), so this IS the visible shape. */
+ *  (main/detection-overlay.ts), so this IS the visible shape.
+ *
+ *  The outer `p-4` (matching main's CARD_INSET) is deliberate transparent
+ *  margin, not decorative spacing — the card's own drop shadow needs room
+ *  outside its own border to render at all; without it, the shadow gets
+ *  clipped flush at the window's edge and is invisible. */
 function OverlayShell({ children }: { children: ReactNode }): React.JSX.Element {
   return (
-    <div
-      style={DRAG}
-      className="animate-pop relative flex h-full flex-col justify-center gap-2.5 overflow-hidden rounded-[26px] border border-white/10 bg-surface/75 p-4 shadow-[0_0_0_1px_rgba(110,123,242,0.12),0_16px_40px_-12px_rgba(0,0,0,0.55)] backdrop-blur-2xl"
-    >
-      <div className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
-      {children}
+    <div className="h-full w-full p-4">
+      <div
+        style={DRAG}
+        className="animate-pop relative flex h-full flex-col justify-center gap-2.5 overflow-hidden rounded-[26px] border border-white/10 bg-surface/75 p-4 shadow-[0_0_0_1px_rgba(110,123,242,0.12),0_16px_40px_-12px_rgba(0,0,0,0.55)] backdrop-blur-2xl"
+      >
+        <div className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
+        {children}
+      </div>
     </div>
-  )
-}
-
-/** Small circular glyph badge, matching the "live activity" icon-in-a-ring look. */
-function IconBadge({ icon: Icon }: { icon: typeof Mic }): React.JSX.Element {
-  return (
-    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-soft ring-1 ring-inset ring-accent/25">
-      <Icon className="h-3.5 w-3.5 text-accent" strokeWidth={2.25} />
-    </span>
   )
 }
 
@@ -79,6 +77,91 @@ function SecondaryPill({
     >
       {children}
     </button>
+  )
+}
+
+// Mirrors main/detection/types.ts's DETECTION_TUNING (this file can't import
+// from src/main - see the DetectorState type note above) - keep in sync if
+// those ever change.
+const DETECTION_TOAST_TIMEOUT_MS = 20_000
+const SWITCH_PROMPT_TIMEOUT_MS = 30_000
+
+// A small, deliberately calm palette (not an arbitrary hue-rotate) so a
+// monogram color always reads as "part of this app's design system" even
+// for an app we've never seen before.
+const MONOGRAM_COLORS = [
+  '#6e7bf2', // accent indigo
+  '#9b6cf2', // violet
+  '#4fb0c9', // teal
+  '#e0a63d', // amber
+  '#e2687a', // rose
+  '#48c78e', // emerald
+  '#5aa9e6', // sky
+  '#d16bd6' // fuchsia
+]
+
+function hashColor(seed: string): string {
+  let hash = 0
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0
+  return MONOGRAM_COLORS[Math.abs(hash) % MONOGRAM_COLORS.length]
+}
+
+function initials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return '?'
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase()
+  return (words[0][0] + words[1][0]).toUpperCase()
+}
+
+/**
+ * The call source's identity — this is deliberately the HERO element (see
+ * M17 §3.3): a colour-hashed monogram so an app we've never heard of still
+ * looks as finished as a recognized one, never a generic "unknown app"
+ * placeholder. A real per-app logo (bundled SVG) or an OS-extracted icon
+ * would slot in ahead of this as stronger tiers of the same resolution
+ * order — neither is wired up yet (icon extraction needs native code; see
+ * docs/detection.md's "Not yet done"), so the monogram is the only tier
+ * implemented today, applied uniformly to every source, known or not.
+ */
+function SourceMonogram({
+  appId,
+  displayName
+}: {
+  appId: string
+  displayName: string
+}): React.JSX.Element {
+  const color = hashColor(appId)
+  return (
+    <span
+      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[13px] font-bold text-white shadow-[0_2px_8px_-2px_rgba(0,0,0,0.5)]"
+      style={{ backgroundColor: color }}
+      aria-hidden="true"
+    >
+      {initials(displayName)}
+    </span>
+  )
+}
+
+/** Uppercase source-name pill — "the answer to which source is being used." */
+function SourceNameChip({ displayName }: { displayName: string }): React.JSX.Element {
+  return (
+    <span className="inline-flex w-fit items-center rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-ink uppercase">
+      {displayName}
+    </span>
+  )
+}
+
+/** Thin linear countdown reusing the app's existing .cue-countdown utility
+ *  (already used for live-cue auto-dismiss) so an auto-dismissing prompt
+ *  visibly shows time running out instead of surprising the user. */
+function DismissCountdown({ durationMs }: { durationMs: number }): React.JSX.Element {
+  return (
+    <div className="h-[3px] w-full overflow-hidden rounded-full bg-white/[0.06]">
+      <div
+        className="cue-countdown h-full rounded-full bg-white/30"
+        style={{ animationDuration: `${durationMs}ms` }}
+      />
+    </div>
   )
 }
 
@@ -159,8 +242,13 @@ export function DetectionOverlay(): React.JSX.Element | null {
     return (
       <OverlayShell>
         <div className="flex items-start gap-2.5">
-          <IconBadge icon={ArrowLeftRight} />
+          <SourceMonogram appId={pending.appId} displayName={pending.displayName} />
           <div className="min-w-0 flex-1">
+            <div className="mb-1 flex flex-wrap items-center gap-1.5">
+              <SourceNameChip displayName={pending.displayName} />
+              <ArrowLeftRight className="h-3 w-3 text-faint" />
+              <SourceNameChip displayName={current.displayName} />
+            </div>
             <p className="truncate text-[13px] font-semibold text-ink">
               New call detected in {pending.displayName}
             </p>
@@ -169,7 +257,7 @@ export function DetectionOverlay(): React.JSX.Element | null {
             </p>
           </div>
         </div>
-        <div className="mt-1 flex gap-2">
+        <div className="flex gap-2">
           <PrimaryPill onClick={() => void window.api.detection.respondToSwitch('switch')}>
             Switch capture
           </PrimaryPill>
@@ -177,16 +265,19 @@ export function DetectionOverlay(): React.JSX.Element | null {
             Keep current
           </SecondaryPill>
         </div>
-        <button
-          style={NO_DRAG}
-          className="self-start text-[11px] text-faint underline-offset-2 hover:underline"
-          onClick={() => {
-            void declineWithNever(pending.appId)
-            void window.api.detection.respondToSwitch('keep')
-          }}
-        >
-          Never ask for {pending.displayName}
-        </button>
+        <div className="flex items-center justify-between gap-2">
+          <button
+            style={NO_DRAG}
+            className="text-[11px] text-faint underline-offset-2 hover:underline"
+            onClick={() => {
+              void declineWithNever(pending.appId)
+              void window.api.detection.respondToSwitch('keep')
+            }}
+          >
+            Never ask for {pending.displayName}
+          </button>
+        </div>
+        <DismissCountdown durationMs={SWITCH_PROMPT_TIMEOUT_MS} />
       </OverlayShell>
     )
   }
@@ -195,12 +286,14 @@ export function DetectionOverlay(): React.JSX.Element | null {
     return (
       <OverlayShell>
         <div className="flex items-start gap-2.5">
-          <IconBadge icon={PhoneIncoming} />
-          <p className="min-w-0 flex-1 truncate text-[13px] font-semibold text-ink">
-            Call detected in {toastCall.displayName}
-          </p>
+          <SourceMonogram appId={toastCall.appId} displayName={toastCall.displayName} />
+          <div className="min-w-0 flex-1">
+            <SourceNameChip displayName={toastCall.displayName} />
+            <p className="mt-1 truncate text-[13px] font-semibold text-ink">Call detected</p>
+          </div>
+          <PhoneIncoming className="mt-0.5 h-3.5 w-3.5 shrink-0 text-faint" />
         </div>
-        <div className="mt-1 flex gap-2">
+        <div className="flex gap-2">
           <PrimaryPill onClick={() => void window.api.detection.respondToDetection('accept')}>
             Start capturing
           </PrimaryPill>
@@ -218,6 +311,7 @@ export function DetectionOverlay(): React.JSX.Element | null {
         >
           Never for {toastCall.displayName}
         </button>
+        <DismissCountdown durationMs={DETECTION_TOAST_TIMEOUT_MS} />
       </OverlayShell>
     )
   }
@@ -239,14 +333,19 @@ export function DetectionOverlay(): React.JSX.Element | null {
     return (
       <OverlayShell>
         <div className="flex items-center gap-2.5">
-          <LiveDot />
-          <p className="flex-1 truncate text-[13px] font-semibold text-ink">{label}</p>
+          <SourceMonogram appId={call.appId} displayName={call.displayName} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <LiveDot />
+              <SourceNameChip displayName={call.displayName} />
+            </div>
+            <p className="mt-1 truncate text-[13px] font-semibold text-ink">{label}</p>
+          </div>
           <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 text-[12px] font-semibold tabular-nums text-ink">
             {elapsed}
           </span>
         </div>
-        <p className="truncate pl-5 text-[12px] text-muted">{call.displayName}</p>
-        <div style={NO_DRAG} className="mt-0.5 flex items-center gap-2">
+        <div style={NO_DRAG} className="flex items-center gap-2">
           <button
             className="press flex flex-1 items-center justify-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] font-medium text-ink hover:bg-white/[0.08]"
             onClick={() => void window.api.detection.requestTogglePause()}
@@ -267,6 +366,16 @@ export function DetectionOverlay(): React.JSX.Element | null {
             <ExternalLink className="h-3.5 w-3.5" />
           </button>
         </div>
+        <button
+          style={NO_DRAG}
+          className="press flex items-center gap-1 self-start text-[11px] text-faint hover:text-muted"
+          onClick={() => {
+            void declineWithNever(call.appId)
+            void window.api.detection.requestStopCapture()
+          }}
+        >
+          <X className="h-3 w-3" /> Not a call — stop detecting {call.displayName}
+        </button>
       </OverlayShell>
     )
   }
