@@ -2,6 +2,7 @@ import { app, ipcMain } from 'electron'
 import { join } from 'node:path'
 import mammoth from 'mammoth'
 import {
+  speechSegments,
   saveCall,
   listCalls,
   getCall,
@@ -63,7 +64,7 @@ async function mineCallIntoQueue(callId: string): Promise<{ ok: boolean; added: 
     // Re-check on the fresh read: another path may have finished mining this
     // call after the caller built its eligible list.
     if (call.objectionsMinedAt) return { ok: true, added: 0 }
-    const result = await mineObjections(call.segments)
+    const result = await mineObjections(speechSegments(call.segments))
     if (!result.ok) return { ok: false, added: 0 }
     const items = await addToQueue(objectionQueueDir(), result.candidates, callId, call.title)
     await setCallObjectionsMined(callsDir(), callId)
@@ -93,7 +94,9 @@ async function maybeGenerateCrmNote(callId: string): Promise<void> {
     if (!call || call.crmNoteGeneratedAt || !call.contactId) return
     const content = call.summary?.executive
       ? [call.summary.executive, ...call.summary.keyPoints].join('\n')
-      : (call.segments ?? []).map((s) => `Speaker ${s.speaker + 1}: ${s.text}`).join('\n')
+      : speechSegments(call.segments)
+          .map((s) => `Speaker ${s.speaker + 1}: ${s.text}`)
+          .join('\n')
     if (!content.trim()) return
     const result = await generateCrmNote(content)
     if (!result.ok) return
@@ -227,7 +230,9 @@ export function registerCalls(): void {
       if (!call.segments?.length) {
         return { ok: false, error: 'failed', message: 'This call has no transcript to summarize.' }
       }
-      const text = call.segments.map((s) => `Speaker ${s.speaker + 1}: ${s.text}`).join('\n')
+      const text = speechSegments(call.segments)
+        .map((s) => `Speaker ${s.speaker + 1}: ${s.text}`)
+        .join('\n')
       const result = await summarize({ kind: 'text', text })
       if (result.ok) {
         const saved = await setCallSummary(callsDir(), callId, result.summary)
@@ -302,7 +307,7 @@ export function registerCalls(): void {
       if (!call.segments?.length) {
         return { ok: false, error: 'failed', message: 'This call has no transcript to coach.' }
       }
-      const result = await coachCall(call.segments, call.durationMs)
+      const result = await coachCall(speechSegments(call.segments), call.durationMs)
       if (result.ok) {
         const saved = await setCallCoaching(callsDir(), callId, result.report)
         if (!saved) {
@@ -343,7 +348,7 @@ export function registerCalls(): void {
         if (!call.segments?.length) {
           return { ok: false, error: 'failed', message: 'This call has no transcript to mine.' }
         }
-        return await mineObjections(call.segments)
+        return await mineObjections(speechSegments(call.segments))
       } catch {
         return {
           ok: false,
@@ -372,7 +377,7 @@ export function registerCalls(): void {
         // transcript check mining used, against THIS call's segments. This
         // also catches candidates mined from one call but enqueued under
         // another call's id.
-        const verify = makeVerifier(call.segments ?? [])
+        const verify = makeVerifier(speechSegments(call.segments))
         const list = (Array.isArray(candidates) ? candidates : []).map((raw) => {
           if (!raw || typeof raw !== 'object') return raw
           const c = raw as Record<string, unknown>
@@ -462,7 +467,7 @@ export function registerCalls(): void {
       try {
         const call = await getCall(callsDir(), callId)
         if (!call?.segments?.length) return { ok: false }
-        const result = await generateCallTitle(call.segments)
+        const result = await generateCallTitle(speechSegments(call.segments))
         if (!result.ok) return result
         const saved = await setCallTitle(callsDir(), callId, result.title)
         if (!saved) return { ok: false }

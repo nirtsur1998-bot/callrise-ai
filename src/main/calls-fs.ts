@@ -6,6 +6,10 @@ import { writeJsonAtomic } from './atomic-write'
 export interface CallSegment {
   speaker: number
   text: string
+  /** A `[gap: Ns]` marker rather than someone's words — audio that was shed,
+   *  discarded to rejoin the live edge, or lost to a suspend. Marked so it is
+   *  never counted as a speaker and never attributed to anyone. */
+  kind?: 'gap'
 }
 
 export interface Summary {
@@ -261,9 +265,28 @@ function sanitizeSegments(value: unknown): CallSegment[] {
     const textRaw = (item as { text?: unknown }).text
     const speaker = Number.isFinite(speakerRaw) ? Math.max(0, Math.trunc(speakerRaw as number)) : 0
     const text = typeof textRaw === 'string' ? textRaw.slice(0, MAX_TEXT) : ''
-    if (text.trim()) out.push({ speaker, text })
+    const isGap = (item as { kind?: unknown }).kind === 'gap'
+    if (text.trim()) out.push(isGap ? { speaker, text, kind: 'gap' } : { speaker, text })
   }
   return out
+}
+
+/**
+ * Only the segments that are somebody's words.
+ *
+ * Gap markers are a transcript-integrity feature, not content: they must be
+ * stored and shown, but they are nobody's speech. Anything that counts words,
+ * measures talk ratio, identifies a speaker, verifies a quote, or prompts a
+ * model has to see through them — otherwise `[gap: 34s]` becomes three words
+ * spoken by speaker 0, quietly skewing every derived metric.
+ */
+export function speechSegments(segments: CallSegment[] | undefined): CallSegment[] {
+  return (segments ?? []).filter((s) => s.kind !== 'gap')
+}
+
+/** Speakers actually present, ignoring gap markers (which belong to nobody). */
+function countSpeakers(segments: CallSegment[]): number {
+  return new Set(speechSegments(segments).map((s) => s.speaker)).size
 }
 
 const MAX_BOOKMARKS = 500
@@ -369,14 +392,16 @@ function applyConsentRetention(call: Call): void {
   // were captured, so the current status must never short-circuit the strip.
   if (!c || c.recordOtherParty === true) return
   if (!Array.isArray(call.segments)) return
-  const kept = call.segments.filter((s) => s.speaker !== BUYER_SPEAKER)
+  // A gap marker is not the buyer's speech — it belongs to nobody, so it
+  // survives the strip regardless of the speaker id it happens to carry.
+  const kept = call.segments.filter((s) => s.kind === 'gap' || s.speaker !== BUYER_SPEAKER)
   if (kept.length === call.segments.length) return
   call.segments = kept
-  call.preview = kept
+  call.preview = speechSegments(kept)
     .map((s) => s.text)
     .join(' ')
     .slice(0, 160)
-  call.speakerCount = new Set(kept.map((s) => s.speaker)).size
+  call.speakerCount = countSpeakers(kept)
 }
 
 export async function saveCall(dir: string, input: CallSaveInput): Promise<CallSummary> {
@@ -389,14 +414,16 @@ export async function saveCall(dir: string, input: CallSaveInput): Promise<CallS
     ? Math.max(0, Math.trunc(input.durationMs))
     : 0
   const id = randomUUID()
-  const transcriptText = segments.map((s) => s.text).join(' ')
+  const transcriptText = speechSegments(segments)
+    .map((s) => s.text)
+    .join(' ')
   const call: Call = {
     id,
     title: formatTitle(createdDate),
     createdAt: createdDate.toISOString(),
     updatedAt: createdDate.toISOString(), // equals createdAt at birth; bumped on edits
     durationMs,
-    speakerCount: new Set(segments.map((s) => s.speaker)).size,
+    speakerCount: countSpeakers(segments),
     preview: transcriptText.slice(0, 160),
     segments,
     attachments: [],
@@ -1199,7 +1226,7 @@ export async function setCallCoaching(
   return withCallLock(callId, async () => {
     const call = await getCall(dir, callId)
     if (!call) return null
-    const clean = sanitizeCoaching(report, call.segments)
+    const clean = sanitizeCoaching(report, speechSegments(call.segments))
     if (!clean) return null // nothing usable to save — signal failure to the caller
     call.coaching = clean
     call.updatedAt = new Date().toISOString()

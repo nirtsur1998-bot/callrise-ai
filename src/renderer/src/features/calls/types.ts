@@ -3,6 +3,10 @@ import type { CoachingReport } from '@renderer/features/coaching/types'
 export interface CallSegment {
   speaker: number
   text: string
+  /** A `[gap: Ns]` marker rather than someone's words — audio that was shed,
+   *  discarded to rejoin the live edge, or lost to a suspend. Rendered as a
+   *  divider, never attributed to a speaker. */
+  kind?: 'gap'
 }
 
 export interface Summary {

@@ -27,6 +27,9 @@ const api = {
     onError: (cb: (payload: unknown) => void) => subscribe('transcription:error', cb),
     onUtteranceEnd: (cb: (payload: unknown) => void) => subscribe('transcription:utteranceEnd', cb),
     onClosed: (cb: (payload: unknown) => void) => subscribe('transcription:closed', cb),
+    onGap: (cb: (payload: unknown) => void) => subscribe('transcription:gap', cb),
+    onHealth: (cb: (payload: unknown) => void) => subscribe('transcription:health', cb),
+    onCaptureLost: (cb: (payload: unknown) => void) => subscribe('transcription:captureLost', cb),
     suggestQuestion: (text: string) => ipcRenderer.invoke('live:suggestQuestion', text),
     askCoach: (transcript: string, question: string) =>
       ipcRenderer.invoke('live:askCoach', { transcript, question }),

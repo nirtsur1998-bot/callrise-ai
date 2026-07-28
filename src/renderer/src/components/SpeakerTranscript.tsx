@@ -65,7 +65,10 @@ export function SpeakerTranscript({
   highlightQuery,
   activeMatchIndex
 }: SpeakerTranscriptProps): React.JSX.Element {
-  const speakerCount = new Set(segments.map((s) => s.speaker)).size
+  // Gap markers belong to nobody, so they must not inflate the speaker count —
+  // that count decides between the calm rep/buyer treatment and the multi-party
+  // palette.
+  const speakerCount = new Set(segments.filter((s) => s.kind !== 'gap').map((s) => s.speaker)).size
   const query = highlightQuery?.trim() ?? ''
   // Only ever read/written inside JSX (as the `ref` attribute) or the effect
   // below — never during render — so it doesn't trip the "no ref access
@@ -113,6 +116,19 @@ export function SpeakerTranscript({
   return (
     <div ref={containerRef} className="space-y-5">
       {segments.map((seg, index) => {
+        // Missing audio, shown honestly: a labelled break rather than a
+        // seamless join between two moments that may be minutes apart.
+        if (seg.kind === 'gap') {
+          return (
+            <div key={index} className="flex items-center gap-3" aria-label="Missing audio">
+              <span className="h-px flex-1 bg-line-soft" />
+              <span className="text-xs font-medium uppercase tracking-wide text-faint tabular-nums">
+                {seg.text}
+              </span>
+              <span className="h-px flex-1 bg-line-soft" />
+            </div>
+          )
+        }
         const style = speakerStyle(seg.speaker, repSpeaker, speakerCount)
         return (
           <div key={index}>

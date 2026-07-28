@@ -4,6 +4,7 @@ import { groupWords, mergeSegments } from './segments'
 import { supportsOtherPartyCapture } from '@renderer/lib/platform'
 import type { LiveStatus } from './types'
 import type { CallSegment, ConsentRecord } from '@renderer/features/calls/types'
+import type { TranscriptionHealthEvent } from '../../../../preload/index.d'
 import {
   getAutoSummarize,
   getAutoGenerateTitle,
@@ -26,6 +27,8 @@ interface UseTranscription {
   otherPartyLive: boolean
   /** Last buyer-capture problem, if any (drives a recovery banner). */
   otherPartyError: OtherPartyError
+  /** 1Hz session-health snapshot, or null before the first tick. */
+  health: TranscriptionHealthEvent | null
   start: () => Promise<void>
   /** The main-process transcription session id for the call in progress, or
    *  null before a session exists / after a failed start. A function (not a
@@ -64,6 +67,7 @@ export function useTranscription(
   const [savedNotice, setSavedNotice] = useState(false)
   const [otherPartyLive, setOtherPartyLive] = useState(false)
   const [otherPartyError, setOtherPartyError] = useState<OtherPartyError>(null)
+  const [health, setHealth] = useState<TranscriptionHealthEvent | null>(null)
 
   const recorderRef = useRef<Recorder | null>(null)
   // Id of the main-process session THIS call owns. Passed as expectedSessionId
@@ -188,6 +192,25 @@ export function useTranscription(
       setAnalyser(null)
     })
 
+    // Audio that will never be transcribed. Recorded inline so the transcript
+    // never silently splices two moments that are minutes apart — an honest
+    // hole is far more useful than a seamless-looking lie.
+    const offGap = window.api.transcription.onGap((payload) => {
+      // Speaker 0 rather than a sentinel: the main-process sanitizer clamps
+      // speaker ids to >= 0, so a sentinel would not survive a save anyway.
+      // Everything that matters keys off `kind`, never the id.
+      const marker: CallSegment = { speaker: 0, text: payload.marker, kind: 'gap' }
+      segmentsRef.current = [...segmentsRef.current, marker]
+      setSegments(segmentsRef.current)
+      // Whatever comes next is a fresh turn, not a continuation of what the
+      // gap interrupted.
+      speakerBoundaryRef.current = true
+    })
+
+    const offHealth = window.api.transcription.onHealth((payload) => {
+      setHealth(payload)
+    })
+
     // The session fully closed after a stop — the final flushed words are in,
     // so save now.
     const offClosed = window.api.transcription.onClosed(() => {
@@ -198,6 +221,8 @@ export function useTranscription(
       offState()
       offTranscript()
       offError()
+      offGap()
+      offHealth()
       offClosed()
     }
   }, [flushPendingSave])
@@ -225,6 +250,7 @@ export function useTranscription(
     setSavedNotice(false)
     setOtherPartyLive(false)
     setOtherPartyError(null)
+    setHealth(null)
     segmentsRef.current = []
     latencySamples.current = []
     savePendingRef.current = false
@@ -467,6 +493,7 @@ export function useTranscription(
     savedNotice,
     otherPartyLive,
     otherPartyError,
+    health,
     start,
     getSessionId,
     stop,

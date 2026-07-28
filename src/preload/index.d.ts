@@ -30,6 +30,31 @@ export interface TranscriptionErrorEvent {
   message: string
 }
 
+export interface TranscriptionGapEvent {
+  /** How much audio was lost. */
+  durationMs: number
+  /** Why: backlog dropped to rejoin the live edge, queue overflow, or a suspend. */
+  reason: 'reconnect' | 'shed' | 'sleep'
+  /** Ready-to-render marker, e.g. `[gap: 34s]`. */
+  marker: string
+}
+
+export interface TranscriptionHealthEvent {
+  /** Seconds of audio handed to the socket, cumulative across reconnects. */
+  submittedSec: number
+  /** Seconds Deepgram has acknowledged, on the same cumulative scale. */
+  acknowledgedSec: number
+  lagSec: number
+  /** The 5-sample median the watchdog actually acts on. */
+  medianLagSec: number
+  tier: 'none' | 'warn' | 'shed' | 'reset'
+  queuedSec: number
+  shedSec: number
+  resets: number
+  gaps: ReadonlyArray<{ atMs: number; durationMs: number; reason: string }>
+  liveness: 'ok' | 'silent' | 'capture-dead' | 'socket-dead'
+}
+
 export interface TranscriptionApi {
   ensureMicAccess: () => Promise<{ status: MicAccessStatus }>
   openMicSettings: () => Promise<{ ok: boolean }>
@@ -48,6 +73,14 @@ export interface TranscriptionApi {
   onUtteranceEnd: (cb: (payload: Record<string, never>) => void) => () => void
   /** Fires after a stopped session's connection has fully closed (flush done). */
   onClosed: (cb: (payload: Record<string, never>) => void) => () => void
+  /** Audio that will never be transcribed — shed, discarded on reconnect, or
+   *  lost to a suspend. Surfaced as a `[gap: Ns]` marker in the transcript so
+   *  two distant moments are never silently spliced together. */
+  onGap: (cb: (payload: TranscriptionGapEvent) => void) => () => void
+  /** 1Hz session-health snapshot (lag cursors, queue, shed, liveness). */
+  onHealth: (cb: (payload: TranscriptionHealthEvent) => void) => () => void
+  /** No audio callbacks for ~10s: the capture device is gone, reacquire. */
+  onCaptureLost: (cb: (payload: { forMs: number }) => void) => () => void
   /** Async, non-blocking: a short next-question suggestion for live cues. */
   suggestQuestion: (text: string) => Promise<{ ok: true; question: string } | { ok: false }>
   /** Manual mid-call help: sends the running transcript + the rep's question. */

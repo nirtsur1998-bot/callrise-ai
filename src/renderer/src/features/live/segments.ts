@@ -19,8 +19,12 @@ export function mergeSegments(prev: CallSegment[], runs: CallSegment[]): CallSeg
   const next = prev.map((s) => ({ ...s }))
   for (const run of runs) {
     const last = next[next.length - 1]
-    if (last && last.speaker === run.speaker) last.text = `${last.text} ${run.text}`
-    else next.push({ ...run })
+    // A gap marker is a hard boundary: speech either side of it is minutes
+    // apart, so merging across one would splice two distant moments into a
+    // single sentence.
+    if (last && last.kind !== 'gap' && run.kind !== 'gap' && last.speaker === run.speaker) {
+      last.text = `${last.text} ${run.text}`
+    } else next.push({ ...run })
   }
   return next
 }
