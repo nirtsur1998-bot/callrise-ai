@@ -1,5 +1,8 @@
-// Lets the renderer's getDisplayMedia() receive macOS system-audio loopback —
-// the other party's voice coming through the rep's headphones/output (M12).
+// Lets the renderer's getDisplayMedia() receive system-audio loopback — the
+// other party's voice coming through the rep's headphones/output (M12).
+// Electron's `audio: 'loopback'` response is genuinely cross-platform (WASAPI
+// loopback on Windows, ScreenCaptureKit-backed loopback on macOS) - only
+// Linux has no supported path here, so this gates on darwin/win32.
 //
 // Consent backstop: capture is DENIED unless the renderer has "armed" it first.
 // The renderer arms exactly one request, synchronously, immediately before each
@@ -39,11 +42,13 @@ export function registerLoopbackCapture(): void {
   // Synchronous arm/disarm so the renderer can flip this in the same tick as the
   // click gesture, right before getDisplayMedia (an async IPC would race).
   ipcMain.on('loopback:arm', (event) => {
-    // Buyer capture rides on macOS system-audio loopback; other platforms have
-    // no capture path yet (M12 is macOS-only), so arming is refused outright.
-    // The master switch can only remove capability: if it's off, refuse to
-    // arm at all, regardless of what the renderer believes consent is.
-    armed = process.platform === 'darwin' && loadAppSettings().allowOtherPartyRecording
+    // Buyer capture rides on system-audio loopback, supported on macOS and
+    // Windows (see the file header) — Linux has no capture path, so arming
+    // is refused outright there. The master switch can only remove
+    // capability: if it's off, refuse to arm at all, regardless of what the
+    // renderer believes consent is.
+    const platformSupported = process.platform === 'darwin' || process.platform === 'win32'
+    armed = platformSupported && loadAppSettings().allowOtherPartyRecording
     event.returnValue = armed
   })
   ipcMain.on('loopback:disarm', (event) => {
