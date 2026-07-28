@@ -61,8 +61,19 @@ const MAX_TURNS = 80 // cap the in-memory turn buffer
 const PACE_WINDOW_MS = 15_000 // window for the rep-only words/min estimate
 const CALL_GAP_MS = 2_500 // minimum gap between brain (LLM) calls
 const DEBOUNCE_MS = 400 // wait after a client turn-end before calling the brain
-const AUTO_DISMISS_MS = 10_000 // a cue fades on its own if not dismissed
+/** How long an interrupt cue stays before fading. Exported because the card's
+ *  countdown bar animates against it — two copies of this number drift the
+ *  moment either is tuned, and the symptom is a bar that finishes early or
+ *  hangs full while the cue vanishes underneath it. */
+export const AUTO_DISMISS_MS = 10_000
 const MIN_CHARS = 30 // not enough transcript to coach on yet
+/** Per-turn tracing. On the hot path — a 40-minute call fires these hundreds
+ *  of times — so it is compiled out of a production build rather than
+ *  shipping console noise (and the template-literal work behind it) to users. */
+const trace: (message: string) => void = import.meta.env.DEV
+  ? (message) => console.log(message)
+  : () => {}
+
 const MAX_SUGGESTIONS = 3 // side rail depth — a reading list, not a backlog
 const SUGGESTION_TTL_MS = 90_000 // advice about a moment that has passed is noise
 
@@ -362,7 +373,7 @@ export function useLiveCues(
     // actually show one — so API calls track display opportunities, not chatter.
     const callBrain = (now: number): void => {
       if (inFlightRef.current) {
-        console.log('[live-cue] skip: a request is already in flight')
+        trace('[live-cue] skip: a request is already in flight')
         return
       }
       if (now - lastCallAtRef.current < CALL_GAP_MS) return
@@ -378,7 +389,7 @@ export function useLiveCues(
       inFlightRef.current = true
       const startedAt = now
       const generation = generationRef.current // discard the response if the session resets
-      console.log(`[live-cue] → request (${turnsRef.current.length} turns buffered)`)
+      trace(`[live-cue] → request (${turnsRef.current.length} turns buffered)`)
       void window.api.transcription
         .liveCue(transcript, repSpeakerRef.current)
         .then((res) => {
@@ -407,7 +418,7 @@ export function useLiveCues(
         })
         .finally(() => {
           inFlightRef.current = false
-          console.log(`[live-cue] ← done in ${Date.now() - startedAt}ms`)
+          trace(`[live-cue] ← done in ${Date.now() - startedAt}ms`)
         })
     }
 

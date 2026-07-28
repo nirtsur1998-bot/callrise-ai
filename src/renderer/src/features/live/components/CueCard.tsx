@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { IconButton } from '@renderer/components/IconButton'
-import type { CueKind, LiveCue } from '../useLiveCues'
+import { AUTO_DISMISS_MS, type CueKind, type LiveCue } from '../useLiveCues'
 
 interface CueStyle {
   icon: LucideIcon
@@ -26,7 +26,7 @@ const META: Record<CueKind, CueStyle> = {
   objection: {
     icon: AlertTriangle,
     label: 'Objection',
-    ring: 'border-warning/40',
+    ring: 'ring-warning/45',
     iconBg: 'bg-warning-soft',
     iconText: 'text-warning',
     bar: 'bg-warning'
@@ -34,7 +34,7 @@ const META: Record<CueKind, CueStyle> = {
   discovery: {
     icon: Search,
     label: 'Discovery',
-    ring: 'border-accent/40',
+    ring: 'ring-accent/45',
     iconBg: 'bg-accent-soft',
     iconText: 'text-accent',
     bar: 'bg-accent'
@@ -42,7 +42,7 @@ const META: Record<CueKind, CueStyle> = {
   'next-question': {
     icon: MessageCircleQuestion,
     label: 'Ask',
-    ring: 'border-accent/40',
+    ring: 'ring-accent/45',
     iconBg: 'bg-accent-soft',
     iconText: 'text-accent',
     bar: 'bg-accent'
@@ -50,7 +50,7 @@ const META: Record<CueKind, CueStyle> = {
   'buying-signal': {
     icon: TrendingUp,
     label: 'Buying signal',
-    ring: 'border-positive/40',
+    ring: 'ring-positive/45',
     iconBg: 'bg-positive-soft',
     iconText: 'text-positive',
     bar: 'bg-positive'
@@ -58,21 +58,24 @@ const META: Record<CueKind, CueStyle> = {
   pace: {
     icon: Gauge,
     label: 'Pace',
-    ring: 'border-line',
+    ring: 'ring-line',
     iconBg: 'bg-elevated',
     iconText: 'text-muted',
     bar: 'bg-muted'
   }
 }
 
-// Mirrors useLiveCues' AUTO_DISMISS_MS so the countdown bar visually matches
-// when the cue actually disappears (kept in sync by hand — that file isn't
-// touched by this styling pass).
-const AUTO_DISMISS_MS = 10_000
-
 /**
- * A single, glanceable, non-modal coaching cue pinned to the bottom-right of
- * the live screen. Dismissible; gently fades in.
+ * A single, glanceable, non-modal coaching cue — the INTERRUPT tier (§4.3).
+ *
+ * Positioning belongs to the stack that owns it, not to this card: the cue and
+ * the suggestion rail share one right-hand column so they cannot collide,
+ * which is a guarantee two independently-positioned absolute elements can only
+ * ever approximate.
+ *
+ * Visually this is the loud sibling of the same glass material the rail uses —
+ * same system, more weight — so "this one matters" reads instantly without the
+ * live screen looking like two different apps.
  */
 export function CueCard({
   cue,
@@ -94,7 +97,7 @@ export function CueCard({
     <div
       role="status"
       className={cn(
-        'absolute bottom-4 right-4 z-40 w-64 overflow-hidden rounded-xl border bg-surface/95 p-3 shadow-2xl backdrop-blur transition-all duration-300',
+        'glass-hud pointer-events-auto relative w-full overflow-hidden rounded-2xl p-3 ring-1 ring-inset transition-all duration-300',
         meta.ring,
         shown ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
       )}

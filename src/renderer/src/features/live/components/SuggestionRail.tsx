@@ -40,8 +40,10 @@ export function SuggestionRail({
       role="log"
       aria-live="polite"
       aria-label="Coaching suggestions"
-      className="pointer-events-none absolute top-3 right-3 bottom-20 z-30 flex w-60 flex-col items-end justify-end gap-2"
+      className="flex w-full flex-col gap-2"
     >
+      {/* Oldest first, so the newest sits closest to the interrupt cue below —
+          the eye lands on the freshest advice without anything having to move. */}
       {[...suggestions].reverse().map((s, index) => {
         const meta = META[s.kind]
         if (!meta) return null

@@ -607,11 +607,19 @@ export function LiveView({
           repSpeaker={repSpeaker}
           paused={status === 'paused'}
         />
-        {/* Two independent channels (§4.3). The deterministic cue keeps the
-            bottom-right corner and its interrupt treatment; model suggestions
-            live in their own rail and can never delay, replace or suppress it. */}
-        {cue && <CueCard key={cue.id} cue={cue} onDismiss={dismiss} />}
-        <SuggestionRail suggestions={suggestions} onDismiss={dismissSuggestion} />
+        {/* Two independent channels (§4.3), one column.
+            They stay logically independent — a suggestion can never delay,
+            replace or suppress an interrupt — but they share a single
+            bottom-anchored stack so they cannot COLLIDE. Positioning each
+            absolutely and picking offsets that happen not to overlap works
+            until a cue wraps to three lines; this cannot overlap at all.
+            The interrupt sits lowest, nearest the eye. */}
+        {(cue || suggestions.length > 0) && (
+          <div className="pointer-events-none absolute top-3 right-4 bottom-4 z-40 flex w-64 flex-col items-end justify-end gap-2">
+            <SuggestionRail suggestions={suggestions} onDismiss={dismissSuggestion} />
+            {cue && <CueCard key={cue.id} cue={cue} onDismiss={dismiss} />}
+          </div>
+        )}
         {(status === 'listening' || status === 'paused') && hasTranscript && (
           <div className="pointer-events-none absolute right-3 top-3 flex items-center gap-2">
             {clips.justClipped && (
