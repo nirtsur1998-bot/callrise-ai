@@ -1,4 +1,11 @@
-import { ipcMain, BrowserWindow, MessageChannelMain, systemPreferences, shell } from 'electron'
+import {
+  ipcMain,
+  BrowserWindow,
+  MessageChannelMain,
+  powerMonitor,
+  systemPreferences,
+  shell
+} from 'electron'
 import WebSocket from 'ws'
 import { keyRejectedHint } from './ai-keys'
 import { SessionTimeline, SleepDetector, formatGapMarker } from './session-health/timeline'
@@ -645,6 +652,18 @@ let registered = false
 export function registerTranscription(): void {
   if (registered) return
   registered = true
+
+  // `powerMonitor` is documented to fire 'resume' twice on macOS and, on some
+  // Linux desktop environments, not at all — so it can never be the sleep
+  // DETECTOR (SleepDetector's clock-divergence check owns that, and is what
+  // actually decides whether a suspend happened). What it is good for is
+  // speed: without this, a resume is only noticed on the next 1s health tick.
+  // Forcing an immediate tick here shrinks that to the width of the event
+  // itself, and firing twice costs nothing — the second call sees `sleptMs`
+  // already back near zero and no-ops.
+  powerMonitor.on('resume', () => {
+    if (session) healthTick(session)
+  })
 
   ipcMain.handle('transcription:start', (event, options: StartOptions) => {
     const key = process.env.DEEPGRAM_API_KEY?.trim() ?? ''

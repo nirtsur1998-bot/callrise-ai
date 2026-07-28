@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: never[]) => unknown>()
   const listeners = new Map<string, (...args: never[]) => void>()
   const sent: Array<{ channel: string; payload: Record<string, unknown> }> = []
+  const resumeListener: { current: (() => void) | null } = { current: null }
   const window = {
     isDestroyed: () => false,
     webContents: {
@@ -42,6 +43,7 @@ const mocks = vi.hoisted(() => {
     handlers,
     listeners,
     sent,
+    resumeListener,
     electron: {
       ipcMain: {
         handle: (c: string, fn: (...args: never[]) => unknown) => handlers.set(c, fn),
@@ -52,7 +54,18 @@ const mocks = vi.hoisted(() => {
         getMediaAccessStatus: () => 'granted',
         askForMediaAccess: async () => true
       },
-      shell: { openExternal: async () => undefined }
+      shell: { openExternal: async () => undefined },
+      // Captured so a test below can drive it directly, the same way Electron
+      // itself would call it on a real resume.
+      powerMonitor: {
+        on: (event: string, fn: () => void) => {
+          if (event === 'resume') resumeListener.current = fn
+        }
+      },
+      MessageChannelMain: class {
+        port1 = { on: () => undefined, start: () => undefined, close: () => undefined }
+        port2 = {}
+      }
     }
   }
 })
@@ -351,4 +364,26 @@ describe('a half-open socket', () => {
 
     await stopSession()
   }, 60_000)
+})
+
+describe('the powerMonitor resume hint', () => {
+  // powerMonitor fires 'resume' twice on macOS and sometimes not at all on
+  // Linux, so it is never the sleep DETECTOR — SleepDetector's own clock-
+  // divergence check owns that. It is wired only as a speed hint: pokes the
+  // health tick immediately instead of waiting for the next 1s interval.
+  it('registers a resume listener that runs a health tick without throwing', async () => {
+    await startSession()
+    await waitFor(() => transcriptionHealth() !== null, 10_000, 'session health')
+    // Let the socket actually finish connecting before stopSession tears it
+    // down — terminating one still mid-handshake is a ws library error, not
+    // anything this test is about.
+    await waitFor(() => server.connectionCount > 0, 10_000, 'the socket to connect')
+
+    expect(mocks.resumeListener.current).toBeTypeOf('function')
+    expect(() => mocks.resumeListener.current?.()).not.toThrow()
+    // A resume with no actual clock divergence is a no-op, not a spurious gap.
+    expect(transcriptionHealth()).not.toBeNull()
+
+    await stopSession()
+  }, 15_000)
 })

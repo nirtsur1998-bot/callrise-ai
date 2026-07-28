@@ -188,7 +188,11 @@ the machine whose clock moved.
 `SleepDetector` uses the divergence between the two clocks to notice a suspend,
 rather than Electron's `powerMonitor` (which fires twice on macOS and sometimes
 not at all). `powerMonitor` remains useful as a faster _hint_, never as the
-mechanism.
+mechanism: `transcription.ts` listens for its `'resume'` event and forces an
+immediate health tick, so a resume is noticed within the width of the event
+instead of waiting up to 1s for the next scheduled tick. Firing twice on macOS
+costs nothing — the second call sees the divergence already collapsed to zero
+and no-ops.
 
 ## Reading a health snapshot
 
