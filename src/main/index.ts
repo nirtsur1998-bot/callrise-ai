@@ -60,6 +60,7 @@ import { disposeOverlay } from './detection-overlay'
 import { disposeTray } from './detection-tray'
 import { registerCoachPdf } from './coach-pdf'
 import { registerAiKeys, loadStoredAiKeysIntoEnv } from './ai-keys'
+import { registerUpdater } from './updater'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -201,6 +202,12 @@ app.whenReady().then(async () => {
       })
     })
   }
+
+  // Inert unless UPDATE_FEED_URL names a trusted https host — the publish
+  // block still carries electron-vite's example.com placeholder, and an
+  // updater pointed at a domain you do not control is a supply-chain
+  // compromise waiting for someone to register it.
+  registerUpdater()
 
   registerTranscription()
   registerCalls()

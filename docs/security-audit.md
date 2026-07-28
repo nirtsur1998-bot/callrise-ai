@@ -95,6 +95,51 @@ armed, and both the arm and the grant read it back:
 20 unit tests, including every "confident-looking object a compromised or buggy
 renderer might send" case. Main never asks the renderer whether consent exists.
 
+### Auto-updater — criterion 12
+
+`electron-updater` 6.8.9, comfortably past the 6.3.0-alpha.6 fix for
+CVE-2024-39698. But the version was never the interesting part.
+
+**It is inert until a real feed is configured.** `electron-builder.yml`'s
+publish block still carries electron-vite's scaffold placeholder,
+`https://example.com/auto-updates`. Wiring an updater to that would have the
+app ask a domain nobody here controls what software to install, on every
+launch — a supply-chain compromise waiting for someone to register it. So the
+feed comes from `UPDATE_FEED_URL`, `isTrustedFeed` checks it _before any
+request is made_, and unset-or-untrusted means **no network activity at all**,
+not a check whose answer is ignored.
+
+`src/main/updater/policy.ts` is written to default-deny, because the canonical
+failure in this class does not look like an attack — it looks like a bug. In
+the 2020 Doyensec bypass, an update filename containing a single quote caused a
+PowerShell parse error, the signature check returned `null`, the caller read
+`null` as "no problem found", and the update installed. Nobody defeated the
+cryptography; a check failed, and failing was interpreted as passing.
+
+So every function returns an explicit verdict rather than a boolean that could
+be `undefined`, and every unparseable input is a **reject**:
+
+| Input                                                   | Verdict                                                        |
+| ------------------------------------------------------- | -------------------------------------------------------------- |
+| `example.com` feed, or plain `http`                     | refused before any request                                     |
+| version equal to, or older than, current                | refused — a downgrade is how an attacker reinstalls known bugs |
+| version that will not parse (`latest`, `v1.2.3`, `1.2`) | refused, never coerced                                         |
+| filename containing `'` `"` `` ` `` `$` `;` `           | ` `&` `>` newline NUL                                          | refused |
+| filename containing `..` or a path separator            | refused                                                        |
+| missing or malformed sha512                             | refused                                                        |
+| `null`, `undefined`, a string, a number, `{}`           | refused, not passed through                                    |
+
+41 unit tests, including the Doyensec quote verbatim. Downloading is also gated
+on a state our own policy already accepted, re-checked in main rather than
+trusted from the renderer; `autoDownload` and `autoInstallOnAppQuit` are both
+off, because an updater that stages an install on quit takes the decision away
+from the person whose machine it is.
+
+**Not done, and only doable with a real feed:** the end-to-end test that serves
+a genuinely malformed or unsigned artifact to a packaged build and confirms the
+install is refused. The policy above is the part that can be tested without
+one.
+
 ---
 
 ## Verified here
@@ -233,13 +278,9 @@ ELECTRON_RUN_AS_NODE=1 "/Applications/CallRise AI.app/Contents/MacOS/CallRise AI
 
 ## Still open
 
-- **Auto-updater.** Not a dependency yet, so CVE-2024-39698 does not apply and
-  criterion 12's updater half is untestable. You chose to build it and then
-  audit it; that is not done. When it is, the test that matters is a malformed
-  or unsigned artifact being **refused** — in the 2020 Doyensec bypass a
-  filename containing one quote caused a PowerShell parse error, the check
-  returned null, and the update installed anyway. Any validation error must
-  reject, never fail open. Treat `latest.yml` as untrusted input.
+- ~~**Auto-updater.**~~ Built and audited — see below. Remaining work is
+  operational: stand up a real feed and run the end-to-end refusal test on a
+  packaged build.
 - ~~**Criterion 11**~~ — **met.** See "The durable consent gate" above.
 - **Audible in-call announcement.** The remote party cannot see an Electron
   window, so a UI banner is worth nothing to them. Twelve US states require
