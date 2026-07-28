@@ -11,6 +11,7 @@ import { useLiveClips } from './useLiveClips'
 import { useCueSettings } from './useCueSettings'
 import { useConsent } from '@renderer/features/consent/useConsent'
 import { useAutoStartListening } from '@renderer/features/settings/useAutoStartListening'
+import { IdleStopWatcher, idleStopNotice } from './auto-stop'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import { getExcludedApps, addSeenApp } from '@renderer/features/settings/prefs'
 import { OtherPartyControl } from '@renderer/features/consent/OtherPartyControl'
@@ -204,6 +205,53 @@ export function LiveView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allowOtherPartyRecording, disableOtherParty])
 
+  // An auto-started call has to be able to END by itself too. The app-name
+  // detector only ever announces a START, so before this an auto-started
+  // session ran until someone opened the app and pressed Stop — and since the
+  // call is only written to disk when the session closes, "nobody pressed
+  // Stop" meant the call was never saved at all.
+  //
+  // Armed only for calls the app started itself: a rep who pressed Start is
+  // present and in control, and timing them out mid-thought would be a
+  // surprise rather than a rescue.
+  const idleWatcherRef = useRef(new IdleStopWatcher())
+  const [autoStopNotice, setAutoStopNotice] = useState<string | null>(null)
+
+  // Reset-on-change, adjusted during render rather than in an effect (React's
+  // documented pattern for exactly this): the moment a new call leaves 'idle',
+  // any notice explaining why the PREVIOUS one ended stops being true.
+  const [noticeStatus, setNoticeStatus] = useState(status)
+  if (status !== noticeStatus) {
+    setNoticeStatus(status)
+    if (status !== 'idle' && autoStopNotice !== null) setAutoStopNotice(null)
+  }
+
+  const armIdleStop = useCallback(() => {
+    idleWatcherRef.current.arm(performance.now())
+  }, [])
+
+  // Any transcribed words mean the conversation is still alive.
+  useEffect(() => {
+    if (segments.length > 0 || interimText) {
+      idleWatcherRef.current.noteSpeech(performance.now())
+    }
+  }, [segments, interimText])
+
+  useEffect(() => {
+    if (status === 'idle' || status === 'error') {
+      idleWatcherRef.current.disarm()
+      return
+    }
+    const timer = setInterval(() => {
+      const decision = idleWatcherRef.current.evaluate(performance.now())
+      if (!decision.stop) return
+      idleWatcherRef.current.disarm()
+      setAutoStopNotice(idleStopNotice(decision.idleMs))
+      void stop() // stop() arms the save, so the call is persisted on close
+    }, 15_000)
+    return () => clearInterval(timer)
+  }, [status, stop])
+
   // Shared guard: two auto-start sources must never start the same call twice.
   //
   // It is CLEARED whenever a call ends, and that matters more than it looks.
@@ -231,6 +279,7 @@ export function LiveView({
     if (appOpenAutoStartedRef.current || autoStartedRef.current) return
     appOpenAutoStartedRef.current = true
     autoStartedRef.current = true
+    armIdleStop()
     void (async () => {
       // Exclusion checks the app the rep was using BEFORE switching here —
       // the frontmost app right now is always this app itself (the user just
@@ -242,7 +291,7 @@ export function LiveView({
       if (previousApp && getExcludedApps().includes(previousApp)) return
       start()
     })()
-  }, [autoStartListening, status, start])
+  }, [autoStartListening, status, start, armIdleStop])
 
   // Detected-call auto-start (banner click, or the Auto-transcribe setting) —
   // shares autoStartedRef with the effect above so whichever fires first wins
@@ -256,9 +305,10 @@ export function LiveView({
     if (autoStartedRef.current) return
     if (status !== 'idle') return
     autoStartedRef.current = true
+    armIdleStop()
     onAutoStartFromDetectionConsumed?.()
     start()
-  }, [autoStartFromDetection, onAutoStartFromDetectionConsumed, status, start])
+  }, [autoStartFromDetection, onAutoStartFromDetectionConsumed, status, start, armIdleStop])
 
   // Ambient call detection (M15) auto-start — same shared autoStartedRef, so
   // this can never double-start alongside either source above. Unlike those,
@@ -274,6 +324,7 @@ export function LiveView({
       return
     }
     autoStartedRef.current = true
+    armIdleStop()
     void (async () => {
       await start()
       const sessionId = getSessionId()
@@ -287,7 +338,8 @@ export function LiveView({
     onAmbientAutoStartResult,
     status,
     start,
-    getSessionId
+    getSessionId,
+    armIdleStop
   ])
 
   // Ambient-detection overlay banner's Stop/Pause buttons live in a different
@@ -486,7 +538,9 @@ export function LiveView({
       )}
       {status === 'idle' && savedNotice && (
         <InlineBanner tone="positive">
-          <span>Call saved to Past Calls.</span>
+          {/* When the app ended the call itself, say so — a call that stops on
+              its own with no explanation reads as a crash. */}
+          <span>{autoStopNotice ?? 'Call saved to Past Calls.'}</span>
         </InlineBanner>
       )}
       {status === 'reconnecting' && (
