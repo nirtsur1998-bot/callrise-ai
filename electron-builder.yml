@@ -30,6 +30,17 @@ win:
       arch:
         - x64
         - arm64
+    # A second, structurally different artifact alongside the NSIS installer:
+    # one self-contained exe, no install step, no NSIS stub/uninstaller at
+    # all. Added as a debugging alternative after the NSIS installer
+    # repeatedly failed to launch on real Windows test machines with
+    # "This app can't run on your PC" despite a verified-intact download -
+    # if the portable exe launches where the installer didn't, that isolates
+    # the problem to something NSIS-specific in the installer packaging
+    # rather than the app bundle itself.
+    - target: portable
+      arch:
+        - x64
 nsis:
   artifactName: CallRise AI Windows.${ext}
   shortcutName: ${productName}
@@ -39,6 +50,8 @@ nsis:
   # install — clearer for a first-time Windows user installing an unsigned app.
   oneClick: false
   allowToChangeInstallationDirectory: true
+portable:
+  artifactName: CallRise AI Windows Portable.${ext}
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
