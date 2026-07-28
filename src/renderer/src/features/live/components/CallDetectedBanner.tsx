@@ -21,18 +21,23 @@ export function CallDetectedBanner({
 }: CallDetectedBannerProps): React.JSX.Element {
   return (
     <div className="animate-pop fixed inset-x-0 top-3 z-50 flex justify-center px-4">
-      <div className="no-drag flex items-center gap-3 rounded-xl border border-accent/30 bg-surface px-4 py-3 shadow-pop">
+      {/* Bounded and wrap-tolerant: this is a single row of icon + sentence +
+          two controls, and the sentence carries a variable app name, so an
+          unbounded row clips its own button on a narrow window. */}
+      <div className="no-drag flex w-full max-w-2xl items-center gap-3 rounded-xl border border-accent/30 bg-surface px-4 py-3 shadow-pop">
         <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent-soft">
           <PhoneCall className="h-4 w-4 text-accent" />
         </div>
-        <p className="text-[13px] text-ink">
+        <p className="min-w-0 flex-1 text-[13px] text-ink">
           Looks like you&rsquo;re on a call in <span className="font-medium">{appName}</span>. Want
           CallRise AI to transcribe it?
         </p>
-        <Button size="sm" onClick={onStart}>
+        <Button size="sm" className="shrink-0" onClick={onStart}>
           Start transcribing
         </Button>
-        <IconButton icon={X} label="Dismiss" onClick={onDismiss} />
+        <span className="shrink-0">
+          <IconButton icon={X} label="Dismiss" onClick={onDismiss} />
+        </span>
       </div>
     </div>
   )

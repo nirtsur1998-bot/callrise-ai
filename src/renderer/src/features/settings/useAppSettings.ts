@@ -9,6 +9,7 @@ export type CrmSettings = AppSettings['crm']
 // loads — never more permissive than what loadAppSettings() would return.
 const DEFAULT_SETTINGS: AppSettings = {
   allowOtherPartyRecording: true,
+  alwaysRecordOtherParty: false,
   personalization: { name: '', role: '', pronoun: '', about: '' },
   summaryLanguage: 'auto',
   syncScope: {

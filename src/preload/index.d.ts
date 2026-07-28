@@ -106,6 +106,9 @@ export interface TranscriptionApi {
 export interface CallSegment {
   speaker: number
   text: string
+  /** A `[gap: Ns]` marker — audio that was never transcribed. Never counted as
+   *  speech and never attributed to a speaker. */
+  kind?: 'gap'
 }
 
 export interface Summary {
@@ -999,6 +1002,10 @@ export interface AppSettings {
    *  Can only remove capability, never grant it — per-call consent still
    *  fully governs actual recording. Defaults to true. */
   allowOtherPartyRecording: boolean
+  /** Standing consent: every call starts already consented for buyer capture
+   *  (method 'pre-agreed'), so the per-call consent step is skipped. Records a
+   *  real consent rather than bypassing one. Gated on the master switch. */
+  alwaysRecordOtherParty: boolean
   /** Who the rep is — fed into summary/coaching prompts. Empty by default. */
   personalization: PersonalizationSettings
   /** Language for AI summaries. 'auto' = same language as the source content. */
@@ -1026,6 +1033,7 @@ export interface AppSettings {
 
 export interface AppSettingsPatch {
   allowOtherPartyRecording?: boolean
+  alwaysRecordOtherParty?: boolean
   /** Partial — only the keys present are changed; others are left as-is. */
   personalization?: Partial<PersonalizationSettings>
   summaryLanguage?: SummaryLanguage

@@ -201,6 +201,21 @@ export interface AppSettings {
    * fully governs actual recording. Defaults to true (today's behavior).
    */
   allowOtherPartyRecording: boolean
+  /**
+   * Standing consent: treat every call as already consented for buyer-side
+   * capture, so the rep never clicks through the per-call consent step.
+   *
+   * This does NOT bypass consent — it RECORDS one. Each call still gets a real
+   * ConsentRecord (status 'consented', method 'pre-agreed', timestamped), so
+   * the sanitizeConsent invariant is untouched and the audit trail stays
+   * honest about how consent was obtained. It is gated on
+   * `allowOtherPartyRecording`, so the master switch still removes capability.
+   *
+   * Off by default: it is only defensible when the rep genuinely has a
+   * standing basis (a recorded-line notice, a contract, or a one-party
+   * jurisdiction), which only they can know.
+   */
+  alwaysRecordOtherParty: boolean
   /** Who the rep is — fed into summary/coaching prompts. Empty by default. */
   personalization: PersonalizationSettings
   /** Language for AI summaries. 'auto' = same language as the source content. */
@@ -245,6 +260,7 @@ const EPOCH = new Date(0).toISOString()
 
 const DEFAULT_SETTINGS: AppSettings = {
   allowOtherPartyRecording: true,
+  alwaysRecordOtherParty: false,
   personalization: EMPTY_PERSONALIZATION,
   summaryLanguage: 'auto',
   syncScope: EMPTY_SYNC_SCOPE,
@@ -302,6 +318,10 @@ export function loadAppSettings(): AppSettings {
         typeof parsed.allowOtherPartyRecording === 'boolean'
           ? parsed.allowOtherPartyRecording
           : DEFAULT_SETTINGS.allowOtherPartyRecording,
+      alwaysRecordOtherParty:
+        typeof parsed.alwaysRecordOtherParty === 'boolean'
+          ? parsed.alwaysRecordOtherParty
+          : DEFAULT_SETTINGS.alwaysRecordOtherParty,
       personalization: sanitizePersonalization(parsed.personalization),
       summaryLanguage: sanitizeSummaryLanguage(parsed.summaryLanguage),
       syncScope: sanitizeSyncScope(parsed.syncScope),
@@ -335,6 +355,10 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
       typeof p.allowOtherPartyRecording === 'boolean'
         ? p.allowOtherPartyRecording
         : current.allowOtherPartyRecording,
+    alwaysRecordOtherParty:
+      typeof p.alwaysRecordOtherParty === 'boolean'
+        ? p.alwaysRecordOtherParty
+        : current.alwaysRecordOtherParty,
     personalization: mergePersonalization(current.personalization, p.personalization),
     summaryLanguage:
       'summaryLanguage' in p ? sanitizeSummaryLanguage(p.summaryLanguage) : current.summaryLanguage,

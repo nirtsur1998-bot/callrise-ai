@@ -76,8 +76,17 @@ export function LiveView({
   remoteStopToken = 0,
   remotePauseToken = 0
 }: LiveViewProps): React.JSX.Element {
-  // Recording consent for the current call (gates future other-party capture).
-  const consent = useConsent()
+  // Settings first: standing consent has to be known before useConsent builds
+  // the call's opening record, or the first call of a session would start from
+  // "not asked" and only correct itself a tick later.
+  const appSettings = useAppSettings().settings
+  const allowOtherPartyRecording = appSettings.allowOtherPartyRecording
+  // Standing consent is gated on the master switch — it can never grant
+  // capability the switch has removed.
+  const standingConsent = allowOtherPartyRecording && appSettings.alwaysRecordOtherParty
+
+  // Recording consent for the current call (gates other-party capture).
+  const consent = useConsent(standingConsent)
   const [consentOpen, setConsentOpen] = useState(false)
 
   // "Clip this" — a local, in-memory clip buffer (no callId exists yet for a
@@ -159,13 +168,31 @@ export function LiveView({
     if (!canRecordOther) void disableOtherParty()
   }, [canRecordOther, disableOtherParty])
 
+  // Standing consent means nobody clicks "they said yes" on this call, so the
+  // buyer side has to be picked up on its own once the session is live.
+  //
+  // Exactly one attempt per call. getDisplayMedia wants a recent user gesture,
+  // and an auto-started call (ambient detection) may have none — so this can
+  // legitimately fail. When it does, `otherPartyError` renders the existing
+  // recovery banner, whose "Try again" IS a gesture and always works. Retrying
+  // in a loop here would just spam a prompt that cannot succeed.
+  const autoBuyerAttemptedRef = useRef(false)
+  useEffect(() => {
+    if (status === 'idle') autoBuyerAttemptedRef.current = false
+  }, [status])
+  useEffect(() => {
+    if (autoBuyerAttemptedRef.current) return
+    if (status !== 'listening' || !canRecordOther || otherPartyLive || otherPartyError) return
+    autoBuyerAttemptedRef.current = true
+    void enableOtherParty()
+  }, [status, canRecordOther, otherPartyLive, otherPartyError, enableOtherParty])
+
   // Settings master switch: when off, the whole other-party recording feature
   // is unavailable — no control to open the modal, the modal itself never
   // renders, and any capture already running is stopped. This can only ever
   // remove capability (see useAppSettings' safe default + app-settings.ts);
   // the per-call consent checks above are unchanged and still fully apply
   // whenever the switch is on.
-  const allowOtherPartyRecording = useAppSettings().settings.allowOtherPartyRecording
   useEffect(() => {
     if (!allowOtherPartyRecording) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- force-close the modal/consent when the master switch flips off mid-session
@@ -176,13 +203,32 @@ export function LiveView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allowOtherPartyRecording, disableOtherParty])
 
-  // Auto-start listening (Settings → AI Note Taker), so the rep needn't click
-  // Start. Guarded with a ref so it only ever fires once per mount — start()
-  // moves status away from 'idle' on success, so this isn't a retry loop.
-  const [autoStartListening] = useAutoStartListening()
+  // Shared guard: two auto-start sources must never start the same call twice.
+  //
+  // It is CLEARED whenever a call ends, and that matters more than it looks.
+  // While this ref latched true for the lifetime of the view, only the first
+  // auto-start ever worked: every later detected call hit the guard and was
+  // silently dropped — the banner's "Start transcribing" button did nothing,
+  // and ambient auto-start reported a failure it could not explain. With
+  // auto-start-on-open enabled it was worse still, because that burned the
+  // flag at launch and killed every detection for the rest of the session.
   const autoStartedRef = useRef(false)
   useEffect(() => {
-    if (!autoStartListening || status !== 'idle' || autoStartedRef.current) return
+    // start() leaves 'idle' before this can re-run, so clearing here cannot
+    // race a start that is already in flight.
+    if (status === 'idle') autoStartedRef.current = false
+  }, [status])
+
+  // Auto-start listening (Settings → AI Note Taker), so the rep needn't click
+  // Start. This one genuinely IS once-per-mount — it means "start when the app
+  // opens", not "start after every call" — so it keeps its own latch that the
+  // reset above deliberately does not touch.
+  const [autoStartListening] = useAutoStartListening()
+  const appOpenAutoStartedRef = useRef(false)
+  useEffect(() => {
+    if (!autoStartListening || status !== 'idle') return
+    if (appOpenAutoStartedRef.current || autoStartedRef.current) return
+    appOpenAutoStartedRef.current = true
     autoStartedRef.current = true
     void (async () => {
       // Exclusion checks the app the rep was using BEFORE switching here —
@@ -202,9 +248,14 @@ export function LiveView({
   // and the other never double-starts.
   useEffect(() => {
     if (!autoStartFromDetection) return
-    onAutoStartFromDetectionConsumed?.()
-    if (status !== 'idle' || autoStartedRef.current) return
+    // A request that arrives mid-call is genuinely not actionable, but one that
+    // arrives while we are still tearing down the previous call is — so leave
+    // the request standing rather than consuming it, and let the effect re-run
+    // once status settles back to idle.
+    if (autoStartedRef.current) return
+    if (status !== 'idle') return
     autoStartedRef.current = true
+    onAutoStartFromDetectionConsumed?.()
     start()
   }, [autoStartFromDetection, onAutoStartFromDetectionConsumed, status, start])
 

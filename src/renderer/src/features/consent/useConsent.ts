@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   ConsentJurisdiction,
   ConsentMethod,
@@ -7,6 +7,7 @@ import type {
 import {
   canRecordOtherParty,
   freshConsent,
+  isStandingConsent,
   loadScript,
   saveDefaultJurisdiction,
   saveScript,
@@ -37,14 +38,26 @@ export interface ConsentController {
 }
 
 /**
- * Holds the consent state for the call currently being composed. The only way
- * `recordOtherParty` ever becomes true is `markConsented` — there is no setter
- * that flips it on without recording an explicit consent.
+ * Holds the consent state for the call currently being composed.
+ *
+ * `recordOtherParty` still only ever becomes true alongside an explicit
+ * 'consented' status — there is no setter that flips it on by itself. With
+ * `standing` on (Settings → "Always record the other party") a new call simply
+ * STARTS from a recorded 'pre-agreed' consent instead of from "not asked";
+ * the record is real and timestamped either way.
  */
-export function useConsent(): ConsentController {
-  const [record, setRecord] = useState<ConsentRecord>(() => freshConsent())
+export function useConsent(standing = false): ConsentController {
+  const [record, setRecord] = useState<ConsentRecord>(() => freshConsent(standing))
   const [script, setScriptState] = useState<string>(() => loadScript())
   const recordRef = useRef<ConsentRecord>(record)
+  // Read inside `reset`, which runs long after mount. Held in a ref, and
+  // written from an effect rather than during render, so `reset` keeps a stable
+  // identity — it is a dependency of `start()` in useTranscription, and churning
+  // it would re-run the auto-start effects downstream for no reason.
+  const standingRef = useRef(standing)
+  useEffect(() => {
+    standingRef.current = standing
+  }, [standing])
 
   // Update the ref synchronously alongside state so the save path is never stale.
   const apply = useCallback((next: ConsentRecord) => {
@@ -101,8 +114,21 @@ export function useConsent(): ConsentController {
   }, [])
 
   const reset = useCallback(() => {
-    apply(freshConsent())
+    apply(freshConsent(standingRef.current))
   }, [apply])
+
+  // The setting arrives asynchronously and can be toggled mid-call, so the
+  // in-flight record has to follow it. Only records that CAME from the standing
+  // setting are touched — a consent the rep actually asked for on this call is
+  // never overwritten or revoked by a settings change.
+  useEffect(() => {
+    const current = recordRef.current
+    if (standing && current.status === 'not-asked') {
+      apply(freshConsent(true))
+    } else if (!standing && isStandingConsent(current)) {
+      apply(freshConsent(false))
+    }
+  }, [standing, apply])
 
   return {
     record,
