@@ -61,6 +61,7 @@ import { disposeTray } from './detection-tray'
 import { registerCoachPdf } from './coach-pdf'
 import { registerAiKeys, loadStoredAiKeysIntoEnv } from './ai-keys'
 import { registerUpdater } from './updater'
+import { buildDiagnoseReport, wantsDiagnose } from './diagnose'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -128,6 +129,17 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('ai.callrise.app')
+
+  // `--diagnose`: print one block of text a tester can paste back, then exit
+  // without ever opening a window. Runs before anything else registers, so a
+  // machine where the app fails to start for some OTHER reason can still be
+  // asked what it thinks its own state is.
+  if (wantsDiagnose()) {
+    await loadStoredAiKeysIntoEnv().catch(() => {})
+    process.stdout.write(`${buildDiagnoseReport()}\n`)
+    app.exit(0)
+    return
+  }
 
   // Before anything that might use Deepgram/Anthropic — a user's own
   // Settings-entered key (if any) needs to be in process.env first.

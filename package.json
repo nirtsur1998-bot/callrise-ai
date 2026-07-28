@@ -1,7 +1,7 @@
 {
   "name": "callrise-ai",
   "version": "0.1.0",
-  "description": "CallRise AI — desktop AI assistant for sales calls",
+  "description": "CallRise AI \u2014 desktop AI assistant for sales calls",
   "main": "./out/main/index.js",
   "author": "",
   "private": true,
@@ -23,7 +23,8 @@
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run native:build:win && npm run build && electron-builder --win",
     "build:mac": "npm run native:build:mac && electron-vite build && electron-builder --mac",
-    "build:linux": "electron-vite build && electron-builder --linux"
+    "build:linux": "electron-vite build && electron-builder --linux",
+    "diagnose": "electron-vite build && electron out/main/index.js --diagnose"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.107.0",
