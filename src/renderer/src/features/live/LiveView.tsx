@@ -20,6 +20,7 @@ import { RecordingIndicator } from '@renderer/features/consent/RecordingIndicato
 import { Waveform } from './components/Waveform'
 import { TranscriptView } from './components/TranscriptView'
 import { CueCard } from './components/CueCard'
+import { SuggestionRail } from './components/SuggestionRail'
 import { CueControls } from './components/CueControls'
 import { AskCoach } from './components/AskCoach'
 import { EngagementGauge } from './components/EngagementGauge'
@@ -148,7 +149,7 @@ export function LiveView({
   const { enabled, setEnabled, sensitivity, setSensitivity } = useCueSettings()
   // When buyer capture is live, the rep is channel 0 — tell the cues so they
   // don't have to guess who the rep is.
-  const { cue, dismiss, repSpeaker, engagementScore } = useLiveCues(
+  const { cue, dismiss, suggestions, dismissSuggestion, repSpeaker, engagementScore } = useLiveCues(
     status === 'listening',
     enabled,
     sensitivity,
@@ -606,7 +607,11 @@ export function LiveView({
           repSpeaker={repSpeaker}
           paused={status === 'paused'}
         />
+        {/* Two independent channels (§4.3). The deterministic cue keeps the
+            bottom-right corner and its interrupt treatment; model suggestions
+            live in their own rail and can never delay, replace or suppress it. */}
         {cue && <CueCard key={cue.id} cue={cue} onDismiss={dismiss} />}
+        <SuggestionRail suggestions={suggestions} onDismiss={dismissSuggestion} />
         {(status === 'listening' || status === 'paused') && hasTranscript && (
           <div className="pointer-events-none absolute right-3 top-3 flex items-center gap-2">
             {clips.justClipped && (
