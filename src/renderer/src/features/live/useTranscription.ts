@@ -8,6 +8,7 @@ import type { TranscriptionHealthEvent } from '../../../../preload/index.d'
 import {
   getAutoSummarize,
   getAutoGenerateTitle,
+  getAutoPostCallBrief,
   addSeenApp
 } from '@renderer/features/settings/prefs'
 
@@ -37,6 +38,8 @@ interface UseTranscription {
   health: TranscriptionHealthEvent | null
   /** True only while the OS microphone permission prompt is actually showing. */
   micPrompting: boolean
+  /** True once the post-call brief + follow-up email are on the clipboard. */
+  briefCopied: boolean
   start: () => Promise<void>
   /** The main-process transcription session id for the call in progress, or
    *  null before a session exists / after a failed start. A function (not a
@@ -79,6 +82,8 @@ export function useTranscription(
   /** True only while the OS microphone prompt is genuinely pending, so the
    *  startup copy can name it instead of guessing. */
   const [micPrompting, setMicPrompting] = useState(false)
+  /** True once a post-call brief has been written to the clipboard. */
+  const [briefCopied, setBriefCopied] = useState(false)
 
   const recorderRef = useRef<Recorder | null>(null)
   // Id of the main-process session THIS call owns. Passed as expectedSessionId
@@ -134,6 +139,17 @@ export function useTranscription(
         // independent — one failing (or being off) never affects the others.
         if (getAutoSummarize()) void window.api.calls.summarizeCall(saved.id).catch(() => {})
         if (getAutoGenerateTitle()) void window.api.calls.generateTitle(saved.id).catch(() => {})
+        // §4.6 — the brief lands on the clipboard without anyone clicking.
+        // Main does the clipboard write, so this works while the rep is still
+        // looking at Zoom and our window has no focus.
+        if (getAutoPostCallBrief()) {
+          void window.api.calls
+            .postCallBrief(saved.id)
+            .then((res) => {
+              if (res.ok && res.copied) setBriefCopied(true)
+            })
+            .catch(() => {})
+        }
         onSavedRef.current?.(saved.id)
       })
       .catch(() => {
@@ -263,6 +279,7 @@ export function useTranscription(
     setOtherPartyLive(false)
     setOtherPartyError(null)
     setHealth(null)
+    setBriefCopied(false)
     segmentsRef.current = []
     latencySamples.current = []
     savePendingRef.current = false
@@ -554,6 +571,7 @@ export function useTranscription(
     otherPartyError,
     health,
     micPrompting,
+    briefCopied,
     start,
     getSessionId,
     stop,

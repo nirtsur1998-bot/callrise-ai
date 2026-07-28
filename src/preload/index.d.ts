@@ -30,6 +30,18 @@ export interface TranscriptionErrorEvent {
   message: string
 }
 
+export interface PostCallBrief {
+  brief: string
+  nextSteps: string[]
+  email: { subject: string; body: string }
+  model: string
+  createdAt: string
+}
+
+export type PostCallBriefEvent =
+  | { ok: true; brief: PostCallBrief; copied: boolean }
+  | { ok: false; error: 'no-key' | 'failed' | 'empty-call'; message?: string }
+
 export interface TranscriptionGapEvent {
   /** How much audio was lost. */
   durationMs: number
@@ -406,6 +418,9 @@ export interface CallsApi {
   }>
   /** AI Note Taker's auto-title feature: generate + save a title in one step. */
   generateTitle: (callId: string) => Promise<{ ok: true; title: string } | { ok: false }>
+  /** §4.6 — brief + next steps + follow-up email, written straight to the
+   *  clipboard by the main process (which needs no window focus). */
+  postCallBrief: (callId: string) => Promise<PostCallBriefEvent>
   /** Link (contactId) or clear (null) the contact this call belongs to. */
   setContact: (callId: string, contactId: string | null) => Promise<Call | null>
   /** Bookmark a moment mid-call ("clip this") — atMs from call start, plus the

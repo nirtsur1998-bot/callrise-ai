@@ -5,6 +5,7 @@ const KEY_AUTO_START_LISTENING = 'salesos.settings.autoStartListening'
 const KEY_AUTO_OPEN_MEETING_PAGE = 'salesos.settings.autoOpenMeetingPage'
 const KEY_AUTO_SUMMARIZE = 'salesos.settings.autoSummarize'
 const KEY_AUTO_GENERATE_TITLE = 'salesos.settings.autoGenerateTitle'
+const KEY_AUTO_POST_CALL_BRIEF = 'salesos.settings.autoPostCallBrief'
 const KEY_EXCLUDED_APPS = 'salesos.settings.excludedApps'
 const KEY_SEEN_APPS = 'salesos.settings.seenApps'
 const KEY_AUTO_TRANSCRIBE_CALLS = 'salesos.settings.autoTranscribeCalls'
@@ -71,6 +72,21 @@ export function getAutoGenerateTitle(): boolean {
 
 export function setAutoGenerateTitle(value: boolean): void {
   write(KEY_AUTO_GENERATE_TITLE, String(value))
+}
+
+// Default OFF, same reasoning again — one AI call per saved call.
+//
+// §4.6 specifies "fire automatically on call-end (no click)", and once this is
+// on that is exactly what happens: the brief and the follow-up email are on the
+// clipboard before the rep has switched windows, with nothing to press. What
+// "no click" cannot reasonably mean is opting a rep into per-call spend on
+// their own key without asking once.
+export function getAutoPostCallBrief(): boolean {
+  return read(KEY_AUTO_POST_CALL_BRIEF) === 'true'
+}
+
+export function setAutoPostCallBrief(value: boolean): void {
+  write(KEY_AUTO_POST_CALL_BRIEF, String(value))
 }
 
 /** Apps excluded from auto-start (checked against the foreground app when a

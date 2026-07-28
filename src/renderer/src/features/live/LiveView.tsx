@@ -117,6 +117,7 @@ export function LiveView({
     otherPartyLive,
     otherPartyError,
     micPrompting,
+    briefCopied,
     start,
     getSessionId,
     stop,
@@ -541,7 +542,13 @@ export function LiveView({
         <InlineBanner tone="positive">
           {/* When the app ended the call itself, say so — a call that stops on
               its own with no explanation reads as a crash. */}
-          <span>{autoStopNotice ?? 'Call saved to Past Calls.'}</span>
+          <span>
+            {autoStopNotice ?? 'Call saved to Past Calls.'}
+            {/* The clipboard changed under the rep without them asking, so it
+                has to be said out loud — an unannounced clipboard write is
+                indistinguishable from losing whatever they had copied. */}
+            {briefCopied && ' Brief + follow-up email copied to your clipboard.'}
+          </span>
         </InlineBanner>
       )}
       {status === 'reconnecting' && (

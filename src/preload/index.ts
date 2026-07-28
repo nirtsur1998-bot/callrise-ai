@@ -55,6 +55,7 @@ const api = {
     objectionScanEstimate: () => ipcRenderer.invoke('objections:scanEstimate'),
     scanPastCallsForObjections: () => ipcRenderer.invoke('objections:scanPastCalls'),
     generateTitle: (callId: string) => ipcRenderer.invoke('calls:generateTitle', callId),
+    postCallBrief: (callId: string) => ipcRenderer.invoke('calls:postCallBrief', callId),
     setContact: (callId: string, contactId: string | null) =>
       ipcRenderer.invoke('calls:setContact', callId, contactId),
     addBookmark: (callId: string, atMs: number, text: string) =>

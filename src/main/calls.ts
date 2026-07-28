@@ -1,6 +1,7 @@
 import { app, ipcMain } from 'electron'
 import { join } from 'node:path'
 import mammoth from 'mammoth'
+import { generatePostCallBrief, type PostCallBriefResult } from './post-call-brief'
 import {
   speechSegments,
   saveCall,
@@ -456,6 +457,24 @@ export function registerCalls(): void {
         return { ok: true, scanned, candidatesAdded, failed }
       } finally {
         scanInFlight = false
+      }
+    }
+  )
+
+  // §4.6 — the instant post-call brief. Generates the brief, next steps and a
+  // follow-up email, and puts the lot on the clipboard. The clipboard write
+  // deliberately happens in MAIN (see post-call-brief.ts): this fires the
+  // moment a call ends, when the rep is still looking at Zoom, so the renderer
+  // is exactly not focused and navigator.clipboard would refuse.
+  ipcMain.handle(
+    'calls:postCallBrief',
+    async (_event, callId: string): Promise<PostCallBriefResult> => {
+      try {
+        const call = await getCall(callsDir(), callId)
+        if (!call?.segments?.length) return { ok: false, error: 'empty-call' as const }
+        return await generatePostCallBrief(speechSegments(call.segments), call.title)
+      } catch {
+        return { ok: false, error: 'failed' as const }
       }
     }
   )
