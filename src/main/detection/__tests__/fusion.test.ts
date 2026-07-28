@@ -45,7 +45,7 @@ describe('fuseSignals', () => {
       1,
       DETECTION_TUNING.weights['mic-session-known'] +
         DETECTION_TUNING.weights.process +
-        DETECTION_TUNING.weights['window-title'] +
+        DETECTION_TUNING.weights['window-title-known'] +
         DETECTION_TUNING.weights['output-activity'] +
         DETECTION_TUNING.weights.calendar
     )
@@ -76,7 +76,7 @@ describe('fuseSignals', () => {
     const candidates = fuseSignals(signals, T0)
     expect(candidates).toHaveLength(1)
     expect(candidates[0].confidence).toBeCloseTo(
-      DETECTION_TUNING.weights['window-title'] + DETECTION_TUNING.weights.process
+      DETECTION_TUNING.weights['window-title-known'] + DETECTION_TUNING.weights.process
     )
   })
 
@@ -96,11 +96,30 @@ describe('fuseSignals', () => {
 
   it('a lone unknown-app mic-session never reaches the start threshold on its own', () => {
     // This is exactly the "Voice Memos / dictation" false-positive case: mic-session
-    // on an unrecognized app scores 0.25, well under the 0.60 start threshold.
+    // alone on an unrecognized app is 0.35, under the 0.60 start threshold - an
+    // unknown app needs real corroboration (process + a call-sounding window
+    // title, typically) before it can ever reach 'capturing'.
     const [candidate] = fuseSignals(
       [signal({ kind: 'mic-session', appId: 'unknown:voice-memos' })],
       T0
     )
     expect(candidate.confidence).toBeLessThan(DETECTION_TUNING.startThreshold)
+  })
+
+  it('an unknown app crosses the start threshold once mic-session, process, and a generic call-sounding title all corroborate', () => {
+    // This is the M17 §2.2 case: zero registry entry, detected purely from
+    // generic signals - mirrors criterion 7 (a renamed, totally unrecognized binary).
+    const signals = [
+      signal({ kind: 'mic-session', appId: 'unknown:zzq-4471', pid: 1 }),
+      signal({ kind: 'process', appId: 'unknown:zzq-4471', pid: 1 }),
+      signal({
+        kind: 'window-title',
+        appId: 'unknown:zzq-4471',
+        pid: 1,
+        title: 'zzq-4471 — Call with Acme Co'
+      })
+    ]
+    const [candidate] = fuseSignals(signals, T0)
+    expect(candidate.confidence).toBeGreaterThanOrEqual(DETECTION_TUNING.startThreshold)
   })
 })

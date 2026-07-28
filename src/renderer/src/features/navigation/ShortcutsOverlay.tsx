@@ -15,7 +15,7 @@ interface ShortcutGroup {
 const GROUPS: ShortcutGroup[] = [
   {
     title: 'Navigation',
-    shortcuts: [{ label: 'Jump to a screen', keys: '⌘K' }]
+    shortcuts: [{ label: 'Jump to a screen, contact, deal, or call', keys: '⌘K' }]
   },
   {
     title: 'Command palette',
@@ -28,6 +28,13 @@ const GROUPS: ShortcutGroup[] = [
   {
     title: 'Anywhere',
     shortcuts: [{ label: 'Close any dialog', keys: 'Esc' }]
+  },
+  {
+    title: 'Call detection (works even when CallRise AI is in the background)',
+    shortcuts: [
+      { label: 'Stop capturing', keys: '⌘⇧S' },
+      { label: 'Pause / resume detection', keys: '⌘⇧P' }
+    ]
   },
   {
     title: 'Help',

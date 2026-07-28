@@ -1,25 +1,16 @@
-// AI Note Taker's "auto-generate title" — a small, cheap Haiku call (same
-// model tier as live-cue.ts's classification-style tasks) that reads the
-// transcript and proposes a short, specific title.
-import Anthropic from '@anthropic-ai/sdk'
+// AI Note Taker's "auto-generate title" — a small, cheap call (same purpose
+// tier as live-cue.ts's classification-style tasks) that reads the
+// transcript and proposes a short, specific title. Provider-neutral (see
+// src/main/ai/) — works with whichever of Claude/ChatGPT the user has active.
+import { getActiveAIProvider, type AITool } from './ai'
 import type { CallSegment } from './calls-fs'
 
-const MODEL = 'claude-haiku-4-5'
 const MAX_INPUT = 12000
 
-let client: Anthropic | null = null
-
-function getClient(): Anthropic | null {
-  const key = process.env.ANTHROPIC_API_KEY?.trim()
-  if (!key) return null
-  if (!client) client = new Anthropic({ apiKey: key })
-  return client
-}
-
-const TITLE_TOOL: Anthropic.Tool = {
+const TITLE_TOOL: AITool = {
   name: 'record_title',
   description: 'Record a short, specific title for this sales call.',
-  input_schema: {
+  inputSchema: {
     type: 'object',
     properties: {
       title: {
@@ -38,8 +29,8 @@ const PROMPT = `Read this sales call transcript and give it a short, specific ti
 export type GenerateTitleResult = { ok: true; title: string } | { ok: false }
 
 export async function generateCallTitle(segments: CallSegment[]): Promise<GenerateTitleResult> {
-  const anthropic = getClient()
-  if (!anthropic) return { ok: false }
+  const provider = getActiveAIProvider()
+  if (!provider) return { ok: false }
   if (!segments.length) return { ok: false }
 
   const transcript = segments
@@ -48,25 +39,14 @@ export async function generateCallTitle(segments: CallSegment[]): Promise<Genera
     .slice(0, MAX_INPUT)
 
   try {
-    const response = await anthropic.messages.create(
-      {
-        model: MODEL,
-        max_tokens: 60,
-        tools: [TITLE_TOOL],
-        tool_choice: { type: 'tool', name: 'record_title' },
-        messages: [
-          {
-            role: 'user',
-            content: [{ type: 'text', text: `${PROMPT}\n\n--- TRANSCRIPT ---\n${transcript}` }]
-          }
-        ]
-      },
-      { timeout: 20_000 }
-    )
-    const block = response.content.find((b) => b.type === 'tool_use')
-    if (!block || block.type !== 'tool_use') return { ok: false }
-    const raw = block.input as { title?: unknown }
-    const title = typeof raw.title === 'string' ? raw.title.trim().slice(0, 100) : ''
+    const result = await provider.complete({
+      purpose: 'other',
+      maxTokens: 60,
+      tool: TITLE_TOOL,
+      messages: [{ role: 'user', content: `${PROMPT}\n\n--- TRANSCRIPT ---\n${transcript}` }]
+    })
+    const raw = result.toolInput as { title?: unknown } | undefined
+    const title = typeof raw?.title === 'string' ? raw.title.trim().slice(0, 100) : ''
     return title ? { ok: true, title } : { ok: false }
   } catch {
     return { ok: false } // best-effort — the deterministic "Call · <date>" title stays

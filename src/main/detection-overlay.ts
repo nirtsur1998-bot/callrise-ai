@@ -4,18 +4,40 @@
 // DetectionOverlay.tsx) switches what it shows based on IPC state, rather
 // than three independently-managed windows. Never steals focus
 // (focusable: false + showInactive()); position is remembered across drags.
-import { app, BrowserWindow, screen } from 'electron'
+import { app, BrowserWindow, Menu, globalShortcut, screen } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { writeJsonAtomicSync } from './atomic-write'
 
-const WIDTH = 360
-const HEIGHT = 180
+// The visible card is smaller than the window (see DetectionOverlay.tsx's
+// OverlayShell — it wraps the card in CARD_INSET of transparent padding on
+// every side) so the card's own drop shadow has room to render instead of
+// being clipped flush at the window's bounds.
+const CARD_INSET = 16
+const WIDTH = 360 + CARD_INSET * 2
+const HEIGHT = 180 + CARD_INSET * 2
 const MARGIN = 20
 
+/** Actions the overlay's right-click menu and global shortcuts act on —
+ *  passed in once from detection-service.ts (which already owns these as
+ *  `trayActions`) rather than this module reaching back into that one and
+ *  creating a circular import. */
+export interface OverlayActions {
+  openMainWindow: () => void
+  pauseDetection: () => void
+  resumeDetection: () => void
+  stopCapture: () => void
+  snoozeDetection: (minutes: number) => void
+  /** Whether detection is currently running (unpaused) — drives the
+   *  Pause/Resume menu label, mirrors detection-tray.ts's own snapshot. */
+  isRunning: () => boolean
+}
+
 let overlayWindow: BrowserWindow | null = null
+let overlayActions: OverlayActions | null = null
 let savePositionTimer: ReturnType<typeof setTimeout> | undefined
+let shortcutsRegistered = false
 
 function positionPath(): string {
   return join(app.getPath('userData'), 'detection-banner-position.json')
@@ -75,6 +97,12 @@ function createOverlayWindow(): BrowserWindow {
     show: false,
     hasShadow: true,
     backgroundColor: '#00000000',
+    // Native translucent material so the glass-capsule content (backdrop-blur
+    // in CSS) reads as a genuinely native surface rather than a flat image of
+    // one — falls back to the CSS blur alone on platforms/GPUs where this is
+    // unsupported (Electron silently no-ops rather than erroring).
+    vibrancy: process.platform === 'darwin' ? 'under-window' : undefined,
+    backgroundMaterial: process.platform === 'win32' ? 'acrylic' : undefined,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
@@ -91,11 +119,71 @@ function createOverlayWindow(): BrowserWindow {
   win.on('closed', () => {
     overlayWindow = null
   })
+  win.webContents.on('context-menu', () => {
+    if (!overlayActions) return
+    const running = overlayActions.isRunning()
+    Menu.buildFromTemplate([
+      { label: 'Open CallRise AI', click: () => overlayActions?.openMainWindow() },
+      { type: 'separator' },
+      running
+        ? { label: 'Pause detection', click: () => overlayActions?.pauseDetection() }
+        : { label: 'Resume detection', click: () => overlayActions?.resumeDetection() },
+      { label: 'Pause detection for 1 hour', click: () => overlayActions?.snoozeDetection(60) }
+    ]).popup({ window: win })
+  })
   loadOverlayContent(win)
   return win
 }
 
-/** Show the overlay (creating it on first use). Never activates the app - this must not steal focus from whatever the rep is doing. */
+/**
+ * Global (system-wide) shortcuts for the two actions a rep most wants
+ * mid-call without hunting for the overlay's small buttons — Cmd/Ctrl+Shift+S
+ * to stop, Cmd/Ctrl+Shift+P to pause/resume. `globalShortcut.register`
+ * returns false (not a thrown error) if another app already holds the
+ * combo — checked and left silently unregistered rather than fighting for
+ * it, per the "only if they don't conflict" requirement.
+ *
+ * Gated on the SAME ff_ambient_detection enablement as the tray (see
+ * detection-service.ts's syncTrayPresence) — a system-wide hotkey claimed
+ * even while the feature is off would violate the "off means zero
+ * footprint" rule the tray already follows. detection-service.ts calls
+ * these alongside syncTrayPresence, not unconditionally at boot.
+ */
+export function enableOverlayShortcuts(): void {
+  if (shortcutsRegistered || !overlayActions) return
+  shortcutsRegistered = true
+  const actions = overlayActions
+  const stopOk = globalShortcut.register('CommandOrControl+Shift+S', () => actions.stopCapture())
+  const pauseOk = globalShortcut.register('CommandOrControl+Shift+P', () => {
+    if (actions.isRunning()) actions.pauseDetection()
+    else actions.resumeDetection()
+  })
+  if (!stopOk) console.log('[detection-overlay] Cmd/Ctrl+Shift+S already taken by another app')
+  if (!pauseOk) console.log('[detection-overlay] Cmd/Ctrl+Shift+P already taken by another app')
+}
+
+export function disableOverlayShortcuts(): void {
+  if (!shortcutsRegistered) return
+  shortcutsRegistered = false
+  globalShortcut.unregister('CommandOrControl+Shift+S')
+  globalShortcut.unregister('CommandOrControl+Shift+P')
+}
+
+/**
+ * Pre-create the (hidden) overlay window at app boot rather than lazily on
+ * first showOverlay() — window creation + first content load takes far
+ * longer than the <100ms show budget on its own; by the time a call is
+ * actually detected, this window already exists and showInactive() is
+ * effectively instant. Safe to call unconditionally at startup regardless of
+ * whether ambient detection ends up enabled - an unused hidden window costs
+ * negligible memory and is never shown until showOverlay() is actually called.
+ */
+export function initOverlay(actions: OverlayActions): void {
+  overlayActions = actions
+  if (!overlayWindow || overlayWindow.isDestroyed()) overlayWindow = createOverlayWindow()
+}
+
+/** Show the overlay (creating it first if initOverlay() hasn't run yet). Never activates the app - this must not steal focus from whatever the rep is doing. */
 export function showOverlay(): void {
   if (!overlayWindow || overlayWindow.isDestroyed()) overlayWindow = createOverlayWindow()
   if (!overlayWindow.isVisible()) overlayWindow.showInactive()
@@ -107,6 +195,7 @@ export function hideOverlay(): void {
 
 export function disposeOverlay(): void {
   clearTimeout(savePositionTimer)
+  disableOverlayShortcuts()
   if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.close()
   overlayWindow = null
 }

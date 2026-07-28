@@ -775,7 +775,7 @@ export interface VirtualMicStatus {
   helperPath: string | null
 }
 
-export type AiKeyName = 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY'
+export type AiKeyName = 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY'
 
 export interface AiKeyStatus {
   /** True once real API calls will succeed for this key — a Settings-saved
@@ -785,11 +785,19 @@ export interface AiKeyStatus {
   hint: string | null
 }
 
+export type AiProviderId = 'anthropic' | 'openai'
+
+export type AiKeyValidateResult = { ok: true; models: string[] } | { ok: false; reason: string }
+
 export interface AiKeysApi {
   getStatus: () => Promise<Record<AiKeyName, AiKeyStatus>>
-  /** Saved key takes effect after the app is restarted. */
+  /** Saved key takes effect on the very next AI call — no restart needed. */
   save: (name: AiKeyName, value: string) => Promise<{ ok: boolean; error?: string }>
   clear: (name: AiKeyName) => Promise<{ ok: boolean; error?: string }>
+  /** Cheapest possible round-trip against a key the user just pasted (not
+   *  necessarily saved yet) — 'anthropic'/'openai' only, Deepgram has no
+   *  equivalent flow here. */
+  validate: (providerId: AiProviderId, value: string) => Promise<AiKeyValidateResult>
 }
 
 export interface VirtualMicApi {
@@ -978,6 +986,9 @@ export interface AppSettings {
   objectionMining: ObjectionMiningSettings
   /** Ambient call detection (M15). Defaults OFF. */
   detection: DetectionSettings
+  /** Which text-AI provider coaching/summaries/tasks/etc. use. Defaults to
+   *  'anthropic'. The API key itself is separate, encrypted (see AiKeysApi). */
+  aiProvider: AiProviderId
 }
 
 export interface AppSettingsPatch {
@@ -1005,6 +1016,7 @@ export interface AppSettingsPatch {
       appOverrides?: Record<string, AppOverride | 'default' | null>
     }
   }
+  aiProvider?: AiProviderId
 }
 
 export interface AppSettingsApi {

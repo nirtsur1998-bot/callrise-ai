@@ -185,6 +185,33 @@ export function matchTitle(title: string): ConferencingAppEntry | undefined {
   )
 }
 
+/**
+ * Generic "does this window title look like a call" fallback for apps with
+ * NO registry entry at all (M17 §2.2 — an unlisted app must still be
+ * detectable). Only reached when matchTitle() above already found nothing —
+ * this is deliberately conservative (explicit call/meeting words only, no
+ * bare timer-pattern matching) since a false hit here contributes directly
+ * to detection confidence for an app we have zero other information about.
+ * Kept as its own function (not folded into CONFERENCING_APPS) so it's easy
+ * to find, tune, and unit-test in isolation as false-positive reports come in.
+ */
+const GENERIC_CALL_TITLE_PATTERNS: RegExp[] = [
+  /\bcall\b/i,
+  /\bmeeting\b/i,
+  /\bconference\b/i,
+  /\bvideo\s*chat\b/i,
+  /\bhuddle\b/i,
+  /\bwebinar\b/i,
+  /\bvoip\b/i,
+  /\bdialer\b/i,
+  /\bon\s+a\s+call\b/i,
+  /\bin\s+a\s+meeting\b/i
+]
+
+export function looksLikeCallTitle(title: string): boolean {
+  return GENERIC_CALL_TITLE_PATTERNS.some((pattern) => pattern.test(title))
+}
+
 /** True if this process (by pid, bundle id, or name) is one of our own - must be excluded before it ever reaches fusion. */
 export function isOwnProcess(input: {
   pid?: number

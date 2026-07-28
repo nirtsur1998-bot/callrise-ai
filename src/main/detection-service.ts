@@ -26,7 +26,13 @@ import { CallDetector } from './detection/CallDetector'
 import { MacAdapter } from './detection/adapters/MacAdapter'
 import { NullAdapter } from './detection/adapters/NullAdapter'
 import { WindowsAdapter } from './detection/adapters/WindowsAdapter'
-import { hideOverlay, showOverlay } from './detection-overlay'
+import {
+  disableOverlayShortcuts,
+  enableOverlayShortcuts,
+  hideOverlay,
+  initOverlay,
+  showOverlay
+} from './detection-overlay'
 import { disposeTray, registerDetectionTray, updateTray } from './detection-tray'
 import { decideCaptureAction, type CaptureAction } from './detection/policy'
 import type { ICallDetectorAdapter } from './detection/adapters/ICallDetectorAdapter'
@@ -71,7 +77,8 @@ const trayActions = {
   pauseDetection: () => pauseDetection(),
   resumeDetection: () => resumeDetection(),
   stopCapture: () => stopCapture(),
-  snoozeDetection: (minutes: number) => snoozeDetection(minutes)
+  snoozeDetection: (minutes: number) => snoozeDetection(minutes),
+  isRunning: () => running
 }
 
 /**
@@ -79,11 +86,18 @@ const trayActions = {
  * transient `running`/paused state) - pausing detection via the tray must
  * only change its label/menu, never make the tray icon (and its own Resume
  * item) disappear. Everyone with the feature off keeps zero footprint: no
- * new persistent tray icon just because this milestone's code exists.
+ * new persistent tray icon just because this milestone's code exists. The
+ * overlay's right-click menu + global shortcuts (Cmd/Ctrl+Shift+S/P) follow
+ * the exact same rule, for the exact same reason.
  */
 function syncTrayPresence(): void {
-  if (isAmbientDetectionEnabled()) registerDetectionTray(trayActions)
-  else disposeTray()
+  if (isAmbientDetectionEnabled()) {
+    registerDetectionTray(trayActions)
+    enableOverlayShortcuts()
+  } else {
+    disposeTray()
+    disableOverlayShortcuts()
+  }
 }
 
 /** The overlay window + tray are refreshed together, every time - whenever anything relevant changes. */
@@ -199,6 +213,10 @@ export function startDetectionService(): void {
     running = true
   }
   setDetectionEnabledChangedListener(refreshDetectionServiceEnablement)
+  // Pre-creates the (hidden) overlay window now, regardless of whether the
+  // feature ends up enabled — see initOverlay()'s own comment for why this
+  // beats creating it lazily on first real detection.
+  initOverlay(trayActions)
   syncTrayPresence()
 }
 

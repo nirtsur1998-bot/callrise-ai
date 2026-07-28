@@ -4,6 +4,7 @@ import { join } from 'path'
 import {
   isKnownConferencingApp,
   isOwnProcess,
+  looksLikeCallTitle,
   matchTitle,
   normalizeAppIdentity
 } from '../appRegistry'
@@ -83,26 +84,45 @@ function loadNativeAddon(): { addon: NativeAddon | null; error: unknown } {
  * what's verified vs. still unexercised, e.g. the window-title path).
  */
 export class WindowsAdapter implements ICallDetectorAdapter {
-  private readonly addon: NativeAddon | null
-  readonly loadError: unknown
+  // Deliberately NOT loaded in the constructor — a WindowsAdapter is created
+  // unconditionally at every app startup (detection-service.ts's
+  // startDetectionService(), regardless of the ff_ambient_detection setting),
+  // so an eager require() here means a bad/incompatible .node file on the
+  // user's machine (e.g. a missing VC++ runtime DLL) could crash the WHOLE
+  // APP on every single launch, for every user, even ones who never touched
+  // this feature — confirmed as the real-world cause of "installs fine, then
+  // never opens, no error" on multiple Windows testers' machines. Loading is
+  // deferred to the first isSupported()/start() call, both of which only
+  // happen once the feature is actually enabled — so a broken addon can only
+  // ever break detection, never the app's ability to open.
+  private addon: NativeAddon | null = null
+  private addonLoadAttempted = false
+  loadError: unknown = null
   private readonly now: () => number
 
   private listeners = new Set<(signal: DetectionSignal) => void>()
   private pollTimer?: ReturnType<typeof setInterval>
 
   constructor(options: { now?: () => number } = {}) {
-    const { addon, error } = loadNativeAddon()
-    this.addon = addon
-    this.loadError = error
     this.now = options.now ?? Date.now
   }
 
+  private ensureAddonLoaded(): NativeAddon | null {
+    if (!this.addonLoadAttempted) {
+      this.addonLoadAttempted = true
+      const { addon, error } = loadNativeAddon()
+      this.addon = addon
+      this.loadError = error
+    }
+    return this.addon
+  }
+
   isSupported(): boolean {
-    return process.platform === 'win32' && this.addon != null
+    return process.platform === 'win32' && this.ensureAddonLoaded() != null
   }
 
   start(): void {
-    if (!this.addon || this.pollTimer) return
+    if (!this.ensureAddonLoaded() || this.pollTimer) return
     this.sample()
     this.pollTimer = setInterval(() => this.sample(), SAMPLE_INTERVAL_MS)
   }
@@ -141,10 +161,12 @@ export class WindowsAdapter implements ICallDetectorAdapter {
     )
     const byPid = new Map(runningApps.map((p) => [p.pid, p]))
 
+    // M17 §2.2: emit for every running app, not just registry-known ones —
+    // see MacAdapter's identical comment. A `process` signal alone (weight
+    // 0.1) is far too weak to trigger detection by itself.
     for (const app of runningApps) {
       if (isOwnProcess({ pid: app.pid, processName: app.exeName })) continue
       const identity = normalizeAppIdentity({ windowsExeName: app.exeName })
-      if (!identity.known) continue
       this.emit({
         kind: 'process',
         appId: identity.appId,
@@ -175,31 +197,51 @@ export class WindowsAdapter implements ICallDetectorAdapter {
     const windows = this.safeCall(() => this.addon!.getWindowTitles(), [] as NativeWindowInfo[])
     for (const w of windows) {
       if (!w.title || isOwnProcess({ pid: w.pid })) continue
-      const match = matchTitle(w.title)
-      if (!match) continue
-      this.emit({
-        kind: 'window-title',
-        appId: match.appId,
-        displayName: match.displayName,
-        pid: w.pid,
-        title: w.title,
-        observedAt: now,
-        weight: 0
-      })
-      // Mirrors MacAdapter: a matched title on a process not already flagged
-      // as a known app (the browser-hosted case - e.g. Google Meet in Chrome,
-      // which has no windowsExeNames/bundleId entry, only a titlePattern) is
-      // still useful as a weak corroborating `process` signal.
       const exeApp = byPid.get(w.pid)
-      if (
-        exeApp &&
-        !isKnownConferencingApp(normalizeAppIdentity({ windowsExeName: exeApp.exeName }).appId)
-      ) {
+      const match = matchTitle(w.title)
+
+      if (match) {
         this.emit({
-          kind: 'process',
+          kind: 'window-title',
           appId: match.appId,
           displayName: match.displayName,
           pid: w.pid,
+          title: w.title,
+          observedAt: now,
+          weight: 0
+        })
+        // Mirrors MacAdapter: a matched title on a process not already
+        // flagged as a known app (the browser-hosted case - e.g. Google Meet
+        // in Chrome, which has no windowsExeNames/bundleId entry, only a
+        // titlePattern) is still useful as a weak corroborating `process` signal.
+        if (
+          exeApp &&
+          !isKnownConferencingApp(normalizeAppIdentity({ windowsExeName: exeApp.exeName }).appId)
+        ) {
+          this.emit({
+            kind: 'process',
+            appId: match.appId,
+            displayName: match.displayName,
+            pid: w.pid,
+            observedAt: now,
+            weight: 0
+          })
+        }
+        continue
+      }
+
+      // M17 §2.2: no per-app pattern matched — fall back to the generic
+      // "does this look like a call" heuristic (see MacAdapter's identical
+      // comment) so a totally unlisted Windows app's window title can still
+      // contribute a (deliberately weaker) signal.
+      if (looksLikeCallTitle(w.title)) {
+        const identity = normalizeAppIdentity({ windowsExeName: exeApp?.exeName })
+        this.emit({
+          kind: 'window-title',
+          appId: identity.appId,
+          displayName: identity.displayName,
+          pid: w.pid,
+          title: w.title,
           observedAt: now,
           weight: 0
         })

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { PageHeader } from '@renderer/components/PageHeader'
 import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { ContactsView } from '@renderer/features/contacts/ContactsView'
@@ -13,13 +13,34 @@ const TABS: { id: CrmTab; label: string }[] = [
   { id: 'followups', label: 'Follow-ups' }
 ]
 
+interface CrmViewProps {
+  /** The command palette's "jump to a specific contact/deal" — preselects
+   *  that record and switches to its tab on mount. Same one-shot-consume
+   *  shape as PastCallsView's initialSelectedId. */
+  initialContactId?: string | null
+  initialDealId?: string | null
+  onInitialSelectionConsumed?: () => void
+}
+
 /** The CRM hub: Contacts (Phase 1), Deals (Phase 3), and Follow-ups
  *  (Phase 4) as tabs of one screen, rather than separate sidebar items —
  *  they're one feature area. */
-export function CrmView(): React.JSX.Element {
-  const [tab, setTab] = useState<CrmTab>('contacts')
-  const [openDealId, setOpenDealId] = useState<string | null>(null)
-  const [openContactId, setOpenContactId] = useState<string | null>(null)
+export function CrmView({
+  initialContactId = null,
+  initialDealId = null,
+  onInitialSelectionConsumed
+}: CrmViewProps = {}): React.JSX.Element {
+  const [tab, setTab] = useState<CrmTab>(initialDealId ? 'deals' : 'contacts')
+  const [openDealId, setOpenDealId] = useState<string | null>(initialDealId)
+  const [openContactId, setOpenContactId] = useState<string | null>(initialContactId)
+
+  const consumedRef = useRef(false)
+  useEffect(() => {
+    if ((initialDealId || initialContactId) && !consumedRef.current) {
+      consumedRef.current = true
+      onInitialSelectionConsumed?.()
+    }
+  }, [initialDealId, initialContactId, onInitialSelectionConsumed])
 
   // The Follow-ups tab always shows — it now covers risk flags, open linked
   // tasks, and this week's meetings, none of which depend on the cadence

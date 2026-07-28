@@ -4,19 +4,25 @@ import type { Deal, DealStage } from './types'
 /** Follow-up dashboard priority tiers, most urgent first. A deal's risk
  *  assessment (when one has been run) takes priority over plain cadence —
  *  a deal called last week but flagged high-risk still needs attention. */
-export type AttentionTier = 'risk-high' | 'risk-medium' | 'stale'
+export type AttentionTier = 'risk-high' | 'risk-medium' | 'risk-stale' | 'stale'
 
 export const ATTENTION_TIER_RANK: Record<AttentionTier, number> = {
   'risk-high': 0,
   'risk-medium': 1,
-  stale: 2
+  'risk-stale': 2,
+  stale: 3
 }
+
+/** A 'low'/no-longer-current risk read older than this is worth re-checking
+ *  rather than trusted at face value — deals move fast enough that a month-old
+ *  "low risk" verdict isn't a reliable signal anymore. */
+export const RISK_ASSESSMENT_STALE_DAYS = 30
 
 /**
  * Whether an open deal needs attention on the follow-up dashboard, and why:
  * a medium/high risk assessment (if one exists — there's no separate on/off
- * switch for risk assessment itself, since it's opt-in per deal already;
- * a deal with no assessment or a 'low' one falls through to cadence), or
+ * switch for risk assessment itself, since it's opt-in per deal already), a
+ * 'low' assessment that's gone stale itself and is due for a re-check, or
  * (when the cadence feature is on) no call in longer than the threshold.
  * Returns null when the deal doesn't need attention at all.
  */
@@ -31,6 +37,9 @@ export function dealAttentionTier(
   const level = deal.riskAssessment?.level
   if (level === 'high') return 'risk-high'
   if (level === 'medium') return 'risk-medium'
+  if (deal.riskAssessment && isStale(deal.riskAssessment.createdAt, RISK_ASSESSMENT_STALE_DAYS)) {
+    return 'risk-stale'
+  }
   if (cadenceEnabled && isStale(lastCallAt ?? deal.createdAt, staleAfterDays)) return 'stale'
   return null
 }

@@ -185,6 +185,23 @@ export function MainApp({
     setActive('past-calls')
   }
 
+  // Command palette's "jump to a specific record" search results — same
+  // one-shot preselect pattern as openCallId above, just for the CRM tabs.
+  const [openContactId, setOpenContactId] = useState<string | null>(null)
+  const [openDealId, setOpenDealId] = useState<string | null>(null)
+  const openContactFromPalette = (id: string): void => {
+    setOpenContactId(id)
+    setActive('crm')
+  }
+  const openDealFromPalette = (id: string): void => {
+    setOpenDealId(id)
+    setActive('crm')
+  }
+  const openCallFromPalette = (id: string): void => {
+    setOpenCallId(id)
+    setActive('past-calls')
+  }
+
   const signOut = (): void => {
     void window.api.auth.signOut() // the gate swaps back to the login screen via the broadcast
   }
@@ -196,6 +213,9 @@ export function MainApp({
         onClose={() => setPaletteOpen(false)}
         onSelect={setActive}
         actions={paletteActions}
+        onOpenContact={openContactFromPalette}
+        onOpenDeal={openDealFromPalette}
+        onOpenCall={openCallFromPalette}
       />
       <ShortcutsOverlay open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       {detectedCallApp && (
@@ -265,7 +285,14 @@ export function MainApp({
         ) : active === 'tasks' ? (
           <TasksView />
         ) : active === 'crm' ? (
-          <CrmView />
+          <CrmView
+            initialContactId={openContactId}
+            initialDealId={openDealId}
+            onInitialSelectionConsumed={() => {
+              setOpenContactId(null)
+              setOpenDealId(null)
+            }}
+          />
         ) : active === 'calendar' ? (
           <CalendarView />
         ) : active === 'coaching' ? (

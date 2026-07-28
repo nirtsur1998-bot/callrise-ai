@@ -1,20 +1,50 @@
 // Foreground-app detection for AI Note Taker's "exclude these apps" feature.
 // Only the frontmost app's NAME is used (never its window title or URL), and
 // active-win only needs macOS Accessibility/Screen Recording permission to
-// fetch those two extra fields — so both are explicitly disabled below. This
-// also stops macOS from repeatedly showing its own native permission prompt
-// (accessibilityPermission defaults to true, which re-prompts on every
-// unsigned/ad-hoc-signed rebuild, since each rebuild gets a new code-signing
-// identity that macOS's TCC treats as a different app). Detection is always
-// best-effort regardless: any failure (unsupported platform, helper crash)
-// resolves to null, and callers must fail OPEN (never block auto-start just
-// because detection itself didn't work).
-import { app, ipcMain, BrowserWindow } from 'electron'
+// fetch those two extra fields — so both are explicitly disabled via its
+// `accessibilityPermission`/`screenRecordingPermission: false` options.
+//
+// That alone turned out NOT to be enough to stop the repeated native
+// permission prompt (reported 2026-07-28, after the flags above had already
+// shipped): active-win's macOS helper is a separately compiled binary
+// (node_modules/active-win/main) that still performs its OWN baseline
+// Accessibility-trust check before it can honor those flags at all — and
+// on an unsigned/ad-hoc-signed rebuild (a NEW code-signing identity every
+// build, which TCC treats as a different app each time, even at the same
+// bundle id), THAT check itself is what triggers the OS prompt, regardless
+// of what the flags say to skip afterward. The poll below fires
+// automatically every 5s whenever the window loses focus — with no user
+// gesture attached to it, that background poll was silently re-triggering
+// the prompt on every blur, on a machine where the CURRENT build's identity
+// had never actually been granted (even though an OLDER build's identity
+// still shows as "granted" in System Settings, which is exactly the
+// confusing "it says it's allowed but keeps asking" symptom).
+//
+// Fix: check trust via Electron's OWN non-prompting API
+// (`systemPreferences.isTrustedAccessibilityClient(false)` — the `false`
+// means "just tell me, don't ask") BEFORE ever invoking active-win's
+// helper. If this build's identity isn't currently trusted, skip the
+// active-win call entirely — the exclusion-detection feature just silently
+// doesn't work until the user (re-)grants it for this exact build, which is
+// far better than nagging them with a system prompt they can't seem to
+// satisfy every few seconds.
+import { app, ipcMain, BrowserWindow, systemPreferences } from 'electron'
 import activeWin from 'active-win'
 import { isKnownCallingApp } from './known-calling-apps'
 
+function hasAccessibilityTrust(): boolean {
+  // Only macOS gates this; other platforms have no equivalent TCC prompt.
+  if (process.platform !== 'darwin') return true
+  try {
+    return systemPreferences.isTrustedAccessibilityClient(false)
+  } catch {
+    return false // never risk a prompt if the check itself is unavailable
+  }
+}
+
 /** The frontmost app's name, or null if detection isn't available/failed. */
 export async function getActiveAppName(): Promise<string | null> {
+  if (!hasAccessibilityTrust()) return null
   try {
     const result = await activeWin({
       accessibilityPermission: false,

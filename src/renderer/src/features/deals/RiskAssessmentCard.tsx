@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ShieldAlert, RotateCw, ArrowRight, PhoneCall } from 'lucide-react'
+import { ShieldAlert, RotateCw, ArrowRight, PhoneCall, History, ChevronDown } from 'lucide-react'
 import { Badge, type BadgeTone } from '@renderer/components/Badge'
 import { Button } from '@renderer/components/Button'
 import { Skeleton } from '@renderer/components/Skeleton'
@@ -85,7 +85,12 @@ export function RiskAssessmentCard({
       {assessing ? (
         <RiskLoading />
       ) : assessment ? (
-        <RiskReport assessment={assessment} />
+        <>
+          <RiskReport assessment={assessment} />
+          {!!deal.riskAssessmentHistory?.length && (
+            <RiskHistory history={deal.riskAssessmentHistory} />
+          )}
+        </>
       ) : (
         <div className="flex flex-col items-start gap-3">
           <p className="text-sm text-muted">
@@ -146,6 +151,48 @@ function RiskReport({
         </p>
         <p className="mt-0.5 text-[13px] text-ink">{assessment.suggestedAction}</p>
       </div>
+    </div>
+  )
+}
+
+/** Past assessments, most recent first, collapsed by default — a lightweight
+ *  timeline so a rep can see how the read on a deal has moved, not just the
+ *  current snapshot. */
+function RiskHistory({
+  history
+}: {
+  history: NonNullable<Deal['riskAssessmentHistory']>
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const entries = [...history].reverse()
+
+  return (
+    <div className="mt-4 border-t border-line-soft pt-3">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 text-[12px] font-medium text-faint hover:text-muted"
+      >
+        <History className="h-3.5 w-3.5" />
+        {entries.length} previous assessment{entries.length === 1 ? '' : 's'}
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <ul className="mt-2.5 space-y-1.5">
+          {entries.map((a, i) => (
+            <li
+              key={i}
+              className="flex items-center gap-2.5 rounded-lg border border-line-soft bg-canvas px-3 py-2"
+            >
+              <Badge tone={LEVEL_TONE[a.level]} className="shrink-0">
+                {LEVEL_LABEL[a.level]}
+              </Badge>
+              <p className="min-w-0 flex-1 truncate text-[12px] text-faint">{a.summary}</p>
+              <span className="shrink-0 text-[11px] text-faint">{formatRelative(a.createdAt)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

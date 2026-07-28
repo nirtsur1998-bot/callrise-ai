@@ -4,6 +4,7 @@ import { join } from 'path'
 import {
   isKnownConferencingApp,
   isOwnProcess,
+  looksLikeCallTitle,
   matchTitle,
   normalizeAppIdentity
 } from '../appRegistry'
@@ -94,8 +95,14 @@ function loadNativeAddon(): { addon: NativeAddon | null; error: unknown } {
  * back to manual capture.
  */
 export class MacAdapter implements ICallDetectorAdapter {
-  private readonly addon: NativeAddon | null
-  readonly loadError: unknown
+  // Deliberately NOT loaded in the constructor — see WindowsAdapter's
+  // identical comment. A MacAdapter is created unconditionally at every app
+  // startup regardless of the ff_ambient_detection setting, so loading stays
+  // deferred to the first isSupported()/start() call so a broken addon can
+  // never prevent the app itself from opening.
+  private addon: NativeAddon | null = null
+  private addonLoadAttempted = false
+  loadError: unknown = null
   private readonly now: () => number
   private readonly onUnavailableWindowTitles?: () => void
 
@@ -105,19 +112,26 @@ export class MacAdapter implements ICallDetectorAdapter {
   private warnedNoScreenRecording = false
 
   constructor(options: { now?: () => number; onUnavailableWindowTitles?: () => void } = {}) {
-    const { addon, error } = loadNativeAddon()
-    this.addon = addon
-    this.loadError = error
     this.now = options.now ?? Date.now
     this.onUnavailableWindowTitles = options.onUnavailableWindowTitles
   }
 
+  private ensureAddonLoaded(): NativeAddon | null {
+    if (!this.addonLoadAttempted) {
+      this.addonLoadAttempted = true
+      const { addon, error } = loadNativeAddon()
+      this.addon = addon
+      this.loadError = error
+    }
+    return this.addon
+  }
+
   isSupported(): boolean {
-    return process.platform === 'darwin' && this.addon != null
+    return process.platform === 'darwin' && this.ensureAddonLoaded() != null
   }
 
   start(): void {
-    if (!this.addon || this.pollTimer) return
+    if (!this.ensureAddonLoaded() || this.pollTimer) return
     // sample() itself resolves virtualMicUID on its first call (and keeps
     // re-checking on every later call for as long as it stays null).
     this.sample()
@@ -173,10 +187,16 @@ export class MacAdapter implements ICallDetectorAdapter {
   }
 
   private emitProcessSignals(runningApps: NativeRunningProcess[], now: number): void {
+    // M17 §2.2: emit for every running app, not just registry-known ones — a
+    // `process` signal alone (weight 0.1) is far too weak to trigger
+    // detection on its own; the registry only affects the STRENGTH of the
+    // eventual mic-session/window-title signals for this app (see
+    // fusion.ts's weightForSignal), never whether a process signal exists at
+    // all. This is what lets a totally unlisted app ever accumulate enough
+    // confidence to be detected.
     for (const app of runningApps) {
       if (isOwnProcess({ pid: app.pid, bundleId: app.bundleId, processName: app.name })) continue
       const identity = normalizeAppIdentity({ macBundleId: app.bundleId, processName: app.name })
-      if (!identity.known) continue
       this.emit({
         kind: 'process',
         appId: identity.appId,
@@ -229,8 +249,7 @@ export class MacAdapter implements ICallDetectorAdapter {
 
     for (const [pid, app] of byPid) {
       const identity = normalizeAppIdentity({ macBundleId: app.bundleId, processName: app.name })
-      if (!identity.known || isOwnProcess({ pid, bundleId: app.bundleId, processName: app.name }))
-        continue
+      if (isOwnProcess({ pid, bundleId: app.bundleId, processName: app.name })) continue
       this.emit({
         kind: ourMicRunning ? 'own-virtual-device' : 'mic-session',
         appId: identity.appId,
@@ -256,29 +275,55 @@ export class MacAdapter implements ICallDetectorAdapter {
     for (const w of windows) {
       if (!w.title) continue
       if (isOwnProcess({ pid: w.pid, processName: w.ownerName })) continue
-      const match = matchTitle(w.title)
-      if (!match) continue
       const app = byPid.get(w.pid)
-      this.emit({
-        kind: 'window-title',
-        appId: match.appId,
-        displayName: match.displayName,
-        pid: w.pid,
-        title: w.title,
-        observedAt: now,
-        weight: 0
-      })
-      // A matched title on a process CoreAudio didn't already flag as a known
-      // app is still useful as a weak `process` corroboration.
-      if (
-        app &&
-        !isKnownConferencingApp(normalizeAppIdentity({ macBundleId: app.bundleId }).appId)
-      ) {
+      const match = matchTitle(w.title)
+
+      if (match) {
         this.emit({
-          kind: 'process',
+          kind: 'window-title',
           appId: match.appId,
           displayName: match.displayName,
           pid: w.pid,
+          title: w.title,
+          observedAt: now,
+          weight: 0
+        })
+        // A matched title on a process CoreAudio didn't already flag as a
+        // known app is still useful as a weak `process` corroboration.
+        if (
+          app &&
+          !isKnownConferencingApp(normalizeAppIdentity({ macBundleId: app.bundleId }).appId)
+        ) {
+          this.emit({
+            kind: 'process',
+            appId: match.appId,
+            displayName: match.displayName,
+            pid: w.pid,
+            observedAt: now,
+            weight: 0
+          })
+        }
+        continue
+      }
+
+      // M17 §2.2: no per-app pattern matched (this app has no registry
+      // entry at all) — fall back to the generic "does this look like a
+      // call" heuristic so an unlisted app's window title can still
+      // contribute a (deliberately weaker — see fusion.ts) signal. The
+      // signal's own appId is the process's own normalized identity, not a
+      // known app's — this is what keeps it correctly weighted as
+      // 'window-title-generic' downstream.
+      if (looksLikeCallTitle(w.title)) {
+        const identity = normalizeAppIdentity({
+          macBundleId: app?.bundleId,
+          processName: app?.name ?? w.ownerName
+        })
+        this.emit({
+          kind: 'window-title',
+          appId: identity.appId,
+          displayName: identity.displayName,
+          pid: w.pid,
+          title: w.title,
           observedAt: now,
           weight: 0
         })
