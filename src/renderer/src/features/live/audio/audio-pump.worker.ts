@@ -71,6 +71,11 @@ function drain(): void {
   // the next tick would turn a one-off gap into a permanent lag floor.
   for (;;) {
     const { samples, frames, dropped } = r.read(MAX_FRAMES_PER_POST)
+    // Reported even while paused: an overrun is real audio that's gone
+    // forever the instant it happens, independent of whether anyone wanted it
+    // forwarded right now. Silently swallowing it here would make a health
+    // report claim no audio was lost during a pause that in fact overflowed.
+    if (dropped > 0) post({ type: 'dropped', frames: dropped })
     // While paused the ring is still drained, just not forwarded. Letting it
     // fill instead would mean resuming into a backlog of audio from before the
     // pause — exactly the stale-audio lag this subsystem exists to prevent.
@@ -78,7 +83,6 @@ function drain(): void {
       if (frames < MAX_FRAMES_PER_POST) return
       continue
     }
-    if (dropped > 0) post({ type: 'dropped', frames: dropped })
     if (frames <= 0) return
     const payload = stereo ? samples : monoFromStereo(samples, frames)
     // Transferred, not copied — the worker has no further use for it.

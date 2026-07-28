@@ -52,22 +52,47 @@ export interface AudioPump {
 /** The port main sends us, re-posted into this world by the preload. */
 function awaitPort(timeoutMs: number): Promise<MessagePort | null> {
   return new Promise((resolve) => {
-    let done = false
-    const finish = (port: MessagePort | null): void => {
-      if (done) return
-      done = true
+    let resolved = false
+    let listening = true
+    const stopListening = (): void => {
+      if (!listening) return
+      listening = false
       window.removeEventListener('message', onMessage)
-      clearTimeout(timer)
-      resolve(port)
     }
     const onMessage = (event: MessageEvent): void => {
       // Same-window only, and only our tag. Nothing else can hand us a pipe to
       // the process that owns the Deepgram socket.
       if (event.source !== window) return
       if ((event.data as { type?: string } | null)?.type !== 'callrise:audio-port') return
-      finish(event.ports[0] ?? null)
+      const port = event.ports[0] ?? null
+      if (resolved) {
+        // The handshake already timed out and the caller moved on to the
+        // fallback path — this port arrived too late to use. Close it rather
+        // than leaving it open: main's paired end only cleans up on the NEXT
+        // request or the window closing, so an unclosed late port would sit
+        // alive for nothing until either of those happens.
+        try {
+          port?.close()
+        } catch {
+          /* already gone */
+        }
+        stopListening()
+        return
+      }
+      resolved = true
+      stopListening()
+      clearTimeout(giveUpTimer)
+      resolve(port)
     }
-    const timer = setTimeout(() => finish(null), timeoutMs)
+    const giveUpTimer = setTimeout(() => {
+      if (resolved) return
+      resolved = true
+      resolve(null)
+      // Keep listening a little longer in case the grant is just about to
+      // land — closing a late arrival beats leaking it forever — then give up
+      // for good so this listener doesn't outlive the call.
+      setTimeout(stopListening, timeoutMs)
+    }, timeoutMs)
     window.addEventListener('message', onMessage)
     window.api.transcription.requestAudioPort()
   })
@@ -82,7 +107,12 @@ function awaitPort(timeoutMs: number): Promise<MessagePort | null> {
 export async function startAudioPump(
   sampleRate: number,
   stereo: boolean,
-  onDropped: (frames: number) => void
+  onDropped: (frames: number) => void,
+  /** Called at most once, if the worker dies or reports an error AFTER the
+   *  handshake succeeded. The caller is expected to revert the worklet to the
+   *  postMessage fallback (send it 'ring-detach') — this module cannot do
+   *  that itself, since it never holds a reference to the worklet. */
+  onFailure?: () => void
 ): Promise<AudioPump | null> {
   if (!sharedMemoryAvailable()) return null
 
@@ -142,6 +172,31 @@ export async function startAudioPump(
   }
 
   let stopped = false
+
+  // The handshake's own onmessage/onerror close over `settled`, which is
+  // already true by now — so from here on those handlers would silently
+  // no-op on a real failure. Replace them with handlers that stay meaningful
+  // for the rest of the pump's life: 'dropped' keeps being counted, and a
+  // post-handshake error or worker crash calls `onFailure` exactly once so
+  // the caller can fall back instead of an audio path that has gone dark with
+  // no signal that it did.
+  let failed = false
+  const fail = (): void => {
+    if (failed || stopped) return
+    failed = true
+    onFailure?.()
+  }
+  worker.onmessage = (event: MessageEvent<PumpEvent>): void => {
+    const data = event.data
+    if (data.type === 'dropped') {
+      dropped += data.frames
+      onDropped(data.frames)
+    } else if (data.type === 'error') {
+      fail()
+    }
+  }
+  worker.onerror = (): void => fail()
+
   return {
     ringMessage: {
       type: 'ring',

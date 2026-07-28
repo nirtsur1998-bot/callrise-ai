@@ -86,9 +86,21 @@ export async function startRecorder(
   // postMessage path above carries the call exactly as it always has.
   let pump: AudioPump | null = null
   let stereoMode = false
+  // If the worker dies mid-call after the handshake succeeded, revert the
+  // worklet to the postMessage fallback it never stopped supporting — the
+  // ring attach only made it stop USING that path, it didn't remove it. Kept
+  // as a named function (not inline) so it reads the same whether it fires
+  // during setup or minutes into a live call.
+  const fallBackToPostMessage = (): void => {
+    worklet.port.postMessage({ type: 'ring-detach' })
+    pump = null
+  }
   try {
-    pump = await startAudioPump(context.sampleRate, stereoMode, (frames) =>
-      onAudioDropped?.(frames)
+    pump = await startAudioPump(
+      context.sampleRate,
+      stereoMode,
+      (frames) => onAudioDropped?.(frames),
+      fallBackToPostMessage
     )
   } catch {
     pump = null
@@ -166,8 +178,15 @@ export async function startRecorder(
     stop: (): void => {
       if (stopped) return
       stopped = true
-      pump?.stop()
-      pump = null
+      if (pump) {
+        // Explicit rather than relying on merger.disconnect() to starve the
+        // worklet's input into silence: without this the worklet's `ring`
+        // reference outlives the buffer it points at for however long the
+        // disconnect takes to actually stop delivering render quanta.
+        worklet.port.postMessage({ type: 'ring-detach' })
+        pump.stop()
+        pump = null
+      }
       detachLoopback()
       micTrack?.removeEventListener('ended', handleEnded)
       worklet.port.onmessage = null

@@ -174,6 +174,7 @@ export function useTranscription(
         setPhase('error')
         setPaused(false)
         setOtherPartyLive(false)
+        setBuyerSilentWarning(false)
         savePendingRef.current = false
       }
     })
@@ -222,6 +223,7 @@ export function useTranscription(
       setPhase('error')
       setPaused(false)
       setOtherPartyLive(false)
+      setBuyerSilentWarning(false)
       savePendingRef.current = false
       recorderRef.current?.stop()
       recorderRef.current = null
@@ -251,6 +253,24 @@ export function useTranscription(
       setBuyerSilentWarning(true)
     })
 
+    // Main's liveness watchdog noticed no audio callback at all for 10s while
+    // the session was live (session-health.md calls this "capture-dead →
+    // reacquire") — the capture device is gone even though nothing at the
+    // browser level (the mic track's own 'ended' event) said so. Recovers the
+    // same way an unplugged mic does: end the session and surface the
+    // existing "Microphone disconnected" / Reconnect flow rather than leaving
+    // the rep on a call that main can see has gone silent forever.
+    const offCaptureLost = window.api.transcription.onCaptureLost(() => {
+      armSave()
+      recorderRef.current?.stop()
+      recorderRef.current = null
+      setAnalyser(null)
+      setOtherPartyLive(false)
+      setBuyerSilentWarning(false)
+      void window.api.transcription.stop()
+      setPhase('no-device')
+    })
+
     // The session fully closed after a stop — the final flushed words are in,
     // so save now.
     const offClosed = window.api.transcription.onClosed(() => {
@@ -264,9 +284,10 @@ export function useTranscription(
       offGap()
       offHealth()
       offBuyerSilent()
+      offCaptureLost()
       offClosed()
     }
-  }, [flushPendingSave])
+  }, [armSave, flushPendingSave])
 
   const beginSession = useCallback(async (): Promise<void> => {
     // If a previous call is still waiting to be saved, save it before we reset.
@@ -419,6 +440,7 @@ export function useTranscription(
     setPaused(false)
     setOtherPartyLive(false)
     setOtherPartyError(null)
+    setBuyerSilentWarning(false)
     await window.api.transcription.stop()
     setInterimText('')
     setPhase('idle')
@@ -450,6 +472,11 @@ export function useTranscription(
       if (!recorder || !recorder.isLoopbackAttached()) return
       setOtherPartyLive(false)
       setOtherPartyError(null)
+      // Whatever prompted the buyer warning no longer applies once buyer
+      // capture itself has been turned off — a stale "audio has been silent,
+      // check your routing" banner about a channel that's no longer running
+      // reads as contradicting whatever banner explains WHY it stopped.
+      setBuyerSilentWarning(false)
       recorder.detachLoopback() // stop capturing the buyer immediately
       speakerBoundaryRef.current = true
       try {
@@ -505,12 +532,14 @@ export function useTranscription(
         if (display.getAudioTracks().length === 0) {
           display.getTracks().forEach((t) => t.stop())
           setOtherPartyError('no-audio')
+          setBuyerSilentWarning(false)
           return
         }
         audio = new MediaStream(display.getAudioTracks())
       } catch {
         window.api.loopback.disarm()
         setOtherPartyError('denied')
+        setBuyerSilentWarning(false)
         return
       }
 
@@ -529,6 +558,7 @@ export function useTranscription(
         // Loopback ended on its own (OS revoked screen recording / stopped sharing).
         void disableOtherParty()
         setOtherPartyError('interrupted')
+        setBuyerSilentWarning(false)
       })
 
       // Switch the socket to multichannel FIRST, then flip the worklet to stereo —
@@ -551,6 +581,7 @@ export function useTranscription(
         // Roll back cleanly so the worklet and socket never disagree.
         recorder.detachLoopback()
         setOtherPartyError('denied')
+        setBuyerSilentWarning(false)
         return
       }
       speakerBoundaryRef.current = true

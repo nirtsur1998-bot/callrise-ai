@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Eye, EyeOff, ExternalLink, Loader2, FlaskConical } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { fieldClass } from '@renderer/components/field'
@@ -69,6 +69,12 @@ function KeyCard({
   const [savedNotice, setSavedNotice] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
+  // Same auto-clearing "Saved" pattern as CrmSection/PersonalizationSection/
+  // AccountSection, including the cleanup those already have: without it, a
+  // save right before navigating away from Settings fires setSavedNotice on
+  // an unmounted card after the 4s timer outlives it.
+  const savedTimeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(savedTimeout.current), [])
 
   const save = async (): Promise<void> => {
     if (!value.trim() || busy) return
@@ -80,7 +86,8 @@ function KeyCard({
         setSavedNotice(true)
         setTestResult(null)
         onChanged()
-        setTimeout(() => setSavedNotice(false), 4000)
+        clearTimeout(savedTimeout.current)
+        savedTimeout.current = setTimeout(() => setSavedNotice(false), 4000)
       }
     } finally {
       setBusy(false)

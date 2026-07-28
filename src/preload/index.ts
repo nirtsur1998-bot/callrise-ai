@@ -261,15 +261,20 @@ const api = {
 // The page then transfers it on to the audio worker, which streams PCM straight
 // to the main process without ever waking the renderer's main thread.
 //
-// The `*` target origin is safe here in the way it usually is not: this window
-// only ever loads the app's own bundle, never remote content, and the port
-// carries no authority by itself — main accepts audio on it only while the
-// window that requested it owns the live session.
+// Targeted at the page's own origin rather than '*': window.postMessage
+// delivers to any listener within the SAME document regardless of
+// targetOrigin (that part of the exposure is inherent to re-posting a port
+// into the main world at all, and is accepted because this window only ever
+// loads the app's own bundle) — but a non-'*' target origin at least means
+// the port is never handed to a different origin's content were one ever
+// embedded here (an iframe, a future webview), which '*' would not prevent.
+// The port carries no authority by itself either way — main accepts audio on
+// it only while the window that requested it owns the live session.
 export const AUDIO_PORT_MESSAGE = 'callrise:audio-port'
 ipcRenderer.on('audio-port:granted', (event: IpcRendererEvent) => {
   const port = event.ports[0]
   if (!port) return
-  window.postMessage({ type: AUDIO_PORT_MESSAGE }, '*', [port])
+  window.postMessage({ type: AUDIO_PORT_MESSAGE }, window.location.origin, [port])
 })
 
 if (process.contextIsolated) {
