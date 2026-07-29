@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CueLatencyTracker, type CueLatencyReport } from './cue-latency'
 import { BattlecardMatcher, type Battlecard } from './battlecards/match'
 import { STARTER_TRIGGERS } from './battlecards/library'
+import { MonologueTracker, type MonologueState } from './monologue'
 
 // Live in-call coaching cues. The substance comes from a conversation-aware
 // Claude call (window.api.transcription.liveCue) over a SPEAKER-LABELED
@@ -195,6 +196,9 @@ export interface UseLiveCues {
    *  now (see computeEngagementScore) — NOT a coaching or AI-derived score.
    *  Null until at least MIN_TURNS_FOR_ENGAGEMENT turns have been seen. */
   engagementScore: number | null
+  /** The current run of uninterrupted rep speech (§4.2) — a passive read,
+   *  never an interrupt. Null before the rep is identified. */
+  monologue: MonologueState | null
 }
 
 /**
@@ -216,6 +220,8 @@ export function useLiveCues(
   const [latency, setLatency] = useState<CueLatencyReport>(() => new CueLatencyTracker().report())
   const [repSpeaker, setRepSpeaker] = useState<number | null>(knownRepSpeaker)
   const [engagementScore, setEngagementScore] = useState<number | null>(null)
+  const [monologue, setMonologue] = useState<MonologueState | null>(null)
+  const monologueRef = useRef(new MonologueTracker())
 
   const cfgRef = useRef<Thresholds>(SENSITIVITY_THRESHOLDS[sensitivity])
   useEffect(() => {
@@ -296,6 +302,8 @@ export function useLiveCues(
       lastTurnEndAtRef.current = null
       setRepSpeaker(knownRepRef.current)
       setEngagementScore(null)
+      monologueRef.current.reset()
+      setMonologue(null)
       return
     }
 
@@ -310,6 +318,8 @@ export function useLiveCues(
     battlecardsRef.current.reset()
     setRepSpeaker(knownRepRef.current)
     setEngagementScore(null)
+    monologueRef.current.reset()
+    setMonologue(null)
 
     // Record turn-end → rendered for whichever tier just delivered (§1.7).
     const noteLatency = (tier: 'deterministic' | 'model'): void => {
@@ -515,6 +525,9 @@ export function useLiveCues(
       // Recompute the deterministic engagement gauge on every finalized turn
       // update — cheap (word-counting over ≤24 turns), no brain/AI call.
       setEngagementScore(computeEngagementScore(turnsRef.current, repSpeakerRef.current))
+      // Same pass updates the monologue meter (§4.2) — a passive read of the
+      // rep's current uninterrupted-speech run, never an interrupt.
+      setMonologue(monologueRef.current.update(turnsRef.current, repSpeakerRef.current, now))
 
       if (payload.speechFinal) onTurnEnd(now)
     })
@@ -535,6 +548,7 @@ export function useLiveCues(
     dismissSuggestion,
     latency,
     repSpeaker,
-    engagementScore
+    engagementScore,
+    monologue
   }
 }

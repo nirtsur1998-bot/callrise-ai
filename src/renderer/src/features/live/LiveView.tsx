@@ -27,6 +27,7 @@ import { SuggestionRail } from './components/SuggestionRail'
 import { CueControls } from './components/CueControls'
 import { AskCoach } from './components/AskCoach'
 import { EngagementGauge } from './components/EngagementGauge'
+import { MonologueMeter } from './components/MonologueMeter'
 import {
   IdleHero,
   CenteredState,
@@ -155,12 +156,8 @@ export function LiveView({
   const { enabled, setEnabled, sensitivity, setSensitivity } = useCueSettings()
   // When buyer capture is live, the rep is channel 0 — tell the cues so they
   // don't have to guess who the rep is.
-  const { cue, dismiss, suggestions, dismissSuggestion, repSpeaker, engagementScore } = useLiveCues(
-    status === 'listening',
-    enabled,
-    sensitivity,
-    otherPartyLive ? 0 : null
-  )
+  const { cue, dismiss, suggestions, dismissSuggestion, repSpeaker, engagementScore, monologue } =
+    useLiveCues(status === 'listening', enabled, sensitivity, otherPartyLive ? 0 : null)
 
   // When a call is saved, consent resets to off so it never carries to the next.
   const resetConsent = consent.reset
@@ -556,6 +553,9 @@ export function LiveView({
           />
           {status === 'listening' && engagementScore !== null && (
             <EngagementGauge score={engagementScore} />
+          )}
+          {status === 'listening' && monologue !== null && monologue.ms > 0 && (
+            <MonologueMeter state={monologue} />
           )}
           <StatusBadge status={status} />
           <div className="flex min-w-[70px] items-center gap-1.5 text-[13px]">
