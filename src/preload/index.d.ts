@@ -1216,7 +1216,7 @@ export interface DetectionApi {
 // --- Scheduled alerts (M19 Task 1) ------------------------------------------
 
 export type AlertTriggerType = 'meeting_starting' | 'task_due' | 'deal_cold' | 'no_next_step'
-export type AlertChannelType = 'telegram' | 'email' | 'whatsapp'
+export type AlertChannelType = 'telegram' | 'email' | 'whatsapp' | 'desktop'
 
 export interface NotificationChannel {
   id: string

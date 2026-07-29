@@ -14,6 +14,7 @@ import {
   MessageSquareQuote,
   KeyRound,
   Radar,
+  BellRing,
   type LucideIcon
 } from 'lucide-react'
 
@@ -30,6 +31,7 @@ export type SettingsPageId =
   | 'objection-library'
   | 'calendar'
   | 'crm'
+  | 'alerts'
   | 'app'
   | 'appearance'
   | 'privacy-data'
@@ -155,6 +157,18 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         icon: Contact,
         description:
           'Calendar-match suggestions, default country, and auto-numbered customer IDs for Contacts.'
+      }
+    ]
+  },
+  {
+    label: 'Alerts',
+    items: [
+      {
+        id: 'alerts',
+        label: 'Scheduled alerts',
+        icon: BellRing,
+        description:
+          'Reminders for meetings, tasks, cooling deals, and missed next steps — delivered to Telegram, email, or desktop, even when the app is closed.'
       }
     ]
   },

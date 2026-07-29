@@ -16,6 +16,7 @@ import { PersonalizationSection } from './PersonalizationSection'
 import { ObjectionLibrarySection } from './ObjectionLibrarySection'
 import { CalendarSection } from './CalendarSection'
 import { CrmSection } from './CrmSection'
+import { AlertsSection } from '@renderer/features/alerts/AlertsSection'
 import { AppSection } from './AppSection'
 import { AppearanceSection } from './AppearanceSection'
 import { PrivacyDataPage } from './PrivacyDataPage'
@@ -33,6 +34,7 @@ const PAGE_CONTENT: Record<SettingsPageId, React.ComponentType> = {
   'objection-library': ObjectionLibrarySection,
   calendar: CalendarSection,
   crm: CrmSection,
+  alerts: AlertsSection,
   app: AppSection,
   appearance: AppearanceSection,
   'privacy-data': PrivacyDataPage
