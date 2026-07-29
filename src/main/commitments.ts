@@ -14,22 +14,14 @@
 // loop in their CISO" are both commitments, and a list that blends them is a
 // list the rep has to re-read every time to work out which ones are theirs.
 
-import type { CallSegment } from './calls-fs'
+import type { CallSegment, Commitment, CommitmentOwner } from './calls-fs'
 import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
 
 const MAX_TEXT_CHARS = 200_000
 const MAX_COMMITMENTS = 20
 const MAX_TEXT_LENGTH = 160
 
-export type CommitmentOwner = 'rep' | 'prospect'
-
-export interface Commitment {
-  owner: CommitmentOwner
-  /** What was promised, in the promiser's own terms. */
-  text: string
-  /** ISO date, only when a date was actually stated. */
-  dueDate?: string
-}
+export type { Commitment, CommitmentOwner }
 
 export type CommitmentResult =
   | { ok: true; commitments: Commitment[] }

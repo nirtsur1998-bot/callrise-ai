@@ -14,6 +14,7 @@ import {
   setCallSummary,
   setAttachmentSummary,
   setCallCoaching,
+  setCallCommitments,
   setCallTitle,
   setCallContact,
   setCallObjectionsMined,
@@ -25,6 +26,7 @@ import {
 } from './calls-fs'
 import { summarize, type SummarizeInput, type SummaryResult } from './summarize'
 import { coachCall, type CoachResult } from './coach'
+import { extractCommitments, type CommitmentResult } from './commitments'
 import { generateCallTitle, type GenerateTitleResult } from './call-title'
 import { mineObjections, makeVerifier, type ObjectionMiningResult } from './objection-mining'
 import { addToQueue, purgeQueueForCall } from './objection-queue-fs'
@@ -329,6 +331,35 @@ export function registerCalls(): void {
       }
     }
   })
+
+  // --- Commitments (§4.7) — who promised what -------------------------------
+  ipcMain.handle(
+    'commitments:extract',
+    async (_event, callId: string): Promise<CommitmentResult> => {
+      try {
+        const call = await getCall(callsDir(), callId)
+        if (!call) return { ok: false, error: 'failed', message: 'Call not found.' }
+        const result = await extractCommitments(speechSegments(call.segments))
+        if (result.ok) {
+          const saved = await setCallCommitments(callsDir(), callId, result.commitments)
+          if (!saved) {
+            return {
+              ok: false,
+              error: 'failed',
+              message: 'The commitments could not be saved. Please try again.'
+            }
+          }
+        }
+        return result
+      } catch {
+        return {
+          ok: false,
+          error: 'failed',
+          message: 'The commitments could not be saved. Please try again.'
+        }
+      }
+    }
+  )
 
   // --- Objection Library: mine a call for raw candidates --------------------
   // Gated on the SAME toggle that will later gate new-call mining + the

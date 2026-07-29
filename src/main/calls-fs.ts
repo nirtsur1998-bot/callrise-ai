@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from './atomic-write'
+import { sanitizeCommitments } from './commitments'
 
 export interface CallSegment {
   speaker: number
@@ -87,6 +88,18 @@ export interface CoachingReport {
   metrics: CoachMetrics
   model: string
   createdAt: string
+}
+
+// --- Commitments (§4.7 — who promised what) ---------------------------------
+
+export type CommitmentOwner = 'rep' | 'prospect'
+
+export interface Commitment {
+  owner: CommitmentOwner
+  /** What was promised, in the promiser's own terms. */
+  text: string
+  /** ISO date, only when a date was actually stated. */
+  dueDate?: string
 }
 
 // --- Recording consent (stored on the call, like a summary) -----------------
@@ -219,6 +232,11 @@ export interface Call extends CallBase {
   summary?: Summary
   attachments?: Attachment[]
   coaching?: CoachingReport
+  /** Who promised what (§4.7) — the last extraction run on this call, if any.
+   *  Not synced to cloud backup (see `callBackupPayload`): unlike coaching's
+   *  scores/advice, this hasn't been reviewed for what counts as safe to leave
+   *  the device, so it stays local-only until that's deliberately decided. */
+  commitments?: Commitment[]
   /** Recording-consent record. Always present on calls saved from M11 on. */
   consent?: ConsentRecord
   /** When this call was last read for Objection Library mining, if ever. */
@@ -1243,6 +1261,25 @@ export async function setCallCoaching(
     const clean = sanitizeCoaching(report, speechSegments(call.segments))
     if (!clean) return null // nothing usable to save — signal failure to the caller
     call.coaching = clean
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+export async function setCallCommitments(
+  dir: string,
+  callId: string,
+  commitments: Commitment[]
+): Promise<Call | null> {
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    // Re-sanitized here too (not just at generation time in commitments.ts) —
+    // the same defense-in-depth every other AI-derived field on a call gets:
+    // whatever reaches disk was validated at the point of writing it, not just
+    // trusted because it came from the extraction call moments earlier.
+    call.commitments = sanitizeCommitments(commitments)
     call.updatedAt = new Date().toISOString()
     await writeCall(dir, call)
     return call

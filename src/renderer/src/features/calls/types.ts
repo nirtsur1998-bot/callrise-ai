@@ -27,6 +27,16 @@ export interface Summary {
   createdAt: string
 }
 
+export type CommitmentOwner = 'rep' | 'prospect'
+
+export interface Commitment {
+  owner: CommitmentOwner
+  /** What was promised, in the promiser's own terms. */
+  text: string
+  /** ISO date, only when a date was actually stated. */
+  dueDate?: string
+}
+
 export type ConsentStatus = 'not-asked' | 'disclosed' | 'consented' | 'declined'
 export type ConsentJurisdiction = 'one-party' | 'two-party'
 export type ConsentMethod = 'verbal-on-call' | 'pre-agreed' | 'written'
@@ -87,6 +97,7 @@ export interface Call extends CallBase {
   summary?: Summary
   attachments?: Attachment[]
   coaching?: CoachingReport
+  commitments?: Commitment[]
   consent?: ConsentRecord
   bookmarks?: Bookmark[]
 }

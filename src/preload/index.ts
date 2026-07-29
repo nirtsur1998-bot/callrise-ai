@@ -56,6 +56,7 @@ const api = {
     summarizeAttachment: (callId: string, attachmentId: string) =>
       ipcRenderer.invoke('summary:attachment', callId, attachmentId),
     coachCall: (callId: string) => ipcRenderer.invoke('coach:call', callId),
+    extractCommitments: (callId: string) => ipcRenderer.invoke('commitments:extract', callId),
     mineObjectionsTest: (callId: string) => ipcRenderer.invoke('objections:mineTest', callId),
     enqueueObjections: (callId: string, candidates: unknown) =>
       ipcRenderer.invoke('objections:enqueue', callId, candidates),

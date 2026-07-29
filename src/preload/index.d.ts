@@ -207,6 +207,18 @@ export interface CoachingReport {
 export type CoachResult =
   { ok: true; report: CoachingReport } | { ok: false; error: 'no-key' | 'failed'; message?: string }
 
+export type CommitmentOwner = 'rep' | 'prospect'
+
+export interface Commitment {
+  owner: CommitmentOwner
+  text: string
+  dueDate?: string
+}
+
+export type CommitmentResult =
+  | { ok: true; commitments: Commitment[] }
+  | { ok: false; error: 'no-key' | 'failed' | 'empty-call'; message?: string }
+
 export type ConsentStatus = 'not-asked' | 'disclosed' | 'consented' | 'declined'
 export type ConsentJurisdiction = 'one-party' | 'two-party'
 export type ConsentMethod = 'verbal-on-call' | 'pre-agreed' | 'written'
@@ -411,6 +423,8 @@ export interface CallsApi {
   summarizeCall: (callId: string) => Promise<SummaryResult>
   summarizeAttachment: (callId: string, attachmentId: string) => Promise<SummaryResult>
   coachCall: (callId: string) => Promise<CoachResult>
+  /** Who promised what on this call, split rep vs. prospect (§4.7). */
+  extractCommitments: (callId: string) => Promise<CommitmentResult>
   /** Objection Library: mine a single call for raw candidates, for the rep to
    *  judge quality — gated on the settings toggle. */
   mineObjectionsTest: (callId: string) => Promise<ObjectionMiningResult>

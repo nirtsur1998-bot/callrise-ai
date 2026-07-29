@@ -17,7 +17,8 @@ import {
   Search,
   ChevronUp,
   ChevronDown,
-  Bookmark as BookmarkIcon
+  Bookmark as BookmarkIcon,
+  ClipboardList
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { SpeakerTranscript } from '@renderer/components/SpeakerTranscript'
@@ -51,7 +52,7 @@ import type { CalendarEvent } from '@renderer/features/calendar/types'
 import { recordRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import { formatDate, formatDuration, formatBytes } from './format'
 import { PracticeMode } from './PracticeMode'
-import type { Attachment, Call } from './types'
+import type { Attachment, Call, Commitment } from './types'
 
 /** mm:ss relative to call start — bookmarks store `atMs` as milliseconds. */
 function formatMmSs(ms: number): string {
@@ -110,6 +111,8 @@ export function CallDetail({
   const [tasksAdded, setTasksAdded] = useState(0)
   const [coaching, setCoaching] = useState(false)
   const [coachError, setCoachError] = useState<string | null>(null)
+  const [findingCommitments, setFindingCommitments] = useState(false)
+  const [commitmentsError, setCommitmentsError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [practicing, setPracticing] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -248,6 +251,27 @@ export function CallDetail({
       if (mountedRef.current) setCoachError('Could not coach this call. Please try again.')
     } finally {
       if (mountedRef.current) setCoaching(false)
+    }
+  }, [callId, notifyChanged])
+
+  const findCommitments = useCallback(async () => {
+    setCommitmentsError(null)
+    setNoKey(false)
+    setFindingCommitments(true)
+    try {
+      const res = await window.api.calls.extractCommitments(callId)
+      if (!mountedRef.current) return
+      if (res.ok) await notifyChanged()
+      else if (res.error === 'no-key') setNoKey(true)
+      else if (res.error === 'empty-call') {
+        setCommitmentsError('This call is too short to have any commitments worth extracting.')
+      } else setCommitmentsError(res.message ?? 'Could not find commitments on this call.')
+    } catch {
+      if (mountedRef.current) {
+        setCommitmentsError('Could not find commitments on this call. Please try again.')
+      }
+    } finally {
+      if (mountedRef.current) setFindingCommitments(false)
     }
   }, [callId, notifyChanged])
 
@@ -727,6 +751,48 @@ export function CallDetail({
           )}
         </Card>
 
+        {/* Commitments (§4.7) — who promised what */}
+        <Card>
+          <div className="mb-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ClipboardList className="h-4 w-4 text-accent" />
+              <h3 className="text-sm font-semibold">Commitments</h3>
+            </div>
+            {call.commitments && !findingCommitments && (
+              <Button variant="secondary" size="sm" icon={RotateCw} onClick={findCommitments}>
+                Re-check
+              </Button>
+            )}
+          </div>
+          {findingCommitments ? (
+            <div className="space-y-2.5">
+              <Skeleton className="h-6" />
+              <Skeleton className="h-6" />
+              <Skeleton className="h-6" />
+            </div>
+          ) : call.commitments ? (
+            call.commitments.length === 0 ? (
+              <p className="text-sm text-muted">
+                Nobody committed to anything specific on this call.
+              </p>
+            ) : (
+              <CommitmentsList commitments={call.commitments} />
+            )
+          ) : (
+            <div className="flex flex-col items-start gap-3">
+              <p className="text-sm text-muted">
+                Pull out every &ldquo;I&rsquo;ll send the pricing&rdquo; and &ldquo;we&rsquo;ll loop
+                in our CISO&rdquo; from this call, split by who owes it — the list you check before
+                the next call, not a line buried in a summary.
+              </p>
+              {commitmentsError && <p className="text-[13px] text-danger">{commitmentsError}</p>}
+              <Button icon={ClipboardList} onClick={findCommitments}>
+                Find commitments
+              </Button>
+            </div>
+          )}
+        </Card>
+
         <MineTestPanel callId={callId} enabled={settings.objectionMining.enabled} />
 
         {/* Tasks */}
@@ -819,6 +885,57 @@ export function CallDetail({
           }}
         />
       )}
+    </div>
+  )
+}
+
+/** `Mar 14` from an ISO `YYYY-MM-DD`, never re-parsed with a timezone that
+ *  could roll it to the wrong day (see cleanDate's round-trip check in
+ *  main/commitments.ts — this only ever receives a value that already passed
+ *  it). */
+function formatDueDate(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC'
+  })
+}
+
+function CommitmentGroup({
+  title,
+  items
+}: {
+  title: string
+  items: Commitment[]
+}): React.JSX.Element | null {
+  if (items.length === 0) return null
+  return (
+    <div>
+      <h4 className="mb-2 text-[11px] font-semibold tracking-wide text-faint uppercase">{title}</h4>
+      <ul className="space-y-2">
+        {items.map((c, i) => (
+          <li key={i} className="flex items-start justify-between gap-3 text-sm">
+            <span className="text-ink">{c.text}</span>
+            {c.dueDate && (
+              <Badge tone="neutral" className="shrink-0">
+                {formatDueDate(c.dueDate)}
+              </Badge>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function CommitmentsList({ commitments }: { commitments: Commitment[] }): React.JSX.Element {
+  const rep = commitments.filter((c) => c.owner === 'rep')
+  const prospect = commitments.filter((c) => c.owner === 'prospect')
+  return (
+    <div className="space-y-4">
+      <CommitmentGroup title="You committed to" items={rep} />
+      <CommitmentGroup title="They committed to" items={prospect} />
     </div>
   )
 }
