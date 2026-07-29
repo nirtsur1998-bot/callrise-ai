@@ -192,6 +192,7 @@ export function useTranscription(
         setPaused(false)
         setOtherPartyLive(false)
         setBuyerSilentWarning(false)
+        setCrossTalkWarning(false)
         savePendingRef.current = false
       }
     })
@@ -241,6 +242,7 @@ export function useTranscription(
       setPaused(false)
       setOtherPartyLive(false)
       setBuyerSilentWarning(false)
+      setCrossTalkWarning(false)
       savePendingRef.current = false
       recorderRef.current?.stop()
       recorderRef.current = null
@@ -293,6 +295,7 @@ export function useTranscription(
       setAnalyser(null)
       setOtherPartyLive(false)
       setBuyerSilentWarning(false)
+      setCrossTalkWarning(false)
       void window.api.transcription.stop()
       setPhase('no-device')
     })
@@ -506,6 +509,7 @@ export function useTranscription(
       // check your routing" banner about a channel that's no longer running
       // reads as contradicting whatever banner explains WHY it stopped.
       setBuyerSilentWarning(false)
+      setCrossTalkWarning(false)
       recorder.detachLoopback() // stop capturing the buyer immediately
       speakerBoundaryRef.current = true
       try {
@@ -562,6 +566,7 @@ export function useTranscription(
           display.getTracks().forEach((t) => t.stop())
           setOtherPartyError('no-audio')
           setBuyerSilentWarning(false)
+          setCrossTalkWarning(false)
           return
         }
         audio = new MediaStream(display.getAudioTracks())
@@ -569,6 +574,7 @@ export function useTranscription(
         window.api.loopback.disarm()
         setOtherPartyError('denied')
         setBuyerSilentWarning(false)
+        setCrossTalkWarning(false)
         return
       }
 
@@ -588,6 +594,7 @@ export function useTranscription(
         void disableOtherParty()
         setOtherPartyError('interrupted')
         setBuyerSilentWarning(false)
+        setCrossTalkWarning(false)
       })
 
       // Switch the socket to multichannel FIRST, then flip the worklet to stereo —
@@ -611,6 +618,7 @@ export function useTranscription(
         recorder.detachLoopback()
         setOtherPartyError('denied')
         setBuyerSilentWarning(false)
+        setCrossTalkWarning(false)
         return
       }
       speakerBoundaryRef.current = true

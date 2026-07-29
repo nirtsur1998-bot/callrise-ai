@@ -82,11 +82,15 @@ interface Session {
    *  energy history, checked against Deepgram's claimed channel per Results
    *  message. Only meaningful when `multichannel` is true. */
   crossTalk: CrossTalkGate
-  /** session.timeline.elapsedMs() at the moment the CURRENT Deepgram
-   *  connection opened — Deepgram's start/duration are relative to ITS OWN
-   *  per-connection audio clock (like lag.ts's ackBaseSec rebasing), so
-   *  crossTalk (which is fed on the session's continuous timeline) needs
-   *  this offset to translate one into the other. */
+  /** The session-timeline capture time (session.timeline.elapsedMs() scale)
+   *  that corresponds to Deepgram's start=0 on the CURRENT connection —
+   *  Deepgram's start/duration are relative to ITS OWN per-connection audio
+   *  clock (like lag.ts's ackBaseSec rebasing), so crossTalk (which is fed
+   *  on the session's continuous timeline) needs this offset to translate
+   *  one into the other. NOT simply "when the socket opened": a reconnect
+   *  can replay up to replayCapSec of already-queued backlog first, so
+   *  start=0 actually corresponds to that backlog's own capture time — see
+   *  the assignment site in connect()'s 'open' handler. */
   connectionOpenedAtMs: number
   /** Shed audio waiting to be reported as ONE gap marker, rather than one
    *  marker per 40ms frame. Flushed the moment audio flows again. */
@@ -420,8 +424,15 @@ function connect(s: Session): void {
     // onto the cumulative scale so lag stays continuous across the reconnect.
     s.lag.onConnectionOpen()
     s.liveness.onConnectionOpen(at)
-    // Same rebasing crossTalk needs — see the field's own doc comment.
-    s.connectionOpenedAtMs = at
+    // Same rebasing crossTalk needs — see the field's own doc comment. NOT
+    // just "now": trimToReplayCap() above can leave up to replayCapSec of
+    // already-captured backlog still queued, and THAT is what Deepgram will
+    // process as start=0 on this connection, not whatever's captured next.
+    // Using "now" here would misdate every crossTalk window on this
+    // connection by exactly the replayed backlog's duration. The oldest
+    // surviving frame's own capture time is the correct anchor; only fall
+    // back to "now" when the queue is genuinely empty (nothing to replay).
+    s.connectionOpenedAtMs = s.queue.peek()?.atMs ?? at
 
     emit(s, 'transcription:state', { state: 'listening' })
     // Only forgive the retry budget once the connection has proven stable.
@@ -599,7 +610,8 @@ function ingestAudio(s: Session, chunk: unknown): void {
   const shed = s.queue.push({
     bytes,
     seconds: frameSeconds(bytes.byteLength, s.channels, s.sampleRate),
-    rms
+    rms,
+    atMs: at
   })
   queueShed(s, shed.droppedSec, 'shed')
   drain(s)

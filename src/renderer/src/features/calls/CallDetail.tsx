@@ -353,8 +353,17 @@ export function CallDetail({
   // resolution cascade never overwrites it on a later re-run.
   const renameSpeaker = useCallback(
     async (key: string, name: string) => {
-      await window.api.calls.setSpeakerName(callId, key, name)
-      await notifyChanged()
+      // SpeakerTranscript's onRename is fired-and-forgotten (its prop type is
+      // synchronous), so this must swallow its own errors -- otherwise a
+      // failed IPC call surfaces as an unhandled rejection instead of just
+      // leaving the label as it was, with the inline editor still available
+      // for a retry.
+      try {
+        await window.api.calls.setSpeakerName(callId, key, name)
+        await notifyChanged()
+      } catch {
+        /* label keeps its previous value; the rep can retry the rename */
+      }
     },
     [callId, notifyChanged]
   )

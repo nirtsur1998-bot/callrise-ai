@@ -138,3 +138,46 @@ describe('CROSSTALK_TUNING', () => {
     expect(CROSSTALK_TUNING.dominanceRatio).toBeGreaterThan(1)
   })
 })
+
+describe('dominantChannel — boundary values', () => {
+  const { silenceFloor, dominanceRatio } = CROSSTALK_TUNING
+
+  it('treats a channel exactly AT the silence floor as still carrying signal (boundary is exclusive)', () => {
+    // micRms < silenceFloor is the silent test, so exactly-equal must NOT count as silent.
+    const verdict = dominantChannel(silenceFloor, 0.3)
+    expect(verdict.state).not.toBe('silent')
+  })
+
+  it('treats a ratio exactly AT the dominance threshold as dominant (boundary is inclusive)', () => {
+    const buyerRms = 0.05
+    const verdict = dominantChannel(buyerRms * dominanceRatio, buyerRms)
+    expect(verdict).toMatchObject({ state: 'dominant', channel: 0 })
+  })
+
+  it('treats a ratio one step below the dominance threshold as ambiguous', () => {
+    const buyerRms = 0.05
+    const verdict = dominantChannel(buyerRms * dominanceRatio - 0.0001, buyerRms)
+    expect(verdict.state).toBe('ambiguous')
+  })
+})
+
+describe('CrossTalkGate — boundary values', () => {
+  it('includes a sample landing exactly on the window start or end (inclusive range)', () => {
+    const gate = new CrossTalkGate()
+    gate.observe({ atMs: 100, bytes: stereoFrame(200, null) })
+    gate.observe({ atMs: 200, bytes: stereoFrame(200, null) })
+    expect(gate.dominantChannelFor(100, 200).state).not.toBe('no-data')
+    // Querying a window that only touches the two endpoints must still see both.
+    expect(gate.dominantChannelFor(100, 100).state).not.toBe('no-data')
+    expect(gate.dominantChannelFor(200, 200).state).not.toBe('no-data')
+  })
+
+  it('retains a sample landing exactly on the eviction cutoff (eviction is strictly-older-than)', () => {
+    const gate = new CrossTalkGate(1_000)
+    gate.observe({ atMs: 0, bytes: stereoFrame(200, null) })
+    // cutoff for this frame is 1000 - 1000 = 0, so the t=0 sample is exactly
+    // at the cutoff and must survive, not be evicted.
+    gate.observe({ atMs: 1_000, bytes: stereoFrame(200, null) })
+    expect(gate.dominantChannelFor(0, 0).state).not.toBe('no-data')
+  })
+})

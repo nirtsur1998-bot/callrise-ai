@@ -14,9 +14,9 @@ function pcm(amplitude: number, byteLength = FRAME_BYTES): ArrayBuffer {
   return buffer
 }
 
-function frame(amplitude: number): AudioFrame {
+function frame(amplitude: number, atMs = 0): AudioFrame {
   const bytes = pcm(amplitude)
-  return { bytes, seconds: frameSeconds(bytes.byteLength, CHANNELS, RATE), rms: frameRms(bytes) }
+  return { bytes, seconds: frameSeconds(bytes.byteLength, CHANNELS, RATE), rms: frameRms(bytes), atMs }
 }
 
 const voiced = (): AudioFrame => frame(0.5)

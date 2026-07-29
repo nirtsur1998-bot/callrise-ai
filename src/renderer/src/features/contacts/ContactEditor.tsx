@@ -228,7 +228,7 @@ export function ContactEditor({
             <Field label="Deal Value">
               <input
                 type="number"
-                value={value.dealValue || ''}
+                value={value.dealValue ?? ''}
                 onChange={(e) => set({ dealValue: e.target.value ? Number(e.target.value) : undefined })}
                 placeholder="e.g. 50000"
                 className={fieldClass}

@@ -40,7 +40,13 @@ describe('setSpeakerIdentity', () => {
       segments: [
         { speaker: 0, channel: 0, text: 'Hi, this is Alex from Acme.' },
         { speaker: 1, channel: 1, text: 'Hi Alex, thanks for calling.' }
-      ]
+      ],
+      // Consented, recordOtherParty: true — these tests target ch1/spk1 (the
+      // buyer channel), and applyConsentRetention (M11, extended M19 Task 2)
+      // correctly strips a buyer-channel identity on every read when consent
+      // isn't held. Without this, every ch1/spk1 assertion here would be
+      // fighting that invariant instead of testing setSpeakerIdentity itself.
+      consent: { status: 'consented', jurisdiction: 'two-party', recordOtherParty: true }
     })
     return summary.id
   }

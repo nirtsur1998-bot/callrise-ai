@@ -36,8 +36,16 @@ export function countryDial(code: string | undefined): string | undefined {
 export function toE164(phoneCountry: string | undefined, phone: string | undefined): string | undefined {
   const dial = countryDial(phoneCountry)
   if (!dial || !phone) return undefined
-  const digits = phone.replace(/\D/g, '')
+  let digits = phone.replace(/\D/g, '')
   if (!digits) return undefined
+  // Most countries write the national number with a leading trunk '0' that's
+  // dropped when combining with the country code (e.g. UK "07700 900123" ->
+  // "+447700900123", not "+4407700900123"). NANP (+1) doesn't follow this
+  // convention -- area codes never start with 0, so a leading 0 there is a
+  // typo, not a trunk prefix, and shouldn't be silently stripped.
+  if (dial !== '+1' && digits.startsWith('0')) {
+    digits = digits.slice(1)
+  }
   const e164 = `${dial}${digits}`
   return /^\+[1-9]\d{6,14}$/.test(e164) ? e164 : undefined
 }

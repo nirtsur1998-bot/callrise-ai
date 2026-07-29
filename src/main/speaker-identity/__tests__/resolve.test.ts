@@ -153,3 +153,50 @@ describe('resolveCascade — never invents an identity for an unobserved speaker
     expect(Object.keys(result)).toEqual(['ch0/spk0'])
   })
 })
+
+describe('resolveCascade — mid-call mono<->multichannel switch (regression)', () => {
+  // A call that started mono (diarize) and later had "enable buyer capture"
+  // clicked mid-call ends up with BOTH mono/spkN segments (pre-switch) and
+  // chN/spkN segments (post-switch) in the same segments array. Resolution
+  // must judge "how many other speakers" using ONLY the current regime's
+  // keys — a stale mono key must never inflate the count and defeat an
+  // otherwise-clean 1:1 match.
+  it('ignores stale mono keys and still resolves a genuine post-switch 1:1', async () => {
+    const result = await resolveCascade(
+      baseInput({
+        multichannel: true,
+        segments: [
+          // Pre-switch: two mono-diarized speakers.
+          { speaker: 0 },
+          { speaker: 1 },
+          // Post-switch: the current multichannel regime, a clean 1:1.
+          { speaker: 0, channel: 0 },
+          { speaker: 1, channel: 1 }
+        ],
+        calendarEvents: [oneOnOneEvent]
+      }),
+      NO_CONTACTS
+    )
+    expect(result['ch1/spk1']).toMatchObject({ name: 'Sarah Chen', source: 'calendar' })
+    // The stale pre-switch mono keys never get an entry of their own.
+    expect(result['mono/spk0']).toBeUndefined()
+    expect(result['mono/spk1']).toBeUndefined()
+  })
+
+  it('does not treat the sole observed speaker as "the other party" when repSpeaker is unknown', async () => {
+    // Very first pass of a mono call, before coaching has set repSpeaker:
+    // only one speaker has been diarized so far. Being the ONLY one to
+    // speak makes them far more likely to be the rep than a not-yet-heard
+    // buyer, so this must resolve nothing rather than guess.
+    const result = await resolveCascade(
+      baseInput({
+        multichannel: false,
+        repSpeaker: null,
+        segments: [{ speaker: 0 }],
+        calendarEvents: [oneOnOneEvent]
+      }),
+      NO_CONTACTS
+    )
+    expect(Object.keys(result)).toHaveLength(0)
+  })
+})

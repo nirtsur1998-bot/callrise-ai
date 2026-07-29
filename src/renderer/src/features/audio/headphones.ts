@@ -36,12 +36,24 @@ const SPEAKER_PATTERNS = [
 
 export type HeadphoneVerdict = 'headphones' | 'speakers' | 'unknown'
 
+/** Windows combo-jack devices report a label naming a switchable physical
+ *  jack -- "Speakers / Headphones (Realtek(R) Audio)" -- rather than
+ *  whatever's actually plugged in right now. That's different from a label
+ *  where one word merely modifies the other (e.g. "Bluetooth Headphones
+ *  (Speaker Mode)", which IS a headphone device): here "speakers" and
+ *  "headphones" are two alternatives joined by a slash, so neither verdict
+ *  is safe. Checked before HEADPHONE_PATTERNS so this doesn't silently
+ *  suppress the loudspeaker-echo warning on the single most common Windows
+ *  output label. */
+const COMBO_JACK_PATTERN = /speakers?\s*\/\s*headphones?|headphones?\s*\/\s*speakers?/i
+
 /** Pure classification of one device label. Exported separately from the
  *  enumerateDevices() call below so the heuristic itself is unit-testable
  *  without a browser environment. */
 export function classifyOutputLabel(label: string): HeadphoneVerdict {
   const trimmed = label.trim()
   if (!trimmed) return 'unknown'
+  if (COMBO_JACK_PATTERN.test(trimmed)) return 'unknown'
   if (HEADPHONE_PATTERNS.some((re) => re.test(trimmed))) return 'headphones'
   if (SPEAKER_PATTERNS.some((re) => re.test(trimmed))) return 'speakers'
   return 'unknown'

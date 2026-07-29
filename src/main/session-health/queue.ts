@@ -22,6 +22,13 @@ export interface AudioFrame {
   seconds: number
   /** Normalized RMS 0..1. Cheap VAD gate for silence-first eviction. */
   rms: number
+  /** session.timeline.elapsedMs() at the moment this frame was captured —
+   *  the continuous session clock, not any per-connection clock. Lets a
+   *  caller draining the queue after a reconnect find out how old the
+   *  oldest still-queued frame actually is (see transcription.ts's
+   *  connectionOpenedAtMs, which a naive "now" would misdate by exactly the
+   *  replayed backlog's duration). */
+  atMs: number
 }
 
 export interface ShedSummary {

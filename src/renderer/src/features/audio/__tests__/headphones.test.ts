@@ -27,6 +27,11 @@ describe('classifyOutputLabel', () => {
     expect(classifyOutputLabel('USB Audio Device 47B2')).toBe('unknown')
   })
 
+  it('returns unknown for a Windows combo-jack label instead of assuming headphones', () => {
+    expect(classifyOutputLabel('Speakers / Headphones (Realtek(R) Audio)')).toBe('unknown')
+    expect(classifyOutputLabel('Headphones / Speakers (Realtek High Definition Audio)')).toBe('unknown')
+  })
+
   it('is case-insensitive', () => {
     expect(classifyOutputLabel('HEADPHONES')).toBe('headphones')
     expect(classifyOutputLabel('speakers')).toBe('speakers')

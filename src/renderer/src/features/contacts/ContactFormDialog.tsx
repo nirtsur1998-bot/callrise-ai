@@ -150,7 +150,8 @@ export function ContactFormDialog({
         title: draft.title?.trim() || null,
         decisionAuthority: draft.decisionAuthority?.trim() || null,
         otherStakeholders: draft.otherStakeholders?.trim() || null,
-        dealValue: draft.dealValue ? Number(draft.dealValue) : null,
+        dealValue:
+          draft.dealValue !== undefined && draft.dealValue !== '' ? Number(draft.dealValue) : null,
         pipelineStage: draft.pipelineStage?.trim() || null,
         leadSource: draft.leadSource?.trim() || null,
         budgetIndication: draft.budgetIndication?.trim() || null,
