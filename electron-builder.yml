@@ -93,7 +93,17 @@ linux:
   category: Utility
 appImage:
   artifactName: ${name}-${version}-${arch}.${ext}
+# Off everywhere, not just Windows (see scripts/apply-fuses.js's matching
+# comment): electron-builder's own asar-integrity embedding step uses `resedit`
+# to fully regenerate the packaged Windows exe, and that rewrite is what's
+# actually corrupting the binary - real, confirmed on hardware, not merely a
+# fuse mis-check. Mac's equivalent embed (a plist entry, not a binary rewrite)
+# was never shown broken, but there's no per-platform switch for this option,
+# and shipping a fuse that says "verify integrity" with no embedded data to
+# verify against (Mac would end up in exactly this same broken state once its
+# own embed is skipped) is worse than not enabling the check at all.
 npmRebuild: false
+disableAsarIntegrity: true
 publish:
   provider: generic
   url: https://example.com/auto-updates
