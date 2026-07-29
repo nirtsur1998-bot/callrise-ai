@@ -21,6 +21,7 @@ import {
   setCallCrmNoteGenerated,
   addBookmark,
   removeBookmark,
+  setSpeakerIdentity,
   type CallSaveInput,
   type CallSummary
 } from './calls-fs'
@@ -214,6 +215,30 @@ export function registerCalls(): void {
     if (call && contactId) void maybeGenerateCrmNote(callId).catch(() => {})
     return call
   })
+
+  // --- Speaker identification (M19 Task 2) -----------------------------------
+  // The one write path for both an inline rename and the "remember this
+  // person" checkbox — always source: 'manual', which the auto-resolution
+  // cascade (resolve-for-call.ts) is guaranteed to never overwrite.
+  ipcMain.handle(
+    'calls:setSpeakerName',
+    async (
+      _event,
+      callId: string,
+      key: string,
+      name: string | null,
+      opts?: { rememberAsContactId?: string }
+    ) => {
+      const call = await setSpeakerIdentity(callsDir(), callId, key, {
+        name,
+        source: 'manual',
+        confidence: 'high',
+        contactId: opts?.rememberAsContactId
+      })
+      if (call) scheduleBackup()
+      return call
+    }
+  )
 
   // --- Bookmarks ("clip this moment") ---------------------------------------
   ipcMain.handle(

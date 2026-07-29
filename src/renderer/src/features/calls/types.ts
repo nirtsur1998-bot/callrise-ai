@@ -92,6 +92,28 @@ export interface CallSummary extends CallBase {
   coachScore?: number
 }
 
+// --- M19 Task 2: resolved speaker identities --------------------------------
+// Kept as a local type (not imported from features/coaching/meta.ts, which
+// re-declares the identical shape) so this foundational, widely-imported
+// file doesn't couple to the coaching feature.
+export type SpeakerIdentitySource =
+  | 'user-profile'
+  | 'calendar'
+  | 'contact'
+  | 'participant-list'
+  | 'self-intro'
+  | 'voice-profile'
+  | 'manual'
+export type SpeakerIdentityConfidence = 'high' | 'medium' | 'low'
+/** Keyed by speakerKey() — see live/segments.ts. */
+export interface SpeakerIdentity {
+  name: string
+  source: SpeakerIdentitySource
+  confidence: SpeakerIdentityConfidence
+  contactId?: string
+  resolvedAt: string
+}
+
 export interface Call extends CallBase {
   segments: CallSegment[]
   summary?: Summary
@@ -100,6 +122,7 @@ export interface Call extends CallBase {
   commitments?: Commitment[]
   consent?: ConsentRecord
   bookmarks?: Bookmark[]
+  speakerIdentities?: Record<string, SpeakerIdentity>
 }
 
 export type SummaryResult =

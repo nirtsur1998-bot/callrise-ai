@@ -1,7 +1,20 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Pencil } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import type { CallSegment } from '@renderer/features/calls/types'
-import { speakerLabel } from '@renderer/features/coaching/meta'
+import {
+  speakerLabel,
+  speakerIdentityFor,
+  SPEAKER_SOURCE_LABEL,
+  type SpeakerIdentities
+} from '@renderer/features/coaching/meta'
+import { speakerKey } from '@renderer/features/live/segments'
+
+const CONFIDENCE_DOT: Record<'high' | 'medium' | 'low', string> = {
+  high: 'bg-positive',
+  medium: 'bg-warning',
+  low: 'bg-faint'
+}
 
 // A distinct color per speaker (cycles for many speakers), using the
 // theme-aware decorative speaker palette (not the status-color tokens).
@@ -54,6 +67,14 @@ interface SpeakerTranscriptProps {
    *  "current" match — gets a stronger highlight and is scrolled into view.
    *  Ignored when `highlightQuery` is empty. */
   activeMatchIndex?: number
+  /** M19 Task 2 — resolved real names, keyed by speakerKey(). When a segment
+   *  has a resolved identity, its name replaces You/Buyer/Speaker N and a
+   *  confidence dot appears next to it (hover shows the source). */
+  identities?: SpeakerIdentities
+  /** Enables one-click inline rename (a name click becomes an editable
+   *  field). Omit for read-only surfaces (live view, the "peek" modal,
+   *  practice mode) where an accidental rename mid-flow would be surprising. */
+  onRename?: (key: string, name: string) => void
 }
 
 /** Renders a transcript grouped into speaker turns. Shared by the Live view
@@ -63,8 +84,12 @@ export function SpeakerTranscript({
   interimText,
   repSpeaker = null,
   highlightQuery,
-  activeMatchIndex
+  activeMatchIndex,
+  identities,
+  onRename
 }: SpeakerTranscriptProps): React.JSX.Element {
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState('')
   // Gap markers belong to nobody, so they must not inflate the speaker count —
   // that count decides between the calm rep/buyer treatment and the multi-party
   // palette.
@@ -130,13 +155,62 @@ export function SpeakerTranscript({
           )
         }
         const style = speakerStyle(seg.speaker, repSpeaker, speakerCount)
+        const key = speakerKey(seg)
+        const identity = speakerIdentityFor(seg.speaker, identities, seg.channel)
+        const label = speakerLabel(seg.speaker, repSpeaker, speakerCount, identities, seg.channel)
+        const isEditing = editingKey === key
+
+        const startEdit = (): void => {
+          if (!onRename) return
+          setEditValue(identity?.name ?? '')
+          setEditingKey(key)
+        }
+        const commitEdit = (): void => {
+          const trimmed = editValue.trim()
+          if (trimmed && onRename) onRename(key, trimmed)
+          setEditingKey(null)
+        }
+
         return (
           <div key={index}>
             <div className="mb-1 flex items-center gap-2">
               <span className={cn('h-1.5 w-1.5 rounded-full', style.dot)} />
-              <span className={cn('text-xs font-semibold uppercase tracking-wide', style.label)}>
-                {speakerLabel(seg.speaker, repSpeaker, speakerCount)}
-              </span>
+              {isEditing ? (
+                <input
+                  autoFocus
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  onBlur={commitEdit}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitEdit()
+                    if (e.key === 'Escape') setEditingKey(null)
+                  }}
+                  className="rounded border border-line bg-canvas px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-ink outline-none"
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={startEdit}
+                  disabled={!onRename}
+                  className={cn(
+                    'group flex items-center gap-1 text-xs font-semibold uppercase tracking-wide',
+                    style.label,
+                    onRename && 'cursor-pointer hover:underline'
+                  )}
+                  title={onRename ? 'Click to rename' : undefined}
+                >
+                  {label}
+                  {onRename && (
+                    <Pencil className="h-2.5 w-2.5 opacity-0 transition-opacity group-hover:opacity-60" />
+                  )}
+                </button>
+              )}
+              {identity && (
+                <span
+                  className={cn('h-1.5 w-1.5 rounded-full', CONFIDENCE_DOT[identity.confidence])}
+                  title={SPEAKER_SOURCE_LABEL[identity.source]}
+                />
+              )}
             </div>
             <p className="text-[17px] leading-[1.7] text-ink">{renderText(seg.text)}</p>
           </div>

@@ -30,19 +30,29 @@ import {
   TONE_TEXT,
   TONE_BAR,
   TONE_TO_GAUGE,
-  TONE_TO_BADGE
+  TONE_TO_BADGE,
+  type SpeakerIdentities
 } from './meta'
 
 interface CoachReportViewProps {
   report: CoachingReport
   callId: string
   callTitle: string
+  /** M19 Task 2 — resolved real names, for Evidence quote attribution. */
+  identities?: SpeakerIdentities
+  /** Whether the call used Deepgram multichannel — evidence.speaker doubles
+   *  as the channel in that mode (they're the same value; see
+   *  transcription.ts), so this is needed to look up the right identity key.
+   *  CoachEvidence doesn't carry channel directly. */
+  multichannel?: boolean
 }
 
 export function CoachReportView({
   report,
   callId,
-  callTitle
+  callTitle,
+  identities,
+  multichannel = false
 }: CoachReportViewProps): React.JSX.Element {
   const tier = overallTier(report.overallScore)
   const repSpeaker = report.metrics.repSpeaker
@@ -178,7 +188,7 @@ export function CoachReportView({
           </div>
           <p className="mt-2 text-sm text-ink">{report.strength.text}</p>
           {report.strength.evidence && (
-            <Evidence ev={report.strength.evidence} repSpeaker={repSpeaker} />
+            <Evidence ev={report.strength.evidence} repSpeaker={repSpeaker} identities={identities} multichannel={multichannel} />
           )}
         </div>
       )}
@@ -198,7 +208,9 @@ export function CoachReportView({
               </div>
               <p className="mt-2 text-sm font-medium text-ink">{imp.title}</p>
               {imp.detail && <p className="mt-1 text-[13px] text-muted">{imp.detail}</p>}
-              {imp.evidence && <Evidence ev={imp.evidence} repSpeaker={repSpeaker} />}
+              {imp.evidence && (
+                <Evidence ev={imp.evidence} repSpeaker={repSpeaker} identities={identities} multichannel={multichannel} />
+              )}
             </div>
           ))}
         </div>
@@ -215,7 +227,9 @@ export function CoachReportView({
                 <ScoreBar score={d.score} />
               </div>
               {d.comment && <p className="mt-1 text-[13px] text-muted">{d.comment}</p>}
-              {d.evidence && <Evidence ev={d.evidence} repSpeaker={repSpeaker} />}
+              {d.evidence && (
+                <Evidence ev={d.evidence} repSpeaker={repSpeaker} identities={identities} multichannel={multichannel} />
+              )}
             </div>
           ))}
         </div>
@@ -235,17 +249,26 @@ export function CoachReportView({
 
 function Evidence({
   ev,
-  repSpeaker
+  repSpeaker,
+  identities,
+  multichannel
 }: {
   ev: CoachEvidence
   repSpeaker: number | null
+  identities?: SpeakerIdentities
+  multichannel?: boolean
 }): React.JSX.Element {
+  // Evidence quotes don't carry channel directly — in multichannel mode
+  // speaker IS the channel (see transcription.ts), so it doubles as one.
+  const channel = multichannel ? ev.speaker : undefined
   return (
     <div className="mt-2 flex gap-2 rounded-lg border-l-2 border-line bg-surface px-3 py-2">
       <Quote className="mt-0.5 h-3.5 w-3.5 shrink-0 text-faint" />
       <p className="text-[13px] italic leading-relaxed text-muted">
         &ldquo;{ev.quote}&rdquo;{' '}
-        <span className="text-faint not-italic">— {speakerLabel(ev.speaker, repSpeaker)}</span>
+        <span className="text-faint not-italic">
+          — {speakerLabel(ev.speaker, repSpeaker, undefined, identities, channel)}
+        </span>
       </p>
     </div>
   )

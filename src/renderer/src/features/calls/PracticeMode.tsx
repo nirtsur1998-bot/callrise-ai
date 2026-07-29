@@ -64,7 +64,7 @@ export function PracticeMode({ call, onExit }: PracticeModeProps): React.JSX.Ele
                 isRep ? 'text-accent' : 'text-muted'
               )}
             >
-              {speakerLabel(turn.speaker, repSpeaker, speakerCount)}
+              {speakerLabel(turn.speaker, repSpeaker, speakerCount, call.speakerIdentities, turn.channel)}
             </span>
             {isRep && !revealed ? (
               <>

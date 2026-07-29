@@ -315,10 +315,11 @@ export function CallDetail({
 
   const copyTranscript = useCallback(() => {
     if (!call) return
+    const repSpeaker = call.coaching?.metrics.repSpeaker ?? null
     const text = call.segments
       .map(
         (seg) =>
-          `${speakerLabel(seg.speaker, call.coaching?.metrics.repSpeaker ?? null)}: ${seg.text}`
+          `${speakerLabel(seg.speaker, repSpeaker, undefined, call.speakerIdentities, seg.channel)}: ${seg.text}`
       )
       .join('\n')
     void navigator.clipboard.writeText(text).then(() => {
@@ -343,6 +344,16 @@ export function CallDetail({
   const doLink = useCallback(
     async (contactId: string | undefined) => {
       await window.api.calls.setContact(callId, contactId ?? null)
+      await notifyChanged()
+    },
+    [callId, notifyChanged]
+  )
+
+  // M19 Task 2 — inline rename. Always source: 'manual', so the auto-
+  // resolution cascade never overwrites it on a later re-run.
+  const renameSpeaker = useCallback(
+    async (key: string, name: string) => {
+      await window.api.calls.setSpeakerName(callId, key, name)
       await notifyChanged()
     },
     [callId, notifyChanged]
@@ -679,6 +690,8 @@ export function CallDetail({
               repSpeaker={call.coaching?.metrics.repSpeaker ?? null}
               highlightQuery={trimmedSearch}
               activeMatchIndex={matchCount > 0 ? clampedActiveMatch : undefined}
+              identities={call.speakerIdentities}
+              onRename={renameSpeaker}
             />
           ) : (
             <p className="text-sm italic text-faint">This call has no transcript.</p>
@@ -735,7 +748,13 @@ export function CallDetail({
           {coaching ? (
             <CoachLoading />
           ) : call.coaching ? (
-            <CoachReportView report={call.coaching} callId={callId} callTitle={call.title} />
+            <CoachReportView
+              report={call.coaching}
+              callId={callId}
+              callTitle={call.title}
+              identities={call.speakerIdentities}
+              multichannel={call.segments.some((s) => s.channel !== undefined)}
+            />
           ) : (
             <div className="flex flex-col items-start gap-3">
               <p className="text-sm text-muted">

@@ -120,16 +120,40 @@ function dimensionScoreColor(score: number): string {
 // optional speakerCount to disambiguate 3+-party calls; this file doesn't
 // have that count handy, so any non-rep speaker is labeled "Buyer" (falling
 // back to generic "Speaker N" only when the rep speaker itself is unknown).
-function speakerLabel(speaker: number, repSpeaker: number | null): string {
+// M19 Task 2: resolved real names, keyed by speakerIdentityKey() (must
+// byte-match main/calls-fs.ts's version — this file can't import it directly
+// without pulling calls-fs.ts's whole surface into a PDF-rendering module,
+// so the tiny key format is duplicated, same as this file already duplicates
+// speakerLabel itself from the renderer's meta.ts).
+function pdfSpeakerKey(speaker: number, channel?: number): string {
+  return channel === undefined ? `mono/spk${speaker}` : `ch${channel}/spk${speaker}`
+}
+
+function speakerLabel(
+  speaker: number,
+  repSpeaker: number | null,
+  identities?: Record<string, { name: string }>,
+  channel?: number
+): string {
+  const identity = identities?.[pdfSpeakerKey(speaker, channel)]
+  if (identity?.name) return identity.name
   if (repSpeaker === null) return `Speaker ${speaker + 1}`
   if (speaker === repSpeaker) return 'You'
   return 'Buyer'
 }
 
-function evidenceHtml(ev: ReportEvidence | undefined, repSpeaker: number | null): string {
+function evidenceHtml(
+  ev: ReportEvidence | undefined,
+  repSpeaker: number | null,
+  identities?: Record<string, { name: string }>,
+  multichannel?: boolean
+): string {
   if (!ev || typeof ev.quote !== 'string' || !ev.quote.trim()) return ''
   const speaker = typeof ev.speaker === 'number' ? ev.speaker : null
-  const label = speaker === null ? 'Speaker' : speakerLabel(speaker, repSpeaker)
+  // Evidence doesn't carry channel directly — in multichannel mode speaker
+  // IS the channel (see transcription.ts), so it doubles as one.
+  const channel = multichannel && speaker !== null ? speaker : undefined
+  const label = speaker === null ? 'Speaker' : speakerLabel(speaker, repSpeaker, identities, channel)
   return `
       <div class="evidence">&ldquo;${escapeHtml(ev.quote)}&rdquo; <span class="ev-speaker">— ${escapeHtml(label)}</span></div>`
 }
@@ -174,7 +198,13 @@ function metricRows(m: ReportMetrics | undefined): MetricRow[] {
   return rows
 }
 
-function buildReportHtml(callTitle: string, createdAt: string, report: ReportLike): string {
+function buildReportHtml(
+  callTitle: string,
+  createdAt: string,
+  report: ReportLike,
+  identities?: Record<string, { name: string }>,
+  multichannel?: boolean
+): string {
   const allDimensions = Array.isArray(report.dimensions)
     ? (report.dimensions as ReportDimension[])
     : []
@@ -197,7 +227,7 @@ function buildReportHtml(callTitle: string, createdAt: string, report: ReportLik
           <span class="dim-score" style="color:${dimensionScoreColor(score)}">${score}/5</span>
         </div>
         <p class="dim-comment">${escapeHtml(comment)}</p>
-        ${evidenceHtml(d.evidence, repSpeaker)}
+        ${evidenceHtml(d.evidence, repSpeaker, identities, multichannel)}
       </div>`
     })
     .join('')
@@ -212,7 +242,7 @@ function buildReportHtml(callTitle: string, createdAt: string, report: ReportLik
         <span class="tag">${imp.kind === 'strategic' ? 'Strategic' : 'Quick fix'}</span>
         <h3>${escapeHtml(title)}</h3>
         <p>${escapeHtml(detail)}</p>
-        ${evidenceHtml(imp.evidence, repSpeaker)}
+        ${evidenceHtml(imp.evidence, repSpeaker, identities, multichannel)}
       </div>`
         })
         .join('')
@@ -283,7 +313,7 @@ function buildReportHtml(callTitle: string, createdAt: string, report: ReportLik
   <div class="metrics">${metricCells}</div>
   ${
     typeof report.strength?.text === 'string' && report.strength.text
-      ? `<div class="strength"><strong>What worked:</strong> ${escapeHtml(report.strength.text)}${evidenceHtml(report.strength.evidence, repSpeaker)}</div>`
+      ? `<div class="strength"><strong>What worked:</strong> ${escapeHtml(report.strength.text)}${evidenceHtml(report.strength.evidence, repSpeaker, identities, multichannel)}</div>`
       : ''
   }
   <h2 style="font-size:14px;">Scorecard</h2>
@@ -332,7 +362,13 @@ export function registerCoachPdf(): void {
 
       const win = new BrowserWindow({ show: false, webPreferences: { offscreen: true } })
       try {
-        const html = buildReportHtml(call.title, call.createdAt, call.coaching)
+        const html = buildReportHtml(
+          call.title,
+          call.createdAt,
+          call.coaching,
+          call.speakerIdentities,
+          call.segments.some((s) => s.channel !== undefined)
+        )
         await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
         const pdf = await win.webContents.printToPDF({})
         await writeFile(filePath, pdf)

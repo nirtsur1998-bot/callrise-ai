@@ -296,6 +296,25 @@ export interface CallSummary extends CallBase {
   objectionsMined: boolean
 }
 
+// --- M19 Task 2: resolved speaker identities --------------------------------
+export type SpeakerIdentitySource =
+  | 'user-profile'
+  | 'calendar'
+  | 'contact'
+  | 'participant-list'
+  | 'self-intro'
+  | 'voice-profile'
+  | 'manual'
+export type SpeakerIdentityConfidence = 'high' | 'medium' | 'low'
+/** Keyed by speakerKey() — see src/renderer/src/features/live/segments.ts. */
+export interface SpeakerIdentity {
+  name: string
+  source: SpeakerIdentitySource
+  confidence: SpeakerIdentityConfidence
+  contactId?: string
+  resolvedAt: string
+}
+
 export interface Call extends CallBase {
   segments: CallSegment[]
   summary?: Summary
@@ -303,6 +322,7 @@ export interface Call extends CallBase {
   coaching?: CoachingReport
   consent?: ConsentRecord
   objectionsMinedAt?: string
+  speakerIdentities?: Record<string, SpeakerIdentity>
 }
 
 export interface CallSaveInput {
@@ -493,6 +513,17 @@ export interface CallsApi {
   exportCoachingPdf: (
     callId: string
   ) => Promise<{ ok: true; path: string } | { ok: false; error: string }>
+  /** Rename (or clear, with `null`) a speaker for THIS call — always
+   *  source: 'manual', which the auto-resolution cascade never overwrites.
+   *  `key` is speakerKey()'s format (e.g. "ch1/spk1", "mono/spk0").
+   *  `rememberAsContactId` links the identity to a saved contact so future
+   *  calls with them resolve instantly. */
+  setSpeakerName: (
+    callId: string,
+    key: string,
+    name: string | null,
+    opts?: { rememberAsContactId?: string }
+  ) => Promise<Call | null>
 }
 
 export interface TasksApi {

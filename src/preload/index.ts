@@ -78,7 +78,13 @@ const api = {
       ipcRenderer.invoke('calls:addBookmark', callId, atMs, text),
     removeBookmark: (callId: string, bookmarkId: string) =>
       ipcRenderer.invoke('calls:removeBookmark', callId, bookmarkId),
-    exportCoachingPdf: (callId: string) => ipcRenderer.invoke('coach:exportPdf', callId)
+    exportCoachingPdf: (callId: string) => ipcRenderer.invoke('coach:exportPdf', callId),
+    setSpeakerName: (
+      callId: string,
+      key: string,
+      name: string | null,
+      opts?: { rememberAsContactId?: string }
+    ) => ipcRenderer.invoke('calls:setSpeakerName', callId, key, name, opts)
   },
   tasks: {
     list: () => ipcRenderer.invoke('tasks:list'),
