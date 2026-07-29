@@ -129,6 +129,35 @@ export interface TranscriptionApi {
   >
 }
 
+/** Plain-English custom trackers (§4.8) — the rep types a request, gets a
+ *  candidate trigger back, and (once accepted) it's persisted here and fed
+ *  into the live BattlecardMatcher alongside the starter library. */
+export interface TrackersApi {
+  /** Raw, unsanitized AI output — run it through sanitizeGeneratedTrigger
+   *  (features/live/battlecards/from-prompt.ts) before trusting it. */
+  generate: (
+    prompt: string
+  ) => Promise<
+    { ok: true; raw: unknown } | { ok: false; error: 'no-key' | 'failed'; message?: string }
+  >
+  list: () => Promise<StoredTracker[]>
+  /** Replaces the whole persisted list. */
+  save: (trackers: unknown) => Promise<StoredTracker[]>
+}
+
+export type StoredTrackerCategory = 'objection' | 'competitor' | 'pricing' | 'process'
+
+export interface StoredTracker {
+  id: string
+  patterns: string[]
+  card: {
+    id: string
+    label: string
+    say: string
+    category: StoredTrackerCategory
+  }
+}
+
 export interface CallSegment {
   speaker: number
   text: string
@@ -1189,6 +1218,7 @@ declare global {
     electron: ElectronAPI
     api: {
       transcription: TranscriptionApi
+      trackers: TrackersApi
       calls: CallsApi
       tasks: TasksApi
       contacts: ContactsApi

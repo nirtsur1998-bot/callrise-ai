@@ -43,6 +43,14 @@ const api = {
     liveCue: (transcript: string, repSpeaker: number | null) =>
       ipcRenderer.invoke('live:cue', { transcript, repSpeaker })
   },
+  trackers: {
+    /** Turn a rep's plain-English request into a candidate tracker (§4.8).
+     *  Raw, unsanitized AI output — the caller must run it through
+     *  sanitizeGeneratedTrigger before trusting or persisting it. */
+    generate: (prompt: string) => ipcRenderer.invoke('trackers:generate', prompt),
+    list: () => ipcRenderer.invoke('trackers:list'),
+    save: (trackers: unknown) => ipcRenderer.invoke('trackers:save', trackers)
+  },
   calls: {
     list: () => ipcRenderer.invoke('calls:list'),
     get: (id: string) => ipcRenderer.invoke('calls:get', id),

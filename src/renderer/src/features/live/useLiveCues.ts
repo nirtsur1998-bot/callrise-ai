@@ -249,6 +249,29 @@ export function useLiveCues(
   // When the turn that a cue is answering ended — the clock §1.7 measures from.
   const lastTurnEndAtRef = useRef<number | null>(null)
 
+  // Custom trackers (§4.8) load asynchronously from disk, so the matcher
+  // starts with just the starter library and is rebuilt once they arrive —
+  // always well before any call is live, since this hook mounts with the
+  // whole Live Calls screen, not per-call. A brand new instance rather than
+  // mutating the existing one: BattlecardMatcher has no "add trigger" method,
+  // and adding one just for this would be more surface for one-time startup
+  // work that never repeats mid-call.
+  useEffect(() => {
+    let cancelled = false
+    window.api.trackers
+      .list()
+      .then((custom) => {
+        if (cancelled || custom.length === 0) return
+        battlecardsRef.current = new BattlecardMatcher([...STARTER_TRIGGERS, ...custom])
+      })
+      .catch(() => {
+        /* starter library alone is still a fully working set */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   useEffect(() => {
     mountedRef.current = true
     return () => {
