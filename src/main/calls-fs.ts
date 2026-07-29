@@ -456,13 +456,24 @@ async function writeCall(dir: string, call: Call): Promise<void> {
 // The other party's turns ride on speaker/channel 1 (Deepgram multichannel).
 const BUYER_SPEAKER = 1
 
+/** A speakerIdentityKey's trailing `spk{N}` number, or null if it doesn't
+ *  parse (defensive — a malformed/hand-edited key should never crash this). */
+function speakerNumberFromKey(key: string): number | null {
+  const m = /spk(\d+)$/.exec(key)
+  return m ? Number(m[1]) : null
+}
+
 /**
- * Recording-consent RETENTION guard (M12 Step 6). Buyer capture only ever runs
- * after consent (status becomes 'consented'); if recording the other party
- * isn't (still) permitted (recordOtherParty !== true — e.g. "turn recording
- * off", a mid-call decline, or a file tampered to drop the flag), the other
- * party's captured turns are removed. Runs on save AND read AND list, so a
- * revoked/hand-edited call can never surface the other party's words.
+ * Recording-consent RETENTION guard (M12 Step 6, extended M19 Task 2). Buyer
+ * capture only ever runs after consent (status becomes 'consented'); if
+ * recording the other party isn't (still) permitted (recordOtherParty !==
+ * true — e.g. "turn recording off", a mid-call decline, or a file tampered
+ * to drop the flag), the other party's captured turns are removed — AND, as
+ * of M19, their resolved NAME too (speakerIdentities). A revoked call with
+ * its transcript stripped but the buyer's real name still attached would
+ * violate the exact invariant this function exists to enforce: a name is
+ * personal data same as the words themselves. Runs on save AND read AND
+ * list, so a revoked/hand-edited call can never surface either.
  */
 function applyConsentRetention(call: Call): void {
   const c = call.consent
@@ -470,6 +481,17 @@ function applyConsentRetention(call: Call): void {
   // can go consented → revoked/declined within one session AFTER buyer turns
   // were captured, so the current status must never short-circuit the strip.
   if (!c || c.recordOtherParty === true) return
+
+  if (call.speakerIdentities) {
+    const keys = Object.keys(call.speakerIdentities)
+    const keptKeys = keys.filter((k) => speakerNumberFromKey(k) !== BUYER_SPEAKER)
+    if (keptKeys.length !== keys.length) {
+      const next: Record<string, SpeakerIdentityRecord> = {}
+      for (const k of keptKeys) next[k] = call.speakerIdentities[k]
+      call.speakerIdentities = next
+    }
+  }
+
   if (!Array.isArray(call.segments)) return
   // A gap marker is not the buyer's speech — it belongs to nobody, so it
   // survives the strip regardless of the speaker id it happens to carry.
@@ -1053,12 +1075,28 @@ export async function setSpeakerIdentity(
     source: unknown
     confidence: unknown
     contactId?: unknown
+  },
+  opts?: {
+    /** The auto-resolution cascade's guard against clobbering a rename —
+     *  checked HERE, atomically with the write inside this function's own
+     *  withCallLock section, never by a caller pre-reading the call and
+     *  deciding from a snapshot that can go stale during its own async work
+     *  (calendar/contact lookups) before the write actually lands. A caller
+     *  that took a snapshot and checked `existing?.source === 'manual'`
+     *  itself was the exact TOCTOU this parameter exists to close. */
+    skipIfManual?: boolean
   }
 ): Promise<Call | null> {
   if (typeof key !== 'string' || !SPEAKER_KEY_RE.test(key)) return null
   return withCallLock(callId, async () => {
     const call = await getCall(dir, callId)
     if (!call) return null
+
+    // Re-checked against the CURRENT on-disk state, inside the same lock
+    // section as the write below — not a value the caller read earlier.
+    if (opts?.skipIfManual && call.speakerIdentities?.[key]?.source === 'manual') {
+      return call
+    }
 
     if (patch.name === null) {
       if (call.speakerIdentities) delete call.speakerIdentities[key]

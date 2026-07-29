@@ -178,12 +178,28 @@ export function registerCalls(): void {
       // by the same setting the cascade itself checks — a self-intro name
       // extracted while the setting was on shouldn't survive it being turned
       // off between the call and the save (a narrow window, but a real one).
+      //
+      // ALSO gated on the call's OWN consent, re-read fresh here (not trusted
+      // from the renderer, which can only send a stale snapshot from whenever
+      // the self-intro resolved) — selfIntro.key always names the OTHER
+      // party, and writing their real name is exactly the kind of personal
+      // data the M11 consent-retention invariant governs. A rep can revoke
+      // buyer consent mid-call (after a self-intro already resolved) and the
+      // save must not persist their name once that happens, matching the
+      // same-save segment strip applyConsentRetention already performs
+      // (which now also strips any speakerIdentities entry that DOES get
+      // written outside consent, as a second line of defense — see its own
+      // doc comment in calls-fs.ts — but the write is prevented here too,
+      // rather than relying solely on next-read cleanup).
       if (selfIntro?.key && selfIntro.name && isSpeakerIdEnabled()) {
-        await setSpeakerIdentity(callsDir(), summary.id, selfIntro.key, {
-          name: selfIntro.name,
-          source: 'self-intro',
-          confidence: 'medium'
-        }).catch(() => {})
+        const current = await getCall(callsDir(), summary.id)
+        if (current?.consent?.recordOtherParty === true) {
+          await setSpeakerIdentity(callsDir(), summary.id, selfIntro.key, {
+            name: selfIntro.name,
+            source: 'self-intro',
+            confidence: 'medium'
+          }).catch(() => {})
+        }
       }
       // Fire-and-forget, same as objection mining above — never block the save.
       // Fully resolves multichannel calls (channel 0/1 are deterministic);

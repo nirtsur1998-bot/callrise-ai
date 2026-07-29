@@ -66,10 +66,18 @@ export async function resolveAndSaveIdentities(dirs: Dirs, callId: string): Prom
 
   let latest: Call | null = call
   for (const [key, record] of Object.entries(resolved)) {
+    // The cheap early-exit below reads the SNAPSHOT taken at the top of this
+    // function — fine as a pure optimization (skip an obviously-identical
+    // write), but NOT what protects a manual rename from being clobbered.
+    // That protection is `skipIfManual`, re-checked atomically against the
+    // CURRENT on-disk state inside setSpeakerIdentity's own lock section —
+    // this function does real async I/O (calendar cache reads, per-attendee
+    // contact lookups) between the snapshot above and this loop, during
+    // which a concurrent manual rename could land; checking only the stale
+    // snapshot here would silently overwrite it (a real bug this once had).
     const existing = call.speakerIdentities?.[key]
-    if (existing?.source === 'manual') continue // never overwrite a rename
     if (existing?.name === record.name && existing?.source === record.source) continue // no-op, skip the write
-    latest = await setSpeakerIdentity(dirs.calls, callId, key, record)
+    latest = await setSpeakerIdentity(dirs.calls, callId, key, record, { skipIfManual: true })
   }
   return latest
 }
