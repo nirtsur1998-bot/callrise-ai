@@ -34,6 +34,7 @@ import { isObjectionMiningEnabled, loadAppSettings } from './app-settings'
 import { scheduleBackup, queueAttachmentBlobDeletes } from './backup'
 import { addComment } from './contacts-fs'
 import { generateCrmNote } from './crm-notes'
+import { resolveAndSaveIdentities } from './speaker-identity/resolve-for-call'
 
 function objectionQueueDir(): string {
   return join(app.getPath('userData'), 'objection-queue')
@@ -166,6 +167,10 @@ export function registerCalls(): void {
     if (isObjectionMiningEnabled()) {
       void mineCallIntoQueue(summary.id).catch(() => {})
     }
+    // Fire-and-forget, same as objection mining above — never block the save.
+    // Fully resolves multichannel calls (channel 0/1 are deterministic);
+    // mono calls only get "me" once coaching supplies repSpeaker (see below).
+    void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, summary.id).catch(() => {})
     return summary
   })
   ipcMain.handle('calls:delete', async (_event, id: string) => {
@@ -321,6 +326,10 @@ export function registerCalls(): void {
           }
         }
         scheduleBackup() // quote-free scores/advice sync; evidence quotes never do
+        // repSpeaker is only known from here on for a mono call — re-run so
+        // its "me" key (and therefore single-other-party detection) can
+        // resolve for the first time.
+        void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, callId).catch(() => {})
       }
       return result
     } catch {
