@@ -23,6 +23,7 @@ export function IdleHero({ onStart }: { onStart: () => void }): React.JSX.Elemen
         <button
           type="button"
           onClick={onStart}
+          aria-label="Start live transcription"
           className="press no-drag relative grid h-24 w-24 place-items-center rounded-full bg-accent text-white shadow-lg shadow-accent/20 transition hover:brightness-110"
         >
           <Mic className="h-9 w-9" strokeWidth={2} />

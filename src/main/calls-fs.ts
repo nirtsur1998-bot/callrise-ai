@@ -479,24 +479,30 @@ export async function listCalls(
   } catch {
     return []
   }
-  const summaries: CallSummary[] = []
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue
-    try {
-      const raw = await fs.readFile(join(dir, file), 'utf8')
-      const call = JSON.parse(raw) as Call
-      // Tombstones stay hidden from the app; the backup reads them via includeDeleted.
-      if (call && typeof call.id === 'string' && (opts?.includeDeleted || !call.deleted)) {
-        // Normalize consent + strip unconsented buyer turns so the list preview
-        // and speaker count never surface the other party's words either.
-        call.consent = sanitizeConsent(call.consent)
-        applyConsentRetention(call)
-        summaries.push(toSummary(call))
-      }
-    } catch {
-      /* skip unreadable / corrupt file */
-    }
-  }
+  // Reads run concurrently — one file's disk I/O never waits on another's, and
+  // order doesn't matter here since the result is sorted below regardless.
+  const results = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map(async (file): Promise<CallSummary | null> => {
+        try {
+          const raw = await fs.readFile(join(dir, file), 'utf8')
+          const call = JSON.parse(raw) as Call
+          // Tombstones stay hidden from the app; the backup reads them via includeDeleted.
+          if (call && typeof call.id === 'string' && (opts?.includeDeleted || !call.deleted)) {
+            // Normalize consent + strip unconsented buyer turns so the list preview
+            // and speaker count never surface the other party's words either.
+            call.consent = sanitizeConsent(call.consent)
+            applyConsentRetention(call)
+            return toSummary(call)
+          }
+          return null
+        } catch {
+          return null // skip unreadable / corrupt file
+        }
+      })
+  )
+  const summaries = results.filter((s): s is CallSummary => s !== null)
   summaries.sort((a, b) => b.createdAt.localeCompare(a.createdAt)) // newest first
   return summaries
 }

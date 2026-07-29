@@ -262,17 +262,20 @@ export async function listDeals(dir: string, opts?: { includeDeleted?: boolean }
   } catch {
     return []
   }
-  const deals: Deal[] = []
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue
-    try {
-      const raw = await fs.readFile(join(dir, file), 'utf8')
-      const deal = sanitizeDealRecord(JSON.parse(raw))
-      if (deal && (opts?.includeDeleted || !deal.deleted)) deals.push(deal)
-    } catch {
-      /* skip unreadable / corrupt file */
-    }
-  }
+  const results = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map(async (file): Promise<Deal | null> => {
+        try {
+          const raw = await fs.readFile(join(dir, file), 'utf8')
+          const deal = sanitizeDealRecord(JSON.parse(raw))
+          return deal && (opts?.includeDeleted || !deal.deleted) ? deal : null
+        } catch {
+          return null // skip unreadable / corrupt file
+        }
+      })
+  )
+  const deals = results.filter((d): d is Deal => d !== null)
   // Newest first as a stable default; the pipeline board applies its own ordering.
   deals.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   return deals

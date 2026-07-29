@@ -207,18 +207,21 @@ export async function listContacts(
   } catch {
     return []
   }
-  const contacts: Contact[] = []
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue
-    try {
-      const raw = await fs.readFile(join(dir, file), 'utf8')
-      const contact = sanitizeContactRecord(JSON.parse(raw))
-      // Tombstones stay hidden from the app; a future backup reads them via includeDeleted.
-      if (contact && (opts?.includeDeleted || !contact.deleted)) contacts.push(contact)
-    } catch {
-      /* skip unreadable / corrupt file */
-    }
-  }
+  const results = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map(async (file): Promise<Contact | null> => {
+        try {
+          const raw = await fs.readFile(join(dir, file), 'utf8')
+          const contact = sanitizeContactRecord(JSON.parse(raw))
+          // Tombstones stay hidden from the app; a future backup reads them via includeDeleted.
+          return contact && (opts?.includeDeleted || !contact.deleted) ? contact : null
+        } catch {
+          return null // skip unreadable / corrupt file
+        }
+      })
+  )
+  const contacts = results.filter((c): c is Contact => c !== null)
   // Alphabetical by name as a stable default; the renderer applies its own ordering.
   contacts.sort((a, b) => a.name.localeCompare(b.name))
   return contacts
