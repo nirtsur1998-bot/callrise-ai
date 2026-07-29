@@ -9,14 +9,23 @@
 //   1. user's own name          -> the caller's own channel/speaker key
 //   2. calendar attendee (1:1)  -> highest confidence
 //   3. contact record match     -> via the calendar attendee's email
-//   4. meeting-app participants -> NOT IMPLEMENTED (see docs/speaker-id.md)
+//   4. meeting-app participants -> NOT IMPLEMENTED — see
+//      participant-list.ts's header for exactly why (no native accessibility-
+//      tree capability exists anywhere in this repo to build on).
 //   5. self-intro extraction    -> handled separately, live-session-scoped
 //      (see live-cue.ts's buyerName extension) — not part of this
 //      post-hoc/on-save cascade at all.
-//   6. voice profile             -> NOT IMPLEMENTED (schema-only, see
-//      voice-profile.ts) — deliberately not an ML feature in this milestone.
+//   6. voice profile            -> NOT IMPLEMENTED — schema-only, see
+//      voice-profile.ts's header (no real embedding model in this repo;
+//      deliberately not faked).
 //   7. fallback "Speaker N"     -> the existing renderer behavior; this
 //      cascade simply produces no entry, which IS the fallback.
+//
+// Steps 4 and 6 are not called from resolveCascade() below — both always
+// return null today, so wiring them in would be pure overhead with no
+// behavior change. Their files exist so a real implementation has an exact,
+// already-agreed integration point (same signature, same place in the
+// priority order) rather than needing this cascade re-designed later.
 
 import { speakerIdentityKey, type SpeakerIdentityRecord } from '../calls-fs'
 import { bestOneOnOneMatch, nameFromEmailLocalPart, type CalendarAttendee } from './calendar-match'
