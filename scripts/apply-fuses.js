@@ -10,7 +10,7 @@
 // that is not a hardening nicety. macOS granted the microphone to *this
 // bundle*, and anything running inside it inherits the grant, so the gap
 // between "a bug" and "a wiretap someone else can point at your customers" is
-// exactly these four flags.
+// exactly these two flags.
 //
 // It also matters that the mic permission is the one thing an attacker cannot
 // obtain on their own: prompting for it draws attention. Borrowing ours does
@@ -24,20 +24,21 @@
 //                                            otherwise attach a debugger to
 //                                            the main process and achieve the
 //                                            same thing more comfortably.
-//   EnableEmbeddedAsarIntegrityValidation on — the binary refuses to run an
-//                                            app.asar whose hash does not
-//                                            match the one baked in at build
-//                                            time, so the bundle cannot be
-//                                            edited in place.
-//   OnlyLoadAppFromAsar                on — closes the way around the above:
-//                                            without it Electron will happily
-//                                            prefer an unpacked `app/`
-//                                            directory beside the archive,
-//                                            and integrity validation of an
-//                                            archive nobody loads is worth
-//                                            nothing.
 //
-// The last two are a pair. Enabling either alone leaves the door open.
+// EnableEmbeddedAsarIntegrityValidation/OnlyLoadAppFromAsar were tried here
+// too (electron-builder.yml's `disableAsarIntegrity: true` has the fuller
+// story) and pulled again: on real Windows hardware every packaged build
+// refused to launch at all - first with "ASAR Integrity Violation: got a hash
+// mismatch" (electron-builder's own asar-integrity embedding conflicting with
+// this script's fuse-flip), then, once this script stopped setting the fuse
+// but electron-builder's embedding step was still running, with no window and
+// no error at all. Disabling electron-builder's embedding globally (so
+// there's no embedded hash to validate against on any platform) is why this
+// pair is gone entirely now rather than just skipped on win32 - a fuse that
+// says "check integrity" with nothing to check against just fails the same
+// way. A pre-M18 Windows build with neither fuse set launched fine on the
+// same class of hardware, so this is a real regression from adding them, not
+// an environment problem.
 
 /* eslint-disable @typescript-eslint/no-require-imports -- plain CJS script, run by electron-builder's afterPack hook, not part of the TS app bundle */
 const { flipFuses, FuseVersion, FuseV1Options } = require('@electron/fuses')
@@ -61,28 +62,6 @@ exports.default = async function applyFuses(context) {
         ? `${appOutDir}/${productName}.exe`
         : `${appOutDir}/${packager.executableName}`
 
-  // EnableEmbeddedAsarIntegrityValidation/OnlyLoadAppFromAsar are disabled on
-  // Windows only: electron-builder's own Windows asar-integrity embedding
-  // (ElectronFramework.beforeCopyExtraFiles -> addWinAsarIntegrity, which
-  // rewrites the exe's resources right before this hook runs) is producing a
-  // binary whose embedded hash never matches what Electron's runtime computes
-  // at startup - confirmed on real Windows hardware, where every packaged
-  // build (both the NSIS installer and the portable exe) refused to launch
-  // with "ASAR Integrity Violation: got a hash mismatch", never a plain
-  // window. The exact interaction between that electron-builder step and this
-  // script's own flipFuses() call isn't fully isolated yet, but a pre-M18
-  // Windows build (with neither fuse set) launched fine on the same class of
-  // hardware, so this is a real regression from adding them here, not an
-  // environment problem. macOS keeps both - that's the platform this pair was
-  // actually verified on.
-  const asarIntegrityFuses =
-    electronPlatformName === 'win32'
-      ? {}
-      : {
-          [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
-          [FuseV1Options.OnlyLoadAppFromAsar]: true
-        }
-
   await flipFuses(binary, {
     version: FuseVersion.V1,
     // Re-signing is handled by electron-builder's own signing step, which runs
@@ -91,8 +70,7 @@ exports.default = async function applyFuses(context) {
     resetAdHocDarwinSignature: electronPlatformName === 'darwin',
 
     [FuseV1Options.RunAsNode]: false,
-    [FuseV1Options.EnableNodeCliInspectArguments]: false,
-    ...asarIntegrityFuses
+    [FuseV1Options.EnableNodeCliInspectArguments]: false
   })
 
   console.log(`[fuses] locked ${electronPlatformName}: ${binary}`)
