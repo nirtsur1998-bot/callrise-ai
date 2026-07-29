@@ -49,6 +49,19 @@ export interface AudioPump {
   stop: () => void
 }
 
+/**
+ * Whether the §1.4 SharedArrayBuffer/worker fast path may be used.
+ *
+ * Hard-off: on Electron a MessagePortMain port transferred into a Web Worker is
+ * severed from the main process, so the worker's drained audio never arrives —
+ * see the long note in startAudioPump. Kept as a function (not a `const false`)
+ * so the rest of the module stays reachable/typechecked and re-enabling later is
+ * a one-line change once the port can reach main from a worker.
+ */
+function fastPathEnabled(): boolean {
+  return false
+}
+
 /** The port main sends us, re-posted into this world by the preload. */
 function awaitPort(timeoutMs: number): Promise<MessagePort | null> {
   return new Promise((resolve) => {
@@ -114,6 +127,22 @@ export async function startAudioPump(
    *  that itself, since it never holds a reference to the worklet. */
   onFailure?: () => void
 ): Promise<AudioPump | null> {
+  // DISABLED (investigated 2026-07-29): this fast path cannot deliver audio on
+  // Electron. The port main hands over is a MessagePortMain pair; the moment it
+  // is transferred INTO this Web Worker (see `worker.postMessage({...}, [port])`
+  // below), Electron severs its link to the main process. The worker then drains
+  // the ring and posts every frame, but none of them arrive at main's port
+  // handler — verified end to end: the ring's READ_INDEX advances to the full
+  // frame count while main's `submittedSec` stays 0, Deepgram receives nothing,
+  // and the 10s no-audio watchdog tears the session down as "No microphone
+  // found." Critically the handshake still SUCCEEDS (the worker's `ready` travels
+  // the worker<->window channel, not the main port), so bringing this path up
+  // switches the worklet to ring mode and SILENCES the postMessage fallback —
+  // turning a broken optimization into a total audio blackout with no
+  // transcription. Until a worker can reach the main process directly, force the
+  // proven postMessage path (worklet -> onChunk -> transcription.sendAudio) by
+  // declaring the fast path unavailable, exactly as the recorder already handles.
+  if (!fastPathEnabled()) return null
   if (!sharedMemoryAvailable()) return null
 
   const layout = {
