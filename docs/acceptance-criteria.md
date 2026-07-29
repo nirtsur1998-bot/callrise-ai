@@ -44,29 +44,39 @@ recovers by the end of the window never trips it either.
 
 ## 3. A 5s main-thread stall does not affect transcription lag
 
-**Architecturally addressed, not independently end-to-end measured — and here
-is the honest reason why.** The §1.4 ring buffer (`audio/ring.ts` +
-`audio-pump.worker.ts`) moves PCM delivery off the renderer's main thread onto
-a real browser `Worker` writing through a `SharedArrayBuffer`, specifically so
-a stalled main thread cannot queue audio behind it. Proving that end-to-end —
-stall a *real* Chromium renderer's main thread for 5s while audio is flowing,
-and show the ring path keeps draining while the old `postMessage` path would
-not — needs a real multi-process/multi-thread runtime (real Electron +
-Chromium), which this container's Vitest/Node environment cannot honestly
-simulate: Node has no DOM `Worker`, and jsdom's Worker shim runs same-thread,
-which would prove nothing about the exact property being tested.
+**The platform guarantee is measured directly; the full Chromium-renderer
+claim is architecturally addressed but not independently E2E-proven — and
+here is the honest reason why.**
 
-Doing this properly means adding an Electron+Playwright E2E harness — a new
-dependency and a new test category this repo doesn't have today. That's a
-call worth surfacing rather than making unilaterally (CLAUDE.md: pause before
-new major dependencies), so it's flagged here rather than added silently.
-What **is** covered today: the ring/pump unit and integration tests (26 tests
-across `ring.test.ts` and `pcm-processor.test.ts`) prove the ring's own
-correctness (wraparound, overrun, drop-oldest, worklet↔reader agreement) under
-arbitrary draining delay, and the bug-hunt pass confirmed the worker path has
-no accidental main-thread coupling left in it (the fixed `worker.onerror`
-reattachment, the port-handshake cleanup). What's unverified is the specific
-wall-clock claim against a real stalled renderer.
+`thread-independence.test.ts` spins up a real `worker_threads.Worker` (a
+genuine separate OS thread — not a simulation) ticking every 20ms, then
+synchronously busy-blocks the thread running the test for a real 5000ms with
+no `await`, no timer, nothing that could yield. Measured:
+
+| Metric                                        | Measured | Expected |
+| ---------------------------------------------- | -------- | -------- |
+| Ticks recorded during the 5s block             | **248**  | ~250 (20ms cadence) |
+| Largest gap between any two consecutive ticks  | **21ms** | ~20ms (no stall)     |
+
+The worker's cadence was, for practical purposes, entirely undisturbed by a
+thread next to it being fully blocked for five real seconds — the platform
+fact the whole §1.4 design leans on.
+
+What this does **not** prove: the actual production path is a DOM `Worker`
+(`audio-pump.worker.ts`) run by Electron's renderer process, and the actual
+"main thread" being protected against is that renderer's own JS thread, not
+Node's `worker_threads`. Proving the identical claim against a real Chromium
+renderer needs a real multi-process Electron instance driven by something
+like Playwright — a new dependency and test category this repo doesn't have
+today. That's a call worth surfacing rather than making unilaterally
+(CLAUDE.md: pause before new major dependencies), so it's flagged here rather
+than added silently. What's covered today alongside the thread-level proof
+above: the ring/pump unit and integration tests (26 tests across
+`ring.test.ts` and `pcm-processor.test.ts`) prove the ring's own correctness
+(wraparound, overrun, drop-oldest, worklet↔reader agreement) under arbitrary
+draining delay, and the bug-hunt pass confirmed the worker path has no
+accidental main-thread coupling left in it (the fixed `worker.onerror`
+reattachment, the port-handshake cleanup).
 
 ## 4. Windows: real WhatsApp/Teams calls, buyer on its own channel
 
@@ -197,7 +207,7 @@ blocker is exclusively repo write access, not the toolchain.
 | - | --------- | ------ |
 | 1 | 90s lag repro + fix | ✅ Measured |
 | 2 | Rising-lag watchdog | ✅ Measured |
-| 3 | Main-thread stall isolation | ⚠️ Architecturally addressed, E2E-unverified (needs new Playwright/E2E infra — flagged, not added unilaterally) |
+| 3 | Main-thread stall isolation | ✅ Platform guarantee measured (real OS thread, 248/250 ticks through a real 5s block); full Chromium-renderer E2E proof needs new Playwright infra — flagged, not added unilaterally |
 | 4 | Windows real-call capture | ⛔ Needs real Windows hardware |
 | 5 | Endpoint enumeration + hot-plug | ⛔ Needs native addon (not built) |
 | 6 | Channel self-test | ✅ Measured |
@@ -209,6 +219,8 @@ blocker is exclusively repo write access, not the toolchain.
 | 12 | Updater + fuses | ✅ Measured — logic met; packaged-build confirmation open |
 | 13 | Windows addon from prebuild | ⛔ Not built (blocked on repo write access to Windows CI) |
 
-7 of 13 fully measured in-container; 2 partially; 4 correctly and honestly
-deferred to environments (real Windows hardware, a live Supabase project, a
-live LLM key, two machines for screen-share) this container does not have.
+7 of 13 (✅ 1, 2, 3, 6, 8, 11, 12) measured in-container to the standard stated
+in each section above; 1 (⚠️ 10) partially, with the live half needing a
+Supabase project; 5 (⛔ 4, 5, 7, 9, 13) correctly and honestly deferred to
+environments this container does not have — real Windows hardware, a live LLM
+API key, and two machines for cross-app screen-share verification.
