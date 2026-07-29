@@ -31,6 +31,57 @@ export interface Contact {
   /** National number only (no dial code — that's phoneCountry). */
   phone?: string
   notes?: string
+
+  // --- KYC / Business (M19) ---
+  /** Industry classification. */
+  industry?: string
+  /** Company size (e.g., "1-10", "11-50", "51-250", "250+"). */
+  companySize?: string
+  /** Website URL. */
+  website?: string
+  /** Registration number, VAT ID, or similar. */
+  registrationNumber?: string
+  /** Verification status of the company (e.g., "verified", "pending", "failed"). */
+  verificationStatus?: string
+  /** Job title / role. */
+  title?: string
+  /** Primary contact's decision-making authority level. */
+  decisionAuthority?: string
+  /** Other stakeholders involved (free text). */
+  otherStakeholders?: string
+
+  // --- Deal Context (M19) ---
+  /** Deal value associated with this contact. */
+  dealValue?: number
+  /** Pipeline stage (links to deal-stages if a deal exists). */
+  pipelineStage?: string
+  /** Source of lead (e.g., "inbound", "cold outreach", "referral"). */
+  leadSource?: string
+  /** Budget indication for this prospect. */
+  budgetIndication?: string
+  /** Timeline/urgency (e.g., "Q1", "ASAP", "TBD"). */
+  timeline?: string
+  /** Competitors in play (free text). */
+  competitors?: string
+  /** Known objections, stored as free text. */
+  knownObjections?: string
+  /** Their current tooling / solutions in use. */
+  currentTooling?: string
+  /** Last contact date as ISO string (yyyy-mm-dd). */
+  lastContactDate?: string
+
+  // --- Personal / Soft (M19) ---
+  /** Preferred language for communication. */
+  preferredLanguage?: string
+  /** Communication style (e.g., "formal", "casual", "email-first"). */
+  communicationStyle?: string
+  /** Timezone (IANA format, e.g., "America/New_York"). */
+  timezone?: string
+  /** Personal notes ("has two kids", "mentions cycling"). */
+  personalNotes?: string
+  /** Large free-text field: "Anything else the AI should know before I meet this person". */
+  briefingNotes?: string
+
   createdAt: string // ISO timestamp
   /** Last modification (create or any edit), ISO timestamp — the ordering key a
    *  future cloud backup would use for "newest wins". Backfilled from createdAt
@@ -53,6 +104,28 @@ export interface ContactCreateInput {
   phoneCountry?: unknown
   phone?: unknown
   notes?: unknown
+  industry?: unknown
+  companySize?: unknown
+  website?: unknown
+  registrationNumber?: unknown
+  verificationStatus?: unknown
+  title?: unknown
+  decisionAuthority?: unknown
+  otherStakeholders?: unknown
+  dealValue?: unknown
+  pipelineStage?: unknown
+  leadSource?: unknown
+  budgetIndication?: unknown
+  timeline?: unknown
+  competitors?: unknown
+  knownObjections?: unknown
+  currentTooling?: unknown
+  lastContactDate?: unknown
+  preferredLanguage?: unknown
+  communicationStyle?: unknown
+  timezone?: unknown
+  personalNotes?: unknown
+  briefingNotes?: unknown
 }
 
 /** Fields the renderer may change. A key present with `null` clears that
@@ -67,6 +140,28 @@ export interface ContactUpdateInput {
   phoneCountry?: unknown
   phone?: unknown
   notes?: unknown
+  industry?: unknown
+  companySize?: unknown
+  website?: unknown
+  registrationNumber?: unknown
+  verificationStatus?: unknown
+  title?: unknown
+  decisionAuthority?: unknown
+  otherStakeholders?: unknown
+  dealValue?: unknown
+  pipelineStage?: unknown
+  leadSource?: unknown
+  budgetIndication?: unknown
+  timeline?: unknown
+  competitors?: unknown
+  knownObjections?: unknown
+  currentTooling?: unknown
+  lastContactDate?: unknown
+  preferredLanguage?: unknown
+  communicationStyle?: unknown
+  timezone?: unknown
+  personalNotes?: unknown
+  briefingNotes?: unknown
 }
 
 // Ids are used to build file paths, so they must be tightly constrained
@@ -80,6 +175,9 @@ const MAX_CID = 100
 const MAX_EMAIL = 320
 const MAX_PHONE = 40
 const MAX_NOTES = 2000
+const MAX_SHORT_TEXT = 100
+const MAX_LONG_TEXT = 1000
+const MAX_BRIEFING = 5000
 
 export function isSafeId(id: unknown): id is string {
   return typeof id === 'string' && ID_RE.test(id)
@@ -120,6 +218,13 @@ function sanitizeMultilineText(value: unknown, max: number): string | undefined 
     .trim()
     .slice(0, max)
   return clean ? clean : undefined
+}
+
+/** Validate and bound a currency amount. */
+function sanitizeValue(value: unknown): number | undefined {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  if (!Number.isFinite(n) || n < 0) return undefined
+  return Math.round(n * 100) / 100
 }
 
 async function ensureDir(dir: string): Promise<void> {
@@ -165,6 +270,28 @@ function sanitizeContactRecord(value: unknown): Contact | null {
     phoneCountry: sanitizeCountryCode(v.phoneCountry),
     phone: sanitizeOptionalText(v.phone, MAX_PHONE),
     notes: sanitizeMultilineText(v.notes, MAX_NOTES),
+    industry: sanitizeOptionalText(v.industry, MAX_SHORT_TEXT),
+    companySize: sanitizeOptionalText(v.companySize, MAX_SHORT_TEXT),
+    website: sanitizeOptionalText(v.website, MAX_LONG_TEXT),
+    registrationNumber: sanitizeOptionalText(v.registrationNumber, MAX_SHORT_TEXT),
+    verificationStatus: sanitizeOptionalText(v.verificationStatus, MAX_SHORT_TEXT),
+    title: sanitizeOptionalText(v.title, MAX_SHORT_TEXT),
+    decisionAuthority: sanitizeOptionalText(v.decisionAuthority, MAX_SHORT_TEXT),
+    otherStakeholders: sanitizeMultilineText(v.otherStakeholders, MAX_LONG_TEXT),
+    dealValue: sanitizeValue(v.dealValue),
+    pipelineStage: sanitizeOptionalText(v.pipelineStage, MAX_SHORT_TEXT),
+    leadSource: sanitizeOptionalText(v.leadSource, MAX_SHORT_TEXT),
+    budgetIndication: sanitizeOptionalText(v.budgetIndication, MAX_SHORT_TEXT),
+    timeline: sanitizeOptionalText(v.timeline, MAX_SHORT_TEXT),
+    competitors: sanitizeMultilineText(v.competitors, MAX_LONG_TEXT),
+    knownObjections: sanitizeMultilineText(v.knownObjections, MAX_LONG_TEXT),
+    currentTooling: sanitizeMultilineText(v.currentTooling, MAX_LONG_TEXT),
+    lastContactDate: sanitizeDateOnly(v.lastContactDate),
+    preferredLanguage: sanitizeOptionalText(v.preferredLanguage, MAX_SHORT_TEXT),
+    communicationStyle: sanitizeOptionalText(v.communicationStyle, MAX_SHORT_TEXT),
+    timezone: sanitizeOptionalText(v.timezone, MAX_SHORT_TEXT),
+    personalNotes: sanitizeMultilineText(v.personalNotes, MAX_LONG_TEXT),
+    briefingNotes: sanitizeMultilineText(v.briefingNotes, MAX_BRIEFING),
     createdAt,
     updatedAt
   }
@@ -189,6 +316,28 @@ export async function createContact(
     phoneCountry: sanitizeCountryCode(input?.phoneCountry),
     phone: sanitizeOptionalText(input?.phone, MAX_PHONE),
     notes: sanitizeMultilineText(input?.notes, MAX_NOTES),
+    industry: sanitizeOptionalText(input?.industry, MAX_SHORT_TEXT),
+    companySize: sanitizeOptionalText(input?.companySize, MAX_SHORT_TEXT),
+    website: sanitizeOptionalText(input?.website, MAX_LONG_TEXT),
+    registrationNumber: sanitizeOptionalText(input?.registrationNumber, MAX_SHORT_TEXT),
+    verificationStatus: sanitizeOptionalText(input?.verificationStatus, MAX_SHORT_TEXT),
+    title: sanitizeOptionalText(input?.title, MAX_SHORT_TEXT),
+    decisionAuthority: sanitizeOptionalText(input?.decisionAuthority, MAX_SHORT_TEXT),
+    otherStakeholders: sanitizeMultilineText(input?.otherStakeholders, MAX_LONG_TEXT),
+    dealValue: sanitizeValue(input?.dealValue),
+    pipelineStage: sanitizeOptionalText(input?.pipelineStage, MAX_SHORT_TEXT),
+    leadSource: sanitizeOptionalText(input?.leadSource, MAX_SHORT_TEXT),
+    budgetIndication: sanitizeOptionalText(input?.budgetIndication, MAX_SHORT_TEXT),
+    timeline: sanitizeOptionalText(input?.timeline, MAX_SHORT_TEXT),
+    competitors: sanitizeMultilineText(input?.competitors, MAX_LONG_TEXT),
+    knownObjections: sanitizeMultilineText(input?.knownObjections, MAX_LONG_TEXT),
+    currentTooling: sanitizeMultilineText(input?.currentTooling, MAX_LONG_TEXT),
+    lastContactDate: sanitizeDateOnly(input?.lastContactDate),
+    preferredLanguage: sanitizeOptionalText(input?.preferredLanguage, MAX_SHORT_TEXT),
+    communicationStyle: sanitizeOptionalText(input?.communicationStyle, MAX_SHORT_TEXT),
+    timezone: sanitizeOptionalText(input?.timezone, MAX_SHORT_TEXT),
+    personalNotes: sanitizeMultilineText(input?.personalNotes, MAX_LONG_TEXT),
+    briefingNotes: sanitizeMultilineText(input?.briefingNotes, MAX_BRIEFING),
     createdAt: now,
     updatedAt: now
   }
@@ -291,6 +440,28 @@ async function updateContactUnlocked(
   if ('phoneCountry' in patch) contact.phoneCountry = sanitizeCountryCode(patch.phoneCountry)
   if ('phone' in patch) contact.phone = sanitizeOptionalText(patch.phone, MAX_PHONE)
   if ('notes' in patch) contact.notes = sanitizeMultilineText(patch.notes, MAX_NOTES)
+  if ('industry' in patch) contact.industry = sanitizeOptionalText(patch.industry, MAX_SHORT_TEXT)
+  if ('companySize' in patch) contact.companySize = sanitizeOptionalText(patch.companySize, MAX_SHORT_TEXT)
+  if ('website' in patch) contact.website = sanitizeOptionalText(patch.website, MAX_LONG_TEXT)
+  if ('registrationNumber' in patch) contact.registrationNumber = sanitizeOptionalText(patch.registrationNumber, MAX_SHORT_TEXT)
+  if ('verificationStatus' in patch) contact.verificationStatus = sanitizeOptionalText(patch.verificationStatus, MAX_SHORT_TEXT)
+  if ('title' in patch) contact.title = sanitizeOptionalText(patch.title, MAX_SHORT_TEXT)
+  if ('decisionAuthority' in patch) contact.decisionAuthority = sanitizeOptionalText(patch.decisionAuthority, MAX_SHORT_TEXT)
+  if ('otherStakeholders' in patch) contact.otherStakeholders = sanitizeMultilineText(patch.otherStakeholders, MAX_LONG_TEXT)
+  if ('dealValue' in patch) contact.dealValue = sanitizeValue(patch.dealValue)
+  if ('pipelineStage' in patch) contact.pipelineStage = sanitizeOptionalText(patch.pipelineStage, MAX_SHORT_TEXT)
+  if ('leadSource' in patch) contact.leadSource = sanitizeOptionalText(patch.leadSource, MAX_SHORT_TEXT)
+  if ('budgetIndication' in patch) contact.budgetIndication = sanitizeOptionalText(patch.budgetIndication, MAX_SHORT_TEXT)
+  if ('timeline' in patch) contact.timeline = sanitizeOptionalText(patch.timeline, MAX_SHORT_TEXT)
+  if ('competitors' in patch) contact.competitors = sanitizeMultilineText(patch.competitors, MAX_LONG_TEXT)
+  if ('knownObjections' in patch) contact.knownObjections = sanitizeMultilineText(patch.knownObjections, MAX_LONG_TEXT)
+  if ('currentTooling' in patch) contact.currentTooling = sanitizeMultilineText(patch.currentTooling, MAX_LONG_TEXT)
+  if ('lastContactDate' in patch) contact.lastContactDate = sanitizeDateOnly(patch.lastContactDate)
+  if ('preferredLanguage' in patch) contact.preferredLanguage = sanitizeOptionalText(patch.preferredLanguage, MAX_SHORT_TEXT)
+  if ('communicationStyle' in patch) contact.communicationStyle = sanitizeOptionalText(patch.communicationStyle, MAX_SHORT_TEXT)
+  if ('timezone' in patch) contact.timezone = sanitizeOptionalText(patch.timezone, MAX_SHORT_TEXT)
+  if ('personalNotes' in patch) contact.personalNotes = sanitizeMultilineText(patch.personalNotes, MAX_LONG_TEXT)
+  if ('briefingNotes' in patch) contact.briefingNotes = sanitizeMultilineText(patch.briefingNotes, MAX_BRIEFING)
 
   contact.updatedAt = new Date().toISOString() // mark modified (future backup ordering key)
 
