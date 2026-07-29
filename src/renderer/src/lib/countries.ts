@@ -28,6 +28,20 @@ export function countryDial(code: string | undefined): string | undefined {
   return COUNTRIES.find((c) => c.code === code)?.dial
 }
 
+/** Combines a phoneCountry (ISO2) + national number into E.164
+ *  ("+14155551234") — the join key M19 Task 2's phone-based contact
+ *  matching uses. Main can't do this itself (it doesn't have this
+ *  country->dial-code table), so it's computed here, at the one place a
+ *  contact's phone actually gets typed in, and sent already-formatted. */
+export function toE164(phoneCountry: string | undefined, phone: string | undefined): string | undefined {
+  const dial = countryDial(phoneCountry)
+  if (!dial || !phone) return undefined
+  const digits = phone.replace(/\D/g, '')
+  if (!digits) return undefined
+  const e164 = `${dial}${digits}`
+  return /^\+[1-9]\d{6,14}$/.test(e164) ? e164 : undefined
+}
+
 export const COUNTRIES: Country[] = [
   { code: 'AF', name: 'Afghanistan', dial: '+93' },
   { code: 'AL', name: 'Albania', dial: '+355' },

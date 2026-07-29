@@ -22,6 +22,48 @@ export interface CallSegment {
   kind?: 'gap'
 }
 
+// --- Speaker identification (M19 Task 2) ------------------------------------
+
+/** Same compound key every consumer uses: `channel` present -> multichannel
+ *  (`ch0/spk0`, `ch1/spk1`); absent -> mono/diarized (`mono/spk0`, ...).
+ *  MUST stay byte-identical to the renderer's speakerKey() in
+ *  src/renderer/src/features/live/segments.ts — main can't import renderer
+ *  code, so this is a deliberate duplicate, not an independent design. */
+export function speakerIdentityKey(seg: { speaker: number; channel?: number }): string {
+  return seg.channel === undefined ? `mono/spk${seg.speaker}` : `ch${seg.channel}/spk${seg.speaker}`
+}
+
+export type SpeakerIdentitySource =
+  | 'user-profile'
+  | 'calendar'
+  | 'contact'
+  | 'participant-list'
+  | 'self-intro'
+  | 'voice-profile'
+  | 'manual'
+
+export type SpeakerIdentityConfidence = 'high' | 'medium' | 'low'
+
+/** One resolved name for one speakerIdentityKey, for one call. Rename is
+ *  ALWAYS a `source: 'manual'` write to this record — never a string
+ *  replace inside stored transcript/summary/coaching text, which stays
+ *  purely numeric (`speaker`/`repSpeaker`) and resolves a display name only
+ *  at render time (see speakerLabel() in the renderer). That's what makes
+ *  rename retroactive and cheap: editing this one small record instantly
+ *  changes every past AND future render of this call, with zero risk of
+ *  missing a surface that baked the old name into generated prose. */
+export interface SpeakerIdentityRecord {
+  name: string
+  source: SpeakerIdentitySource
+  confidence: SpeakerIdentityConfidence
+  /** The contact this identity is linked to, if resolved via (or "remember
+   *  this person"-linked to) one. Lets a rename optionally update the
+   *  contact's own name too, and lets future calls with the same contact
+   *  resolve instantly without re-running the cascade. */
+  contactId?: string
+  resolvedAt: string
+}
+
 export interface Summary {
   executive: string
   keyPoints: string[]
@@ -249,6 +291,11 @@ export interface Call extends CallBase {
    *  double-drafting when both the contact-link and the summary land (in
    *  either order) with Settings → CRM → "Auto-generate notes" on. */
   crmNoteGeneratedAt?: string
+  /** M19 Task 2 — resolved speaker names, keyed by speakerIdentityKey().
+   *  Absent/missing key = unresolved, falls back to the existing You/Buyer/
+   *  Speaker N logic. Never required, never migrated — old calls simply have
+   *  no entries here and behave exactly as before this field existed. */
+  speakerIdentities?: Record<string, SpeakerIdentityRecord>
 }
 
 export interface CallSaveInput {
@@ -969,6 +1016,70 @@ export async function setCallContact(
       call.contactId = contactId
     } else {
       return call // not a recognizable id and not an explicit clear — leave as-is
+    }
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+const MAX_SPEAKER_NAME = 200
+const SPEAKER_KEY_RE = /^(mono|ch[01])\/spk\d+$/
+const SOURCES: SpeakerIdentitySource[] = [
+  'user-profile',
+  'calendar',
+  'contact',
+  'participant-list',
+  'self-intro',
+  'voice-profile',
+  'manual'
+]
+const CONFIDENCES: SpeakerIdentityConfidence[] = ['high', 'medium', 'low']
+
+/**
+ * Set (or clear, with `name: null`) the resolved name for one speaker key on
+ * one call — the single write path for BOTH the auto-resolution cascade
+ * (source !== 'manual') and a user's inline rename (source: 'manual').
+ * A manual rename always overwrites a lower-confidence auto-resolution; an
+ * auto-resolution call is expected to check the existing entry itself before
+ * calling this (the cascade should never clobber a rep's manual rename).
+ */
+export async function setSpeakerIdentity(
+  dir: string,
+  callId: string,
+  key: unknown,
+  patch: {
+    name: unknown
+    source: unknown
+    confidence: unknown
+    contactId?: unknown
+  }
+): Promise<Call | null> {
+  if (typeof key !== 'string' || !SPEAKER_KEY_RE.test(key)) return null
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+
+    if (patch.name === null) {
+      if (call.speakerIdentities) delete call.speakerIdentities[key]
+      call.updatedAt = new Date().toISOString()
+      await writeCall(dir, call)
+      return call
+    }
+
+    const name = typeof patch.name === 'string' ? patch.name.trim().slice(0, MAX_SPEAKER_NAME) : ''
+    if (!name) return call // nothing usable — leave existing entry (if any) untouched
+    const source = SOURCES.includes(patch.source as SpeakerIdentitySource)
+      ? (patch.source as SpeakerIdentitySource)
+      : 'manual'
+    const confidence = CONFIDENCES.includes(patch.confidence as SpeakerIdentityConfidence)
+      ? (patch.confidence as SpeakerIdentityConfidence)
+      : 'high' // a manual rename IS the ground truth
+    const contactId = isSafeId(patch.contactId) ? patch.contactId : undefined
+
+    call.speakerIdentities = {
+      ...call.speakerIdentities,
+      [key]: { name, source, confidence, contactId, resolvedAt: new Date().toISOString() }
     }
     call.updatedAt = new Date().toISOString()
     await writeCall(dir, call)

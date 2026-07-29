@@ -512,7 +512,66 @@ export interface ContactComment {
   source: 'user' | 'ai'
 }
 
-export interface Contact {
+/** M19 KYC/deal/personal/briefing fields on the stored Contact record —
+ *  factored out so Contact and the *Input variant below can't drift as
+ *  fields get added (they did drift once already: the M19 Task 3A form
+ *  fields were built without ever being wired into the create/update
+ *  payload, silently discarding everything a user typed into them). */
+interface ContactKycFields {
+  industry?: string
+  companySize?: string
+  website?: string
+  registrationNumber?: string
+  verificationStatus?: string
+  title?: string
+  decisionAuthority?: string
+  otherStakeholders?: string
+  dealValue?: number
+  pipelineStage?: string
+  leadSource?: string
+  budgetIndication?: string
+  timeline?: string
+  competitors?: string
+  knownObjections?: string
+  currentTooling?: string
+  lastContactDate?: string
+  preferredLanguage?: string
+  communicationStyle?: string
+  timezone?: string
+  personalNotes?: string
+  /** Free text: "Anything else the AI should know before I meet this
+   *  person" — the highest-value input to the M19 Task 3B pre-meeting brief. */
+  briefingNotes?: string
+}
+
+/** Same fields, but as a create/update payload: `null` explicitly clears the
+ *  field, `undefined`/absent leaves it untouched (update) or unset (create). */
+interface ContactKycInput {
+  industry?: string | null
+  companySize?: string | null
+  website?: string | null
+  registrationNumber?: string | null
+  verificationStatus?: string | null
+  title?: string | null
+  decisionAuthority?: string | null
+  otherStakeholders?: string | null
+  dealValue?: number | null
+  pipelineStage?: string | null
+  leadSource?: string | null
+  budgetIndication?: string | null
+  timeline?: string | null
+  competitors?: string | null
+  knownObjections?: string | null
+  currentTooling?: string | null
+  lastContactDate?: string | null
+  preferredLanguage?: string | null
+  communicationStyle?: string | null
+  timezone?: string | null
+  personalNotes?: string | null
+  briefingNotes?: string | null
+}
+
+export interface Contact extends ContactKycFields {
   id: string
   name: string
   /** Free-text company name — not a separate entity yet (a later CRM phase). */
@@ -528,6 +587,9 @@ export interface Contact {
   phoneCountry?: string
   /** National number only (no dial code — that's phoneCountry). */
   phone?: string
+  /** E.164 (e.g. "+14155551234"), derived from phoneCountry+phone at write
+   *  time — the join key M19 Task 2's phone-based contact matching uses. */
+  phoneE164?: string
   notes?: string
   createdAt: string
   /** Last modification (create or edit); a future backup's "newest wins" key. */
@@ -535,7 +597,7 @@ export interface Contact {
   comments?: ContactComment[]
 }
 
-export interface ContactCreateInput {
+export interface ContactCreateInput extends ContactKycInput {
   name: string
   company?: string | null
   cid?: string | null
@@ -544,10 +606,11 @@ export interface ContactCreateInput {
   email?: string | null
   phoneCountry?: string | null
   phone?: string | null
+  phoneE164?: string | null
   notes?: string | null
 }
 
-export interface ContactUpdateInput {
+export interface ContactUpdateInput extends ContactKycInput {
   name?: string
   company?: string | null
   cid?: string | null
@@ -556,6 +619,7 @@ export interface ContactUpdateInput {
   email?: string | null
   phoneCountry?: string | null
   phone?: string | null
+  phoneE164?: string | null
   notes?: string | null
 }
 

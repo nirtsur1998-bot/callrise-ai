@@ -59,6 +59,58 @@ function mergeObjectionMining(
 }
 
 /**
+ * Speaker identification (M19 Task 2) — auto-resolving real names for
+ * transcript speakers. Three independent switches with different risk
+ * profiles, so one privacy-sensitive step being off never silently disables
+ * the safe ones:
+ *
+ * - `enabled`: the cascade itself (user profile / calendar attendee / contact
+ *   match / fallback "Speaker N") — none of these send anything to an LLM or
+ *   a third party, so this defaults ON (the headline "resolved automatically"
+ *   behavior).
+ * - `allowSelfIntroExtraction`: extends the EXISTING M9 live-coaching LLM call
+ *   (which already reads the transcript to find the REP's self-intro) to also
+ *   extract the BUYER's name from their own self-intro. Off by default — this
+ *   is buyer speech reaching a third-party LLM, which M11's consent framing
+ *   never explicitly covered; ship it opt-in until that copy is reviewed.
+ * - `voiceProfileMatching`: biometric voice-embedding matching across calls.
+ *   Real regulatory weight (GDPR, BIPA) — off by default, and the matching
+ *   engine itself is schema-only in this milestone (see voice-profile.ts).
+ */
+export interface SpeakerIdSettings {
+  enabled: boolean
+  allowSelfIntroExtraction: boolean
+  voiceProfileMatching: boolean
+}
+
+const EMPTY_SPEAKER_ID: SpeakerIdSettings = {
+  enabled: true,
+  allowSelfIntroExtraction: false,
+  voiceProfileMatching: false
+}
+
+function sanitizeSpeakerId(value: unknown): SpeakerIdSettings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return {
+    enabled: typeof v.enabled === 'boolean' ? v.enabled : EMPTY_SPEAKER_ID.enabled,
+    allowSelfIntroExtraction: v.allowSelfIntroExtraction === true,
+    voiceProfileMatching: v.voiceProfileMatching === true
+  }
+}
+
+function mergeSpeakerId(current: SpeakerIdSettings, patch: unknown): SpeakerIdSettings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return {
+    enabled: 'enabled' in p ? p.enabled === true : current.enabled,
+    allowSelfIntroExtraction:
+      'allowSelfIntroExtraction' in p ? p.allowSelfIntroExtraction === true : current.allowSelfIntroExtraction,
+    voiceProfileMatching:
+      'voiceProfileMatching' in p ? p.voiceProfileMatching === true : current.voiceProfileMatching
+  }
+}
+
+/**
  * Ambient call detection (M15). HARD RULE: `enabled` is the feature flag
  * (ff_ambient_detection) - off by default, so this milestone ships inert
  * until a later phase adds a Settings toggle. `capturePolicy` maps straight
@@ -240,6 +292,9 @@ export interface AppSettings {
   objectionMining: ObjectionMiningSettings
   /** Ambient call detection (M15) - feature flag + capture policy. Defaults OFF. */
   detection: DetectionSettings
+  /** Speaker identification (M19 Task 2) - auto-name-resolution cascade +
+   *  two separate privacy-sensitive opt-ins. See SpeakerIdSettings. */
+  speakerId: SpeakerIdSettings
   /** Which text-AI provider coaching/summaries/tasks/etc. use - see
    *  src/main/ai/. Defaults to 'anthropic' (unchanged behavior for every
    *  existing install). The actual API key lives separately, encrypted, in
@@ -270,6 +325,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   crm: EMPTY_CRM_SETTINGS,
   objectionMining: EMPTY_OBJECTION_MINING,
   detection: EMPTY_DETECTION_SETTINGS,
+  speakerId: EMPTY_SPEAKER_ID,
   aiProvider: 'anthropic'
 }
 
@@ -335,6 +391,7 @@ export function loadAppSettings(): AppSettings {
       crm: sanitizeCrmSettings(parsed.crm),
       objectionMining: sanitizeObjectionMining(parsed.objectionMining),
       detection: sanitizeDetectionSettings(parsed.detection),
+      speakerId: sanitizeSpeakerId(parsed.speakerId),
       aiProvider: sanitizeAIProvider(parsed.aiProvider)
     }
   } catch {
@@ -343,7 +400,8 @@ export function loadAppSettings(): AppSettings {
       personalization: { ...EMPTY_PERSONALIZATION },
       crm: { ...EMPTY_CRM_SETTINGS },
       objectionMining: { ...EMPTY_OBJECTION_MINING },
-      detection: { ...EMPTY_DETECTION_SETTINGS }
+      detection: { ...EMPTY_DETECTION_SETTINGS },
+      speakerId: { ...EMPTY_SPEAKER_ID }
     }
   }
 }
@@ -375,6 +433,7 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
     crm: mergeCrmSettings(current.crm, p.crm),
     objectionMining: mergeObjectionMining(current.objectionMining, p.objectionMining),
     detection: mergeDetectionSettings(current.detection, p.detection),
+    speakerId: mergeSpeakerId(current.speakerId, p.speakerId),
     aiProvider: 'aiProvider' in p ? sanitizeAIProvider(p.aiProvider) : current.aiProvider
   }
 }
@@ -484,6 +543,19 @@ export function isObjectionMiningEnabled(): boolean {
 /** The ff_ambient_detection gate - detection-service.ts must check this before starting any adapter. */
 export function isAmbientDetectionEnabled(): boolean {
   return loadAppSettings().detection.enabled
+}
+
+/** M19 Task 2's cascade gate — calendar/contact/fallback resolution only. */
+export function isSpeakerIdEnabled(): boolean {
+  return loadAppSettings().speakerId.enabled
+}
+
+/** The specific gate live-cue.ts must check before asking the LLM to extract
+ *  the BUYER's name from their self-intro — buyer speech reaching a
+ *  third-party LLM, opt-in only. */
+export function isSelfIntroExtractionAllowed(): boolean {
+  const s = loadAppSettings().speakerId
+  return s.enabled && s.allowSelfIntroExtraction
 }
 
 let registered = false

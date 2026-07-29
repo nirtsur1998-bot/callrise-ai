@@ -527,6 +527,12 @@ async function withoutTombstoned(events: OutlookEvent[]): Promise<OutlookEvent[]
   return gone.size ? events.filter((e) => !gone.has(linkKey(e.provider, e.externalId))) : events
 }
 
+/** Main-process accessor for the pulled/cached Outlook events (with
+ *  attendees) — mirrors getCachedGoogleEvents() in google.ts. */
+export async function getCachedOutlookEvents(): Promise<OutlookEvent[]> {
+  return withoutTombstoned(await readCache())
+}
+
 // --- Push local events OUT to Outlook (two-way sync) -----------------------
 
 function eventsUrl(calId: string): string {
