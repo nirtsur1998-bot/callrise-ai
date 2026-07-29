@@ -36,6 +36,7 @@ import {
   StatusBadge,
   InlineBanner
 } from './components/LiveStates'
+import { sessionHealthNotice } from './session-health-notice'
 
 interface LiveViewProps {
   /** AI Note Taker's "auto-open meeting page" — called with the saved call's
@@ -115,6 +116,7 @@ export function LiveView({
     segments,
     interimText,
     latencyMs,
+    health,
     errorMessage,
     analyser,
     savedNotice,
@@ -559,24 +561,39 @@ export function LiveView({
           )}
           <StatusBadge status={status} />
           <div className="flex min-w-[70px] items-center gap-1.5 text-[13px]">
-            {latencyMs !== null && (status === 'listening' || status === 'paused') && (
-              <>
-                <span
-                  className={cn(
-                    'h-1.5 w-1.5 rounded-full',
-                    latencyMs < 500 ? 'bg-positive' : 'bg-warning'
-                  )}
-                />
-                <span
-                  className={cn(
-                    'font-medium tabular-nums',
-                    latencyMs < 500 ? 'text-positive' : 'text-warning'
-                  )}
-                >
-                  {latencyMs} ms
-                </span>
-              </>
-            )}
+            {latencyMs !== null &&
+              (status === 'listening' || status === 'paused') &&
+              (() => {
+                const notice = sessionHealthNotice(health)
+                const tone = notice ? 'danger' : latencyMs < 500 ? 'positive' : 'warning'
+                return (
+                  <>
+                    <span
+                      className={cn(
+                        'h-1.5 w-1.5 rounded-full',
+                        tone === 'danger'
+                          ? 'bg-danger'
+                          : tone === 'positive'
+                            ? 'bg-positive'
+                            : 'bg-warning'
+                      )}
+                    />
+                    <span
+                      title={notice?.title}
+                      className={cn(
+                        'font-medium tabular-nums',
+                        tone === 'danger'
+                          ? 'text-danger'
+                          : tone === 'positive'
+                            ? 'text-positive'
+                            : 'text-warning'
+                      )}
+                    >
+                      {notice ? notice.label : `${latencyMs} ms`}
+                    </span>
+                  </>
+                )
+              })()}
           </div>
         </div>
       </div>
@@ -740,7 +757,7 @@ export function LiveView({
           </div>
         )}
         {(status === 'listening' || status === 'paused') && hasTranscript && (
-          <div className="pointer-events-none absolute right-3 top-3 flex items-center gap-2">
+          <div className="pointer-events-none absolute top-3 right-3 z-50 flex items-center gap-2">
             {clips.justClipped && (
               <span className="rounded-lg bg-accent-soft px-2 py-1 text-xs font-medium text-accent">
                 Clipped
