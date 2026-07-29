@@ -20,6 +20,8 @@ import {
 import { generateVerificationCode, isValidEmail, EMAIL_CODE_TTL_MS } from './alert-channels/email'
 import { whatsAppStatus } from './alert-channels/whatsapp'
 import type { ChannelType } from './alert-channels/types'
+import { getCachedPrepBrief } from './prep-brief-fs'
+import { formatBriefForPush } from './prep-brief'
 
 const TRIGGER_LABELS: Record<TriggerType, string> = {
   meeting_starting: 'Meeting starting',
@@ -76,15 +78,16 @@ function subscribeDesktopDeliveries(): void {
           id: string
           status: string
           rule_id: string
+          subject_id: string
         }
         if (row.status !== 'pending') return
-        void handleDesktopDelivery(row.id, row.rule_id)
+        void handleDesktopDelivery(row.id, row.rule_id, row.subject_id)
       }
     )
     .subscribe()
 }
 
-async function handleDesktopDelivery(deliveryId: string, ruleId: string): Promise<void> {
+async function handleDesktopDelivery(deliveryId: string, ruleId: string, subjectId: string): Promise<void> {
   const client = getSupabaseClient()
   if (!client) return
   // Confirm this delivery is actually routed to a desktop channel of ours —
@@ -95,16 +98,34 @@ async function handleDesktopDelivery(deliveryId: string, ruleId: string): Promis
   const { error } = await client.rpc('ack_desktop_delivery', { p_delivery_id: deliveryId })
   if (error) return // row wasn't ours, already handled, or not a desktop channel — nothing to show
   const title = TRIGGER_LABELS[rule.trigger_type as TriggerType] ?? 'CallRise AI'
+  // M19 Task 3B: this path runs fully in the main process (no key ever
+  // leaves the device), so — unlike the server-side dispatcher, which needs
+  // the blocked Vault-sync path — it can read a prep brief straight from the
+  // local cache. Read-only: never generates fresh here (this must stay fast
+  // and can't block on an AI call), so it only helps once the rep has opened
+  // this meeting's brief at least once before (Calendar's "Prep brief"
+  // button, or an earlier firing of this same notification).
+  let body = 'Open CallRise AI for details.'
+  if (rule.trigger_type === 'meeting_starting') {
+    const cached = await getCachedPrepBrief(subjectId).catch(() => null)
+    if (cached) body = formatBriefForPush(cached.brief)
+  }
   const win = BrowserWindow.getAllWindows()[0]
   const notification = new Notification({
     title,
-    body: 'Open CallRise AI for details.'
+    body
   })
   if (win) {
     notification.on('click', () => {
       if (win.isMinimized()) win.restore()
       win.show()
       win.focus()
+      // Same channel the callrise://meeting/<id> deep link uses — clicking
+      // the notification opens straight to that meeting's brief, same as
+      // tapping the Telegram/email version of this alert would.
+      if (rule.trigger_type === 'meeting_starting') {
+        win.webContents.send('prepBrief:openRequested', subjectId)
+      }
     })
   }
   notification.show()

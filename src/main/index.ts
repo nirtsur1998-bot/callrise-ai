@@ -40,6 +40,47 @@ app.setName('CallRise AI')
 const userDataDir = join(app.getPath('appData'), 'sales-os')
 app.setPath('userData', userDataDir)
 
+// Deep link (M19 Task 3B): callrise://meeting/<eventId> jumps straight to a
+// meeting's prep brief — e.g. tapped from a Telegram/email meeting_starting
+// alert. In dev, the executable is electron.exe with the project path as an
+// argument, so the OS needs to be told to pass this project back as an arg
+// on every launch; a packaged build's own exe needs no such hint.
+if (!app.isPackaged && process.platform === 'win32') {
+  app.setAsDefaultProtocolClient('callrise', process.execPath, [join(__dirname, '..', '..')])
+} else {
+  app.setAsDefaultProtocolClient('callrise')
+}
+
+// Windows/Linux launch a BRAND NEW process for a protocol invocation rather
+// than routing it to one already running — without a single-instance lock,
+// clicking a callrise:// link while the app is open would silently spawn a
+// second, blank window instead of focusing the existing one and showing the
+// brief. A second launch loses this race and hands its argv to the first via
+// 'second-instance' below, then exits.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  // Calling quit() before whenReady() has resolved aborts this instance's
+  // startup entirely (Electron never fires 'ready' for it) — nothing below
+  // needs guarding against a losing instance limping partway through setup.
+  app.quit()
+} else {
+  app.on('second-instance', (_event, argv) => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+    const link = argv.find((arg) => arg.startsWith('callrise://'))
+    if (link) handleDeepLink(link)
+  })
+}
+
+// macOS delivers a protocol launch via this event instead of argv, both for
+// a cold start (queued below until the window exists) and while running.
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  handleDeepLink(url)
+})
+
 // Lets the audio worklet hand PCM to its worker through shared memory (§1.4),
 // so audio never waits on the renderer's main thread. Chromium otherwise gates
 // SharedArrayBuffer behind cross-origin isolation, which exists to keep a
@@ -100,8 +141,35 @@ import { registerCoachPdf } from './coach-pdf'
 import { registerAiKeys, loadStoredAiKeysIntoEnv } from './ai-keys'
 import { registerUpdater } from './updater'
 import { buildDiagnoseReport, wantsDiagnose } from './diagnose'
+import { registerPrepBrief } from './prep-brief-ipc'
 
 let mainWindow: BrowserWindow | null = null
+
+// Set by handleDeepLink() when it fires before the window exists yet (a cold
+// start via the protocol) — flushed once ready-to-show fires below. A send()
+// before the renderer has loaded and registered its listener is simply lost,
+// so this can't just fire immediately regardless of mainWindow's state.
+let pendingDeepLinkEventId: string | null = null
+
+function deliverDeepLink(eventId: string): void {
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
+    mainWindow.webContents.send('prepBrief:openRequested', eventId)
+  } else {
+    pendingDeepLinkEventId = eventId
+  }
+}
+
+/** callrise://meeting/<eventId> — the only deep link shape this app defines. */
+function handleDeepLink(url: string): void {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'callrise:' || parsed.hostname !== 'meeting') return
+    const eventId = decodeURIComponent(parsed.pathname.replace(/^\//, ''))
+    if (eventId) deliverDeepLink(eventId)
+  } catch {
+    /* malformed deep link — ignore rather than crash on attacker-controlled input */
+  }
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -125,6 +193,10 @@ function createWindow(): void {
   // Only show the window once the UI is painted (avoids a white flash).
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+    if (pendingDeepLinkEventId) {
+      mainWindow?.webContents.send('prepBrief:openRequested', pendingDeepLinkEventId)
+      pendingDeepLinkEventId = null
+    }
   })
 
   // Open external links in the real browser — but only safe web schemes.
@@ -281,8 +353,14 @@ app.whenReady().then(async () => {
   registerLaunchAtLogin()
   registerActiveApp()
   registerAlerts()
+  registerPrepBrief()
   registerDetectionService()
   writeCrashLog('registrations done', 'all registerX() calls completed, about to createWindow()')
+
+  // A cold start via callrise://meeting/<id> on Windows/Linux — the URL
+  // arrives as a regular argv entry, not the 'open-url' event (macOS-only).
+  const argvDeepLink = process.argv.find((arg) => arg.startsWith('callrise://'))
+  if (argvDeepLink) handleDeepLink(argvDeepLink)
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

@@ -1427,6 +1427,54 @@ export interface AlertsApi {
   }
 }
 
+export interface PrepBriefAttendee {
+  email: string
+  name?: string
+}
+
+export interface PrepBriefEventInput {
+  eventId: string
+  title: string
+  startIso: string
+  attendees: PrepBriefAttendee[]
+  contactId?: string
+  dealId?: string
+}
+
+export interface PrepBrief {
+  whoYoureMeeting: string
+  dealStatus: string
+  lastTime: string
+  openCommitments: string[]
+  likelyObjections: string[]
+  openers: string[]
+  model: string
+  generatedAt: string
+}
+
+export interface PrepBriefRecord {
+  eventId: string
+  contactId?: string
+  dealId?: string
+  inputHash: string
+  brief: PrepBrief
+  savedAt: string
+}
+
+export type PrepBriefResult =
+  | { ok: true; record: PrepBriefRecord; fromCache: boolean }
+  | { ok: false; error: 'no-key' | 'failed' | 'no-context'; message?: string }
+
+export interface PrepBriefApi {
+  getForEvent: (input: PrepBriefEventInput) => Promise<PrepBriefResult>
+  regenerate: (input: PrepBriefEventInput) => Promise<PrepBriefResult>
+  /** Fired when a callrise://meeting/<eventId> deep link is opened (from a
+   *  meeting_starting alert) — the caller resolves eventId to a full
+   *  PrepBriefEventInput itself (the renderer already holds the merged
+   *  calendar event via useCalendar()) and opens the brief for it. */
+  onOpenRequested: (callback: (eventId: string) => void) => () => void
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -1453,6 +1501,7 @@ declare global {
       aiKeys: AiKeysApi
       detection: DetectionApi
       alerts: AlertsApi
+      prepBrief: PrepBriefApi
     }
   }
 }

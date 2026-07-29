@@ -215,6 +215,17 @@ export function MainApp({
     setActive('past-calls')
   }
 
+  // M19 Task 3B — a callrise://meeting/<eventId> deep link (from a
+  // meeting_starting alert) jumps straight to Calendar and opens that
+  // meeting's prep brief. Same one-shot preselect pattern as openCallId.
+  const [deepLinkEventId, setDeepLinkEventId] = useState<string | null>(null)
+  useEffect(() => {
+    return window.api.prepBrief.onOpenRequested((eventId) => {
+      setDeepLinkEventId(eventId)
+      setActive('calendar')
+    })
+  }, [])
+
   // Command palette's "jump to a specific record" search results — same
   // one-shot preselect pattern as openCallId above, just for the CRM tabs.
   const [openContactId, setOpenContactId] = useState<string | null>(null)
@@ -333,7 +344,10 @@ export function MainApp({
               }}
             />
           ) : active === 'calendar' ? (
-            <CalendarView />
+            <CalendarView
+              deepLinkEventId={deepLinkEventId}
+              onDeepLinkConsumed={() => setDeepLinkEventId(null)}
+            />
           ) : active === 'coaching' ? (
             <CoachingView />
           ) : active === 'analytics' ? (

@@ -131,6 +131,12 @@ const api = {
       recent: (limit?: number) => ipcRenderer.invoke('alerts:deliveries:recent', limit)
     }
   },
+  prepBrief: {
+    getForEvent: (input: unknown) => ipcRenderer.invoke('prepBrief:getForEvent', input),
+    regenerate: (input: unknown) => ipcRenderer.invoke('prepBrief:regenerate', input),
+    onOpenRequested: (cb: (eventId: string) => void) =>
+      subscribe<string>('prepBrief:openRequested', cb)
+  },
   deals: {
     list: () => ipcRenderer.invoke('deals:list'),
     create: (input: unknown) => ipcRenderer.invoke('deals:create', input),

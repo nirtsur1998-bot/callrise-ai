@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Mic, Square, Pause, Play, AlertTriangle, MicOff, Loader2, Bookmark } from 'lucide-react'
+import {
+  Mic,
+  Square,
+  Pause,
+  Play,
+  AlertTriangle,
+  MicOff,
+  Loader2,
+  Bookmark,
+  Sparkles
+} from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { isMac, isWindows } from '@renderer/lib/platform'
 import { IconButton } from '@renderer/components/IconButton'
@@ -21,6 +31,9 @@ import { detectOutputDevice } from '@renderer/features/audio/headphones'
 import { capturedJustWentLive, playCaptureLiveChime } from './audio/capture-chime'
 import { ConsentModal } from '@renderer/features/consent/ConsentModal'
 import { RecordingIndicator } from '@renderer/features/consent/RecordingIndicator'
+import { useCalendar } from '@renderer/features/calendar/useCalendar'
+import type { CalendarEvent } from '@renderer/features/calendar/types'
+import { PrepBriefModal, type PrepBriefMeeting } from '@renderer/features/prep-brief/PrepBriefModal'
 import { Waveform } from './components/Waveform'
 import { TranscriptView } from './components/TranscriptView'
 import { CueCard } from './components/CueCard'
@@ -144,6 +157,32 @@ export function LiveView({
     disableOtherParty
   } = useTranscription(consent.recordRef, consent.reset, handleSaved, buyerIdentityRef)
 
+  // M19 Task 3B — "show the prep brief again at call start": whichever
+  // calendar event is happening right now (or started in the last 10
+  // minutes — the common case of clicking Start a beat after the meeting
+  // actually began), surfaced as a banner above the idle hero so the rep
+  // doesn't have to go find it in Calendar. Read-only, local-cache-only
+  // (useCalendar's initial load never hits the network), so this costs
+  // nothing extra beyond what Calendar itself already fetches.
+  const { events: calEvents, googleEvents, outlookEvents } = useCalendar()
+  const [prepBriefMeeting, setPrepBriefMeeting] = useState<PrepBriefMeeting | null>(null)
+  // Date.now() is impure, so "is a meeting happening right now" can't be a
+  // useMemo (which runs during render) — it has to live in an effect.
+  const [currentMeeting, setCurrentMeeting] = useState<CalendarEvent | null>(null)
+  useEffect(() => {
+    const now = Date.now()
+    const all = [...calEvents, ...googleEvents, ...outlookEvents]
+    const match = all.find((e) => {
+      if (e.allDay) return false
+      const start = new Date(e.start).getTime()
+      const end = new Date(e.end).getTime()
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return false
+      return now >= start - 10 * 60_000 && now <= end
+    })
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Date.now() forces this out of render; syncing derived state from the calendar data is exactly what an effect is for
+    setCurrentMeeting(match ?? null)
+  }, [calEvents, googleEvents, outlookEvents])
+
   // M19 Task 2 Part A — per-channel attribution is only deterministic on
   // headphones; on speakers the buyer's voice leaks back into the mic. Best-
   // effort device-label heuristic, checked once buyer capture actually goes
@@ -199,7 +238,8 @@ export function LiveView({
     engagementScore,
     monologue,
     buyerName,
-    buyerIdentityKey
+    buyerIdentityKey,
+    coachingPaused
   } = useLiveCues(status === 'listening', enabled, sensitivity, otherPartyLive ? 0 : null)
 
   // Keep the save-time ref in sync with the live-resolved buyer name, and
@@ -506,7 +546,44 @@ export function LiveView({
 
   // Full-screen states — only when there's no transcript worth preserving.
   if (!hasTranscript) {
-    if (status === 'idle') return <IdleHero onStart={start} />
+    if (status === 'idle') {
+      return (
+        <>
+          <IdleHero
+            onStart={start}
+            banner={
+              currentMeeting ? (
+                <InlineBanner tone="positive">
+                  <span className="flex min-w-0 items-center gap-2 text-left">
+                    <Sparkles className="h-4 w-4 shrink-0" />
+                    <span className="truncate">Meeting now: {currentMeeting.title}</span>
+                  </span>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() =>
+                      setPrepBriefMeeting({
+                        eventId: currentMeeting.id,
+                        title: currentMeeting.title,
+                        startIso: currentMeeting.start,
+                        attendees: currentMeeting.attendees ?? [],
+                        contactId: currentMeeting.contactId,
+                        dealId: currentMeeting.dealId
+                      })
+                    }
+                  >
+                    View prep brief
+                  </Button>
+                </InlineBanner>
+              ) : undefined
+            }
+          />
+          {prepBriefMeeting && (
+            <PrepBriefModal meeting={prepBriefMeeting} onClose={() => setPrepBriefMeeting(null)} />
+          )}
+        </>
+      )
+    }
     if (status === 'requesting') {
       // Only names the microphone prompt when one is genuinely up. Otherwise
       // this is just "startup is taking a moment", and claiming a prompt the
@@ -737,6 +814,14 @@ export function LiveView({
             >
               Dismiss
             </button>
+          </span>
+        </InlineBanner>
+      )}
+      {coachingPaused && (
+        <InlineBanner tone="warning">
+          <span>
+            AI coaching cues are temporarily unavailable (every configured model is unreachable or
+            rate-limited right now) — transcription is unaffected. Resumes automatically.
           </span>
         </InlineBanner>
       )}

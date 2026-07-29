@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { X, Trash2 } from 'lucide-react'
+import { X, Trash2, Sparkles } from 'lucide-react'
 import { Modal } from '@renderer/components/Modal'
 import { IconButton } from '@renderer/components/IconButton'
 import { Button } from '@renderer/components/Button'
@@ -32,6 +32,9 @@ interface EventDialogProps {
   onClose: () => void
   onSubmit: (draft: EventDraft) => Promise<void>
   onDelete?: () => Promise<void>
+  /** M19 Task 3B — present only when editing an existing event (a new,
+   *  unsaved event has no identity to key a brief on). */
+  onOpenPrepBrief?: () => void
 }
 
 export function EventDialog({
@@ -39,7 +42,8 @@ export function EventDialog({
   isEdit,
   onClose,
   onSubmit,
-  onDelete
+  onDelete,
+  onOpenPrepBrief
 }: EventDialogProps): React.JSX.Element {
   const [draft, setDraft] = useState<EventDraft>(initial)
   const [busy, setBusy] = useState(false)
@@ -219,6 +223,11 @@ export function EventDialog({
               ))}
             </select>
           </Field>
+        )}
+        {isEdit && onOpenPrepBrief && (
+          <Button variant="secondary" size="sm" icon={Sparkles} onClick={onOpenPrepBrief}>
+            Prep brief
+          </Button>
         )}
         {error && <p className="text-[13px] text-danger">{error}</p>}
       </div>
