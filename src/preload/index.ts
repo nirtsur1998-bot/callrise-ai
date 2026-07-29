@@ -96,6 +96,33 @@ const api = {
     removeComment: (id: string, commentId: string) =>
       ipcRenderer.invoke('contacts:removeComment', id, commentId)
   },
+  alerts: {
+    channels: {
+      list: () => ipcRenderer.invoke('alerts:channels:list'),
+      startTelegramVerify: (label?: string) =>
+        ipcRenderer.invoke('alerts:channels:startTelegramVerify', label),
+      startEmailVerify: (address: string) =>
+        ipcRenderer.invoke('alerts:channels:startEmailVerify', address),
+      confirmEmailCode: (channelId: string, code: string) =>
+        ipcRenderer.invoke('alerts:channels:confirmEmailCode', channelId, code),
+      delete: (channelId: string) => ipcRenderer.invoke('alerts:channels:delete', channelId),
+      whatsappStatus: () => ipcRenderer.invoke('alerts:channels:whatsappStatus'),
+      testSend: (channelId: string) => ipcRenderer.invoke('alerts:channels:testSend', channelId)
+    },
+    rules: {
+      list: () => ipcRenderer.invoke('alerts:rules:list'),
+      create: (input: unknown) => ipcRenderer.invoke('alerts:rules:create', input),
+      update: (ruleId: string, patch: unknown) => ipcRenderer.invoke('alerts:rules:update', ruleId, patch),
+      delete: (ruleId: string) => ipcRenderer.invoke('alerts:rules:delete', ruleId)
+    },
+    settings: {
+      get: () => ipcRenderer.invoke('alerts:settings:get'),
+      update: (patch: unknown) => ipcRenderer.invoke('alerts:settings:update', patch)
+    },
+    deliveries: {
+      recent: (limit?: number) => ipcRenderer.invoke('alerts:deliveries:recent', limit)
+    }
+  },
   deals: {
     list: () => ipcRenderer.invoke('deals:list'),
     create: (input: unknown) => ipcRenderer.invoke('deals:create', input),

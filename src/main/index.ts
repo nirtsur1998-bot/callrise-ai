@@ -87,6 +87,7 @@ import { registerObjectionQueue } from './objection-queue'
 import { registerAppSettings } from './app-settings'
 import { registerLaunchAtLogin } from './launch-at-login'
 import { registerActiveApp } from './active-app'
+import { registerAlerts } from './alerts'
 import {
   registerDetectionService,
   disposeDetectionService,
@@ -279,6 +280,7 @@ app.whenReady().then(async () => {
   registerAppSettings()
   registerLaunchAtLogin()
   registerActiveApp()
+  registerAlerts()
   registerDetectionService()
   writeCrashLog('registrations done', 'all registerX() calls completed, about to createWindow()')
 

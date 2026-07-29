@@ -1213,6 +1213,108 @@ export interface DetectionApi {
   onRequestTogglePause: (cb: () => void) => () => void
 }
 
+// --- Scheduled alerts (M19 Task 1) ------------------------------------------
+
+export type AlertTriggerType = 'meeting_starting' | 'task_due' | 'deal_cold' | 'no_next_step'
+export type AlertChannelType = 'telegram' | 'email' | 'whatsapp'
+
+export interface NotificationChannel {
+  id: string
+  user_id: string
+  type: AlertChannelType
+  address: string | null
+  label: string | null
+  verified_at: string | null
+  verification_token: string | null
+  verification_expires_at: string | null
+  consecutive_failures: number
+  unhealthy_at: string | null
+  revoked_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AlertRule {
+  id: string
+  user_id: string
+  trigger_type: AlertTriggerType
+  lead_time_minutes: number | null
+  enabled: boolean
+  params: Record<string, unknown>
+  created_at: string
+  updated_at: string
+  alert_rule_channels?: { channel_id: string }[]
+}
+
+export interface UserAlertSettings {
+  user_id: string
+  timezone: string
+  quiet_hours_start: string | null
+  quiet_hours_end: string | null
+  quiet_hours_behavior: 'hold' | 'drop'
+  rate_limit_behavior: 'drop' | 'queue' | 'coalesce'
+  max_alerts_per_hour: number
+  deal_cold_days: number
+  deal_cold_digest_hour: number
+  allow_server_side_brief_generation: boolean
+  updated_at: string
+}
+
+export type TelegramVerifyResult =
+  | { ok: true; channelId: string; deepLink: string | null; qrData: string | null; expiresAt: string }
+  | { ok: false; error: 'not-signed-in' | 'not-configured' | 'create-failed' }
+
+export type EmailVerifyResult =
+  | { ok: true; channelId: string; expiresAt: string }
+  | { ok: false; error: 'not-signed-in' | 'invalid-email' | 'create-failed' | 'send-failed'; channelId?: string }
+
+export type ConfirmEmailCodeResult =
+  | { ok: true }
+  | { ok: false; error: 'invalid-input' | 'not-found' | 'expired' | 'wrong-code' | 'update-failed' }
+
+export type TestSendResult =
+  | { ok: true }
+  | { ok: false; error: 'invalid-input' | 'not-found' | 'unverified' | 'send-failed' | 'not-configured'; message?: string }
+
+export interface AlertsApi {
+  channels: {
+    list: () => Promise<NotificationChannel[]>
+    startTelegramVerify: (label?: string) => Promise<TelegramVerifyResult>
+    startEmailVerify: (address: string) => Promise<EmailVerifyResult>
+    confirmEmailCode: (channelId: string, code: string) => Promise<ConfirmEmailCodeResult>
+    delete: (channelId: string) => Promise<{ ok: boolean }>
+    whatsappStatus: () => Promise<{ configured: boolean }>
+    testSend: (channelId: string) => Promise<TestSendResult>
+  }
+  rules: {
+    list: () => Promise<AlertRule[]>
+    create: (input: {
+      triggerType: AlertTriggerType
+      leadTimeMinutes?: number
+      enabled?: boolean
+      params?: Record<string, unknown>
+      channelIds?: string[]
+    }) => Promise<AlertRule | null>
+    update: (
+      ruleId: string,
+      patch: Partial<{
+        leadTimeMinutes: number
+        enabled: boolean
+        params: Record<string, unknown>
+        channelIds: string[]
+      }>
+    ) => Promise<AlertRule | null>
+    delete: (ruleId: string) => Promise<{ ok: boolean }>
+  }
+  settings: {
+    get: () => Promise<UserAlertSettings | null>
+    update: (patch: Partial<UserAlertSettings>) => Promise<UserAlertSettings | null>
+  }
+  deliveries: {
+    recent: (limit?: number) => Promise<Record<string, unknown>[]>
+  }
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -1238,6 +1340,7 @@ declare global {
       app: AppControlApi
       aiKeys: AiKeysApi
       detection: DetectionApi
+      alerts: AlertsApi
     }
   }
 }
