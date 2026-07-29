@@ -47,12 +47,19 @@ exports.default = async function applyFuses(context) {
   const { electronPlatformName, appOutDir, packager } = context
   const productName = packager.appInfo.productFilename
 
+  // macOS and Windows both end up naming the binary after productName here —
+  // Windows only because electron-builder.yml sets win.executableName to
+  // match it exactly. Linux has no such override, and electron-builder's own
+  // default there is a filesystem-sanitized, lowercased name ("CallRise AI"
+  // becomes "callrise-ai"), not productName verbatim — so it needs
+  // packager.executableName, the same accessor electron-builder's own
+  // afterPack ecosystem (e.g. its notarize step) uses for exactly this.
   const binary =
     electronPlatformName === 'darwin'
       ? `${appOutDir}/${productName}.app`
       : electronPlatformName === 'win32'
         ? `${appOutDir}/${productName}.exe`
-        : `${appOutDir}/${productName}`
+        : `${appOutDir}/${packager.executableName}`
 
   await flipFuses(binary, {
     version: FuseVersion.V1,
