@@ -65,7 +65,12 @@ export function useTranscription(
   /** AI Note Taker's "auto-open meeting page" — fired with the saved call's
    *  id after every successful save. Kept in a ref so it's always current
    *  without forcing flushPendingSave to be recreated on every render. */
-  onSaved?: (callId: string) => void
+  onSaved?: (callId: string) => void,
+  /** M19 Task 2 step 5 — set by useLiveCues (a sibling hook, so this can
+   *  only be a ref bridge, not a hook argument) when the buyer's self-intro
+   *  resolves live. Read once, at save time, so it's not lost with the rest
+   *  of the in-progress session's local state. */
+  buyerIdentityRef?: { current: { key: string; name: string } | null }
 ): UseTranscription {
   const onSavedRef = useRef(onSaved)
   useEffect(() => {
@@ -133,14 +138,17 @@ export function useTranscription(
     const captured = segmentsRef.current
     if (captured.length === 0) return
     void window.api.calls
-      .save({
-        startedAt: startedAtRef.current,
-        durationMs: durationMsRef.current,
-        segments: captured,
-        // Consent captured during the session; the main process re-sanitizes it
-        // and enforces the "no consent = no capture" invariant on save.
-        consent: consentRef?.current
-      })
+      .save(
+        {
+          startedAt: startedAtRef.current,
+          durationMs: durationMsRef.current,
+          segments: captured,
+          // Consent captured during the session; the main process re-sanitizes it
+          // and enforces the "no consent = no capture" invariant on save.
+          consent: consentRef?.current
+        },
+        buyerIdentityRef?.current ?? undefined
+      )
       .then((saved) => {
         setSavedNotice(true)
         // AI Note Taker: fire-and-forget the opted-in auto-behaviors. Each is
@@ -163,7 +171,7 @@ export function useTranscription(
       .catch(() => {
         /* non-fatal: the transcript is still on screen */
       })
-  }, [consentRef])
+  }, [consentRef, buyerIdentityRef])
 
   useEffect(() => {
     const offState = window.api.transcription.onState((payload) => {

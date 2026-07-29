@@ -31,7 +31,7 @@ import { extractCommitments, type CommitmentResult } from './commitments'
 import { generateCallTitle, type GenerateTitleResult } from './call-title'
 import { mineObjections, makeVerifier, type ObjectionMiningResult } from './objection-mining'
 import { addToQueue, purgeQueueForCall } from './objection-queue-fs'
-import { isObjectionMiningEnabled, loadAppSettings } from './app-settings'
+import { isObjectionMiningEnabled, loadAppSettings, isSpeakerIdEnabled } from './app-settings'
 import { scheduleBackup, queueAttachmentBlobDeletes } from './backup'
 import { addComment } from './contacts-fs'
 import { generateCrmNote } from './crm-notes'
@@ -159,21 +159,39 @@ export function registerCalls(): void {
 
   ipcMain.handle('calls:list', () => listCalls(callsDir()))
   ipcMain.handle('calls:get', (_event, id: string) => getCall(callsDir(), id))
-  ipcMain.handle('calls:save', async (_event, input: CallSaveInput) => {
-    const summary = await saveCall(callsDir(), input)
-    scheduleBackup() // metadata only reaches the cloud (segments never included)
-    // Fire-and-forget: never block the save on an AI call. Only runs when the
-    // Objection Library toggle is on — this is the "new calls going forward"
-    // half of the mining scope (the other half is the manual scan below).
-    if (isObjectionMiningEnabled()) {
-      void mineCallIntoQueue(summary.id).catch(() => {})
+  ipcMain.handle(
+    'calls:save',
+    async (_event, input: CallSaveInput, selfIntro?: { key: string; name: string }) => {
+      const summary = await saveCall(callsDir(), input)
+      scheduleBackup() // metadata only reaches the cloud (segments never included)
+      // Fire-and-forget: never block the save on an AI call. Only runs when the
+      // Objection Library toggle is on — this is the "new calls going forward"
+      // half of the mining scope (the other half is the manual scan below).
+      if (isObjectionMiningEnabled()) {
+        void mineCallIntoQueue(summary.id).catch(() => {})
+      }
+      // M19 Task 2 step 5 — applied and AWAITED before the cascade below
+      // starts, so ordering is deterministic: self-intro lands first as a
+      // placeholder, then the cascade (fully async, fire-and-forget) can
+      // still overwrite it with a higher-confidence calendar/contact match,
+      // exactly the priority the naming cascade is supposed to have. Guarded
+      // by the same setting the cascade itself checks — a self-intro name
+      // extracted while the setting was on shouldn't survive it being turned
+      // off between the call and the save (a narrow window, but a real one).
+      if (selfIntro?.key && selfIntro.name && isSpeakerIdEnabled()) {
+        await setSpeakerIdentity(callsDir(), summary.id, selfIntro.key, {
+          name: selfIntro.name,
+          source: 'self-intro',
+          confidence: 'medium'
+        }).catch(() => {})
+      }
+      // Fire-and-forget, same as objection mining above — never block the save.
+      // Fully resolves multichannel calls (channel 0/1 are deterministic);
+      // mono calls only get "me" once coaching supplies repSpeaker (see below).
+      void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, summary.id).catch(() => {})
+      return summary
     }
-    // Fire-and-forget, same as objection mining above — never block the save.
-    // Fully resolves multichannel calls (channel 0/1 are deterministic);
-    // mono calls only get "me" once coaching supplies repSpeaker (see below).
-    void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, summary.id).catch(() => {})
-    return summary
-  })
+  )
   ipcMain.handle('calls:delete', async (_event, id: string) => {
     // Capture the attachment list BEFORE the tombstone strips it, so any
     // blobs uploaded to the cloud bucket can be queued for deletion too.

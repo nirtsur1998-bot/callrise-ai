@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Mic, Square, Pause, Play, AlertTriangle, MicOff, Loader2, Bookmark } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { isMac, isWindows } from '@renderer/lib/platform'
@@ -111,6 +111,13 @@ export function LiveView({
     [clips, onSaved]
   )
 
+  // M19 Task 2 step 5 — bridges useLiveCues' self-intro extraction (below,
+  // must run AFTER useTranscription per hooks' call-order rules) into
+  // useTranscription's save flow. A ref, not a hook argument, since
+  // useTranscription only ever READS it later at save time (async), by
+  // which point useLiveCues has already written the resolved value.
+  const buyerIdentityRef = useRef<{ key: string; name: string } | null>(null)
+
   const {
     status,
     segments,
@@ -132,7 +139,7 @@ export function LiveView({
     togglePause,
     enableOtherParty,
     disableOtherParty
-  } = useTranscription(consent.recordRef, consent.reset, handleSaved)
+  } = useTranscription(consent.recordRef, consent.reset, handleSaved, buyerIdentityRef)
 
   // Elapsed-time clock for clips: no callId (or playback position) exists yet
   // for a live call, so track wall-clock elapsed-since-start locally instead.
@@ -158,8 +165,32 @@ export function LiveView({
   const { enabled, setEnabled, sensitivity, setSensitivity } = useCueSettings()
   // When buyer capture is live, the rep is channel 0 — tell the cues so they
   // don't have to guess who the rep is.
-  const { cue, dismiss, suggestions, dismissSuggestion, repSpeaker, engagementScore, monologue } =
-    useLiveCues(status === 'listening', enabled, sensitivity, otherPartyLive ? 0 : null)
+  const {
+    cue,
+    dismiss,
+    suggestions,
+    dismissSuggestion,
+    repSpeaker,
+    engagementScore,
+    monologue,
+    buyerName,
+    buyerIdentityKey
+  } = useLiveCues(status === 'listening', enabled, sensitivity, otherPartyLive ? 0 : null)
+
+  // Keep the save-time ref in sync with the live-resolved buyer name, and
+  // build the identities map SpeakerTranscript needs to show it DURING the
+  // call (not just after saving) — the M19 brief's "propagates to the live
+  // transcript" requirement.
+  useEffect(() => {
+    buyerIdentityRef.current = buyerName && buyerIdentityKey ? { key: buyerIdentityKey, name: buyerName } : null
+  }, [buyerName, buyerIdentityKey, buyerIdentityRef])
+  const liveIdentities = useMemo(
+    () =>
+      buyerName && buyerIdentityKey
+        ? { [buyerIdentityKey]: { name: buyerName, source: 'self-intro' as const, confidence: 'medium' as const } }
+        : undefined,
+    [buyerName, buyerIdentityKey]
+  )
 
   // When a call is saved, consent resets to off so it never carries to the next.
   const resetConsent = consent.reset
@@ -742,6 +773,7 @@ export function LiveView({
           interimText={interimText}
           repSpeaker={repSpeaker}
           paused={status === 'paused'}
+          identities={liveIdentities}
         />
         {/* Two independent channels (§4.3), one column.
             They stay logically independent — a suggestion can never delay,

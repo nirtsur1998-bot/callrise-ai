@@ -54,7 +54,7 @@ const api = {
   calls: {
     list: () => ipcRenderer.invoke('calls:list'),
     get: (id: string) => ipcRenderer.invoke('calls:get', id),
-    save: (input: unknown) => ipcRenderer.invoke('calls:save', input),
+    save: (input: unknown, selfIntro?: unknown) => ipcRenderer.invoke('calls:save', input, selfIntro),
     delete: (id: string) => ipcRenderer.invoke('calls:delete', id),
     addAttachment: (callId: string, file: { name: string; ext: string; data: ArrayBuffer }) =>
       ipcRenderer.invoke('calls:addAttachment', callId, file),

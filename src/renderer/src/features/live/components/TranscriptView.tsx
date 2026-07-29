@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowDown } from 'lucide-react'
 import { SpeakerTranscript } from '@renderer/components/SpeakerTranscript'
 import type { CallSegment } from '@renderer/features/calls/types'
+import type { SpeakerIdentities } from '@renderer/features/coaching/meta'
 
 interface TranscriptViewProps {
   segments: CallSegment[]
@@ -9,6 +10,11 @@ interface TranscriptViewProps {
   repSpeaker?: number | null
   /** Session is paused — swaps the empty-state copy + dots for a "Paused" one. */
   paused?: boolean
+  /** M19 Task 2 step 5 — the buyer's name, once self-intro extraction has
+   *  resolved it live. No calendar/contact resolution here (that needs a
+   *  saved callId) — self-intro is the only source that can name someone
+   *  DURING a call in progress. */
+  identities?: SpeakerIdentities
 }
 
 /** Scrollable live transcript: speaker-labeled finalized turns + faint interim. */
@@ -16,7 +22,8 @@ export function TranscriptView({
   segments,
   interimText,
   repSpeaker = null,
-  paused = false
+  paused = false,
+  identities
 }: TranscriptViewProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -83,6 +90,7 @@ export function TranscriptView({
             segments={segments}
             interimText={interimText}
             repSpeaker={repSpeaker}
+            identities={identities}
           />
         )}
       </div>

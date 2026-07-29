@@ -3,6 +3,7 @@ import { CueLatencyTracker, type CueLatencyReport } from './cue-latency'
 import { BattlecardMatcher, type Battlecard } from './battlecards/match'
 import { STARTER_TRIGGERS } from './battlecards/library'
 import { MonologueTracker, type MonologueState } from './monologue'
+import { speakerKey } from './segments'
 
 // Live in-call coaching cues. The substance comes from a conversation-aware
 // Claude call (window.api.transcription.liveCue) over a SPEAKER-LABELED
@@ -199,6 +200,12 @@ export interface UseLiveCues {
   /** The current run of uninterrupted rep speech (§4.2) — a passive read,
    *  never an interrupt. Null before the rep is identified. */
   monologue: MonologueState | null
+  /** M19 Task 2 step 5 — the buyer's name, once they've explicitly
+   *  introduced themselves AND Settings has self-intro extraction on. Null
+   *  otherwise. Paired with buyerIdentityKey (speakerKey() format) so the
+   *  caller can build a SpeakerIdentities map for live display. */
+  buyerName: string | null
+  buyerIdentityKey: string | null
 }
 
 /**
@@ -221,6 +228,8 @@ export function useLiveCues(
   const [repSpeaker, setRepSpeaker] = useState<number | null>(knownRepSpeaker)
   const [engagementScore, setEngagementScore] = useState<number | null>(null)
   const [monologue, setMonologue] = useState<MonologueState | null>(null)
+  const [buyerName, setBuyerName] = useState<string | null>(null)
+  const [buyerIdentityKey, setBuyerIdentityKey] = useState<string | null>(null)
   const monologueRef = useRef(new MonologueTracker())
 
   const cfgRef = useRef<Thresholds>(SENSITIVITY_THRESHOLDS[sensitivity])
@@ -234,6 +243,7 @@ export function useLiveCues(
   const turnsRef = useRef<Turn[]>([]) // recent speaker-labeled turns
   const lastSpeakerRef = useRef<number | null>(null)
   const repSpeakerRef = useRef<number | null>(null) // locked once identified
+  const buyerNameRef = useRef<string | null>(null) // one-shot per call, like repSpeakerRef
   // When buyer capture is live the rep is deterministically channel 0.
   const knownRepRef = useRef<number | null>(knownRepSpeaker)
   const lastCallAtRef = useRef(0) // last brain call
@@ -327,6 +337,9 @@ export function useLiveCues(
       setEngagementScore(null)
       monologueRef.current.reset()
       setMonologue(null)
+      buyerNameRef.current = null
+      setBuyerName(null)
+      setBuyerIdentityKey(null)
       return
     }
 
@@ -463,6 +476,17 @@ export function useLiveCues(
               setRepSpeaker(res.repSpeaker)
             }
           }
+          // One-shot: once resolved, keep it — a later window with no
+          // self-intro in view must not un-name someone who already said it.
+          if (buyerNameRef.current === null && res.buyerName && res.buyerSpeaker !== null) {
+            // knownRepRef.current === 0 signals multichannel-active (see the
+            // hook's own JSDoc above) — in that mode speaker IS the channel.
+            const channel = knownRepRef.current === 0 ? res.buyerSpeaker : undefined
+            const key = speakerKey({ speaker: res.buyerSpeaker, channel })
+            buyerNameRef.current = res.buyerName
+            setBuyerName(res.buyerName)
+            setBuyerIdentityKey(key)
+          }
           // Side rail, always. This is the line §4.3 exists to enforce: a
           // model response arrives 1.5-2.5s after the moment it describes,
           // which is too late to justify taking over the rep's attention.
@@ -572,6 +596,8 @@ export function useLiveCues(
     latency,
     repSpeaker,
     engagementScore,
-    monologue
+    monologue,
+    buyerName,
+    buyerIdentityKey
   }
 }

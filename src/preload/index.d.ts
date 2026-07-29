@@ -124,6 +124,10 @@ export interface TranscriptionApi {
         repSpeaker: number | null
         cue: 'objection' | 'discovery' | 'next-question' | 'buying-signal' | 'none'
         text: string
+        /** M19 Task 2 step 5 — null unless Settings has self-intro
+         *  extraction on AND the other party explicitly said their name. */
+        buyerName: string | null
+        buyerSpeaker: number | null
       }
     | { ok: false }
   >
@@ -462,7 +466,14 @@ export interface ObjectionQueueApi {
 export interface CallsApi {
   list: () => Promise<CallSummary[]>
   get: (id: string) => Promise<Call | null>
-  save: (input: CallSaveInput) => Promise<CallSummary>
+  /** `selfIntro`: M19 Task 2 step 5's live-resolved buyer name, if any —
+   *  applied with source 'self-intro' BEFORE the auto-resolution cascade
+   *  runs, so a higher-confidence calendar/contact match can still override
+   *  it (unlike a 'manual' rename, which the cascade never touches). */
+  save: (
+    input: CallSaveInput,
+    selfIntro?: { key: string; name: string }
+  ) => Promise<CallSummary>
   delete: (id: string) => Promise<{ ok: boolean }>
   addAttachment: (
     callId: string,
