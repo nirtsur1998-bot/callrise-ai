@@ -1,3 +1,29 @@
+// Diagnostic crash log, written with fs.writeFileSync (synchronous — cannot be
+// lost to the async-stdout-flush-on-exit race that swallows console output on
+// Windows when a process exits immediately after writing to it) to a fixed,
+// Electron-readiness-independent path. Registered before every other import so
+// it catches a throw from ANY of them, not just from this file's own code.
+// TEMPORARY: added to chase a real Windows launch failure that produces zero
+// output through every normal channel (console, --enable-logging, Event
+// Viewer, WER) - remove once that's root-caused.
+import { writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join as joinPathForCrashLog } from 'path'
+const crashLogPath = joinPathForCrashLog(tmpdir(), 'callrise-startup-crash.log')
+function writeCrashLog(label: string, err: unknown): void {
+  try {
+    const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
+    writeFileSync(crashLogPath, `[${new Date().toISOString()}] ${label}\n${detail}\n`, {
+      flag: 'a'
+    })
+  } catch {
+    /* if we can't even write the crash log, there's nothing further to do */
+  }
+}
+process.on('uncaughtException', (err) => writeCrashLog('uncaughtException', err))
+process.on('unhandledRejection', (err) => writeCrashLog('unhandledRejection', err))
+writeCrashLog('process started', 'reached top of main/index.ts')
+
 import { config as loadEnv } from 'dotenv'
 import { app, shell, BrowserWindow, session } from 'electron'
 import { join, dirname } from 'path'
@@ -5,6 +31,7 @@ import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { DEFAULT_CONFIG } from './default-config'
 import { clearActiveConsent } from './consent-gate'
+writeCrashLog('imports resolved', 'all top-level imports completed without throwing')
 
 // Renamed "Sales OS" -> "CallRise AI" (rebrand), but the on-disk data folder
 // keeps its original name so existing calls/tasks/settings/consent/Google
@@ -138,6 +165,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  writeCrashLog('whenReady fired', 'app is ready, starting registration sequence')
   electronApp.setAppUserModelId('ai.callrise.app')
 
   // `--diagnose`: print one block of text a tester can paste back, then exit
@@ -252,12 +280,14 @@ app.whenReady().then(async () => {
   registerLaunchAtLogin()
   registerActiveApp()
   registerDetectionService()
+  writeCrashLog('registrations done', 'all registerX() calls completed, about to createWindow()')
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
 
   createWindow()
+  writeCrashLog('createWindow returned', 'BrowserWindow constructed without throwing')
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
