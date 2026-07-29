@@ -210,7 +210,7 @@ TONE: encouraging, growth-mindset, specific, and kind — never harsh or generic
 
 // --- Evidence verification --------------------------------------------------
 
-function normalize(s: string): string {
+export function normalize(s: string): string {
   return s
     .toLowerCase()
     .replace(/^speaker\s*\d+\s*:\s*/i, '') // strip an accidental speaker label
@@ -229,7 +229,7 @@ function normalize(s: string): string {
  * said/did this" — because matching the transcript alone never confirms the
  * speaker was the rep at all.
  */
-function makeVerifier(
+export function makeVerifier(
   segments: CallSegment[],
   repSpeaker: number | null
 ): (quote: unknown, speaker: unknown) => CoachEvidence | undefined {
@@ -266,7 +266,7 @@ const OVERLAP_WINDOW_WORDS = 8
  * If a field contains a long verbatim run of transcript words (8+ consecutive
  * words), cut the text off before the leak — never ship it as-is.
  */
-function makeFreeTextScrubber(segments: CallSegment[]): (text: string) => string {
+export function makeFreeTextScrubber(segments: CallSegment[]): (text: string) => string {
   const haystack = normalize(segments.map((s) => s.text).join(' '))
   return (text) => {
     if (!text) return text
@@ -289,7 +289,7 @@ function countWords(text: string): number {
   return m ? m.length : 0
 }
 
-function computeMetrics(
+export function computeMetrics(
   segments: CallSegment[],
   durationMs: number,
   repSpeaker: number | null

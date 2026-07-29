@@ -164,6 +164,27 @@ function sanitizeRiskAssessmentHistory(value: unknown): DealRiskAssessment[] | u
   return clean.length ? clean : undefined
 }
 
+const MAX_STAGE_HISTORY = 200
+
+/** Every past stage transition survives a disk round-trip only if this reads
+ *  it back — without it, sanitizeDealRecord silently drops the field on every
+ *  load, so `updateDealUnlocked`'s getDeal() always sees an empty history and
+ *  each new transition overwrites the last instead of appending to it. */
+function sanitizeStageHistory(
+  value: unknown
+): { stageId: string; changedAt: string }[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const clean: { stageId: string; changedAt: string }[] = []
+  for (const item of value.slice(-MAX_STAGE_HISTORY)) {
+    if (!item || typeof item !== 'object') continue
+    const r = item as Record<string, unknown>
+    if (!isSafeId(r.stageId)) continue
+    if (typeof r.changedAt !== 'string' || Number.isNaN(Date.parse(r.changedAt))) continue
+    clean.push({ stageId: r.stageId, changedAt: r.changedAt })
+  }
+  return clean.length ? clean : undefined
+}
+
 async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true })
 }
@@ -201,6 +222,7 @@ function sanitizeDealRecord(value: unknown): Deal | null {
     updatedAt,
     riskAssessment: sanitizeRiskAssessment(v.riskAssessment),
     riskAssessmentHistory: sanitizeRiskAssessmentHistory(v.riskAssessmentHistory),
+    stageHistory: sanitizeStageHistory(v.stageHistory),
     deleted: v.deleted === true ? true : undefined
   }
 }

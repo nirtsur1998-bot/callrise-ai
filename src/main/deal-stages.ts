@@ -56,10 +56,14 @@ function sanitizeLabel(value: unknown): string {
     .slice(0, MAX_LABEL)
 }
 
-/** Coerce an untrusted parsed list into a clean, non-empty stage list. Falls
- *  back to the defaults if the input is unusable (never returns an empty pipeline). */
-function sanitizeStageList(value: unknown): DealStage[] {
-  if (!Array.isArray(value)) return DEFAULT_STAGES
+/** Coerce an untrusted parsed list into a clean stage list. May return an
+ *  empty array — callers decide what "nothing usable came out of this"
+ *  means for them: a disk read falls back to defaults (sanitizeStageList
+ *  below), but a user-initiated setDealStages() needs to see the real empty
+ *  result so it can reject the edit instead of silently substituting an
+ *  unrelated default pipeline. */
+function sanitizeStageListRaw(value: unknown): DealStage[] {
+  if (!Array.isArray(value)) return []
   const seen = new Set<string>()
   const stages: DealStage[] = []
   for (const raw of value.slice(0, MAX_STAGES)) {
@@ -71,7 +75,15 @@ function sanitizeStageList(value: unknown): DealStage[] {
     seen.add(id)
     stages.push({ id, label, kind: sanitizeKind(v.kind) })
   }
-  return stages.length ? stages : DEFAULT_STAGES
+  return stages
+}
+
+/** Same as sanitizeStageListRaw, but never returns an empty pipeline — the
+ *  right behavior when reading a possibly-corrupt file or a cloud pull,
+ *  where "nothing usable" must still leave the app with a working pipeline. */
+function sanitizeStageList(value: unknown): DealStage[] {
+  const clean = sanitizeStageListRaw(value)
+  return clean.length ? clean : DEFAULT_STAGES
 }
 
 const EPOCH = '1970-01-01T00:00:00.000Z'
@@ -136,7 +148,11 @@ export type SetStagesResult =
  * at a real stage without a reassignment UI (Phase 3 Step 1 scope).
  */
 export function setDealStages(input: unknown): SetStagesResult {
-  const next = sanitizeStageList(input)
+  // The raw variant here, deliberately: sanitizeStageList's defaulting is
+  // right for a disk read, but silently swapping in the unrelated default
+  // pipeline when a user submits an empty list would look like the app
+  // ignored the edit rather than rejecting it.
+  const next = sanitizeStageListRaw(input)
   if (!Array.isArray(input) || next.length === 0) return { ok: false, error: 'empty' }
 
   const current = loadDealStages()
