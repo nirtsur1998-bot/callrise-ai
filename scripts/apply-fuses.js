@@ -27,18 +27,15 @@
 //
 // EnableEmbeddedAsarIntegrityValidation/OnlyLoadAppFromAsar were tried here
 // too (electron-builder.yml's `disableAsarIntegrity: true` has the fuller
-// story) and pulled again: on real Windows hardware every packaged build
-// refused to launch at all - first with "ASAR Integrity Violation: got a hash
-// mismatch" (electron-builder's own asar-integrity embedding conflicting with
-// this script's fuse-flip), then, once this script stopped setting the fuse
-// but electron-builder's embedding step was still running, with no window and
-// no error at all. Disabling electron-builder's embedding globally (so
-// there's no embedded hash to validate against on any platform) is why this
-// pair is gone entirely now rather than just skipped on win32 - a fuse that
-// says "check integrity" with nothing to check against just fails the same
-// way. A pre-M18 Windows build with neither fuse set launched fine on the
-// same class of hardware, so this is a real regression from adding them, not
-// an environment problem.
+// story) and pulled again: on real Windows hardware the packaged build
+// refused to launch with "ASAR Integrity Violation: got a hash mismatch",
+// which genuinely went away once these two were dropped and
+// disableAsarIntegrity was set. Left off on every platform rather than
+// win32-only since there's no per-platform switch for electron-builder's own
+// embedding step, and a fuse that says "check integrity" with nothing
+// embedded to check against fails the same way. The Windows launch failure
+// that persisted after this fix turned out to be unrelated to fuses at all -
+// see electron-builder.yml's win.target comment.
 
 /* eslint-disable @typescript-eslint/no-require-imports -- plain CJS script, run by electron-builder's afterPack hook, not part of the TS app bundle */
 const { flipFuses, FuseVersion, FuseV1Options } = require('@electron/fuses')
