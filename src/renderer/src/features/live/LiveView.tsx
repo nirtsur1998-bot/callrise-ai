@@ -17,6 +17,7 @@ import { MustAskStrip } from './components/MustAskStrip'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import { getExcludedApps, addSeenApp } from '@renderer/features/settings/prefs'
 import { OtherPartyControl } from '@renderer/features/consent/OtherPartyControl'
+import { detectOutputDevice } from '@renderer/features/audio/headphones'
 import { capturedJustWentLive, playCaptureLiveChime } from './audio/capture-chime'
 import { ConsentModal } from '@renderer/features/consent/ConsentModal'
 import { RecordingIndicator } from '@renderer/features/consent/RecordingIndicator'
@@ -133,6 +134,8 @@ export function LiveView({
     briefCopied,
     buyerSilentWarning,
     dismissBuyerSilentWarning,
+    crossTalkWarning,
+    dismissCrossTalkWarning,
     start,
     getSessionId,
     stop,
@@ -140,6 +143,28 @@ export function LiveView({
     enableOtherParty,
     disableOtherParty
   } = useTranscription(consent.recordRef, consent.reset, handleSaved, buyerIdentityRef)
+
+  // M19 Task 2 Part A — per-channel attribution is only deterministic on
+  // headphones; on speakers the buyer's voice leaks back into the mic. Best-
+  // effort device-label heuristic, checked once buyer capture actually goes
+  // live (the one moment this actually matters) — never checked continuously,
+  // and 'unknown' (can't tell) deliberately never warns, so a real headphone
+  // setup this heuristic doesn't recognize is never falsely flagged.
+  const [speakerModeWarning, setSpeakerModeWarning] = useState(false)
+  useEffect(() => {
+    if (!otherPartyLive) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears with buyer capture, same as the other live-only warnings on this screen
+      setSpeakerModeWarning(false)
+      return
+    }
+    let cancelled = false
+    void detectOutputDevice().then((verdict) => {
+      if (!cancelled && verdict === 'speakers') setSpeakerModeWarning(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [otherPartyLive])
 
   // Elapsed-time clock for clips: no callId (or playback position) exists yet
   // for a live call, so track wall-clock elapsed-since-start locally instead.
@@ -690,6 +715,44 @@ export function LiveView({
             <button
               type="button"
               onClick={dismissBuyerSilentWarning}
+              className="no-drag rounded-lg bg-warning-soft px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/20"
+            >
+              Dismiss
+            </button>
+          </span>
+        </InlineBanner>
+      )}
+      {crossTalkWarning && (
+        <InlineBanner tone="warning">
+          <span>
+            Some words may be attributed to the wrong speaker — this usually happens on speakers
+            (not headphones), where the other party&rsquo;s voice comes through your mic too.
+            Headphones fix this.
+          </span>
+          <span className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              onClick={dismissCrossTalkWarning}
+              className="no-drag rounded-lg bg-warning-soft px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/20"
+            >
+              Dismiss
+            </button>
+          </span>
+        </InlineBanner>
+      )}
+      {/* Proactive (device-label heuristic) — suppressed once the reactive
+          crossTalkWarning above actually confirms misattribution, since that
+          banner is strictly more specific and showing both would be noise. */}
+      {speakerModeWarning && !crossTalkWarning && (
+        <InlineBanner tone="warning">
+          <span>
+            You appear to be on speakers, not headphones — the other party&rsquo;s voice can leak
+            into your mic and get misattributed to you. Headphones make attribution reliable.
+          </span>
+          <span className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              onClick={() => setSpeakerModeWarning(false)}
               className="no-drag rounded-lg bg-warning-soft px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/20"
             >
               Dismiss

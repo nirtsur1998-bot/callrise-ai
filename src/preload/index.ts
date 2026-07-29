@@ -37,6 +37,8 @@ const api = {
     onHealth: (cb: (payload: unknown) => void) => subscribe('transcription:health', cb),
     onCaptureLost: (cb: (payload: unknown) => void) => subscribe('transcription:captureLost', cb),
     onBuyerSilent: (cb: (payload: unknown) => void) => subscribe('transcription:buyerSilent', cb),
+    onCrossTalkWarning: (cb: (payload: unknown) => void) =>
+      subscribe('transcription:crossTalkWarning', cb),
     suggestQuestion: (text: string) => ipcRenderer.invoke('live:suggestQuestion', text),
     askCoach: (transcript: string, question: string) =>
       ipcRenderer.invoke('live:askCoach', { transcript, question }),

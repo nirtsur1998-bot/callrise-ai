@@ -44,6 +44,10 @@ interface UseTranscription {
    *  look like the Windows endpoint bug (docs/windows-capture.md, §7). */
   buyerSilentWarning: boolean
   dismissBuyerSilentWarning: () => void
+  /** M19 Task 2 Part A — Deepgram's claimed channel disagreed with actual
+   *  audio energy (the loudspeaker/echo signature). Advisory. */
+  crossTalkWarning: boolean
+  dismissCrossTalkWarning: () => void
   start: () => Promise<void>
   /** The main-process transcription session id for the call in progress, or
    *  null before a session exists / after a failed start. A function (not a
@@ -92,6 +96,11 @@ export function useTranscription(
   // "mic live, buyer bit-silent" and this is what turns it into a banner. Null
   // once dismissed OR once the underlying condition clears — see onClosed.
   const [buyerSilentWarning, setBuyerSilentWarning] = useState(false)
+  /** M19 Task 2 Part A — Deepgram's claimed channel disagreed with actual
+   *  per-channel audio energy at least once (the loudspeaker/echo
+   *  signature). Advisory only — no reassignment happens, just a "you may
+   *  want headphones" nudge. */
+  const [crossTalkWarning, setCrossTalkWarning] = useState(false)
   /** True only while the OS microphone prompt is genuinely pending, so the
    *  startup copy can name it instead of guessing. */
   const [micPrompting, setMicPrompting] = useState(false)
@@ -261,6 +270,15 @@ export function useTranscription(
       setBuyerSilentWarning(true)
     })
 
+    // M19 Task 2 Part A — Deepgram's claimed channel disagreed with actual
+    // per-channel energy for a finalized utterance. The main-process gate
+    // can fire this repeatedly through a sustained cross-talk stretch;
+    // React bails out on an identical setState, so the banner just stays up
+    // rather than re-rendering per utterance.
+    const offCrossTalk = window.api.transcription.onCrossTalkWarning(() => {
+      setCrossTalkWarning(true)
+    })
+
     // Main's liveness watchdog noticed no audio callback at all for 10s while
     // the session was live (session-health.md calls this "capture-dead →
     // reacquire") — the capture device is gone even though nothing at the
@@ -292,6 +310,7 @@ export function useTranscription(
       offGap()
       offHealth()
       offBuyerSilent()
+      offCrossTalk()
       offCaptureLost()
       offClosed()
     }
@@ -322,6 +341,7 @@ export function useTranscription(
     setOtherPartyError(null)
     setHealth(null)
     setBuyerSilentWarning(false)
+    setCrossTalkWarning(false)
     setBriefCopied(false)
     segmentsRef.current = []
     latencySamples.current = []
@@ -449,6 +469,7 @@ export function useTranscription(
     setOtherPartyLive(false)
     setOtherPartyError(null)
     setBuyerSilentWarning(false)
+    setCrossTalkWarning(false)
     await window.api.transcription.stop()
     setInterimText('')
     setPhase('idle')
@@ -628,6 +649,8 @@ export function useTranscription(
     briefCopied,
     buyerSilentWarning,
     dismissBuyerSilentWarning: useCallback(() => setBuyerSilentWarning(false), []),
+    crossTalkWarning,
+    dismissCrossTalkWarning: useCallback(() => setCrossTalkWarning(false), []),
     start,
     getSessionId,
     stop,

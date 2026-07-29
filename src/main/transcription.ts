@@ -15,6 +15,7 @@ import { LivenessWatchdog, silenceFrame } from './session-health/liveness'
 import { DriftMeter } from './session-health/drift'
 import { HEALTH_TUNING, type GapReason, type HealthSnapshot } from './session-health/types'
 import { BuyerSilenceWatcher } from './windows-capture/buyer-silence'
+import { CrossTalkGate } from './session-health/crosstalk-gate'
 
 const DEEPGRAM_LISTEN_URL = 'wss://api.deepgram.com/v1/listen'
 
@@ -77,6 +78,16 @@ interface Session {
    *  angle) — flags "mic live, buyer bit-silent" while the real per-process
    *  addon is blocked. Only meaningful when `multichannel` is true. */
   buyerSilence: BuyerSilenceWatcher
+  /** M19 Task 2 Part A — the loudspeaker/echo problem: real per-channel
+   *  energy history, checked against Deepgram's claimed channel per Results
+   *  message. Only meaningful when `multichannel` is true. */
+  crossTalk: CrossTalkGate
+  /** session.timeline.elapsedMs() at the moment the CURRENT Deepgram
+   *  connection opened — Deepgram's start/duration are relative to ITS OWN
+   *  per-connection audio clock (like lag.ts's ackBaseSec rebasing), so
+   *  crossTalk (which is fed on the session's continuous timeline) needs
+   *  this offset to translate one into the other. */
+  connectionOpenedAtMs: number
   /** Shed audio waiting to be reported as ONE gap marker, rather than one
    *  marker per 40ms frame. Flushed the moment audio flows again. */
   pendingShedMs: number
@@ -409,6 +420,8 @@ function connect(s: Session): void {
     // onto the cumulative scale so lag stays continuous across the reconnect.
     s.lag.onConnectionOpen()
     s.liveness.onConnectionOpen(at)
+    // Same rebasing crossTalk needs — see the field's own doc comment.
+    s.connectionOpenedAtMs = at
 
     emit(s, 'transcription:state', { state: 'listening' })
     // Only forgive the retry budget once the connection has proven stable.
@@ -471,6 +484,20 @@ function connect(s: Session): void {
       // The acknowledgement cursor: how much of what we sent Deepgram has now
       // accounted for. Connection-relative, rebased onto the session scale.
       s.lag.onAcknowledged(start + duration)
+
+      // M19 Task 2 Part A — the loudspeaker/echo problem. Deepgram's start/
+      // duration are relative to THIS connection's own audio clock; rebase
+      // onto the session's continuous timeline (the same scale crossTalk was
+      // fed on) using the offset captured at connection-open, same principle
+      // as lag.ts's ackBaseSec rebasing just above.
+      if (s.multichannel && (channel === 0 || channel === 1) && (msg.is_final === true)) {
+        const windowStartMs = s.connectionOpenedAtMs + start * 1000
+        const windowEndMs = s.connectionOpenedAtMs + (start + duration) * 1000
+        if (s.crossTalk.disagreesWithClaim(channel, windowStartMs, windowEndMs)) {
+          emit(s, 'transcription:crossTalkWarning', {})
+        }
+      }
+
       emit(s, 'transcription:transcript', {
         transcript,
         words,
@@ -562,6 +589,7 @@ function ingestAudio(s: Session, chunk: unknown): void {
   if (s.multichannel) {
     const verdict = s.buyerSilence.observe({ atMs: at, bytes })
     if (verdict.shouldWarn) emit(s, 'transcription:buyerSilent', { reason: verdict.reason })
+    s.crossTalk.observe({ atMs: at, bytes })
   }
 
   // A discontinuity is a device event or a suspend, not accumulated drift.
@@ -709,6 +737,8 @@ export function registerTranscription(): void {
       drift: new DriftMeter(sampleRate, channels),
       sleep: new SleepDetector(),
       buyerSilence: new BuyerSilenceWatcher(),
+      crossTalk: new CrossTalkGate(),
+      connectionOpenedAtMs: 0,
       pendingShedMs: 0,
       pendingShedReason: 'shed',
       connectedOnce: false,

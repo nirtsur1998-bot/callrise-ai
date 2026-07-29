@@ -107,6 +107,12 @@ export interface TranscriptionApi {
   /** No audio callbacks for ~10s: the capture device is gone, reacquire. */
   onCaptureLost: (cb: (payload: { forMs: number }) => void) => () => void
   onBuyerSilent: (cb: (payload: { reason: string }) => void) => () => void
+  /** M19 Task 2 Part A — Deepgram's claimed channel disagreed with which
+   *  channel actually had the energy for a finalized utterance (the
+   *  loudspeaker/echo signature: buyer audio leaking into the mic). Not
+   *  fatal, not a reassignment — just a "this attribution may be wrong,
+   *  consider headphones" signal, same spirit as onBuyerSilent above. */
+  onCrossTalkWarning: (cb: (payload: Record<string, never>) => void) => () => void
   /** Async, non-blocking: a short next-question suggestion for live cues. */
   suggestQuestion: (text: string) => Promise<{ ok: true; question: string } | { ok: false }>
   /** Manual mid-call help: sends the running transcript + the rep's question. */
