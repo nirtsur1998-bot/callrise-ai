@@ -61,6 +61,28 @@ exports.default = async function applyFuses(context) {
         ? `${appOutDir}/${productName}.exe`
         : `${appOutDir}/${packager.executableName}`
 
+  // EnableEmbeddedAsarIntegrityValidation/OnlyLoadAppFromAsar are disabled on
+  // Windows only: electron-builder's own Windows asar-integrity embedding
+  // (ElectronFramework.beforeCopyExtraFiles -> addWinAsarIntegrity, which
+  // rewrites the exe's resources right before this hook runs) is producing a
+  // binary whose embedded hash never matches what Electron's runtime computes
+  // at startup - confirmed on real Windows hardware, where every packaged
+  // build (both the NSIS installer and the portable exe) refused to launch
+  // with "ASAR Integrity Violation: got a hash mismatch", never a plain
+  // window. The exact interaction between that electron-builder step and this
+  // script's own flipFuses() call isn't fully isolated yet, but a pre-M18
+  // Windows build (with neither fuse set) launched fine on the same class of
+  // hardware, so this is a real regression from adding them here, not an
+  // environment problem. macOS keeps both - that's the platform this pair was
+  // actually verified on.
+  const asarIntegrityFuses =
+    electronPlatformName === 'win32'
+      ? {}
+      : {
+          [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
+          [FuseV1Options.OnlyLoadAppFromAsar]: true
+        }
+
   await flipFuses(binary, {
     version: FuseVersion.V1,
     // Re-signing is handled by electron-builder's own signing step, which runs
@@ -70,8 +92,7 @@ exports.default = async function applyFuses(context) {
 
     [FuseV1Options.RunAsNode]: false,
     [FuseV1Options.EnableNodeCliInspectArguments]: false,
-    [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
-    [FuseV1Options.OnlyLoadAppFromAsar]: true
+    ...asarIntegrityFuses
   })
 
   console.log(`[fuses] locked ${electronPlatformName}: ${binary}`)
