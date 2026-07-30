@@ -1,7 +1,7 @@
 // `?url` makes Vite emit the worklet as a standalone asset (not bundled),
 // which is required for audioWorklet.addModule().
 import pcmProcessorUrl from './pcm-processor.js?url'
-import { getMicConstraints } from '@renderer/features/audio/devices'
+import { getMicConstraints, TRANSCRIPTION_SAMPLE_RATE } from '@renderer/features/audio/devices'
 import { startAudioPump, type AudioPump } from './pump'
 
 export interface Recorder {
@@ -58,7 +58,21 @@ export async function startRecorder(
   // the system default when none is set or the chosen device is gone).
   const stream = await navigator.mediaDevices.getUserMedia({ audio: getMicConstraints() })
 
-  const context = new AudioContext()
+  // Constrained to Deepgram's own recommended ASR rate rather than left to
+  // inherit whatever the OS negotiates for the default device (commonly
+  // 44.1/48kHz on Windows) — see TRANSCRIPTION_SAMPLE_RATE's own doc comment
+  // for why an unconstrained rate specifically bites once buyer capture
+  // doubles the channel count on top of it. `sampleRate` is a best-effort
+  // hint per spec, not guaranteed on every engine/OS combination, so this
+  // falls back to the unconstrained default rather than failing capture
+  // outright on whatever exotic setup doesn't honor it — a slower call is
+  // recoverable, no microphone at all is not.
+  let context: AudioContext
+  try {
+    context = new AudioContext({ sampleRate: TRANSCRIPTION_SAMPLE_RATE })
+  } catch {
+    context = new AudioContext()
+  }
   await context.resume()
   await context.audioWorklet.addModule(pcmProcessorUrl)
 
