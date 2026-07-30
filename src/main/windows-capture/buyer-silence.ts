@@ -70,11 +70,20 @@ export class BuyerSilenceWatcher {
   /** Feed one multichannel audio frame. Returns a verdict every call; only
    *  act on `shouldWarn`. */
   observe(sample: SilenceSample): SilenceVerdict {
+    const [micRms = 0, buyerRms = 0] = channelRms(sample.bytes, 2)
+    return this.observeRms(sample.atMs, micRms, buyerRms)
+  }
+
+  /** Same as observe(), for a caller that already computed this frame's
+   *  per-channel RMS — ingestAudio shares ONE channelRms pass across both
+   *  this watcher and CrossTalkGate instead of each redoing the identical
+   *  computation from scratch, since both run on every multichannel frame on
+   *  the main process's single thread. */
+  observeRms(atMs: number, micRms: number, buyerRms: number): SilenceVerdict {
     if (this.fired) {
       return { shouldWarn: false, reason: 'already warned this call' }
     }
 
-    const [micRms = 0, buyerRms = 0] = channelRms(sample.bytes, 2)
     const buyerSilent = isSilent(buyerRms)
     const micSpeaking = !isSilent(micRms)
 
@@ -86,11 +95,11 @@ export class BuyerSilenceWatcher {
       return { shouldWarn: false, reason: 'buyer channel has audio' }
     }
 
-    if (this.windowStartMs === null) this.windowStartMs = sample.atMs
+    if (this.windowStartMs === null) this.windowStartMs = atMs
     this.totalFrames++
     if (micSpeaking) this.micSpeechFrames++
 
-    const heldMs = sample.atMs - this.windowStartMs
+    const heldMs = atMs - this.windowStartMs
     if (heldMs < BUYER_SILENCE_TUNING.sustainedMs) {
       return { shouldWarn: false, reason: `buyer silent for ${Math.round(heldMs)}ms — watching` }
     }

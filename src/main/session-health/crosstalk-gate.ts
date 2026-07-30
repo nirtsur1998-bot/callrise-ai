@@ -107,8 +107,17 @@ export class CrossTalkGate {
   /** Feed one interleaved-stereo audio frame. */
   observe(sample: CrossTalkSample): void {
     const [micRms = 0, buyerRms = 0] = channelRms(sample.bytes, 2)
-    this.samples.push({ atMs: sample.atMs, micRms, buyerRms })
-    const cutoff = sample.atMs - this.windowMs
+    this.observeRms(sample.atMs, micRms, buyerRms)
+  }
+
+  /** Same as observe(), for a caller that already computed this frame's
+   *  per-channel RMS — ingestAudio shares ONE channelRms pass across both
+   *  this gate and BuyerSilenceWatcher instead of each redoing the identical
+   *  computation from scratch, since both run on every multichannel frame on
+   *  the main process's single thread. */
+  observeRms(atMs: number, micRms: number, buyerRms: number): void {
+    this.samples.push({ atMs, micRms, buyerRms })
+    const cutoff = atMs - this.windowMs
     // Samples arrive in increasing atMs order (real-time capture), so the
     // stale ones are always a prefix — an index scan beats filtering the
     // whole array every frame.

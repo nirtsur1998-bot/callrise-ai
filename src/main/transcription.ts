@@ -11,6 +11,7 @@ import { keyRejectedHint } from './ai-keys'
 import { SessionTimeline, SleepDetector, formatGapMarker } from './session-health/timeline'
 import { LagTracker } from './session-health/lag'
 import { AudioQueue, frameRms, frameSeconds } from './session-health/queue'
+import { channelRms } from './session-health/channel-test'
 import { LivenessWatchdog, silenceFrame } from './session-health/liveness'
 import { DriftMeter } from './session-health/drift'
 import { HEALTH_TUNING, type GapReason, type HealthSnapshot } from './session-health/types'
@@ -605,9 +606,14 @@ function ingestAudio(s: Session, chunk: unknown): void {
   s.liveness.onAudio(at, rms)
 
   if (s.multichannel) {
-    const verdict = s.buyerSilence.observe({ atMs: at, bytes })
+    // Computed once and shared — buyerSilence and crossTalk both need
+    // per-channel RMS for this exact frame, and each recomputing it from the
+    // raw bytes independently is pure redundant CPU on the main process's
+    // single thread, on every multichannel frame for the whole call.
+    const [micRms = 0, buyerRms = 0] = channelRms(bytes, 2)
+    const verdict = s.buyerSilence.observeRms(at, micRms, buyerRms)
     if (verdict.shouldWarn) emit(s, 'transcription:buyerSilent', { reason: verdict.reason })
-    s.crossTalk.observe({ atMs: at, bytes })
+    s.crossTalk.observeRms(at, micRms, buyerRms)
   }
 
   // A discontinuity is a device event or a suspend, not accumulated drift.
