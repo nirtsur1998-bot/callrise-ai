@@ -90,6 +90,15 @@ export class LagTracker {
     return this.ackBaseSec + Math.max(0, this.connectionAckSec - this.connectionSyntheticSec)
   }
 
+  /** Synthetic silence injected on the CURRENT connection so far, in seconds
+   *  — exposed so other consumers of Deepgram's per-connection `start`
+   *  (crosstalk-gate's window math in transcription.ts) can apply the same
+   *  correction this tracker already applies to its own acknowledgedSeconds,
+   *  rather than drifting relative to real capture time after a silence-fill. */
+  get connectionSyntheticSeconds(): number {
+    return this.connectionSyntheticSec
+  }
+
   /** Instantaneous lag. Never act on this directly — use `sample`/`evaluate`. */
   get instantLagSec(): number {
     return Math.max(0, this.submittedSeconds - this.acknowledgedSeconds)

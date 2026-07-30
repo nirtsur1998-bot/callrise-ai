@@ -17,13 +17,23 @@
 // the failure mode this whole milestone's cascade is built to avoid ("never
 // a wrong name, only a lower-confidence one").
 //
-// So: the storage schema, retention, and deletion are real and complete —
-// ready for a real embedding model to be dropped in later — but
+// So: the storage schema, retention, and deletion FUNCTIONS are real and
+// complete — ready for a real embedding model to be dropped in later — but
 // matchVoiceProfile() always returns null today, and voiceProfileMatching
 // stays off by default (app-settings.ts) regardless. This is the honest
 // version of "shippable behind a flag": the flag exists, the schema exists,
 // and turning the flag on today would still do nothing (never a false
 // positive), because there is nothing behind it yet.
+//
+// HONESTY NOTE (not yet wired up): createVoiceProfilePlaceholder() has no
+// caller anywhere in the app, so no profile can actually exist today —
+// which also means deleteVoiceProfile()'s "cascades from contact deletion"
+// and purgeExpiredVoiceProfiles()'s "call periodically" (see their own doc
+// comments below) describe INTENDED integration points, not things that
+// currently run. Neither is wired into contacts-fs.ts's deleteContact or
+// any startup/periodic task yet. Safe as-is only because nothing can be
+// orphaned when nothing is ever created — do the actual wiring before this
+// subsystem stores anything real, not after.
 
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
@@ -103,9 +113,10 @@ export async function listVoiceProfiles(userDataDir: string): Promise<VoiceProfi
 }
 
 /** Deletion — required by the brief ("implement retention + deletion")
- *  regardless of whether real embeddings exist yet, since a contact record
- *  can be deleted (contacts-fs.ts's deleteContact) and any linked voice
- *  profile must go with it, not survive as an orphaned biometric record. */
+ *  regardless of whether real embeddings exist yet: a deleted contact's
+ *  linked voice profile is INTENDED to go with it rather than survive as an
+ *  orphaned biometric record, once contacts-fs.ts's deleteContact actually
+ *  calls this (it does not yet — see this file's header). */
 export async function deleteVoiceProfile(userDataDir: string, id: string): Promise<{ ok: boolean }> {
   try {
     await fs.unlink(join(profilesDir(userDataDir), `${id}.json`))
@@ -115,8 +126,10 @@ export async function deleteVoiceProfile(userDataDir: string, id: string): Promi
   }
 }
 
-/** Purges every profile past its retainUntil — call periodically (e.g.
- *  alongside app startup), same spirit as the backup layer's scrub queue. */
+/** Purges every profile past its retainUntil. INTENDED to be called
+ *  periodically (e.g. alongside app startup), same spirit as the backup
+ *  layer's scrub queue — but nothing calls it yet (see this file's header);
+ *  wire this in before real profiles can exist, not after. */
 export async function purgeExpiredVoiceProfiles(userDataDir: string): Promise<number> {
   const profiles = await listVoiceProfiles(userDataDir)
   const now = Date.now()

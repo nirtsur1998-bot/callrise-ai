@@ -1,6 +1,7 @@
 import { app, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
+import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
 import { listEntries } from './knowledge-fs'
 import { assembleKnowledgeContext } from './knowledge-context'
 import { listCustomTrackers, saveCustomTrackers } from './custom-trackers'
@@ -64,16 +65,18 @@ const TOOL: AITool = {
 const PROMPT = `You are a live sales-call coach. The salesperson has been talking for a while without asking a question. Based ONLY on what they just said below, suggest ONE short, specific discovery question (8 words or fewer) they could ask next to re-engage the buyer and learn something that matters. It must follow naturally from the content — if nothing specific fits, return an empty string. No preamble, no quotation marks. Record it with the suggest_question tool.`
 
 export async function suggestQuestion(text: unknown): Promise<SuggestResult> {
-  const provider = getActiveAIProvider()
-  if (!provider) return { ok: false }
   const recent = (typeof text === 'string' ? text : '').slice(-MAX_INPUT).trim()
   if (recent.length < 20) return { ok: false } // not enough context to ground a question
 
   try {
     // Same latency-sensitive live-call path as liveCue() below — fires
     // automatically mid-call, so it gets the same fail-fast 'coaching-cue'
-    // policy (0 retries) rather than a provider's default retry behavior.
-    const result = await provider.complete({
+    // policy (0 retries, budget-capped 2-model chain) rather than a
+    // provider's default retry behavior. completeWithFallback() returns
+    // AIProviderError('no-key', …) synchronously-fast when nothing is
+    // configured at all, same shape as the old getActiveAIProvider() null
+    // check this replaces.
+    const result = await completeWithFallback({
       purpose: 'coaching-cue',
       maxTokens: 100,
       tool: TOOL,
@@ -259,7 +262,15 @@ export type LiveCueResult =
        *  buyerName is null. */
       buyerSpeaker: number | null
     }
-  | { ok: false }
+  | {
+      ok: false
+      /** M20 — set only when the whole fallback chain was tried and every
+       *  entry failed (not on "not enough transcript yet" or "nothing
+       *  configured", which return plain {ok:false} same as always). Lets
+       *  the renderer show a small non-blocking "coaching paused" indicator
+       *  instead of just silently doing nothing this cycle. */
+      pausedReason?: 'all-models-unavailable'
+    }
 
 // The buyerName/buyerSpeaker fields only exist on the schema the model sees
 // when self-intro extraction is on — an off rep never even has the model
@@ -344,8 +355,6 @@ Return a SHORT cue (8–10 words max) the rep can read in a glance. It MUST be a
 }
 
 export async function liveCue(input: unknown): Promise<LiveCueResult> {
-  const provider = getActiveAIProvider()
-  if (!provider) return { ok: false }
   const body = (input ?? {}) as { transcript?: unknown; repSpeaker?: unknown }
   const transcript = (typeof body.transcript === 'string' ? body.transcript : '').slice(-MAX_INPUT)
   const repHint =
@@ -373,9 +382,12 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
 
   try {
     // Live cue: fail fast. LATENCY_POLICY['coaching-cue'] is 0 retries / 6s
-    // timeout on both providers — a missed cue beats a late one. Regression
-    // test: __tests__/latencyPolicy.test.ts asserts this stays 0.
-    const result = await provider.complete({
+    // timeout — a missed cue beats a late one. completeWithFallback() splits
+    // that same 6s as a TOTAL budget across its (max 2) chain entries rather
+    // than giving each its own full 6s, so a multi-model chain can't
+    // reintroduce the dead-air regression M9 already fixed once. Regression
+    // tests: __tests__/latencyPolicy.test.ts + __tests__/chainBudget.test.ts.
+    const result = await completeWithFallback({
       purpose: 'coaching-cue',
       maxTokens: 150,
       tool: liveTool(includeBuyerName),
@@ -410,6 +422,17 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
     // buyerName: only trust it if the model also names a speaker actually
     // observed in THIS window, and that speaker isn't the rep — the same
     // hallucination guard repSpeaker already gets, applied here too.
+    //
+    // repSpeaker !== null is NOT redundant with candidateSpeaker !== null:
+    // without it, `candidateSpeaker !== repSpeaker` degenerates to
+    // `candidateSpeaker !== null` whenever repSpeaker itself is still
+    // unknown (the common state on the very first coaching-cue round trip —
+    // exactly when both parties are most likely introducing themselves),
+    // silently admitting ANY candidate, including the rep's own voice. Same
+    // vacuous-null-comparison class already fixed in resolve.ts's otherKeys
+    // filter (`me === null ? [] : ...`); refuse to guess here too rather
+    // than risk permanently mislabeling the rep as "the buyer" (buyerName is
+    // resolved once and kept for the rest of the call — see useLiveCues.ts).
     let buyerName: string | null = null
     let buyerSpeaker: number | null = null
     if (includeBuyerName && typeof raw?.buyerName === 'string' && raw.buyerName.trim()) {
@@ -419,6 +442,7 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
           : null
       if (
         candidateSpeaker !== null &&
+        repSpeaker !== null &&
         observedSpeakers.has(candidateSpeaker) &&
         candidateSpeaker !== repSpeaker
       ) {
@@ -430,6 +454,16 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
     if (cue === 'none' || !text) return { ok: true, repSpeaker, cue: 'none', text: '', buyerName, buyerSpeaker }
     return { ok: true, repSpeaker, cue, text, buyerName, buyerSpeaker }
   } catch (err) {
+    if (err instanceof AllModelsExhaustedError) {
+      // Every configured model in the chain failed this cycle (network down,
+      // every free tier rate-limited, etc.) — degrade exactly like any other
+      // error (deterministic non-AI cue still shows, transcription is
+      // untouched), plus tell the renderer so it can show a small
+      // non-blocking indicator instead of silently doing nothing. Never a
+      // modal, never interrupts the call — see LiveView.tsx.
+      console.log(`[live-cue] all models exhausted: ${err.attempts.map((a) => a.reason).join(', ')}`)
+      return { ok: false, pausedReason: 'all-models-unavailable' }
+    }
     const providerErr = err instanceof AIProviderError ? err : null
     console.log(
       `[live-cue] brain error: code=${providerErr?.code ?? 'unknown'} message=${providerErr?.message ?? String(err)}`

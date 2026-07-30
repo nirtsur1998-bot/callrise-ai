@@ -500,10 +500,17 @@ function connect(s: Session): void {
       // duration are relative to THIS connection's own audio clock; rebase
       // onto the session's continuous timeline (the same scale crossTalk was
       // fed on) using the offset captured at connection-open, same principle
-      // as lag.ts's ackBaseSec rebasing just above.
+      // as lag.ts's ackBaseSec rebasing just above. Synthetic silence-fill
+      // frames (healthTick's needsSilenceFill) advance Deepgram's clock
+      // without ever reaching crossTalk.observe() (they bypass ingestAudio
+      // entirely), so — exactly like lag.ts's own acknowledgedSeconds getter
+      // — that injected duration must be subtracted back out here too, or
+      // every crosstalk window drifts further ahead of real capture time
+      // with each fill on this connection.
+      const syntheticSec = s.lag.connectionSyntheticSeconds
       if (s.multichannel && (channel === 0 || channel === 1) && (msg.is_final === true)) {
-        const windowStartMs = s.connectionOpenedAtMs + start * 1000
-        const windowEndMs = s.connectionOpenedAtMs + (start + duration) * 1000
+        const windowStartMs = s.connectionOpenedAtMs + (start - syntheticSec) * 1000
+        const windowEndMs = s.connectionOpenedAtMs + (start + duration - syntheticSec) * 1000
         if (s.crossTalk.disagreesWithClaim(channel, windowStartMs, windowEndMs)) {
           emit(s, 'transcription:crossTalkWarning', {})
         }

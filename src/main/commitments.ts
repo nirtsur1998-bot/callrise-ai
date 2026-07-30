@@ -15,7 +15,8 @@
 // list the rep has to re-read every time to work out which ones are theirs.
 
 import type { CallSegment, Commitment, CommitmentOwner } from './calls-fs'
-import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
+import { AIProviderError, type AITool } from './ai'
+import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
 
 const MAX_TEXT_CHARS = 200_000
 const MAX_COMMITMENTS = 20
@@ -132,11 +133,8 @@ export async function extractCommitments(segments: CallSegment[]): Promise<Commi
     return { ok: false, error: 'empty-call' }
   }
 
-  const provider = getActiveAIProvider()
-  if (!provider) return { ok: false, error: 'no-key' }
-
   try {
-    const result = await provider.complete({
+    const result = await completeWithFallback({
       purpose: 'summary',
       maxTokens: 2048,
       tool: COMMITMENT_TOOL,
@@ -149,13 +147,18 @@ export async function extractCommitments(segments: CallSegment[]): Promise<Commi
     })
     return { ok: true, commitments: sanitizeCommitments(result.toolInput?.commitments) }
   } catch (err) {
+    // See coach.ts's errorCodeFrom — preserves 'no-key' vs 'failed' for the
+    // renderer's "set up your key" UI (CallDetail.tsx).
+    const errorCode = err instanceof AIProviderError && err.code === 'no-key' ? 'no-key' : 'failed'
     return {
       ok: false,
-      error: 'failed',
+      error: errorCode,
       message:
-        err instanceof AIProviderError
-          ? err.message
-          : 'Something went wrong reading the commitments. Please try again.'
+        err instanceof AllModelsExhaustedError
+          ? 'Every configured AI model failed to read commitments. Check your keys and free-tier limits in Settings, or try again shortly.'
+          : err instanceof AIProviderError
+            ? err.message
+            : 'Something went wrong reading the commitments. Please try again.'
     }
   }
 }

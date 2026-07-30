@@ -206,6 +206,11 @@ export interface UseLiveCues {
    *  caller can build a SpeakerIdentities map for live display. */
   buyerName: string | null
   buyerIdentityKey: string | null
+  /** M20 — every model in the fallback chain failed the most recent
+   *  liveCue() attempt. Non-blocking: transcription is unaffected, this
+   *  just means AI cues are temporarily unavailable. Clears itself the
+   *  moment a call succeeds again. */
+  coachingPaused: boolean
 }
 
 /**
@@ -230,6 +235,10 @@ export function useLiveCues(
   const [monologue, setMonologue] = useState<MonologueState | null>(null)
   const [buyerName, setBuyerName] = useState<string | null>(null)
   const [buyerIdentityKey, setBuyerIdentityKey] = useState<string | null>(null)
+  // M20 — every configured model in the fallback chain failed this cycle.
+  // Non-blocking: transcription keeps running, this just says AI cues are
+  // temporarily unavailable. Cleared the moment a call succeeds again.
+  const [coachingPaused, setCoachingPaused] = useState(false)
   const monologueRef = useRef(new MonologueTracker())
 
   const cfgRef = useRef<Thresholds>(SENSITIVITY_THRESHOLDS[sensitivity])
@@ -301,6 +310,22 @@ export function useLiveCues(
     repSpeakerRef.current = knownRepSpeaker
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mirror the ref for the transcript label when buyer capture starts/stops mid-call
     setRepSpeaker(knownRepSpeaker)
+
+    // A self-intro resolved BEFORE buyer capture went live was necessarily
+    // keyed to a mono speaker number (the only regime that existed then) —
+    // see the one-shot resolution below. Once multichannel is now active,
+    // the buyer is unambiguously channel 1 (a fixed loopback/hardware fact,
+    // never a guess), so recompute the key to match. Without this, the
+    // already-resolved name stays stuck under the stale mono key: new
+    // segments recorded after the switch (now channel-tagged) never match
+    // it for live display, and resolve.ts's own current-regime filter
+    // ignores the stale-regime key entirely at save time. The reverse
+    // transition (multichannel -> mono) is deliberately left alone — mono
+    // has no fixed buyer index to recompute onto, so the name is kept as-is
+    // rather than guessed at.
+    if (knownRepSpeaker === 0 && buyerNameRef.current !== null) {
+      setBuyerIdentityKey(speakerKey({ speaker: 1, channel: 1 }))
+    }
   }, [knownRepSpeaker])
 
   const dismissSuggestion = useCallback((id: number) => {
@@ -461,7 +486,12 @@ export function useLiveCues(
       void window.api.transcription
         .liveCue(transcript, repSpeakerRef.current)
         .then((res) => {
-          if (!mountedRef.current || generation !== generationRef.current || !res.ok) return
+          if (!mountedRef.current || generation !== generationRef.current) return
+          if (!res.ok) {
+            setCoachingPaused(res.pausedReason === 'all-models-unavailable')
+            return
+          }
+          setCoachingPaused(false)
           if (repSpeakerRef.current === null && res.repSpeaker !== null) {
             // Same guard as coach.ts's batch path (speakers.has(repSpeaker)):
             // never lock onto a speaker id that hasn't actually appeared in
@@ -598,6 +628,7 @@ export function useLiveCues(
     engagementScore,
     monologue,
     buyerName,
-    buyerIdentityKey
+    buyerIdentityKey,
+    coachingPaused
   }
 }

@@ -41,7 +41,17 @@ export async function resolveAndSaveIdentities(dirs: Dirs, callId: string): Prom
   const call = await getCall(dirs.calls, callId)
   if (!call) return null
 
-  const multichannel = call.segments.some((s) => s.channel !== undefined)
+  // The CURRENT regime, not "was multichannel ever used" — a call can go
+  // multichannel-then-back-to-mono (disableOtherParty: manual toggle-off,
+  // consent revoked, or the loopback stream ending on its own), and `.some()`
+  // over the whole array is a monotonic OR that stays true forever after the
+  // first channel-tagged segment. observedKeys() below trusts this flag to
+  // mean "current," so a stuck-true value after a reversion would silently
+  // keep filtering to the old (now-stale) channel-tagged segments and drop
+  // every mono segment captured afterward — the exact inverse of what a
+  // forward mono->multichannel switch already guards against.
+  const lastRealSegment = [...call.segments].reverse().find((s) => s.kind !== 'gap')
+  const multichannel = lastRealSegment ? lastRealSegment.channel !== undefined : false
   const repSpeaker = call.coaching?.metrics.repSpeaker ?? null
   const userName = loadAppSettings().personalization.name.trim() || null
   const callStart = new Date(call.createdAt).getTime()

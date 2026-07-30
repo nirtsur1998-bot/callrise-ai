@@ -6,6 +6,7 @@ import type { AuthUser } from '@renderer/features/auth/types'
 import { SETTINGS_GROUPS, ALL_SETTINGS_PAGES, type SettingsPageId } from './settings-nav'
 import { AccountSection } from './AccountSection'
 import { ApiKeysSection } from './ApiKeysSection'
+import { ModelAssignmentSection } from './ModelAssignmentSection'
 import { AINoteTakerSection } from './AINoteTakerSection'
 import { DetectionSection } from './DetectionSection'
 import { RecordingConsentSection } from './RecordingConsentSection'
@@ -24,6 +25,7 @@ import { PrivacyDataPage } from './PrivacyDataPage'
 const PAGE_CONTENT: Record<SettingsPageId, React.ComponentType> = {
   account: AccountSection,
   'ai-setup': ApiKeysSection,
+  'ai-models': ModelAssignmentSection,
   'ai-note-taker': AINoteTakerSection,
   'call-detection': DetectionSection,
   'recording-consent': RecordingConsentSection,

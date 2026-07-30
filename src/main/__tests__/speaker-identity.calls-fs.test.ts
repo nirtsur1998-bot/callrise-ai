@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -155,5 +155,209 @@ describe('setSpeakerIdentity', () => {
       confidence: 'high'
     })
     expect(result).toBeNull()
+  })
+
+  // The TOCTOU-race fix (commit 2cdce4d): the manual-rename guard is checked
+  // atomically inside setSpeakerIdentity's own lock, not from a pre-read
+  // snapshot — resolve-for-call.ts is the only caller, and had no test
+  // coverage for this option anywhere in the suite before this.
+  describe('skipIfManual', () => {
+    it('is a no-op against an existing manual entry', async () => {
+      const callId = await makeCall()
+      await setSpeakerIdentity(dir, callId, 'ch1/spk1', {
+        name: 'Sarah Chen',
+        source: 'manual',
+        confidence: 'high'
+      })
+      const result = await setSpeakerIdentity(
+        dir,
+        callId,
+        'ch1/spk1',
+        { name: 'Auto-Resolved Name', source: 'calendar', confidence: 'high' },
+        { skipIfManual: true }
+      )
+      // Returns the call UNCHANGED (not null — the call exists, the write was
+      // just skipped), and the manual entry survives untouched.
+      expect(result?.speakerIdentities?.['ch1/spk1']).toMatchObject({
+        name: 'Sarah Chen',
+        source: 'manual'
+      })
+    })
+
+    it('writes normally when the existing entry is not manual', async () => {
+      const callId = await makeCall()
+      await setSpeakerIdentity(dir, callId, 'ch1/spk1', {
+        name: 'S. Chen',
+        source: 'self-intro',
+        confidence: 'low'
+      })
+      const result = await setSpeakerIdentity(
+        dir,
+        callId,
+        'ch1/spk1',
+        { name: 'Sarah Chen', source: 'calendar', confidence: 'high' },
+        { skipIfManual: true }
+      )
+      expect(result?.speakerIdentities?.['ch1/spk1']).toMatchObject({
+        name: 'Sarah Chen',
+        source: 'calendar'
+      })
+    })
+
+    it('writes normally when there is no existing entry at all', async () => {
+      const callId = await makeCall()
+      const result = await setSpeakerIdentity(
+        dir,
+        callId,
+        'ch1/spk1',
+        { name: 'Sarah Chen', source: 'calendar', confidence: 'high' },
+        { skipIfManual: true }
+      )
+      expect(result?.speakerIdentities?.['ch1/spk1']?.name).toBe('Sarah Chen')
+    })
+  })
+})
+
+// applyConsentRetention isn't exported directly (it's an internal guard run
+// by saveCall/getCall/listCalls/importCall) — exercised here via a raw
+// on-disk Call file + getCall(), which is exactly the shape a real
+// hand-edited-or-legacy file takes. Covers the mono-vs-multichannel fix:
+// BUYER_SPEAKER=1 is only a fixed fact for multichannel; for mono calls the
+// buyer's actual speaker number depends on the (possibly still-unknown)
+// AI-determined repSpeaker.
+describe('applyConsentRetention (via getCall)', () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'callrise-retention-test-'))
+  })
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  interface RawCallOpts {
+    id: string
+    segments: { speaker: number; channel?: number; text: string }[]
+    speakerIdentities: Record<string, { name: string; source: string; confidence: string; resolvedAt: string }>
+    repSpeaker?: number | null
+    recordOtherParty?: boolean
+  }
+
+  async function writeRawCall(opts: RawCallOpts): Promise<void> {
+    const call = {
+      id: opts.id,
+      title: 'Test call',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      durationMs: 60_000,
+      speakerCount: 2,
+      preview: '',
+      segments: opts.segments,
+      attachments: [],
+      consent: {
+        status: opts.recordOtherParty ? 'consented' : 'not-asked',
+        jurisdiction: 'two-party',
+        recordOtherParty: opts.recordOtherParty === true
+      },
+      speakerIdentities: opts.speakerIdentities,
+      ...(opts.repSpeaker !== undefined
+        ? { coaching: { metrics: { repSpeaker: opts.repSpeaker } } }
+        : {})
+    }
+    await writeFile(join(dir, `${opts.id}.json`), JSON.stringify(call), 'utf8')
+  }
+
+  const identity = (
+    name: string
+  ): { name: string; source: string; confidence: 'high'; resolvedAt: string } => ({
+    name,
+    source: 'calendar',
+    confidence: 'high' as const,
+    resolvedAt: new Date().toISOString()
+  })
+
+  it('multichannel: strips only ch1 (structurally fixed) without consent', async () => {
+    await writeRawCall({
+      id: 'mc-no-consent',
+      segments: [
+        { speaker: 0, channel: 0, text: 'rep line' },
+        { speaker: 1, channel: 1, text: 'buyer line' }
+      ],
+      speakerIdentities: { 'ch0/spk0': identity('Me'), 'ch1/spk1': identity('Sarah Chen') },
+      recordOtherParty: false
+    })
+    const call = await getCall(dir, 'mc-no-consent')
+    expect(call?.speakerIdentities?.['ch0/spk0']?.name).toBe('Me')
+    expect(call?.speakerIdentities?.['ch1/spk1']).toBeUndefined()
+    expect(call?.segments.map((s) => s.speaker)).toEqual([0])
+  })
+
+  it('mono: strips spk0 (the buyer) when repSpeaker=1 is known', async () => {
+    await writeRawCall({
+      id: 'mono-rep1',
+      segments: [
+        { speaker: 0, text: 'buyer line' },
+        { speaker: 1, text: 'rep line' }
+      ],
+      speakerIdentities: { 'mono/spk0': identity('Sarah Chen'), 'mono/spk1': identity('Me') },
+      repSpeaker: 1,
+      recordOtherParty: false
+    })
+    const call = await getCall(dir, 'mono-rep1')
+    expect(call?.speakerIdentities?.['mono/spk1']?.name).toBe('Me')
+    expect(call?.speakerIdentities?.['mono/spk0']).toBeUndefined()
+    expect(call?.segments.map((s) => s.speaker)).toEqual([1])
+  })
+
+  it('mono: strips spk1 (the buyer) when repSpeaker=0 is known', async () => {
+    await writeRawCall({
+      id: 'mono-rep0',
+      segments: [
+        { speaker: 0, text: 'rep line' },
+        { speaker: 1, text: 'buyer line' }
+      ],
+      speakerIdentities: { 'mono/spk0': identity('Me'), 'mono/spk1': identity('Sarah Chen') },
+      repSpeaker: 0,
+      recordOtherParty: false
+    })
+    const call = await getCall(dir, 'mono-rep0')
+    expect(call?.speakerIdentities?.['mono/spk0']?.name).toBe('Me')
+    expect(call?.speakerIdentities?.['mono/spk1']).toBeUndefined()
+    expect(call?.segments.map((s) => s.speaker)).toEqual([0])
+  })
+
+  it('mono: with repSpeaker still unknown, conservatively assumes rep=0 and strips spk1', async () => {
+    await writeRawCall({
+      id: 'mono-unknown-rep',
+      segments: [
+        { speaker: 0, text: 'presumed rep line' },
+        { speaker: 1, text: 'presumed buyer line' }
+      ],
+      speakerIdentities: { 'mono/spk0': identity('Me'), 'mono/spk1': identity('Sarah Chen') },
+      repSpeaker: null,
+      recordOtherParty: false
+    })
+    const call = await getCall(dir, 'mono-unknown-rep')
+    expect(call?.speakerIdentities?.['mono/spk0']?.name).toBe('Me')
+    expect(call?.speakerIdentities?.['mono/spk1']).toBeUndefined()
+    expect(call?.segments.map((s) => s.speaker)).toEqual([0])
+  })
+
+  it('mono: nothing is stripped once consent is actually held', async () => {
+    await writeRawCall({
+      id: 'mono-consented',
+      segments: [
+        { speaker: 0, text: 'buyer line' },
+        { speaker: 1, text: 'rep line' }
+      ],
+      speakerIdentities: { 'mono/spk0': identity('Sarah Chen'), 'mono/spk1': identity('Me') },
+      repSpeaker: 1,
+      recordOtherParty: true
+    })
+    const call = await getCall(dir, 'mono-consented')
+    expect(call?.speakerIdentities?.['mono/spk0']?.name).toBe('Sarah Chen')
+    expect(call?.speakerIdentities?.['mono/spk1']?.name).toBe('Me')
+    expect(call?.segments).toHaveLength(2)
   })
 })

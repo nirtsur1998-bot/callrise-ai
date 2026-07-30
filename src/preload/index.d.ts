@@ -135,7 +135,14 @@ export interface TranscriptionApi {
         buyerName: string | null
         buyerSpeaker: number | null
       }
-    | { ok: false }
+    | {
+        ok: false
+        /** M20 — set only when the whole per-job fallback chain was tried
+         *  and every entry failed this cycle (not on "not enough transcript
+         *  yet"). Renderer shows a small non-blocking "coaching paused"
+         *  indicator, never a modal — see LiveView.tsx. */
+        pausedReason?: 'all-models-unavailable'
+      }
   >
 }
 
@@ -1001,7 +1008,16 @@ export interface VirtualMicStatus {
   helperPath: string | null
 }
 
-export type AiKeyName = 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY'
+export type AiKeyName =
+  | 'DEEPGRAM_API_KEY'
+  | 'ANTHROPIC_API_KEY'
+  | 'OPENAI_API_KEY'
+  | 'GROQ_API_KEY'
+  | 'OPENROUTER_API_KEY'
+  | 'GOOGLE_AI_API_KEY'
+  | 'NVIDIA_API_KEY'
+  | 'CEREBRAS_API_KEY'
+  | 'MISTRAL_API_KEY'
 
 export interface AiKeyStatus {
   /** True once real API calls will succeed for this key — a Settings-saved
@@ -1011,7 +1027,19 @@ export interface AiKeyStatus {
   hint: string | null
 }
 
-export type AiProviderId = 'anthropic' | 'openai'
+/** 'anthropic'/'openai' are the original M16 pair. The other six (M20) are
+ *  all free-tier providers in the model catalog — see ai/model-catalog.ts
+ *  in the main process; this type must stay in lockstep with
+ *  src/main/ai/types.ts's AIProviderId. */
+export type AiProviderId =
+  | 'anthropic'
+  | 'openai'
+  | 'groq'
+  | 'openrouter'
+  | 'google'
+  | 'nvidia'
+  | 'cerebras'
+  | 'mistral'
 
 export type AiKeyValidateResult = { ok: true; models: string[] } | { ok: false; reason: string }
 
@@ -1021,9 +1049,59 @@ export interface AiKeysApi {
   save: (name: AiKeyName, value: string) => Promise<{ ok: boolean; error?: string }>
   clear: (name: AiKeyName) => Promise<{ ok: boolean; error?: string }>
   /** Cheapest possible round-trip against a key the user just pasted (not
-   *  necessarily saved yet) — 'anthropic'/'openai' only, Deepgram has no
-   *  equivalent flow here. */
+   *  necessarily saved yet) — every text-AI provider (not Deepgram, which
+   *  has no equivalent flow here). */
   validate: (providerId: AiProviderId, value: string) => Promise<AiKeyValidateResult>
+}
+
+export type ModelLane = 'speed' | 'quality'
+export type RetentionPosture = 'trains' | 'no-training' | 'unknown'
+
+/** Mirrors main/ai/model-catalog.ts's CatalogEntry. */
+export interface AiCatalogEntry {
+  id: string
+  displayName: string
+  brand: string
+  providerId: AiProviderId
+  lane: ModelLane
+  modelId: string
+  contextWindow: number | null
+  retentionPosture: RetentionPosture
+  retentionUrl: string
+  keyUrl: string
+  knownStale?: string
+}
+
+export interface AiResolvedCatalogEntry extends AiCatalogEntry {
+  hasKey: boolean
+  available: boolean
+}
+
+export interface AiCatalogApi {
+  /** Bundled catalog only — instant, no network. */
+  list: () => Promise<AiCatalogEntry[]>
+  /** Cross-checked against each configured provider's live /models endpoint. */
+  resolve: (forceRefresh?: boolean) => Promise<AiResolvedCatalogEntry[]>
+  /** V1 chain-editing scope — picks one primary model for a job; main
+   *  derives and persists the full fallback chain (promotes the pick to the
+   *  front of the bundled default ordering). Returns the updated AppSettings,
+   *  same shape as settings.update(). */
+  assignPrimaryModel: (purpose: AiPurpose, catalogId: string) => Promise<AppSettings>
+}
+
+export interface AiFallbackEventView {
+  ts: string
+  purpose: AiPurpose
+  fromCatalogId: string
+  toCatalogId: string | null
+  reason: string
+  fromDisplayName: string
+  toDisplayName: string | null
+}
+
+export interface AiFallbackApi {
+  /** Most-recent-first, last ~20 - for the "recent fallback activity" list. */
+  recentEvents: () => Promise<AiFallbackEventView[]>
 }
 
 export interface VirtualMicApi {
@@ -1187,6 +1265,20 @@ export interface DetectionSettings {
   capturePolicy: CapturePolicySettings
 }
 
+/** M20 — must stay in lockstep with src/main/ai/types.ts's AIPurpose. The
+ *  Settings → Model Assignment page exposes 5 of these 6
+ *  ('other' has no UI — its 4 call sites keep using the plain `aiProvider`
+ *  choice forever, an intentional non-goal for this milestone). */
+export type AiPurpose = 'coaching-cue' | 'summary' | 'scorecard' | 'tasks' | 'other' | 'prep-brief'
+
+export interface ModelAssignment {
+  /** Ordered model-catalog entry IDs — see main/ai/model-catalog.ts. Empty
+   *  means "no explicit assignment for this job." */
+  chain: string[]
+}
+
+export type ModelAssignments = Record<AiPurpose, ModelAssignment>
+
 export interface AppSettings {
   /** Master switch: OFF removes all buyer/other-party recording capability.
    *  Can only remove capability, never grant it — per-call consent still
@@ -1216,9 +1308,14 @@ export interface AppSettings {
   objectionMining: ObjectionMiningSettings
   /** Ambient call detection (M15). Defaults OFF. */
   detection: DetectionSettings
-  /** Which text-AI provider coaching/summaries/tasks/etc. use. Defaults to
-   *  'anthropic'. The API key itself is separate, encrypted (see AiKeysApi). */
+  /** Which text-AI provider coaching/summaries/tasks/etc. use when a purpose
+   *  has no aiModelAssignments chain configured. Defaults to 'anthropic'.
+   *  The API key itself is separate, encrypted (see AiKeysApi). */
   aiProvider: AiProviderId
+  /** M20 — ordered per-job model-fallback chains. Empty chain for a purpose
+   *  falls back to `aiProvider` above, then to a bundled default catalog
+   *  chain — see main/ai/complete-with-fallback.ts's resolution rule. */
+  aiModelAssignments: ModelAssignments
 }
 
 export interface AppSettingsPatch {
@@ -1248,6 +1345,10 @@ export interface AppSettingsPatch {
     }
   }
   aiProvider?: AiProviderId
+  /** M20 — partial per-purpose; only the purposes present are replaced
+   *  (whole-chain replace per purpose, not key-by-key — a chain is authored
+   *  as one unit in the Model Assignment UI). */
+  aiModelAssignments?: Partial<Record<AiPurpose, ModelAssignment>>
 }
 
 export interface AppSettingsApi {
@@ -1499,6 +1600,8 @@ declare global {
       settings: AppSettingsApi
       app: AppControlApi
       aiKeys: AiKeysApi
+      aiCatalog: AiCatalogApi
+      aiFallback: AiFallbackApi
       detection: DetectionApi
       alerts: AlertsApi
       prepBrief: PrepBriefApi

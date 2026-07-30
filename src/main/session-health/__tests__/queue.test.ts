@@ -140,6 +140,36 @@ describe('AudioQueue replay cap', () => {
     expect(shed.droppedSec).toBe(0)
     expect(q.queuedSeconds).toBeCloseTo(1, 5)
   })
+
+  // transcription.ts's reconnect handler anchors connectionOpenedAtMs on
+  // exactly this value (`s.queue.peek()?.atMs ?? at`, the fix for the
+  // cross-talk-window-misdating bug) — distinct from the seconds/byte
+  // accounting the tests above already cover, and previously asserted
+  // nowhere. voiced()/silent() default every frame to atMs=0, so this test
+  // gives frames real, increasing timestamps instead.
+  it("after trimming, peek()'s atMs is the oldest SURVIVING frame's real capture time", () => {
+    const q = new AudioQueue(60)
+    const FRAME_MS = 100 // matches the 100ms frame() helper's own duration
+    const FRAME_COUNT = 300 // 30s buffered
+    for (let i = 0; i < FRAME_COUNT; i++) q.push(frame(0.5, i * FRAME_MS))
+    const newestAtMs = (FRAME_COUNT - 1) * FRAME_MS
+
+    q.trimToReplayCap() // keeps HEALTH_TUNING.replayCapSec (3s) of the newest
+
+    const oldestSurviving = q.peek()
+    expect(oldestSurviving).not.toBeNull()
+    // Whatever survived must be within the replay cap of the newest pushed
+    // frame — not some arbitrary earlier frame the eviction skipped past.
+    expect(oldestSurviving?.atMs).toBeGreaterThan(newestAtMs - HEALTH_TUNING.replayCapSec * 1000)
+    expect(oldestSurviving?.atMs).toBeLessThanOrEqual(newestAtMs)
+  })
+
+  it('peek() is null on an empty queue — the `?? at` fallback path connect() relies on', () => {
+    const q = new AudioQueue(60)
+    q.push(frame(0.5, 1000))
+    q.shift()
+    expect(q.peek()).toBeNull()
+  })
 })
 
 describe('AudioQueue.clear', () => {

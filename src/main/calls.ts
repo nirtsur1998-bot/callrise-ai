@@ -31,7 +31,11 @@ import { extractCommitments, type CommitmentResult } from './commitments'
 import { generateCallTitle, type GenerateTitleResult } from './call-title'
 import { mineObjections, makeVerifier, type ObjectionMiningResult } from './objection-mining'
 import { addToQueue, purgeQueueForCall } from './objection-queue-fs'
-import { isObjectionMiningEnabled, loadAppSettings, isSpeakerIdEnabled } from './app-settings'
+import {
+  isObjectionMiningEnabled,
+  loadAppSettings,
+  isSelfIntroExtractionAllowed
+} from './app-settings'
 import { scheduleBackup, queueAttachmentBlobDeletes } from './backup'
 import { addComment } from './contacts-fs'
 import { generateCrmNote } from './crm-notes'
@@ -191,7 +195,7 @@ export function registerCalls(): void {
       // written outside consent, as a second line of defense — see its own
       // doc comment in calls-fs.ts — but the write is prevented here too,
       // rather than relying solely on next-read cleanup).
-      if (selfIntro?.key && selfIntro.name && isSpeakerIdEnabled()) {
+      if (selfIntro?.key && selfIntro.name && isSelfIntroExtractionAllowed()) {
         const current = await getCall(callsDir(), summary.id)
         if (current?.consent?.recordOtherParty === true) {
           await setSpeakerIdentity(callsDir(), summary.id, selfIntro.key, {

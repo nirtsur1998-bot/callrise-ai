@@ -15,12 +15,14 @@ import {
   KeyRound,
   Radar,
   BellRing,
+  Layers,
   type LucideIcon
 } from 'lucide-react'
 
 export type SettingsPageId =
   | 'account'
   | 'ai-setup'
+  | 'ai-models'
   | 'ai-note-taker'
   | 'call-detection'
   | 'recording-consent'
@@ -61,7 +63,14 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         label: 'API keys',
         icon: KeyRound,
         description:
-          'Your own Deepgram (transcription) and Anthropic (coaching & summaries) keys — required for those features to work.'
+          'Your own Deepgram (transcription) and text-AI provider keys — required for those features to work.'
+      },
+      {
+        id: 'ai-models',
+        label: 'Model Assignment',
+        icon: Layers,
+        description:
+          'Which model handles each job — live coaching cues, post-call summaries, scorecards, task extraction, and prep briefs — with an automatic fallback chain if one is unavailable.'
       }
     ]
   },

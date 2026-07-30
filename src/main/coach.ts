@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { join } from 'node:path'
-import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
+import { AIProviderError, type AITool } from './ai'
+import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
 import type {
   CallSegment,
   CoachingReport,
@@ -437,15 +438,27 @@ function assembleReport(
 // --- Friendly errors --------------------------------------------------------
 
 function friendlyError(err: unknown): string {
+  if (err instanceof AllModelsExhaustedError) {
+    return 'Every configured AI model failed to produce a coaching report. Check your keys and free-tier limits in Settings, or try again shortly.'
+  }
   if (err instanceof AIProviderError) return err.message
   return 'Something went wrong while coaching this call. Please try again.'
+}
+
+/** completeWithFallback() throws AIProviderError('no-key', …) — not
+ *  AllModelsExhaustedError — when nothing is configured at all (empty
+ *  chain, nothing to even attempt), same as getActiveAIProvider() returning
+ *  null used to. The renderer's "set up your key" UI (CallDetail.tsx,
+ *  RiskAssessmentCard.tsx, GenerateTasksDialog.tsx, CoachingSection.tsx)
+ *  depends on this exact code surviving — collapsing it into 'failed' would
+ *  silently break that path for anyone with zero keys configured. */
+function errorCodeFrom(err: unknown): 'no-key' | 'failed' {
+  return err instanceof AIProviderError && err.code === 'no-key' ? 'no-key' : 'failed'
 }
 
 // --- Public entry point -----------------------------------------------------
 
 export async function coachCall(segments: CallSegment[], durationMs: number): Promise<CoachResult> {
-  const provider = getActiveAIProvider()
-  if (!provider) return { ok: false, error: 'no-key' }
   if (!segments.length) {
     return { ok: false, error: 'failed', message: 'This call has no transcript to coach.' }
   }
@@ -459,7 +472,7 @@ export async function coachCall(segments: CallSegment[], durationMs: number): Pr
   const personalization = loadCoachPersonalization()
 
   try {
-    const result = await provider.complete({
+    const result = await completeWithFallback({
       purpose: 'scorecard',
       maxTokens: 8192,
       tool: COACH_TOOL,
@@ -481,6 +494,6 @@ export async function coachCall(segments: CallSegment[], durationMs: number): Pr
     }
     return { ok: true, report }
   } catch (err) {
-    return { ok: false, error: 'failed', message: friendlyError(err) }
+    return { ok: false, error: errorCodeFrom(err), message: friendlyError(err) }
   }
 }

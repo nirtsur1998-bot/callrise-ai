@@ -400,6 +400,8 @@ export function useTranscription(
           recorderRef.current = null
           setAnalyser(null)
           setOtherPartyLive(false)
+          setBuyerSilentWarning(false)
+          setCrossTalkWarning(false)
           void window.api.transcription.stop()
           setPhase('no-device')
         },

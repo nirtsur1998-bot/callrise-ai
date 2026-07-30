@@ -227,12 +227,61 @@ const api = {
   },
   aiKeys: {
     getStatus: () => ipcRenderer.invoke('aiKeys:getStatus'),
-    save: (name: 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY', value: string) =>
-      ipcRenderer.invoke('aiKeys:save', name, value),
-    clear: (name: 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY') =>
-      ipcRenderer.invoke('aiKeys:clear', name),
-    validate: (providerId: 'anthropic' | 'openai', value: string) =>
-      ipcRenderer.invoke('aiKeys:validate', providerId, value)
+    // Kept as inline literal unions (not imported from index.d.ts, which is
+    // ambient-only and declares window.api's shape, not this module's) —
+    // must stay in lockstep with AiKeyName/AiProviderId there and with
+    // AIProviderId/AiKeyName in src/main/ai/types.ts + ai-keys.ts (M20 widened
+    // both from the original anthropic/openai-only pair).
+    save: (
+      name:
+        | 'DEEPGRAM_API_KEY'
+        | 'ANTHROPIC_API_KEY'
+        | 'OPENAI_API_KEY'
+        | 'GROQ_API_KEY'
+        | 'OPENROUTER_API_KEY'
+        | 'GOOGLE_AI_API_KEY'
+        | 'NVIDIA_API_KEY'
+        | 'CEREBRAS_API_KEY'
+        | 'MISTRAL_API_KEY',
+      value: string
+    ) => ipcRenderer.invoke('aiKeys:save', name, value),
+    clear: (
+      name:
+        | 'DEEPGRAM_API_KEY'
+        | 'ANTHROPIC_API_KEY'
+        | 'OPENAI_API_KEY'
+        | 'GROQ_API_KEY'
+        | 'OPENROUTER_API_KEY'
+        | 'GOOGLE_AI_API_KEY'
+        | 'NVIDIA_API_KEY'
+        | 'CEREBRAS_API_KEY'
+        | 'MISTRAL_API_KEY'
+    ) => ipcRenderer.invoke('aiKeys:clear', name),
+    validate: (
+      providerId:
+        | 'anthropic'
+        | 'openai'
+        | 'groq'
+        | 'openrouter'
+        | 'google'
+        | 'nvidia'
+        | 'cerebras'
+        | 'mistral',
+      value: string
+    ) => ipcRenderer.invoke('aiKeys:validate', providerId, value)
+  },
+  aiCatalog: {
+    // Bundled catalog - instant, no network, used for the picker's first paint.
+    list: () => ipcRenderer.invoke('aiCatalog:list'),
+    // Cross-checked against each configured provider's live /models endpoint.
+    resolve: (forceRefresh?: boolean) => ipcRenderer.invoke('aiCatalog:resolve', forceRefresh === true),
+    // V1 chain-editing scope: picks one primary model, main derives the full
+    // fallback chain from the bundled default ordering (see catalog-ipc.ts).
+    assignPrimaryModel: (purpose: string, catalogId: string) =>
+      ipcRenderer.invoke('settings:assignPrimaryModel', purpose, catalogId)
+  },
+  aiFallback: {
+    recentEvents: () => ipcRenderer.invoke('aiFallback:recentEvents')
   },
   virtualmic: {
     // App-managed noise cancellation: detect + start/stop the denoiser helper.

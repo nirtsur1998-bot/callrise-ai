@@ -28,6 +28,13 @@ import {
   type CapturePolicyValue,
   type AppOverride
 } from './detection/policy'
+import type { AIProviderId } from './ai/types'
+import {
+  DEFAULT_MODEL_ASSIGNMENTS,
+  sanitizeModelAssignments,
+  mergeModelAssignments,
+  type ModelAssignments
+} from './ai/model-assignments'
 
 /**
  * Objection Library mining — reads call transcripts to suggest reusable
@@ -295,20 +302,41 @@ export interface AppSettings {
   /** Speaker identification (M19 Task 2) - auto-name-resolution cascade +
    *  two separate privacy-sensitive opt-ins. See SpeakerIdSettings. */
   speakerId: SpeakerIdSettings
-  /** Which text-AI provider coaching/summaries/tasks/etc. use - see
-   *  src/main/ai/. Defaults to 'anthropic' (unchanged behavior for every
-   *  existing install). The actual API key lives separately, encrypted, in
+  /** Which text-AI provider coaching/summaries/tasks/etc. use when a
+   *  purpose has no aiModelAssignments chain configured - see src/main/ai/.
+   *  Defaults to 'anthropic' (unchanged behavior for every existing
+   *  install). The actual API key lives separately, encrypted, in
    *  ai-keys.ts - this is just which one is active, not a secret. */
   aiProvider: AIProviderId
+  /** M20 - ordered per-job (AIPurpose) model-fallback chains, catalog-entry
+   *  IDs. Empty chain for a purpose means "no explicit assignment" -
+   *  completeWithFallback()'s resolution rule falls back to `aiProvider`
+   *  above (if configured) before ever reaching the bundled default catalog
+   *  chain, so an existing M16 install sees zero behavior change unless it
+   *  opts into the new Settings → Model Assignment page. See
+   *  ai/model-assignments.ts and ai/complete-with-fallback.ts. */
+  aiModelAssignments: ModelAssignments
 }
 
-/** Kept as a plain local union (not imported from src/main/ai/) so this
- *  settings module never depends on the AI layer - only the AI layer reads
- *  this setting, never the other way around. */
-export type AIProviderId = 'anthropic' | 'openai'
+// AIProviderId is re-exported here (not re-declared) so existing importers
+// of app-settings.ts's AIProviderId keep working unchanged - the type now
+// lives in src/main/ai/types.ts, the single source of truth (M20; this
+// module used to hand-duplicate a 2-value union here, which was already a
+// silent-drift risk at 2 providers and would have been worse at 8).
+export type { AIProviderId } from './ai/types'
 
 function sanitizeAIProvider(value: unknown): AIProviderId {
-  return value === 'openai' ? 'openai' : 'anthropic'
+  const valid: AIProviderId[] = [
+    'anthropic',
+    'openai',
+    'groq',
+    'openrouter',
+    'google',
+    'nvidia',
+    'cerebras',
+    'mistral'
+  ]
+  return valid.includes(value as AIProviderId) ? (value as AIProviderId) : 'anthropic'
 }
 
 const EPOCH = new Date(0).toISOString()
@@ -326,7 +354,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   objectionMining: EMPTY_OBJECTION_MINING,
   detection: EMPTY_DETECTION_SETTINGS,
   speakerId: EMPTY_SPEAKER_ID,
-  aiProvider: 'anthropic'
+  aiProvider: 'anthropic',
+  aiModelAssignments: DEFAULT_MODEL_ASSIGNMENTS
 }
 
 function settingsPath(): string {
@@ -392,7 +421,8 @@ export function loadAppSettings(): AppSettings {
       objectionMining: sanitizeObjectionMining(parsed.objectionMining),
       detection: sanitizeDetectionSettings(parsed.detection),
       speakerId: sanitizeSpeakerId(parsed.speakerId),
-      aiProvider: sanitizeAIProvider(parsed.aiProvider)
+      aiProvider: sanitizeAIProvider(parsed.aiProvider),
+      aiModelAssignments: sanitizeModelAssignments(parsed.aiModelAssignments)
     }
   } catch {
     return {
@@ -401,7 +431,8 @@ export function loadAppSettings(): AppSettings {
       crm: { ...EMPTY_CRM_SETTINGS },
       objectionMining: { ...EMPTY_OBJECTION_MINING },
       detection: { ...EMPTY_DETECTION_SETTINGS },
-      speakerId: { ...EMPTY_SPEAKER_ID }
+      speakerId: { ...EMPTY_SPEAKER_ID },
+      aiModelAssignments: { ...DEFAULT_MODEL_ASSIGNMENTS }
     }
   }
 }
@@ -434,7 +465,8 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
     objectionMining: mergeObjectionMining(current.objectionMining, p.objectionMining),
     detection: mergeDetectionSettings(current.detection, p.detection),
     speakerId: mergeSpeakerId(current.speakerId, p.speakerId),
-    aiProvider: 'aiProvider' in p ? sanitizeAIProvider(p.aiProvider) : current.aiProvider
+    aiProvider: 'aiProvider' in p ? sanitizeAIProvider(p.aiProvider) : current.aiProvider,
+    aiModelAssignments: mergeModelAssignments(current.aiModelAssignments, p.aiModelAssignments)
   }
 }
 

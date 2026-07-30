@@ -88,7 +88,15 @@ export function SpeakerTranscript({
   identities,
   onRename
 }: SpeakerTranscriptProps): React.JSX.Element {
-  const [editingKey, setEditingKey] = useState<string | null>(null)
+  // Keyed by segment INDEX, not speakerKey(seg) — speakerKey is shared by
+  // every turn a speaker takes (mergeSegments only merges consecutive runs),
+  // so keying open/closed state by it would open an <input autoFocus> on
+  // EVERY segment from that speaker at once the moment any one of them is
+  // clicked, each stealing focus from the last and immediately blurring
+  // (committing/closing) the others. The index is unique per segment; the
+  // identity actually being renamed is still resolved via speakerKey(seg) in
+  // commitEdit below.
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [editValue, setEditValue] = useState('')
   // Gap markers belong to nobody, so they must not inflate the speaker count —
   // that count decides between the calm rep/buyer treatment and the multi-party
@@ -158,17 +166,17 @@ export function SpeakerTranscript({
         const key = speakerKey(seg)
         const identity = speakerIdentityFor(seg.speaker, identities, seg.channel)
         const label = speakerLabel(seg.speaker, repSpeaker, speakerCount, identities, seg.channel)
-        const isEditing = editingKey === key
+        const isEditing = editingIndex === index
 
         const startEdit = (): void => {
           if (!onRename) return
           setEditValue(identity?.name ?? '')
-          setEditingKey(key)
+          setEditingIndex(index)
         }
         const commitEdit = (): void => {
           const trimmed = editValue.trim()
           if (trimmed && onRename) onRename(key, trimmed)
-          setEditingKey(null)
+          setEditingIndex(null)
         }
 
         return (
@@ -183,7 +191,7 @@ export function SpeakerTranscript({
                   onBlur={commitEdit}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') commitEdit()
-                    if (e.key === 'Escape') setEditingKey(null)
+                    if (e.key === 'Escape') setEditingIndex(null)
                   }}
                   className="rounded border border-line bg-canvas px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-ink outline-none"
                 />

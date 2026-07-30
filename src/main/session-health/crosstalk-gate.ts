@@ -29,9 +29,19 @@
 import { channelRms } from './channel-test'
 
 export const CROSSTALK_TUNING = {
-  /** How much history to keep, in ms — long enough to cover a Results
-   *  message's window with margin, short enough to stay cheap. */
-  windowMs: 5_000,
+  /** How much history to keep, in ms. MUST stay comfortably above
+   *  HEALTH_TUNING.shedLagSec (5s) and CONNECT_TIMEOUT_MS (8s): the window a
+   *  Results message needs (transcription.ts's windowStartMs/windowEndMs) is
+   *  reconstructed from the audio's REAL capture time, which trails "now" by
+   *  roughly the current lag — so a ring buffer no wider than the lag the
+   *  pipeline already tolerates as merely "warn" would have evicted that
+   *  exact window before it's ever queried, silently collapsing every
+   *  disagreesWithClaim() check to false (via the no-data branch) with no
+   *  signal that detection went quiet. 15s matches resetLagSec — beyond that
+   *  point the session gets torn down and reconnected anyway, so there's
+   *  nothing further to protect. Cheap to keep this large: the buffer only
+   *  holds per-frame RMS floats, not raw audio. */
+  windowMs: 15_000,
   /** Below this RMS, a channel counts as silent for dominance purposes
    *  (matches queue.ts's silenceRms — the same "is this channel actually
    *  carrying anything" threshold used elsewhere in this pipeline). */

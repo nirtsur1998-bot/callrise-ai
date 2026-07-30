@@ -139,6 +139,8 @@ import { disposeOverlay } from './detection-overlay'
 import { disposeTray } from './detection-tray'
 import { registerCoachPdf } from './coach-pdf'
 import { registerAiKeys, loadStoredAiKeysIntoEnv } from './ai-keys'
+import { registerFallbackLog } from './ai/fallback-log'
+import { registerModelCatalog } from './ai/catalog-ipc'
 import { registerUpdater } from './updater'
 import { buildDiagnoseReport, wantsDiagnose } from './diagnose'
 import { registerPrepBrief } from './prep-brief-ipc'
@@ -256,6 +258,8 @@ app.whenReady().then(async () => {
   // Settings-entered key (if any) needs to be in process.env first.
   await loadStoredAiKeysIntoEnv()
   registerAiKeys()
+  registerModelCatalog()
+  registerFallbackLog()
 
   // Any consent record still on disk belongs to a call that is already over —
   // this process has not started one. A crash mid-call must never leave behind

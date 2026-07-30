@@ -116,15 +116,14 @@ function dimensionScoreColor(score: number): string {
 }
 
 // A tiny local stand-in for coaching/meta.ts's speakerLabel() — main can't
-// import renderer code. Deliberately simpler: that helper also takes an
-// optional speakerCount to disambiguate 3+-party calls; this file doesn't
-// have that count handy, so any non-rep speaker is labeled "Buyer" (falling
-// back to generic "Speaker N" only when the rep speaker itself is unknown).
-// M19 Task 2: resolved real names, keyed by speakerIdentityKey() (must
-// byte-match main/calls-fs.ts's version — this file can't import it directly
-// without pulling calls-fs.ts's whole surface into a PDF-rendering module,
-// so the tiny key format is duplicated, same as this file already duplicates
-// speakerLabel itself from the renderer's meta.ts).
+// import renderer code. M19 Task 2: resolved real names, keyed by
+// speakerIdentityKey() (must byte-match main/calls-fs.ts's version — this
+// file can't import it directly without pulling calls-fs.ts's whole surface
+// into a PDF-rendering module, so the tiny key format is duplicated, same as
+// this file already duplicates speakerLabel itself from the renderer's
+// meta.ts — including its speakerCount>2 disambiguation, since call.speakerCount
+// is already sitting right on the same `call` object registerCoachPdf reads
+// identities/segments from below; there was never a reason to drop it here.
 function pdfSpeakerKey(speaker: number, channel?: number): string {
   return channel === undefined ? `mono/spk${speaker}` : `ch${channel}/spk${speaker}`
 }
@@ -133,12 +132,14 @@ function speakerLabel(
   speaker: number,
   repSpeaker: number | null,
   identities?: Record<string, { name: string }>,
-  channel?: number
+  channel?: number,
+  speakerCount?: number
 ): string {
   const identity = identities?.[pdfSpeakerKey(speaker, channel)]
   if (identity?.name) return identity.name
   if (repSpeaker === null) return `Speaker ${speaker + 1}`
   if (speaker === repSpeaker) return 'You'
+  if (speakerCount !== undefined && speakerCount > 2) return `Speaker ${speaker + 1}`
   return 'Buyer'
 }
 
@@ -146,14 +147,16 @@ function evidenceHtml(
   ev: ReportEvidence | undefined,
   repSpeaker: number | null,
   identities?: Record<string, { name: string }>,
-  multichannel?: boolean
+  multichannel?: boolean,
+  speakerCount?: number
 ): string {
   if (!ev || typeof ev.quote !== 'string' || !ev.quote.trim()) return ''
   const speaker = typeof ev.speaker === 'number' ? ev.speaker : null
   // Evidence doesn't carry channel directly — in multichannel mode speaker
   // IS the channel (see transcription.ts), so it doubles as one.
   const channel = multichannel && speaker !== null ? speaker : undefined
-  const label = speaker === null ? 'Speaker' : speakerLabel(speaker, repSpeaker, identities, channel)
+  const label =
+    speaker === null ? 'Speaker' : speakerLabel(speaker, repSpeaker, identities, channel, speakerCount)
   return `
       <div class="evidence">&ldquo;${escapeHtml(ev.quote)}&rdquo; <span class="ev-speaker">— ${escapeHtml(label)}</span></div>`
 }
@@ -203,7 +206,8 @@ function buildReportHtml(
   createdAt: string,
   report: ReportLike,
   identities?: Record<string, { name: string }>,
-  multichannel?: boolean
+  multichannel?: boolean,
+  speakerCount?: number
 ): string {
   const allDimensions = Array.isArray(report.dimensions)
     ? (report.dimensions as ReportDimension[])
@@ -227,7 +231,7 @@ function buildReportHtml(
           <span class="dim-score" style="color:${dimensionScoreColor(score)}">${score}/5</span>
         </div>
         <p class="dim-comment">${escapeHtml(comment)}</p>
-        ${evidenceHtml(d.evidence, repSpeaker, identities, multichannel)}
+        ${evidenceHtml(d.evidence, repSpeaker, identities, multichannel, speakerCount)}
       </div>`
     })
     .join('')
@@ -242,7 +246,7 @@ function buildReportHtml(
         <span class="tag">${imp.kind === 'strategic' ? 'Strategic' : 'Quick fix'}</span>
         <h3>${escapeHtml(title)}</h3>
         <p>${escapeHtml(detail)}</p>
-        ${evidenceHtml(imp.evidence, repSpeaker, identities, multichannel)}
+        ${evidenceHtml(imp.evidence, repSpeaker, identities, multichannel, speakerCount)}
       </div>`
         })
         .join('')
@@ -367,7 +371,8 @@ export function registerCoachPdf(): void {
           call.createdAt,
           call.coaching,
           call.speakerIdentities,
-          call.segments.some((s) => s.channel !== undefined)
+          call.segments.some((s) => s.channel !== undefined),
+          call.speakerCount
         )
         await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
         const pdf = await win.webContents.printToPDF({})
