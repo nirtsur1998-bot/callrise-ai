@@ -13,6 +13,17 @@ files:
   - '!docs/**'
   - '!supabase/**'
   - '!.claude/**'
+  # Stray logs and archives must never be packaged. Beyond bloat, a file that
+  # is still being WRITTEN while electron-builder streams the asar corrupts it:
+  # the header records the size seen at stat time, the file keeps growing, and
+  # every offset after it shifts — so package.json comes back as some other
+  # file's bytes and the packaged app dies on startup with a silent exit 1.
+  # Redirecting a build log into the repo root is enough to trigger it.
+  - '!**/*.log'
+  - '!**/*.zip'
+  - '!**/*.7z'
+  - '!dist{,/**}'
+  - '!out/**/*.map'
 asarUnpack:
   - resources/**
   # mac-audio-activity/win-audio-sessions native addons - a .node binary can't
