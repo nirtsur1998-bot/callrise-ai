@@ -5,7 +5,12 @@ import type { CallSegment, SpeakerRole } from '@renderer/features/calls/types'
  *  so a turn carries who-said-it from the moment it exists. */
 export function groupWords(
   words: Array<{ speaker: number; text: string }>,
-  meta?: { epoch?: number; role?: (speaker: number) => SpeakerRole; confidence?: number }
+  meta?: {
+    epoch?: number
+    role?: (speaker: number) => SpeakerRole
+    confidence?: number
+    unlabelled?: boolean
+  }
 ): CallSegment[] {
   const out: CallSegment[] = []
   for (const word of words) {
@@ -19,7 +24,8 @@ export function groupWords(
         text,
         ...(meta?.epoch !== undefined ? { epoch: meta.epoch } : {}),
         ...(meta?.role ? { role: meta.role(word.speaker) } : {}),
-        ...(meta?.confidence !== undefined ? { confidence: meta.confidence } : {})
+        ...(meta?.confidence !== undefined ? { confidence: meta.confidence } : {}),
+        ...(meta?.unlabelled ? { unlabelled: true } : {})
       })
   }
   return out

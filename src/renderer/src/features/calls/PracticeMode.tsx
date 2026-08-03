@@ -30,7 +30,10 @@ export function PracticeMode({ call, onExit }: PracticeModeProps): React.JSX.Ele
   const [revealed, setRevealed] = useState(false)
 
   const turn = total > 0 ? turns[Math.min(index, total - 1)] : null
-  const isRep = turn !== null && turn.speaker === repSpeaker
+  // Prefer the turn's own recorded attribution over the whole-call number,
+  // matching SpeakerTranscript. A raw number only means something inside one
+  // speaker-label epoch.
+  const isRep = turn !== null && (turn.role ? turn.role === 'rep' : turn.speaker === repSpeaker)
 
   const goTo = (next: number): void => {
     setIndex(Math.max(0, Math.min(total - 1, next)))
@@ -64,7 +67,7 @@ export function PracticeMode({ call, onExit }: PracticeModeProps): React.JSX.Ele
                 isRep ? 'text-accent' : 'text-muted'
               )}
             >
-              {speakerLabel(turn.speaker, repSpeaker, speakerCount)}
+              {speakerLabel(turn.speaker, repSpeaker, speakerCount, turn.role)}
             </span>
             {isRep && !revealed ? (
               <>

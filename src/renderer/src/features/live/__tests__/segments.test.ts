@@ -33,6 +33,25 @@ describe('groupWords', () => {
     ])
   })
 
+  it('marks turns Deepgram never labelled, so they are never back-filled', () => {
+    // 'unknown' has two causes: the rep isn't identified yet (the number is
+    // real, so back-filling is right), or Deepgram returned no labels at all
+    // (the number is a fabricated 0). Only the second is flagged, because
+    // naming the rep 0 would otherwise assert every such turn as the rep.
+    const out = groupWords([w(0, 'unlabelled words')], {
+      epoch: 3,
+      role: (): SpeakerRole => 'unknown',
+      unlabelled: true
+    })
+    expect(out[0].unlabelled).toBe(true)
+    expect(out[0].role).toBe('unknown')
+  })
+
+  it('leaves the flag off when the labels were real', () => {
+    const out = groupWords([w(0, 'labelled')], { epoch: 3, role: (): SpeakerRole => 'unknown' })
+    expect(out[0].unlabelled).toBeUndefined()
+  })
+
   it('records unknown attribution honestly rather than defaulting to the rep', () => {
     const out = groupWords([w(0, 'who said this')], {
       epoch: 1,

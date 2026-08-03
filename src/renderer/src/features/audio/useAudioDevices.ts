@@ -4,6 +4,7 @@ import {
   getSelectedMicLabel,
   hasExplicitMicChoice,
   setSelectedMic,
+  subscribeSelectedMic,
   resolveMic,
   type MicResolution
 } from './devices'
@@ -101,6 +102,11 @@ export function useAudioDevices(preferCallRiseMic = false): UseAudioDevices {
     navigator.mediaDevices.addEventListener?.('devicechange', handler)
     return () => navigator.mediaDevices.removeEventListener?.('devicechange', handler)
   }, [refresh])
+
+  // Keep every mounted instance in step. Whichever one's enumeration resolves
+  // first performs the repair; without this the others keep showing the old
+  // device while a different one is actually being recorded.
+  useEffect(() => subscribeSelectedMic((id) => setSel(id)), [])
 
   // A driver (re)install changes the device list, so re-resolve when the
   // caller starts preferring the denoising mic.

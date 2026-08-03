@@ -18,6 +18,14 @@ export interface CallSegment {
   role?: SpeakerRole
   /** Lowest word confidence Deepgram reported for this turn, when available. */
   confidence?: number
+  /** True when Deepgram returned NO speaker label for these words, so
+   *  `speaker` is a fabricated 0 rather than a real diarization answer.
+   *  `role` is 'unknown' for two very different reasons — "the rep is not
+   *  identified yet" (back-fillable, the number is real) and this one (never
+   *  back-fillable, the number means nothing). Without the distinction, naming
+   *  the rep would assert every label-less turn as the rep, since 0 is usually
+   *  the rep's own number. */
+  unlabelled?: boolean
 }
 
 export interface Summary {
@@ -286,6 +294,7 @@ function sanitizeSegments(value: unknown): CallSegment[] {
     const epochRaw = (item as { epoch?: unknown }).epoch
     const roleRaw = (item as { role?: unknown }).role
     const confRaw = (item as { confidence?: unknown }).confidence
+    const unlabelledRaw = (item as { unlabelled?: unknown }).unlabelled
     out.push({
       speaker,
       text,
@@ -295,7 +304,8 @@ function sanitizeSegments(value: unknown): CallSegment[] {
         : {}),
       ...(typeof confRaw === 'number' && Number.isFinite(confRaw)
         ? { confidence: Math.min(1, Math.max(0, confRaw)) }
-        : {})
+        : {}),
+      ...(unlabelledRaw === true ? { unlabelled: true as const } : {})
     })
   }
   return out

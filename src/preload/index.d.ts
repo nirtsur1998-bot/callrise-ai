@@ -97,6 +97,14 @@ export interface CallSegment {
   role?: SpeakerRole
   /** Lowest word confidence Deepgram reported for this turn, when available. */
   confidence?: number
+  /** True when Deepgram returned NO speaker label for these words, so
+   *  `speaker` is a fabricated 0 rather than a real diarization answer.
+   *  `role` is 'unknown' for two very different reasons — "the rep is not
+   *  identified yet" (back-fillable, the number is real) and this one (never
+   *  back-fillable, the number means nothing). Without the distinction, naming
+   *  the rep would assert every label-less turn as the rep, since 0 is usually
+   *  the rep's own number. */
+  unlabelled?: boolean
 }
 
 export interface Summary {

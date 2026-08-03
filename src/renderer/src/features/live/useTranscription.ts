@@ -135,6 +135,10 @@ export function useTranscription(
     let changed = false
     const next = segmentsRef.current.map((s) => {
       if (s.epoch !== epoch || s.role !== 'unknown') return s
+      // Unknown for the OTHER reason: Deepgram never labelled these words, so
+      // s.speaker is a fabricated 0. Naming the rep 0 (the usual answer) would
+      // silently assert every such turn as the rep. Leave them unattributed.
+      if (s.unlabelled) return s
       changed = true
       return { ...s, role: s.speaker === speaker ? ('rep' as const) : ('other' as const) }
     })
@@ -210,7 +214,10 @@ export function useTranscription(
           epoch,
           role: (speaker: number): SpeakerRole =>
             resolveRole(speaker, epoch, payload.speakerCertain),
-          ...(payload.minConfidence !== null ? { confidence: payload.minConfidence } : {})
+          ...(payload.minConfidence !== null ? { confidence: payload.minConfidence } : {}),
+          // Deepgram gave no speaker labels, so this turn's number is a
+          // fabricated 0 and must never be back-filled from it later.
+          unlabelled: !payload.speakerCertain
         }
         let runs: CallSegment[] = []
         if (payload.words.length > 0) {

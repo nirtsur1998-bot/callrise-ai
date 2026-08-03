@@ -49,6 +49,21 @@ export function getSelectedMicLabel(): string {
   }
 }
 
+// The mic hook is mounted more than once at a time (the Home card and the
+// Copilot panel). localStorage is shared but React state is not, so a
+// self-heal in one instance would leave the other dropdown displaying a device
+// that is no longer the one being recorded. These let every live instance hear
+// about a change, whoever made it.
+type MicListener = (id: string) => void
+const micListeners = new Set<MicListener>()
+
+export function subscribeSelectedMic(fn: MicListener): () => void {
+  micListeners.add(fn)
+  return () => {
+    micListeners.delete(fn)
+  }
+}
+
 export function setSelectedMic(id: string, label = '', explicit?: boolean): void {
   try {
     window.localStorage.setItem(MIC_KEY, id)
@@ -58,6 +73,14 @@ export function setSelectedMic(id: string, label = '', explicit?: boolean): void
     if (explicit) window.localStorage.setItem(MIC_CHOSEN_KEY, '1')
   } catch {
     /* best-effort: a non-critical preference */
+  }
+  // Notify AFTER the write, and never let a listener's failure break the save.
+  for (const fn of micListeners) {
+    try {
+      fn(id)
+    } catch {
+      /* a subscriber blowing up must not affect the others */
+    }
   }
 }
 

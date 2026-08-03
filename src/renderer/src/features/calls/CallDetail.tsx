@@ -291,10 +291,19 @@ export function CallDetail({
 
   const copyTranscript = useCallback(() => {
     if (!call) return
+    // Must pass the same arguments the on-screen transcript does, or the copied
+    // text labels speakers differently from what the user is reading — the
+    // recorded per-turn role now wins over the whole-call comparison.
+    const speakerCount = new Set(call.segments.map((s) => s.speaker)).size
     const text = call.segments
       .map(
         (seg) =>
-          `${speakerLabel(seg.speaker, call.coaching?.metrics.repSpeaker ?? null)}: ${seg.text}`
+          `${speakerLabel(
+            seg.speaker,
+            call.coaching?.metrics.repSpeaker ?? null,
+            speakerCount,
+            seg.role
+          )}: ${seg.text}`
       )
       .join('\n')
     void navigator.clipboard.writeText(text).then(() => {

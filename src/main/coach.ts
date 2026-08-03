@@ -10,6 +10,7 @@ import type {
   CoachImprovement,
   CoachMetrics
 } from './calls-fs'
+import { isRepSegment, sameTurn, repSpeakerFromSegments } from './coach-attribution'
 import { listEntries } from './knowledge-fs'
 import { assembleKnowledgeContext } from './knowledge-context'
 import { loadAppSettings } from './app-settings'
@@ -234,13 +235,17 @@ function makeVerifier(
   repSpeaker: number | null
 ): (quote: unknown, speaker: unknown) => CoachEvidence | undefined {
   // Merge consecutive same-speaker segments into turns (same merge logic as computeMetrics).
-  const turns: { speaker: number; text: string }[] = []
+  const turns: { seg: CallSegment; speaker: number; text: string }[] = []
   for (const s of segments) {
     const last = turns[turns.length - 1]
-    if (last && last.speaker === s.speaker) last.text += ` ${s.text}`
-    else turns.push({ speaker: s.speaker, text: s.text })
+    if (last && sameTurn(last.seg, s)) last.text += ` ${s.text}`
+    else turns.push({ seg: s, speaker: s.speaker, text: s.text })
   }
-  const entries = turns.map((t) => ({ speaker: t.speaker, text: normalize(t.text) }))
+  const entries = turns.map((t) => ({
+    seg: t.seg,
+    speaker: t.speaker,
+    text: normalize(t.text)
+  }))
 
   return (quote, speaker) => {
     const q = typeof quote === 'string' ? quote.trim() : ''
@@ -252,7 +257,10 @@ function makeVerifier(
     // the quote AND that speaker is the rep being coached — evidence for
     // coaching the rep can never be the buyer's own words.
     const match = entries.find((e) => e.speaker === sp && e.text.includes(nq))
-    const verified = !!match && repSpeaker !== null && sp === repSpeaker
+    // The matched TURN must itself be the rep's — checking only that the
+    // claimed number equals repSpeaker lets a buyer turn from another epoch
+    // (where that number means someone else) pass as rep evidence.
+    const verified = !!match && isRepSegment(match.seg, repSpeaker)
     return { quote: q.slice(0, 500), speaker: match ? match.speaker : sp, verified }
   }
 }
@@ -300,21 +308,24 @@ function computeMetrics(
   const repValid = repIdx >= 0
 
   // Merge consecutive same-speaker segments into turns (for monologue length).
-  const turns: { speaker: number; words: number }[] = []
+  const turns: { seg: CallSegment; speaker: number; words: number }[] = []
   for (const s of segments) {
     const words = countWords(s.text)
     const last = turns[turns.length - 1]
-    if (last && last.speaker === s.speaker) last.words += words
-    else turns.push({ speaker: s.speaker, words })
+    // Same rule as the verifier: a turn never spans a speaker-label epoch.
+    if (last && sameTurn(last.seg, s)) last.words += words
+    else turns.push({ seg: s, speaker: s.speaker, words })
   }
 
   const totalWords = segments.reduce((sum, s) => sum + countWords(s.text), 0)
   const repWords = repValid
-    ? segments.filter((s) => s.speaker === repIdx).reduce((sum, s) => sum + countWords(s.text), 0)
+    ? segments
+        .filter((s) => isRepSegment(s, repIdx))
+        .reduce((sum, s) => sum + countWords(s.text), 0)
     : 0
   const talkRatio = repValid && totalWords > 0 ? repWords / totalWords : null
   const longestMonologueWords = repValid
-    ? turns.filter((t) => t.speaker === repIdx).reduce((mx, t) => Math.max(mx, t.words), 0)
+    ? turns.filter((t) => isRepSegment(t.seg, repIdx)).reduce((mx, t) => Math.max(mx, t.words), 0)
     : 0
 
   const minutes = durationMs > 0 ? durationMs / 60000 : null
@@ -324,7 +335,7 @@ function computeMetrics(
       ? Math.round((longestMonologueWords / wordsPerMinute) * 10) / 10
       : null
 
-  const questionSource = repValid ? segments.filter((s) => s.speaker === repIdx) : segments
+  const questionSource = repValid ? segments.filter((s) => isRepSegment(s, repIdx)) : segments
   const questionCount = (
     questionSource
       .map((s) => s.text)
@@ -350,17 +361,6 @@ function computeMetrics(
 
 function str(value: unknown, max = 1500): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : ''
-}
-
-/** The rep's speaker id as recorded DURING the call, if the transcript carries
- *  attribution (M21). Returns null for pre-M21 calls, or if the recorded roles
- *  disagree about which id is the rep — which can legitimately happen across a
- *  reconnect, where the same id means different people in different epochs.
- *  Ambiguity is reported as "don't know" rather than resolved by guessing. */
-function repSpeakerFromSegments(segments: CallSegment[]): number | null {
-  const repIds = new Set<number>()
-  for (const s of segments) if (s.role === 'rep') repIds.add(s.speaker)
-  return repIds.size === 1 ? [...repIds][0] : null
 }
 
 function modelRepSpeaker(raw: Record<string, unknown>): number | null {
