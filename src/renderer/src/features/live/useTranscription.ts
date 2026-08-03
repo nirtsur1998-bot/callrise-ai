@@ -313,6 +313,13 @@ export function useTranscription(
     latencySamples.current = []
     savePendingRef.current = false
     sessionIdRef.current = null
+    // Per-CALL state, and this hook instance outlives a single call (LiveView
+    // stays mounted between them). Leaving it latched made the next mic-only
+    // call report buyerCaptureUsed:true, which re-armed the retention strip and
+    // permanently deleted its speaker-1 turns on save — the exact data loss
+    // this flag exists to prevent.
+    buyerCaptureUsedRef.current = false
+    repByEpochRef.current = new Map()
     setPhase('requesting')
 
     const access = await window.api.transcription.ensureMicAccess()

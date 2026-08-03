@@ -12,7 +12,14 @@ import { describe, it, expect } from 'vitest'
 import { mkdtemp, rm, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { reconcileStore, toServerIso, toServerMs, ts, type CloudRow } from '../backup-core'
+import {
+  reconcileStore,
+  toServerIso,
+  toServerMs,
+  toDeviceIso,
+  ts,
+  type CloudRow
+} from '../backup-core'
 
 const HOUR = 3_600_000
 const SKEW_48H = 48 * HOUR
@@ -69,6 +76,15 @@ describe('toServerMs / toServerIso', () => {
     expect(toServerMs(iso(T + SKEW_48H), SKEW_48H)).toBe(T)
     // Device runs 48h slow.
     expect(toServerMs(iso(T - SKEW_48H), -SKEW_48H)).toBe(T)
+  })
+
+  it('round-trips: server -> device -> server is identity', () => {
+    // The two conversions are inverses. If they ever drift apart, timestamps
+    // get corrected twice somewhere and ordering silently rots.
+    const serverIso = iso(T)
+    const onDevice = toDeviceIso(serverIso, SKEW_48H)
+    expect(ts(onDevice)).toBe(T + SKEW_48H)
+    expect(toServerMs(onDevice, SKEW_48H)).toBe(T)
   })
 
   it('is a no-op when the clock is correct', () => {
@@ -157,6 +173,55 @@ describe('reconcileStore — correct clock (regression guard)', () => {
     const { imported, dir } = await run([cloudRow('fresh', T - HOUR)], [], SKEW_48H)
     await rm(dir, { recursive: true, force: true })
     expect(imported).toEqual(['fresh'])
+  })
+})
+
+describe('payload re-stamping (the onlyIfNewer veto)', () => {
+  it('hands the importer a payload stamped on THIS device’s clock', async () => {
+    // The store importers re-check payload.updatedAt against the on-disk
+    // updatedAt themselves, as plain device-vs-device times. If the payload
+    // still carried server time (or the pushing device's clock), that
+    // un-corrected re-check would silently veto the decision made here and the
+    // 48h-fast restore would still fail.
+    const dir = await mkdtemp(join(tmpdir(), 'callrise-skew-'))
+    const seen: string[] = []
+    await reconcileStore<Rec>(
+      dir,
+      [cloudRow('a', T - HOUR)],
+      new Map([['a', { id: 'a', updatedAt: iso(T - 2 * HOUR + SKEW_48H) }]]),
+      async (_d, payload) => {
+        seen.push((payload as Rec).updatedAt)
+        return payload as Rec
+      },
+      undefined,
+      SKEW_48H
+    )
+    await rm(dir, { recursive: true, force: true })
+
+    expect(seen).toHaveLength(1)
+    // Server instant T-1h expressed on a clock running 48h fast.
+    expect(ts(seen[0])).toBe(T - HOUR + SKEW_48H)
+    // And critically: newer than the local record's own stamp, so the
+    // importer's own guard agrees rather than overruling.
+    expect(ts(seen[0])).toBeGreaterThan(ts(iso(T - 2 * HOUR + SKEW_48H)))
+  })
+
+  it('re-stamps cloud-only records too, so a foreign clock never lands on disk', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'callrise-skew-'))
+    const seen: string[] = []
+    await reconcileStore<Rec>(
+      dir,
+      [cloudRow('fresh', T - HOUR)],
+      new Map(),
+      async (_d, payload) => {
+        seen.push((payload as Rec).updatedAt)
+        return payload as Rec
+      },
+      undefined,
+      SKEW_48H
+    )
+    await rm(dir, { recursive: true, force: true })
+    expect(ts(seen[0])).toBe(T - HOUR + SKEW_48H)
   })
 })
 

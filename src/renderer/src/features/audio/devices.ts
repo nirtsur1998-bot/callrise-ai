@@ -13,6 +13,11 @@ const MIC_KEY = 'salesos.audio.micDeviceId'
 // DIFFERENT microphone and nothing anywhere says so. Keeping the label lets a
 // stale id be re-resolved to the same physical device instead (BUG-005).
 const MIC_LABEL_KEY = 'salesos.audio.micDeviceLabel'
+// Marks that the user has DELIBERATELY chosen something — including "System
+// default", which is stored as an empty id and is otherwise byte-for-byte
+// identical to "never chosen". Without this, auto-selecting the denoising mic
+// would silently override an explicit System-default choice.
+const MIC_CHOSEN_KEY = 'salesos.audio.micChosen'
 
 /** Names the noise-cancelling virtual mic goes by. The macOS device kept its
  *  pre-rebrand name ("Sales OS Microphone") on purpose so existing setups
@@ -44,13 +49,25 @@ export function getSelectedMicLabel(): string {
   }
 }
 
-export function setSelectedMic(id: string, label = ''): void {
+export function setSelectedMic(id: string, label = '', explicit?: boolean): void {
   try {
     window.localStorage.setItem(MIC_KEY, id)
     if (label) window.localStorage.setItem(MIC_LABEL_KEY, label)
     else window.localStorage.removeItem(MIC_LABEL_KEY)
+    // Only a real user action sets this; the self-heal writes leave it alone.
+    if (explicit) window.localStorage.setItem(MIC_CHOSEN_KEY, '1')
   } catch {
     /* best-effort: a non-critical preference */
+  }
+}
+
+/** Has the user ever deliberately picked a microphone (including "System
+ *  default")? Auto-selection must never override that. */
+export function hasExplicitMicChoice(): boolean {
+  try {
+    return window.localStorage.getItem(MIC_CHOSEN_KEY) === '1'
+  } catch {
+    return false
   }
 }
 
@@ -87,7 +104,7 @@ export type MicResolution =
  * overrides a deliberate pick.
  */
 export function resolveMic(
-  saved: { deviceId: string; label: string },
+  saved: { deviceId: string; label: string; explicit?: boolean },
   available: MicChoice[],
   opts?: { preferCallRise?: boolean }
 ): MicResolution {
@@ -103,8 +120,10 @@ export function resolveMic(
   }
 
   // Only auto-pick when the user has not chosen anything. Auto-selecting over
-  // a deliberate choice would be its own silent-wrong-mic bug.
-  if (!saved.deviceId && opts?.preferCallRise) {
+  // a deliberate choice would be its own silent-wrong-mic bug — and "System
+  // default" IS a deliberate choice even though it stores an empty id, which is
+  // why an explicit-choice marker is needed rather than just testing the id.
+  if (!saved.deviceId && !saved.explicit && opts?.preferCallRise) {
     const callrise = available.find((d) => isCallRiseMic(d.label))
     if (callrise) {
       return { status: 'auto-callrise', deviceId: callrise.deviceId, label: callrise.label }

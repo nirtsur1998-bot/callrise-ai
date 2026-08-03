@@ -42,6 +42,20 @@ export const toServerMs = (deviceIso: string | undefined | null, skewMs: number)
 export const toServerIso = (deviceIso: string | undefined | null, skewMs: number): string =>
   new Date(toServerMs(deviceIso, skewMs)).toISOString()
 
+/**
+ * The inverse: express a SERVER timestamp on this device's clock.
+ *
+ * The rule this file follows is "local records are always device time, cloud
+ * rows are always server time, and every boundary converts exactly once". This
+ * is the import side of that. It matters because the store importers re-check
+ * `payload.updatedAt` against the on-disk `updatedAt` themselves (their
+ * onlyIfNewer guard) using plain device-vs-device comparison — so a payload
+ * still carrying server time (or another device's raw clock) would let that
+ * un-corrected re-check silently veto the skew-corrected decision made here.
+ */
+export const toDeviceIso = (serverIso: string | undefined | null, skewMs: number): string =>
+  new Date(ts(serverIso) + skewMs).toISOString()
+
 /** One record as stored in a backup_* table. */
 export interface CloudRow {
   id: string
@@ -95,6 +109,14 @@ export async function reconcileStore<
     if (!row?.payload || typeof row.payload !== 'object') continue
     const payload = { ...(row.payload as Record<string, unknown>) }
     if (row.deleted) payload.deleted = true // older rows may predate the in-payload flag
+    // Re-express the incoming record on THIS device's clock before it goes any
+    // further. The payload was stamped by whichever device pushed it, so it is
+    // a foreign (and possibly badly wrong) clock; the row's server_updated_at is
+    // the authoritative instant. Converting here means the importers' own
+    // onlyIfNewer re-check — which compares payload.updatedAt against the
+    // on-disk updatedAt as plain device times — agrees with the skew-corrected
+    // verdict below instead of overruling it.
+    payload.updatedAt = toDeviceIso(row.server_updated_at, skewMs)
     const local = locals.get(row.id)
 
     if (!local) {

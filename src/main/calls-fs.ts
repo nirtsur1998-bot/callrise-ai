@@ -628,6 +628,12 @@ export function callBackupPayload(call: Call): Record<string, unknown> {
       addedAt: a.addedAt
     })),
     consent: call.consent,
+    // Must be synced: it decides whether the retention strip treats speaker 1
+    // as a buyer CHANNEL or a diarization label. Without it a restore falls
+    // back to the legacy consent inference and can destroy a mic-only
+    // transcript (or retain buyer turns it should not). It is plain metadata of
+    // the same kind as , which already syncs — no transcript content.
+    buyerCaptureUsed: call.buyerCaptureUsed === true,
     ...(call.deleted ? { deleted: true } : {})
   }
 }
@@ -845,6 +851,16 @@ export async function importCall(
       ...(!deleted && (isoOrUndefined(v.objectionsMinedAt) ?? current?.objectionsMinedAt)
         ? { objectionsMinedAt: isoOrUndefined(v.objectionsMinedAt) ?? current?.objectionsMinedAt }
         : {}),
+      // Carry the buyer-capture marker through a restore. Taking the payload
+      // value when present and otherwise falling back to the on-disk record
+      // means neither a cloud row predating this field nor a same-device
+      // restore-merge can silently drop it — dropping it re-arms the retention
+      // strip via the legacy consent inference and permanently deletes turns.
+      ...(typeof v.buyerCaptureUsed === 'boolean'
+        ? { buyerCaptureUsed: v.buyerCaptureUsed }
+        : current?.buyerCaptureUsed !== undefined
+          ? { buyerCaptureUsed: current.buyerCaptureUsed }
+          : {}),
       // Never synced (see callBackupPayload) — preserved only across a
       // same-device restore-merge onto an existing local record, so a
       // restore can't re-trigger a duplicate AI CRM note.

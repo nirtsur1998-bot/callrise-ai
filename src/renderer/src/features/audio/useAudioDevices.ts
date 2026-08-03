@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   getSelectedMicId,
   getSelectedMicLabel,
+  hasExplicitMicChoice,
   setSelectedMic,
   resolveMic,
   type MicResolution
@@ -63,7 +64,11 @@ export function useAudioDevices(preferCallRiseMic = false): UseAudioDevices {
         const labelsKnown = list.some((d) => d.label && !/^Microphone \d+$/.test(d.label))
         if (list.length > 0 && labelsKnown) {
           const resolution = resolveMic(
-            { deviceId: getSelectedMicId(), label: getSelectedMicLabel() },
+            {
+              deviceId: getSelectedMicId(),
+              label: getSelectedMicLabel(),
+              explicit: hasExplicitMicChoice()
+            },
             list,
             { preferCallRise: preferRef.current }
           )
@@ -108,12 +113,16 @@ export function useAudioDevices(preferCallRiseMic = false): UseAudioDevices {
     setMicResolution(null)
     // Store the LABEL alongside the id so this choice survives a driver
     // reinstall that renumbers device ids.
-    setSelectedMic(id, '')
+    // explicit=true: this is a real user action, so it must never be
+    // auto-overridden later - including when they pick "System default",
+    // which stores an empty id and is otherwise indistinguishable from
+    // "never chosen".
+    setSelectedMic(id, '', true)
     navigator.mediaDevices
       .enumerateDevices()
       .then((devices) => {
         const match = devices.find((d) => d.kind === 'audioinput' && d.deviceId === id)
-        if (match?.label) setSelectedMic(id, match.label)
+        if (match?.label) setSelectedMic(id, match.label, true)
       })
       .catch(() => {
         /* the id is still stored; only the label backfill was best-effort */

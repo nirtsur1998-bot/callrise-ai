@@ -36,7 +36,14 @@ import {
   type BackupSyncScope
 } from './app-settings'
 import { writeJsonAtomic } from './atomic-write'
-import { reconcileStore, ts, toServerMs, toServerIso, type CloudRow } from './backup-core'
+import {
+  reconcileStore,
+  ts,
+  toServerMs,
+  toServerIso,
+  toDeviceIso,
+  type CloudRow
+} from './backup-core'
 
 function tasksDir(): string {
   return join(app.getPath('userData'), 'tasks')
@@ -566,16 +573,14 @@ export async function pushAll(): Promise<BackupResult> {
     if (syncScope.settingsPersonalization) {
       try {
         const settings = loadAppSettings()
-        const { error } = await client
-          .from('backup_settings')
-          .upsert(
-            {
-              user_id: userId,
-              updated_at: toServerIso(settings.settingsUpdatedAt, skewMs),
-              payload: settings
-            },
-            { onConflict: 'user_id' }
-          )
+        const { error } = await client.from('backup_settings').upsert(
+          {
+            user_id: userId,
+            updated_at: toServerIso(settings.settingsUpdatedAt, skewMs),
+            payload: settings
+          },
+          { onConflict: 'user_id' }
+        )
         if (error) throw new Error(error.message)
       } catch (err) {
         console.error('[backup] settings push failed:', err)
@@ -849,8 +854,12 @@ export async function pullAll(): Promise<RestoreResult> {
         if (data && ts(data.server_updated_at) > toServerMs(local.settingsUpdatedAt, skewMs)) {
           // Keeps the cloud row's timestamp (no restamp → no multi-device
           // ping-pong) and this device's own syncScope (privacy toggles are
-          // per-device, never switched on remotely).
-          applyPulledSettings(data.payload, String(data.updated_at))
+          // per-device, never switched on remotely). The stamp is converted
+          // onto THIS device's clock first: the uploaded updated_at is already
+          // server-normalised, so storing it raw would leave a server timestamp
+          // in a local field that every later push/compare treats as device
+          // time — subtracting the skew a second time.
+          applyPulledSettings(data.payload, toDeviceIso(data.updated_at as string, skewMs))
         }
       } catch (err) {
         console.error('[backup] settings pull failed:', err)
@@ -891,10 +900,13 @@ export async function pullAll(): Promise<RestoreResult> {
           .maybeSingle()
         if (error) throw new Error(error.message)
         const local = loadDealStagesMeta()
-        // Same server-clock comparison as backup_settings above.
-        if (data && ts(data.server_updated_at) > ts(local.updatedAt)) {
+        // Same server-clock comparison as backup_settings above — including
+        // lifting the local side onto the server timeline. This one was missed
+        // in the first pass and still compared server time against a raw device
+        // stamp, which is precisely the bug being fixed.
+        if (data && ts(data.server_updated_at) > toServerMs(local.updatedAt, skewMs)) {
           const payload = data.payload as { stages?: unknown } | null
-          applyPulledDealStages(payload?.stages, String(data.updated_at))
+          applyPulledDealStages(payload?.stages, toDeviceIso(data.updated_at as string, skewMs))
           notifyDataChanged() // pipeline board re-reads its columns
         }
       } catch (err) {

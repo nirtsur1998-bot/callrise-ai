@@ -73,6 +73,24 @@ describe('resolveMic', () => {
     expect(r.deviceId).toBe('NEW-GUID-999')
   })
 
+  it('never overrides an explicit "System default" choice', () => {
+    // System default is stored as an empty id, which is byte-identical to
+    // "never chosen" - so without the explicit marker the auto-select would
+    // silently switch the user off their deliberate choice.
+    const r = resolveMic({ deviceId: '', label: '', explicit: true }, ALL, {
+      preferCallRise: true
+    })
+    expect(r.status).toBe('none')
+    expect(r.deviceId).toBe('')
+  })
+
+  it('still auto-selects when the user has genuinely never chosen', () => {
+    const r = resolveMic({ deviceId: '', label: '', explicit: false }, ALL, {
+      preferCallRise: true
+    })
+    expect(r.status).toBe('auto-callrise')
+  })
+
   it('leaves the system default alone when nothing is chosen and no CallRise mic exists', () => {
     const r = resolveMic({ deviceId: '', label: '' }, [HEADSET, BUILTIN], { preferCallRise: true })
     expect(r.status).toBe('none')
