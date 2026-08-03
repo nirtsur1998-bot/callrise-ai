@@ -746,6 +746,15 @@ export interface BackupStatus {
   /** `<id>.conflict` files across the stores — the losing sides of two-device
    *  concurrent edits, kept beside the store so nothing is silently lost. */
   conflictCount: number
+  /** This device's clock minus the server's, in ms, last time it was measured.
+   *  Absent when it has never been measurable (e.g. offline, or the schema's
+   *  `server_now()` function hasn't been created yet). */
+  clockSkewMs?: number
+  clockSkewCheckedAt?: string
+  /** True when the device clock is far enough off the server's to be worth
+   *  telling the user. Backup ORDERING is corrected for skew regardless — this
+   *  is about times displayed in the app being wrong, so it never blocks. */
+  clockSkewWarning?: boolean
 }
 
 export interface BackupApi {

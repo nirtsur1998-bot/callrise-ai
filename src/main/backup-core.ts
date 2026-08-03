@@ -10,6 +10,38 @@ export const ts = (s: string | undefined | null): number => {
   return Number.isNaN(t) ? 0 : t
 }
 
+/**
+ * Convert a DEVICE-clock timestamp into SERVER-clock time.
+ *
+ * Local records are stamped with `new Date()` — this machine's clock. Cloud rows
+ * carry `server_updated_at`, stamped by the DB. Comparing those two directly is
+ * comparing two different clocks: on a device running 48h fast every local
+ * record looks newer than anything the server has ever seen, so a genuinely
+ * newer cloud copy would never win and restore would silently return stale data
+ * (and 48h slow inverts it — the cloud always wins and real local edits get
+ * spuriously conflicted).
+ *
+ * `skewMs` is (deviceNow - serverNow), measured against the server. Subtracting
+ * it puts a device timestamp on the server's timeline so the two are comparable.
+ * A skew we could not measure is passed as 0, which reproduces the old
+ * behaviour exactly — never worse, and never a hard failure.
+ */
+export const toServerMs = (deviceIso: string | undefined | null, skewMs: number): number =>
+  ts(deviceIso) - skewMs
+
+/**
+ * Same conversion, rendered back as an ISO string for UPLOAD.
+ *
+ * The pushed `updated_at` is what the DB trigger compares across devices
+ * ("is the incoming row newer than the stored one?"). If each device uploads
+ * its own raw clock, two devices with different skews compare unequal clocks
+ * there too — a device running slow would have its genuinely-newer edits
+ * rejected as stale. Uploading server-normalised time makes that comparison
+ * like-for-like no matter how wrong either device's clock is.
+ */
+export const toServerIso = (deviceIso: string | undefined | null, skewMs: number): string =>
+  new Date(toServerMs(deviceIso, skewMs)).toISOString()
+
 /** One record as stored in a backup_* table. */
 export interface CloudRow {
   id: string
@@ -44,6 +76,9 @@ async function writeConflictCopy(dir: string, id: string, record: unknown): Prom
  * `importRecord` must be an ID-PRESERVING importer that re-runs the store's
  * sanitizer (NEVER the normal create path, which mints new ids and would
  * duplicate on every pull). Returns how many records changed.
+ *
+ * `skewMs` is this device's clock offset from the server (deviceNow-serverNow);
+ * see toServerMs. Pass 0 when it could not be measured.
  */
 export async function reconcileStore<
   T extends { id: string; updatedAt: string; deleted?: boolean }
@@ -52,7 +87,8 @@ export async function reconcileStore<
   rows: CloudRow[],
   locals: Map<string, T>,
   importRecord: (dir: string, payload: unknown) => Promise<T | null>,
-  lastSyncAt: string | undefined
+  lastSyncAt: string | undefined,
+  skewMs = 0
 ): Promise<number> {
   let changed = 0
   for (const row of rows) {
@@ -69,14 +105,20 @@ export async function reconcileStore<
 
     // Use the server's own clock (server_updated_at) to decide whether the
     // cloud copy is newer — never the pushing device's own updated_at, which a
-    // device with a fast/wrong clock could have inflated.
+    // device with a fast/wrong clock could have inflated. The local side is
+    // converted ONTO the server's timeline first (toServerMs) so this is a
+    // like-for-like comparison; comparing raw device time against server time
+    // is what let a skewed clock pick the wrong winner.
     const cloudT = ts(row.server_updated_at)
-    const localT = ts(local.updatedAt)
-    if (cloudT <= localT) continue // local is same-or-newer → local wins; push uploads it
+    const localOnServerT = toServerMs(local.updatedAt, skewMs)
+    if (cloudT <= localOnServerT) continue // local is same-or-newer → local wins; push uploads it
 
     // Cloud is newer → it wins. If the local copy was ALSO edited since our last
     // sync (a genuine two-machine concurrent edit), keep it as a .conflict copy.
-    if (lastSyncAt && localT > ts(lastSyncAt) && local.deleted !== true) {
+    // Both sides here are THIS device's own clock (local.updatedAt and the
+    // lastSyncAt we wrote ourselves), so they are already comparable — applying
+    // the skew correction to only one of them would reintroduce the same bug.
+    if (lastSyncAt && ts(local.updatedAt) > ts(lastSyncAt) && local.deleted !== true) {
       await writeConflictCopy(dir, local.id, local)
     }
     if (await importRecord(dir, payload)) changed++

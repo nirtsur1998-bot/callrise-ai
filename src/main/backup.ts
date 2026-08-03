@@ -36,7 +36,7 @@ import {
   type BackupSyncScope
 } from './app-settings'
 import { writeJsonAtomic } from './atomic-write'
-import { reconcileStore, ts, type CloudRow } from './backup-core'
+import { reconcileStore, ts, toServerMs, toServerIso, type CloudRow } from './backup-core'
 
 function tasksDir(): string {
   return join(app.getPath('userData'), 'tasks')
@@ -278,6 +278,12 @@ export interface BackupState {
   lastPushErrorAt?: string
   lastPullError?: string
   lastPullErrorAt?: string
+  /** This device's clock minus the server's, in ms, from the last successful
+   *  measurement. Used to put local timestamps on the server's timeline before
+   *  comparing them (see backup-core's toServerMs) and to warn the user when
+   *  their clock is badly wrong. Absent = never successfully measured. */
+  clockSkewMs?: number
+  clockSkewCheckedAt?: string
 }
 
 async function readState(): Promise<BackupState> {
@@ -310,6 +316,38 @@ async function writeState(patch: BackupState): Promise<void> {
   await writeJsonAtomic(statePath(), next).catch(() => {})
 }
 
+/** Past this much device-vs-server clock difference we warn the user. Well
+ *  above any plausible network/NTP jitter, well below the multi-hour skews that
+ *  actually corrupt ordering. Non-blocking: it is a hint, never a gate. */
+export const CLOCK_SKEW_WARN_MS = 2 * 60_000
+
+/**
+ * Measure this device's clock offset from the server (device - server).
+ *
+ * Best-effort by design, exactly like every other cloud call here: if the
+ * `server_now()` function hasn't been created yet (the user runs
+ * supabase/backup-schema.sql by hand) or the network is down, we return null
+ * and every caller falls back to a 0 correction — i.e. the previous behaviour.
+ * A skew we can't measure must never block a sync.
+ */
+async function measureClockSkew(
+  client: NonNullable<ReturnType<typeof getSupabaseClient>>
+): Promise<number | null> {
+  try {
+    const before = Date.now()
+    const { data, error } = await client.rpc('server_now')
+    const after = Date.now()
+    if (error || data == null) return null
+    const serverMs = Date.parse(String(data))
+    if (Number.isNaN(serverMs)) return null
+    // Compare the server's instant against the MIDPOINT of our own request
+    // window, so round-trip latency isn't misread as clock skew.
+    return Math.round(before + (after - before) / 2 - serverMs)
+  } catch {
+    return null
+  }
+}
+
 /** Strip only the machine-specific sync STATE. The Google/Outlook IDENTITY
  *  (provider/externalId/remoteUpdatedAt) is account-level — the same remote
  *  event has the same ids on every machine — and carrying it lets a restore
@@ -335,13 +373,19 @@ const CHUNK = 200
 async function upsertRows(
   client: ReturnType<typeof getSupabaseClient>,
   table: string,
-  rows: BackupRow[]
+  rows: BackupRow[],
+  skewMs = 0
 ): Promise<void> {
   if (!client) return
-  for (let i = 0; i < rows.length; i += CHUNK) {
+  // Upload every timestamp on the SERVER's timeline, so the trigger's
+  // newest-wins comparison is between comparable values even when two devices
+  // syncing the same account have differently-wrong clocks.
+  const normalised =
+    skewMs === 0 ? rows : rows.map((r) => ({ ...r, updated_at: toServerIso(r.updated_at, skewMs) }))
+  for (let i = 0; i < normalised.length; i += CHUNK) {
     // The client carries the user's JWT → RLS applies; on conflict, the DB
     // trigger keeps whichever row is newest (server-decided).
-    const { error } = await client.from(table).upsert(rows.slice(i, i + CHUNK), {
+    const { error } = await client.from(table).upsert(normalised.slice(i, i + CHUNK), {
       onConflict: 'user_id,id'
     })
     if (error) throw new Error(`${table}: ${error.message}`)
@@ -445,6 +489,11 @@ export async function pushAll(): Promise<BackupResult> {
     return { ok: false, error: 'ownership-mismatch' }
   }
   try {
+    // Clock offset for this push — every uploaded updated_at is normalised onto
+    // the server's timeline with it. Best-effort: unmeasurable → 0 → previous
+    // behaviour, never a failed push.
+    const skewMs = (await measureClockSkew(client)) ?? 0
+
     // Privacy scrubs first (toggle-offs waiting to take effect in the cloud) —
     // the transcripts scrub touches calls so THIS push replaces their rows.
     try {
@@ -492,9 +541,9 @@ export async function pushAll(): Promise<BackupResult> {
       payload: buildCallPayload(c)
     }))
 
-    await upsertRows(client, 'backup_tasks', taskRows)
-    await upsertRows(client, 'backup_events', eventRows)
-    await upsertRows(client, 'backup_calls', callRows)
+    await upsertRows(client, 'backup_tasks', taskRows, skewMs)
+    await upsertRows(client, 'backup_events', eventRows, skewMs)
+    await upsertRows(client, 'backup_calls', callRows, skewMs)
 
     // Optional categories (Settings → Privacy & data toggles). Each is best-effort
     // and isolated from the core sync above and from each other — a missing table
@@ -509,7 +558,7 @@ export async function pushAll(): Promise<BackupResult> {
           deleted: e.deleted === true,
           payload: e
         }))
-        await upsertRows(client, 'backup_knowledge', knowledgeRows)
+        await upsertRows(client, 'backup_knowledge', knowledgeRows, skewMs)
       } catch (err) {
         console.error('[backup] knowledge-base push failed:', err)
       }
@@ -520,7 +569,11 @@ export async function pushAll(): Promise<BackupResult> {
         const { error } = await client
           .from('backup_settings')
           .upsert(
-            { user_id: userId, updated_at: settings.settingsUpdatedAt, payload: settings },
+            {
+              user_id: userId,
+              updated_at: toServerIso(settings.settingsUpdatedAt, skewMs),
+              payload: settings
+            },
             { onConflict: 'user_id' }
           )
         if (error) throw new Error(error.message)
@@ -545,7 +598,7 @@ export async function pushAll(): Promise<BackupResult> {
           deleted: c.deleted === true,
           payload: c
         }))
-        await upsertRows(client, 'backup_contacts', contactRows)
+        await upsertRows(client, 'backup_contacts', contactRows, skewMs)
       } catch (err) {
         console.error('[backup] contacts push failed:', err)
       }
@@ -561,7 +614,7 @@ export async function pushAll(): Promise<BackupResult> {
           deleted: d.deleted === true,
           payload: d
         }))
-        await upsertRows(client, 'backup_deals', dealRows)
+        await upsertRows(client, 'backup_deals', dealRows, skewMs)
       } catch (err) {
         console.error('[backup] deals push failed:', err)
       }
@@ -573,7 +626,7 @@ export async function pushAll(): Promise<BackupResult> {
         const { error } = await client
           .from('backup_deal_stages')
           .upsert(
-            { user_id: userId, updated_at: updatedAt, payload: { stages } },
+            { user_id: userId, updated_at: toServerIso(updatedAt, skewMs), payload: { stages } },
             { onConflict: 'user_id' }
           )
         if (error) throw new Error(error.message)
@@ -686,6 +739,19 @@ export async function pullAll(): Promise<RestoreResult> {
   try {
     const { lastSyncAt } = await readState()
 
+    // Measure the device-vs-server clock offset BEFORE reconciling: every
+    // "is the cloud copy newer?" decision below depends on it. Best-effort —
+    // an unmeasurable skew applies a 0 correction (the old behaviour) rather
+    // than failing the restore.
+    const measuredSkew = await measureClockSkew(client)
+    const skewMs = measuredSkew ?? 0
+    if (measuredSkew !== null) {
+      await writeState({
+        clockSkewMs: measuredSkew,
+        clockSkewCheckedAt: new Date().toISOString()
+      })
+    }
+
     // onlyIfNewer: the importers RE-CHECK the on-disk record at write time, so a
     // user edit/delete landing mid-restore (after this snapshot) is never
     // clobbered by stale cloud data.
@@ -711,7 +777,8 @@ export async function pullAll(): Promise<RestoreResult> {
       taskRows,
       taskMap,
       guardedImportTask,
-      lastSyncAt
+      lastSyncAt,
+      skewMs
     )
     if (tasksChanged > 0) notifyDataChanged() // Tasks refresh (fire per stage, so a later failure never hides done work)
 
@@ -726,7 +793,8 @@ export async function pullAll(): Promise<RestoreResult> {
       eventRows,
       eventMap,
       guardedImportEvent,
-      lastSyncAt
+      lastSyncAt,
+      skewMs
     )
     if (eventsChanged > 0) notifyEventsChanged() // the calendar re-reads live
 
@@ -737,7 +805,8 @@ export async function pullAll(): Promise<RestoreResult> {
       callRows,
       callMap,
       guardedImportCall,
-      lastSyncAt
+      lastSyncAt,
+      skewMs
     )
     if (callsChanged > 0) notifyDataChanged() // Past Calls refresh
 
@@ -756,7 +825,8 @@ export async function pullAll(): Promise<RestoreResult> {
           knowledgeRows,
           knowledgeMap,
           guardedImportEntry,
-          lastSyncAt
+          lastSyncAt,
+          skewMs
         )
         if (knowledgeChanged > 0) notifyDataChanged() // Knowledge Base refresh
       } catch (err) {
@@ -774,7 +844,9 @@ export async function pullAll(): Promise<RestoreResult> {
         const local = loadAppSettings()
         // Compared on the server's clock (server_updated_at), not the pushing
         // device's own updated_at — see backup-core.ts's reconcileStore for why.
-        if (data && ts(data.server_updated_at) > ts(local.settingsUpdatedAt)) {
+        // The local side is lifted onto the server's timeline first, so a skewed
+        // device clock can't make stale settings look newer than the cloud's.
+        if (data && ts(data.server_updated_at) > toServerMs(local.settingsUpdatedAt, skewMs)) {
           // Keeps the cloud row's timestamp (no restamp → no multi-device
           // ping-pong) and this device's own syncScope (privacy toggles are
           // per-device, never switched on remotely).
@@ -803,7 +875,8 @@ export async function pullAll(): Promise<RestoreResult> {
           contactRows,
           contactMap,
           guardedImportContact,
-          lastSyncAt
+          lastSyncAt,
+          skewMs
         )
         if (contactsChanged > 0) notifyDataChanged() // Contacts refresh
       } catch (err) {
@@ -837,7 +910,8 @@ export async function pullAll(): Promise<RestoreResult> {
           dealRows,
           dealMap,
           guardedImportDeal,
-          lastSyncAt
+          lastSyncAt,
+          skewMs
         )
         if (dealsChanged > 0) notifyDataChanged() // Deals refresh
       } catch (err) {
@@ -907,12 +981,20 @@ export function registerBackup(): void {
   // Manual triggers (the settings UI in a later step calls these).
   ipcMain.handle('backup:pushNow', () => enqueue(pushAll))
   ipcMain.handle('backup:syncNow', () => enqueue(syncNow))
-  ipcMain.handle('backup:getStatus', async () => ({
-    ...(await readState()),
-    // Losing sides of two-device concurrent edits, kept as <id>.conflict —
-    // surfaced in the Settings card so "kept" data isn't invisibly lost.
-    conflictCount: await countConflictFiles()
-  }))
+  ipcMain.handle('backup:getStatus', async () => {
+    const state = await readState()
+    return {
+      ...state,
+      // Losing sides of two-device concurrent edits, kept as <id>.conflict —
+      // surfaced in the Settings card so "kept" data isn't invisibly lost.
+      conflictCount: await countConflictFiles(),
+      // Non-blocking hint only: a badly wrong device clock no longer corrupts
+      // backup ordering (that's corrected for), but it still makes every
+      // locally-displayed time wrong, so it's worth telling the user.
+      clockSkewWarning:
+        typeof state.clockSkewMs === 'number' && Math.abs(state.clockSkewMs) > CLOCK_SKEW_WARN_MS
+    }
+  })
   ipcMain.handle('backup:revealConflicts', async () => {
     for (const dir of conflictDirs()) {
       try {
