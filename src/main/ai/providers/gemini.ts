@@ -41,6 +41,36 @@ interface GeminiContent {
   parts: GeminiPart[]
 }
 
+// Gemini's function-declaration Schema is a RESTRICTED subset of OpenAPI's
+// Schema object (Google's own docs: "only a subset of the OpenAPI schema is
+// supported") - confirmed fields are type/properties/items/required/
+// description/enum; `additionalProperties` and `$schema` are not among them.
+// Every AITool in this codebase (COACH_TOOL, SUMMARY_TOOL, TASKS_TOOL, the
+// live_cue tool, etc.) sets `additionalProperties: false` per plain JSON
+// Schema convention, which Anthropic/OpenAI both accept natively - Gemini's
+// REST API rejects the whole request with a 400 the moment it sees a field
+// it doesn't recognize, so every tool-calling request to Gemini failed
+// outright (root-caused 2026-08-03 from a real user's "chain exhausted"
+// reports - every attempt failed with the generic 'failed' code, consistent
+// with a structural 400 on every single request, not an auth/quota issue).
+// Recurses into properties/items since a deeper tool could nest the same
+// keyword in a sub-schema.
+export function toGeminiSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const { additionalProperties: _additionalProperties, $schema: _$schema, ...rest } = schema
+  if (rest.properties && typeof rest.properties === 'object') {
+    rest.properties = Object.fromEntries(
+      Object.entries(rest.properties as Record<string, unknown>).map(([key, value]) => [
+        key,
+        value && typeof value === 'object' ? toGeminiSchema(value as Record<string, unknown>) : value
+      ])
+    )
+  }
+  if (rest.items && typeof rest.items === 'object') {
+    rest.items = toGeminiSchema(rest.items as Record<string, unknown>)
+  }
+  return rest
+}
+
 function toContents(req: AICompletionRequest): GeminiContent[] {
   return req.messages.map((m, i) => {
     const parts: GeminiPart[] = []
@@ -114,7 +144,11 @@ export class GeminiProvider implements AIProvider {
       body.tools = [
         {
           functionDeclarations: [
-            { name: req.tool.name, description: req.tool.description, parameters: req.tool.inputSchema }
+            {
+              name: req.tool.name,
+              description: req.tool.description,
+              parameters: toGeminiSchema(req.tool.inputSchema)
+            }
           ]
         }
       ]

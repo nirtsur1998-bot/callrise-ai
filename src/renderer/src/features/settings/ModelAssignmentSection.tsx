@@ -197,7 +197,9 @@ function RecentFallbackActivity(): React.JSX.Element | null {
         {events.slice(0, 10).map((e, i) => (
           <li key={i} className="text-[12px] text-faint">
             <span className="text-muted">{new Date(e.ts).toLocaleString()}</span> — {e.purpose}:{' '}
-            {e.fromDisplayName} failed ({e.reason}){e.toDisplayName ? ` → ${e.toDisplayName}` : ' — chain exhausted'}
+            {e.fromDisplayName} failed ({e.reason})
+            {e.toDisplayName ? ` → ${e.toDisplayName}` : ' — chain exhausted'}
+            {e.detail && <span className="block text-faint/80">↳ {e.detail}</span>}
           </li>
         ))}
       </ul>

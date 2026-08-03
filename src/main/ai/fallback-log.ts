@@ -21,6 +21,11 @@ export interface FallbackEvent {
   fromCatalogId: string
   toCatalogId: string | null // null = chain exhausted, nothing left to advance to
   reason: string
+  /** The provider's own error message, when available - e.g. "Gemini
+   *  returned an error (400)." or the actual Google/OpenAI-compatible error
+   *  text. Lets a structural bug (wrong request shape, bad model id) be
+   *  diagnosed from the reason alone, instead of just a generic code. */
+  detail?: string
 }
 
 const MAX_ENTRIES = 1000

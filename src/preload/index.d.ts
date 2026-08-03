@@ -1095,6 +1095,8 @@ export interface AiFallbackEventView {
   fromCatalogId: string
   toCatalogId: string | null
   reason: string
+  /** The provider's own error message, when available. */
+  detail?: string
   fromDisplayName: string
   toDisplayName: string | null
 }

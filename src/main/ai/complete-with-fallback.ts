@@ -132,6 +132,16 @@ function classifyReason(err: unknown): string {
   return 'failed'
 }
 
+/** The provider's own descriptive message, when it has one - surfaced in the
+ *  fallback-event log so a structural bug (e.g. a provider rejecting the
+ *  request shape outright) is diagnosable from Settings without needing to
+ *  reproduce it - a generic 'failed' code alone hid exactly this once. */
+function detailFrom(err: unknown): string | undefined {
+  if (err instanceof AIProviderError) return err.message
+  if (err instanceof Error) return err.message
+  return undefined
+}
+
 /** The single entry point for every M20-aware call site. `req.purpose` is
  *  read from `req` itself (same field every provider already reads), so
  *  callers pass their existing AICompletionRequest unchanged. */
@@ -186,14 +196,16 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
       return result
     } catch (err) {
       const reason = classifyReason(err)
-      attempts.push({ catalogId: step.catalogId, reason })
+      const detail = detailFrom(err)
+      attempts.push({ catalogId: step.catalogId, reason: detail ? `${reason}: ${detail}` : reason })
       const nextStep = chain[i + 1] ?? null
       void logFallbackEvent({
         ts: new Date().toISOString(),
         purpose,
         fromCatalogId: step.catalogId,
         toCatalogId: nextStep?.catalogId ?? null,
-        reason
+        reason,
+        detail
       })
     } finally {
       if (budget) {
