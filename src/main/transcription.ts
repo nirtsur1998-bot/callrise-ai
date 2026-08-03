@@ -7,6 +7,25 @@ const MAX_CHUNK_BYTES = 1 << 16 // 64 KB safety cap on a single audio frame
 const CONNECT_TIMEOUT_MS = 8000 // give up if we never reach 'open'
 const STABLE_AFTER_MS = 4000 // connection considered healthy after this long
 const STOP_FLUSH_MS = 1500 // wait this long for final words on stop
+// Ping Deepgram every 5s so a PAUSED session (no audio being forwarded) isn't
+// closed by the server's idle timeout.
+//
+// This is NOT a silence cutoff, despite being the only 5-second constant in the
+// audio path. M21 Phase D investigated the standing "the app cancels a session
+// after ~5s of silence" report and found NO such code exists anywhere: no VAD
+// gate, no RMS/amplitude threshold, no inactivity timer, nothing that stops
+// capture on quiet. The worklet forwards silence as ordinary PCM, and this
+// KeepAlive can only ever EXTEND a session's life. A long pause in a call does
+// not drop the session.
+//
+// The likeliest cause of the reported symptom is that nothing visibly changes
+// during silence — Deepgram sends no results, so the transcript stops growing
+// and the UI merely looks dead. The one genuine automatic teardown with
+// comparable timing is the reconnect cascade below (see MAX_RECONNECTS): three
+// failures at 500/1000/2000ms backoff inside the STABLE_AFTER_MS window ends a
+// session roughly 4-6s after the first drop, which is easy to misread as a
+// silence timeout. It surfaces as "Lost connection to the transcription
+// service", not as a silent stop.
 const KEEPALIVE_MS = 5000
 const MAX_RECONNECTS = 3
 

@@ -4,6 +4,23 @@
 // loopback on Windows, ScreenCaptureKit-backed loopback on macOS) - only
 // Linux has no supported path here, so this gates on darwin/win32.
 //
+// KNOWN WINDOWS LIMITATION (verified on real hardware; M21 Phase D re-confirmed
+// it is still open). "Cross-platform" above is true for ORDINARY media playback
+// only. On Windows a real VoIP call (tested: WhatsApp) does NOT reliably reach
+// the Buyer channel: whole-system WASAPI loopback — what `audio: 'loopback'`
+// taps here — doesn't reliably include audio that Windows routes through its
+// separate "Communications" role. What does come through is physical mic bleed
+// (the buyer's voice out of the speakers, picked up by the mic), which lands on
+// the REP's channel and is therefore mislabelled as the rep.
+//
+// This is an OS/Chromium-level constraint, not a bug in this file — nothing
+// here can fix it. Proper support needs a native addon using Windows'
+// per-process Application Loopback Capture API
+// (ActivateAudioInterfaceAsync + AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK),
+// which does not exist in this repo. Deliberately out of scope for M21;
+// documented here rather than only in CLAUDE.md so the next person reading
+// this code sees it before trusting the "cross-platform" line above.
+//
 // Consent backstop: capture is DENIED unless the renderer has "armed" it first.
 // The renderer arms exactly one request, synchronously, immediately before each
 // getDisplayMedia call — and only after consent has been recorded. The handler
