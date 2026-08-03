@@ -222,21 +222,24 @@ export async function listEvents(
   } catch {
     return []
   }
-  const events: CalendarEvent[] = []
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue
-    try {
-      const raw = await fs.readFile(join(dir, file), 'utf8')
-      const event = sanitizeEventRecord(JSON.parse(raw))
-      // Tombstones never render: sync.state='deleted' is the transient awaiting-
-      // Google state, `deleted` is the permanent backup tombstone. The Google
-      // reconcile pass and the backup read them via includeDeleted.
-      const tombstoned = event?.sync?.state === 'deleted' || event?.deleted === true
-      if (event && (opts?.includeDeleted || !tombstoned)) events.push(event)
-    } catch {
-      /* skip unreadable / corrupt file */
-    }
-  }
+  const results = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map(async (file): Promise<CalendarEvent | null> => {
+        try {
+          const raw = await fs.readFile(join(dir, file), 'utf8')
+          const event = sanitizeEventRecord(JSON.parse(raw))
+          // Tombstones never render: sync.state='deleted' is the transient awaiting-
+          // Google state, `deleted` is the permanent backup tombstone. The Google
+          // reconcile pass and the backup read them via includeDeleted.
+          const tombstoned = event?.sync?.state === 'deleted' || event?.deleted === true
+          return event && (opts?.includeDeleted || !tombstoned) ? event : null
+        } catch {
+          return null // skip unreadable / corrupt file
+        }
+      })
+  )
+  const events = results.filter((e): e is CalendarEvent => e !== null)
   events.sort((a, b) => a.start.localeCompare(b.start)) // earliest first
   return events
 }

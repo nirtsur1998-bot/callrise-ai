@@ -1,4 +1,5 @@
-import { PhoneCall, Loader2, Check, User, Sparkles, Mic } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { PhoneCall, Loader2, Check, User, Sparkles, Mic, KeyRound } from 'lucide-react'
 import { Badge, type BadgeTone } from '@renderer/components/Badge'
 import { Button } from '@renderer/components/Button'
 import type { OnboardingState } from '../useOnboarding'
@@ -25,6 +26,26 @@ export function Done({
     : 'Off'
   const cuesTone: BadgeTone = o.cuesEnabled ? 'positive' : 'neutral'
   const recording = o.recordBothSides ? 'Both sides, with consent' : 'My side only'
+
+  // Checked rather than assumed: most fresh installs have no keys yet (BYO,
+  // never pre-filled), and "Start my first call" failing with no warning at
+  // all — after two minutes of setup that never mentioned this — is a worse
+  // first impression than a one-line heads-up here.
+  const [missingKey, setMissingKey] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    window.api.aiKeys
+      .getStatus()
+      .then((status) => {
+        if (!cancelled) setMissingKey(!status.DEEPGRAM_API_KEY.configured)
+      })
+      .catch(() => {
+        /* can't check — say nothing rather than a false alarm */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   return (
     <div className="text-center">
@@ -54,6 +75,16 @@ export function Done({
         </div>
       </div>
 
+      {missingKey && (
+        <p className="mx-auto mt-4 flex max-w-xs items-start gap-2 rounded-xl border border-warning/30 bg-warning-soft px-3 py-2.5 text-left text-[12px] leading-relaxed text-warning">
+          <KeyRound className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            Live transcription needs a Deepgram API key. Add one anytime in{' '}
+            <span className="font-medium">Settings → API keys</span> — free to get, takes a minute.
+          </span>
+        </p>
+      )}
+
       <div className="mt-6 space-y-2.5">
         <Button fullWidth onClick={onStartCall} disabled={busy}>
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <PhoneCall className="h-4 w-4" />}
@@ -68,6 +99,14 @@ export function Done({
           Explore the app
         </button>
       </div>
+
+      {/* Two real features this flow never asks about — off by default, so
+          the only way to know they exist at all is Settings. One line here
+          beats them staying permanently undiscovered. */}
+      <p className="mx-auto mt-5 max-w-xs text-[11px] leading-relaxed text-faint">
+        Settings also has automatic call detection (start capturing without a click) and optional
+        cloud backup for your calls, tasks, and calendar.
+      </p>
     </div>
   )
 }

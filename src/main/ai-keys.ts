@@ -12,10 +12,34 @@
 import { app, ipcMain, safeStorage } from 'electron'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
-import { buildProviderForValidation, type AIProviderId } from './ai'
+import { buildProviderForValidation, PROVIDER_REGISTRY, type AIProviderId } from './ai'
 
-export type AiKeyName = 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY'
-const KEY_NAMES: AiKeyName[] = ['DEEPGRAM_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']
+// M20 added the six new text-AI provider keys (GROQ_API_KEY through
+// MISTRAL_API_KEY) alongside M16's original ANTHROPIC_API_KEY/OPENAI_API_KEY
+// pair. Everything below this point (encryption, save/load/clear, IPC) was
+// already generic over AiKeyName — extending it needed no new mechanism,
+// exactly per docs/ai-providers.md's "Adding a third provider" guide.
+export type AiKeyName =
+  | 'DEEPGRAM_API_KEY'
+  | 'ANTHROPIC_API_KEY'
+  | 'OPENAI_API_KEY'
+  | 'GROQ_API_KEY'
+  | 'OPENROUTER_API_KEY'
+  | 'GOOGLE_AI_API_KEY'
+  | 'NVIDIA_API_KEY'
+  | 'CEREBRAS_API_KEY'
+  | 'MISTRAL_API_KEY'
+const KEY_NAMES: AiKeyName[] = [
+  'DEEPGRAM_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'GROQ_API_KEY',
+  'OPENROUTER_API_KEY',
+  'GOOGLE_AI_API_KEY',
+  'NVIDIA_API_KEY',
+  'CEREBRAS_API_KEY',
+  'MISTRAL_API_KEY'
+]
 
 function keysDir(): string {
   return join(app.getPath('userData'), 'ai-keys')
@@ -79,7 +103,13 @@ export function registerAiKeys(): void {
     const status: Record<AiKeyName, { configured: boolean; hint: string | null }> = {
       DEEPGRAM_API_KEY: { configured: false, hint: null },
       ANTHROPIC_API_KEY: { configured: false, hint: null },
-      OPENAI_API_KEY: { configured: false, hint: null }
+      OPENAI_API_KEY: { configured: false, hint: null },
+      GROQ_API_KEY: { configured: false, hint: null },
+      OPENROUTER_API_KEY: { configured: false, hint: null },
+      GOOGLE_AI_API_KEY: { configured: false, hint: null },
+      NVIDIA_API_KEY: { configured: false, hint: null },
+      CEREBRAS_API_KEY: { configured: false, hint: null },
+      MISTRAL_API_KEY: { configured: false, hint: null }
     }
     for (const name of KEY_NAMES) {
       status[name].configured = isConfigured(name)
@@ -100,11 +130,13 @@ export function registerAiKeys(): void {
 
   // "Test key" - the cheapest possible round-trip against a key the user
   // just pasted (not necessarily saved yet), so a bad key is caught before
-  // it's relied on mid-call. Only anthropic/openai are real AI providers;
-  // Deepgram has no equivalent flow here (transcription, not text AI).
+  // it's relied on mid-call. Every text-AI provider in PROVIDER_REGISTRY
+  // (M20: 8, up from the original anthropic/openai pair) has this; Deepgram
+  // has no equivalent flow here (transcription, not text AI).
   ipcMain.handle('aiKeys:validate', async (_event, providerId: unknown, value: unknown) => {
     if (
-      (providerId !== 'anthropic' && providerId !== 'openai') ||
+      typeof providerId !== 'string' ||
+      !(providerId in PROVIDER_REGISTRY) ||
       typeof value !== 'string' ||
       !value.trim()
     ) {

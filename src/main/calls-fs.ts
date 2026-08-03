@@ -2,10 +2,66 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from './atomic-write'
+import { sanitizeCommitments } from './commitments'
 
 export interface CallSegment {
   speaker: number
   text: string
+  /** Which capture channel this came from: 0 = the rep's mic, 1 = the other
+   *  party's loopback. Undefined for mono (mic-only) calls and for anything
+   *  saved before this existed.
+   *
+   *  Present because `speaker` ALONE is ambiguous. In mono it is a diarized
+   *  guess; in multichannel it is the channel index — so "speaker 0" means two
+   *  different people either side of a mid-call switch to buyer capture, and a
+   *  saved transcript could not tell you which. Identity is the PAIR. */
+  channel?: number
+  /** A `[gap: Ns]` marker rather than someone's words — audio that was shed,
+   *  discarded to rejoin the live edge, or lost to a suspend. Marked so it is
+   *  never counted as a speaker and never attributed to anyone. */
+  kind?: 'gap'
+}
+
+// --- Speaker identification (M19 Task 2) ------------------------------------
+
+/** Same compound key every consumer uses: `channel` present -> multichannel
+ *  (`ch0/spk0`, `ch1/spk1`); absent -> mono/diarized (`mono/spk0`, ...).
+ *  MUST stay byte-identical to the renderer's speakerKey() in
+ *  src/renderer/src/features/live/segments.ts — main can't import renderer
+ *  code, so this is a deliberate duplicate, not an independent design. */
+export function speakerIdentityKey(seg: { speaker: number; channel?: number }): string {
+  return seg.channel === undefined ? `mono/spk${seg.speaker}` : `ch${seg.channel}/spk${seg.speaker}`
+}
+
+export type SpeakerIdentitySource =
+  | 'user-profile'
+  | 'calendar'
+  | 'contact'
+  | 'participant-list'
+  | 'self-intro'
+  | 'voice-profile'
+  | 'manual'
+
+export type SpeakerIdentityConfidence = 'high' | 'medium' | 'low'
+
+/** One resolved name for one speakerIdentityKey, for one call. Rename is
+ *  ALWAYS a `source: 'manual'` write to this record — never a string
+ *  replace inside stored transcript/summary/coaching text, which stays
+ *  purely numeric (`speaker`/`repSpeaker`) and resolves a display name only
+ *  at render time (see speakerLabel() in the renderer). That's what makes
+ *  rename retroactive and cheap: editing this one small record instantly
+ *  changes every past AND future render of this call, with zero risk of
+ *  missing a surface that baked the old name into generated prose. */
+export interface SpeakerIdentityRecord {
+  name: string
+  source: SpeakerIdentitySource
+  confidence: SpeakerIdentityConfidence
+  /** The contact this identity is linked to, if resolved via (or "remember
+   *  this person"-linked to) one. Lets a rename optionally update the
+   *  contact's own name too, and lets future calls with the same contact
+   *  resolve instantly without re-running the cascade. */
+  contactId?: string
+  resolvedAt: string
 }
 
 export interface Summary {
@@ -74,6 +130,18 @@ export interface CoachingReport {
   metrics: CoachMetrics
   model: string
   createdAt: string
+}
+
+// --- Commitments (§4.7 — who promised what) ---------------------------------
+
+export type CommitmentOwner = 'rep' | 'prospect'
+
+export interface Commitment {
+  owner: CommitmentOwner
+  /** What was promised, in the promiser's own terms. */
+  text: string
+  /** ISO date, only when a date was actually stated. */
+  dueDate?: string
 }
 
 // --- Recording consent (stored on the call, like a summary) -----------------
@@ -206,6 +274,11 @@ export interface Call extends CallBase {
   summary?: Summary
   attachments?: Attachment[]
   coaching?: CoachingReport
+  /** Who promised what (§4.7) — the last extraction run on this call, if any.
+   *  Not synced to cloud backup (see `callBackupPayload`): unlike coaching's
+   *  scores/advice, this hasn't been reviewed for what counts as safe to leave
+   *  the device, so it stays local-only until that's deliberately decided. */
+  commitments?: Commitment[]
   /** Recording-consent record. Always present on calls saved from M11 on. */
   consent?: ConsentRecord
   /** When this call was last read for Objection Library mining, if ever. */
@@ -218,6 +291,11 @@ export interface Call extends CallBase {
    *  double-drafting when both the contact-link and the summary land (in
    *  either order) with Settings → CRM → "Auto-generate notes" on. */
   crmNoteGeneratedAt?: string
+  /** M19 Task 2 — resolved speaker names, keyed by speakerIdentityKey().
+   *  Absent/missing key = unresolved, falls back to the existing You/Buyer/
+   *  Speaker N logic. Never required, never migrated — old calls simply have
+   *  no entries here and behave exactly as before this field existed. */
+  speakerIdentities?: Record<string, SpeakerIdentityRecord>
 }
 
 export interface CallSaveInput {
@@ -261,9 +339,33 @@ function sanitizeSegments(value: unknown): CallSegment[] {
     const textRaw = (item as { text?: unknown }).text
     const speaker = Number.isFinite(speakerRaw) ? Math.max(0, Math.trunc(speakerRaw as number)) : 0
     const text = typeof textRaw === 'string' ? textRaw.slice(0, MAX_TEXT) : ''
-    if (text.trim()) out.push({ speaker, text })
+    const isGap = (item as { kind?: unknown }).kind === 'gap'
+    const channelRaw = (item as { channel?: unknown }).channel
+    const channel = channelRaw === 0 || channelRaw === 1 ? (channelRaw as 0 | 1) : undefined
+    if (!text.trim()) continue
+    const seg: CallSegment = isGap ? { speaker, text, kind: 'gap' } : { speaker, text }
+    if (channel !== undefined) seg.channel = channel
+    out.push(seg)
   }
   return out
+}
+
+/**
+ * Only the segments that are somebody's words.
+ *
+ * Gap markers are a transcript-integrity feature, not content: they must be
+ * stored and shown, but they are nobody's speech. Anything that counts words,
+ * measures talk ratio, identifies a speaker, verifies a quote, or prompts a
+ * model has to see through them — otherwise `[gap: 34s]` becomes three words
+ * spoken by speaker 0, quietly skewing every derived metric.
+ */
+export function speechSegments(segments: CallSegment[] | undefined): CallSegment[] {
+  return (segments ?? []).filter((s) => s.kind !== 'gap')
+}
+
+/** Speakers actually present, ignoring gap markers (which belong to nobody). */
+function countSpeakers(segments: CallSegment[]): number {
+  return new Set(speechSegments(segments).map((s) => s.speaker)).size
 }
 
 const MAX_BOOKMARKS = 500
@@ -351,16 +453,50 @@ async function writeCall(dir: string, call: Call): Promise<void> {
   await writeJsonAtomic(join(dir, `${call.id}.json`), call)
 }
 
-// The other party's turns ride on speaker/channel 1 (Deepgram multichannel).
+// Multichannel: the other party's turns ride on channel 1, a hardware/
+// loopback fact fixed at capture time — never a guess. Mono has no such fixed
+// mapping; see isOtherPartyKey/isOtherPartySegment below.
 const BUYER_SPEAKER = 1
 
+/** A speakerIdentityKey's trailing `spk{N}` number, or null if it doesn't
+ *  parse (defensive — a malformed/hand-edited key should never crash this). */
+function speakerNumberFromKey(key: string): number | null {
+  const m = /spk(\d+)$/.exec(key)
+  return m ? Number(m[1]) : null
+}
+
 /**
- * Recording-consent RETENTION guard (M12 Step 6). Buyer capture only ever runs
- * after consent (status becomes 'consented'); if recording the other party
- * isn't (still) permitted (recordOtherParty !== true — e.g. "turn recording
- * off", a mid-call decline, or a file tampered to drop the flag), the other
- * party's captured turns are removed. Runs on save AND read AND list, so a
- * revoked/hand-edited call can never surface the other party's words.
+ * True when `n` is the OTHER party's speaker number and must be stripped
+ * absent consent. Multichannel is a fixed hardware fact (channel 1 is always
+ * the buyer). Mono has no such fixed mapping — `speaker` is a diarized guess
+ * (see CallSegment.channel's own doc comment), and which number is the rep
+ * is only known once coaching sets repSpeaker (it can legitimately resolve to
+ * either 0 or 1). Until then, conservatively assume rep === 0 (the common
+ * case) so an unconsented second voice is never wrongly kept just because
+ * coaching hasn't finished yet — "no consent = no capture" errs toward
+ * stripping too much, never too little.
+ */
+function isOtherPartySpeaker(n: number, multichannel: boolean, repSpeaker: number | null): boolean {
+  return multichannel ? n === BUYER_SPEAKER : n !== (repSpeaker ?? 0)
+}
+
+/**
+ * Recording-consent RETENTION guard (M12 Step 6, extended M19 Task 2). Buyer
+ * capture only ever runs after consent (status becomes 'consented'); if
+ * recording the other party isn't (still) permitted (recordOtherParty !==
+ * true — e.g. "turn recording off", a mid-call decline, or a file tampered
+ * to drop the flag), the other party's captured turns are removed — AND, as
+ * of M19, their resolved NAME too (speakerIdentities). A revoked call with
+ * its transcript stripped but the buyer's real name still attached would
+ * violate the exact invariant this function exists to enforce: a name is
+ * personal data same as the words themselves. Runs on save AND read AND
+ * list, so a revoked/hand-edited call can never surface either.
+ *
+ * A call can mix mono and channel-tagged segments (the mid-call "enable buyer
+ * capture" switch) — each key/segment is judged by ITS OWN regime, via the
+ * `mono/` key prefix or CallSegment.channel's presence, never by a single
+ * call-wide flag (that sticky-flag mistake is exactly what resolve-for-call.ts's
+ * own regime detection was separately fixed to avoid).
  */
 function applyConsentRetention(call: Call): void {
   const c = call.consent
@@ -368,15 +504,35 @@ function applyConsentRetention(call: Call): void {
   // can go consented → revoked/declined within one session AFTER buyer turns
   // were captured, so the current status must never short-circuit the strip.
   if (!c || c.recordOtherParty === true) return
+  const repSpeaker = call.coaching?.metrics.repSpeaker ?? null
+
+  if (call.speakerIdentities) {
+    const keys = Object.keys(call.speakerIdentities)
+    const keptKeys = keys.filter((k) => {
+      const n = speakerNumberFromKey(k)
+      if (n === null) return true // malformed key — nothing to strip, keep as-is
+      return !isOtherPartySpeaker(n, !k.startsWith('mono/'), repSpeaker)
+    })
+    if (keptKeys.length !== keys.length) {
+      const next: Record<string, SpeakerIdentityRecord> = {}
+      for (const k of keptKeys) next[k] = call.speakerIdentities[k]
+      call.speakerIdentities = next
+    }
+  }
+
   if (!Array.isArray(call.segments)) return
-  const kept = call.segments.filter((s) => s.speaker !== BUYER_SPEAKER)
+  // A gap marker is not the buyer's speech — it belongs to nobody, so it
+  // survives the strip regardless of the speaker id it happens to carry.
+  const kept = call.segments.filter(
+    (s) => s.kind === 'gap' || !isOtherPartySpeaker(s.speaker, s.channel !== undefined, repSpeaker)
+  )
   if (kept.length === call.segments.length) return
   call.segments = kept
-  call.preview = kept
+  call.preview = speechSegments(kept)
     .map((s) => s.text)
     .join(' ')
     .slice(0, 160)
-  call.speakerCount = new Set(kept.map((s) => s.speaker)).size
+  call.speakerCount = countSpeakers(kept)
 }
 
 export async function saveCall(dir: string, input: CallSaveInput): Promise<CallSummary> {
@@ -389,14 +545,16 @@ export async function saveCall(dir: string, input: CallSaveInput): Promise<CallS
     ? Math.max(0, Math.trunc(input.durationMs))
     : 0
   const id = randomUUID()
-  const transcriptText = segments.map((s) => s.text).join(' ')
+  const transcriptText = speechSegments(segments)
+    .map((s) => s.text)
+    .join(' ')
   const call: Call = {
     id,
     title: formatTitle(createdDate),
     createdAt: createdDate.toISOString(),
     updatedAt: createdDate.toISOString(), // equals createdAt at birth; bumped on edits
     durationMs,
-    speakerCount: new Set(segments.map((s) => s.speaker)).size,
+    speakerCount: countSpeakers(segments),
     preview: transcriptText.slice(0, 160),
     segments,
     attachments: [],
@@ -420,24 +578,30 @@ export async function listCalls(
   } catch {
     return []
   }
-  const summaries: CallSummary[] = []
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue
-    try {
-      const raw = await fs.readFile(join(dir, file), 'utf8')
-      const call = JSON.parse(raw) as Call
-      // Tombstones stay hidden from the app; the backup reads them via includeDeleted.
-      if (call && typeof call.id === 'string' && (opts?.includeDeleted || !call.deleted)) {
-        // Normalize consent + strip unconsented buyer turns so the list preview
-        // and speaker count never surface the other party's words either.
-        call.consent = sanitizeConsent(call.consent)
-        applyConsentRetention(call)
-        summaries.push(toSummary(call))
-      }
-    } catch {
-      /* skip unreadable / corrupt file */
-    }
-  }
+  // Reads run concurrently — one file's disk I/O never waits on another's, and
+  // order doesn't matter here since the result is sorted below regardless.
+  const results = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map(async (file): Promise<CallSummary | null> => {
+        try {
+          const raw = await fs.readFile(join(dir, file), 'utf8')
+          const call = JSON.parse(raw) as Call
+          // Tombstones stay hidden from the app; the backup reads them via includeDeleted.
+          if (call && typeof call.id === 'string' && (opts?.includeDeleted || !call.deleted)) {
+            // Normalize consent + strip unconsented buyer turns so the list preview
+            // and speaker count never surface the other party's words either.
+            call.consent = sanitizeConsent(call.consent)
+            applyConsentRetention(call)
+            return toSummary(call)
+          }
+          return null
+        } catch {
+          return null // skip unreadable / corrupt file
+        }
+      })
+  )
+  const summaries = results.filter((s): s is CallSummary => s !== null)
   summaries.sort((a, b) => b.createdAt.localeCompare(a.createdAt)) // newest first
   return summaries
 }
@@ -553,6 +717,13 @@ export function callBackupPayload(call: Call): Record<string, unknown> {
     // means "explicitly unlinked", so old rows without the field can't wipe
     // a local link.
     contactId: call.contactId ?? null,
+    // Resolved/renamed speaker names — plain metadata like contactId, not
+    // transcript content, so it's safe in the default (non-transcript) sync
+    // scope too. Caller (listCallsForBackup) already ran applyConsentRetention
+    // on this call, so a buyer's name here is only ever present when consent
+    // actually permits it — same guarantee `segments`/`preview` rely on
+    // upstream rather than re-filtering redundantly here.
+    speakerIdentities: call.speakerIdentities ?? {},
     objectionsMinedAt: call.objectionsMinedAt,
     // Attachment metadata only (name/size) so the list shows; NOT file contents
     // (local-only) nor the AI summary of the attached document.
@@ -657,6 +828,59 @@ function sanitizeBackupAttachment(value: unknown): Attachment | null {
  * than what's on disk, so a mid-restore local edit/delete is never clobbered
  * by stale cloud data.
  */
+/** Defensive validation of an incoming (untrusted, cloud-origin) speakerIdentities
+ *  map — same validation setSpeakerIdentity applies to a single write, just
+ *  looped over a whole object instead of trusting the payload's shape. */
+function sanitizeIncomingSpeakerIdentities(value: unknown): Record<string, SpeakerIdentityRecord> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const out: Record<string, SpeakerIdentityRecord> = {}
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!SPEAKER_KEY_RE.test(key)) continue
+    if (!raw || typeof raw !== 'object') continue
+    const r = raw as Record<string, unknown>
+    const name = typeof r.name === 'string' ? r.name.trim().slice(0, MAX_SPEAKER_NAME) : ''
+    if (!name) continue
+    const source = SOURCES.includes(r.source as SpeakerIdentitySource)
+      ? (r.source as SpeakerIdentitySource)
+      : 'manual'
+    const confidence = CONFIDENCES.includes(r.confidence as SpeakerIdentityConfidence)
+      ? (r.confidence as SpeakerIdentityConfidence)
+      : 'high'
+    const contactId = isSafeId(r.contactId) ? r.contactId : undefined
+    const resolvedAt = isoOrUndefined(r.resolvedAt) ?? new Date(0).toISOString()
+    out[key] = { name, source, confidence, contactId, resolvedAt }
+  }
+  return out
+}
+
+/** Reconciles local vs. cloud speakerIdentities key-by-key rather than one
+ *  side blanket-winning (the "local copy always wins when it exists" rule
+ *  segments/bookmarks use above is wrong here, since a REMOTE rename made on
+ *  a different device is real, wanted data, not stale backlog): a MANUAL
+ *  rename on either side is never silently overwritten — mirrors
+ *  setSpeakerIdentity's own skipIfManual guarantee — and otherwise whichever
+ *  entry resolved more recently wins. */
+function mergeSpeakerIdentities(
+  local: Record<string, SpeakerIdentityRecord> | undefined,
+  cloud: Record<string, SpeakerIdentityRecord>
+): Record<string, SpeakerIdentityRecord> | undefined {
+  const keys = new Set([...Object.keys(local ?? {}), ...Object.keys(cloud)])
+  if (keys.size === 0) return undefined
+  const merged: Record<string, SpeakerIdentityRecord> = {}
+  for (const key of keys) {
+    const l = local?.[key]
+    const cRec = cloud[key]
+    if (l && !cRec) merged[key] = l
+    else if (cRec && !l) merged[key] = cRec
+    else if (l && cRec) {
+      if (l.source === 'manual' && cRec.source !== 'manual') merged[key] = l
+      else if (cRec.source === 'manual' && l.source !== 'manual') merged[key] = cRec
+      else merged[key] = Date.parse(cRec.resolvedAt) > Date.parse(l.resolvedAt) ? cRec : l
+    }
+  }
+  return merged
+}
+
 export async function importCall(
   dir: string,
   payload: unknown,
@@ -758,6 +982,12 @@ export async function importCall(
       coaching = current.coaching
     }
 
+    // Resolved speaker names (M19 Task 2) — reconciled, not simply carried
+    // forward or replaced (see mergeSpeakerIdentities' own doc comment).
+    const speakerIdentities = deleted
+      ? undefined
+      : mergeSpeakerIdentities(current?.speakerIdentities, sanitizeIncomingSpeakerIdentities(v.speakerIdentities))
+
     const call: Call = {
       id,
       title,
@@ -788,6 +1018,7 @@ export async function importCall(
         ? { crmNoteGeneratedAt: current.crmNoteGeneratedAt }
         : {}),
       ...(!deleted && bookmarks.length ? { bookmarks } : {}),
+      ...(speakerIdentities && Object.keys(speakerIdentities).length ? { speakerIdentities } : {}),
       ...(deleted ? { deleted: true } : {})
     }
     // Mirror every other persister (saveCall/getCall/listCalls): strip buyer
@@ -904,6 +1135,86 @@ export async function setCallContact(
       call.contactId = contactId
     } else {
       return call // not a recognizable id and not an explicit clear — leave as-is
+    }
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+const MAX_SPEAKER_NAME = 200
+const SPEAKER_KEY_RE = /^(mono|ch[01])\/spk\d+$/
+const SOURCES: SpeakerIdentitySource[] = [
+  'user-profile',
+  'calendar',
+  'contact',
+  'participant-list',
+  'self-intro',
+  'voice-profile',
+  'manual'
+]
+const CONFIDENCES: SpeakerIdentityConfidence[] = ['high', 'medium', 'low']
+
+/**
+ * Set (or clear, with `name: null`) the resolved name for one speaker key on
+ * one call — the single write path for BOTH the auto-resolution cascade
+ * (source !== 'manual') and a user's inline rename (source: 'manual').
+ * A manual rename always overwrites a lower-confidence auto-resolution; an
+ * auto-resolution call is expected to check the existing entry itself before
+ * calling this (the cascade should never clobber a rep's manual rename).
+ */
+export async function setSpeakerIdentity(
+  dir: string,
+  callId: string,
+  key: unknown,
+  patch: {
+    name: unknown
+    source: unknown
+    confidence: unknown
+    contactId?: unknown
+  },
+  opts?: {
+    /** The auto-resolution cascade's guard against clobbering a rename —
+     *  checked HERE, atomically with the write inside this function's own
+     *  withCallLock section, never by a caller pre-reading the call and
+     *  deciding from a snapshot that can go stale during its own async work
+     *  (calendar/contact lookups) before the write actually lands. A caller
+     *  that took a snapshot and checked `existing?.source === 'manual'`
+     *  itself was the exact TOCTOU this parameter exists to close. */
+    skipIfManual?: boolean
+  }
+): Promise<Call | null> {
+  if (typeof key !== 'string' || !SPEAKER_KEY_RE.test(key)) return null
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+
+    // Re-checked against the CURRENT on-disk state, inside the same lock
+    // section as the write below — not a value the caller read earlier.
+    if (opts?.skipIfManual && call.speakerIdentities?.[key]?.source === 'manual') {
+      return call
+    }
+
+    if (patch.name === null) {
+      if (call.speakerIdentities) delete call.speakerIdentities[key]
+      call.updatedAt = new Date().toISOString()
+      await writeCall(dir, call)
+      return call
+    }
+
+    const name = typeof patch.name === 'string' ? patch.name.trim().slice(0, MAX_SPEAKER_NAME) : ''
+    if (!name) return call // nothing usable — leave existing entry (if any) untouched
+    const source = SOURCES.includes(patch.source as SpeakerIdentitySource)
+      ? (patch.source as SpeakerIdentitySource)
+      : 'manual'
+    const confidence = CONFIDENCES.includes(patch.confidence as SpeakerIdentityConfidence)
+      ? (patch.confidence as SpeakerIdentityConfidence)
+      : 'high' // a manual rename IS the ground truth
+    const contactId = isSafeId(patch.contactId) ? patch.contactId : undefined
+
+    call.speakerIdentities = {
+      ...call.speakerIdentities,
+      [key]: { name, source, confidence, contactId, resolvedAt: new Date().toISOString() }
     }
     call.updatedAt = new Date().toISOString()
     await writeCall(dir, call)
@@ -1199,9 +1510,28 @@ export async function setCallCoaching(
   return withCallLock(callId, async () => {
     const call = await getCall(dir, callId)
     if (!call) return null
-    const clean = sanitizeCoaching(report, call.segments)
+    const clean = sanitizeCoaching(report, speechSegments(call.segments))
     if (!clean) return null // nothing usable to save — signal failure to the caller
     call.coaching = clean
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+export async function setCallCommitments(
+  dir: string,
+  callId: string,
+  commitments: Commitment[]
+): Promise<Call | null> {
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    // Re-sanitized here too (not just at generation time in commitments.ts) —
+    // the same defense-in-depth every other AI-derived field on a call gets:
+    // whatever reaches disk was validated at the point of writing it, not just
+    // trusted because it came from the extraction call moments earlier.
+    call.commitments = sanitizeCommitments(commitments)
     call.updatedAt = new Date().toISOString()
     await writeCall(dir, call)
     return call

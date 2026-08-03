@@ -30,7 +30,63 @@ export interface Contact {
   phoneCountry?: string
   /** National number only (no dial code — that's phoneCountry). */
   phone?: string
+  /** E.164 (e.g. "+14155551234"), computed by the renderer from
+   *  phoneCountry+phone at write time (it owns the country→dial-code table;
+   *  main only validates the format) — the join key M19 Task 2's
+   *  phone-based contact matching uses. */
+  phoneE164?: string
   notes?: string
+
+  // --- KYC / Business (M19) ---
+  /** Industry classification. */
+  industry?: string
+  /** Company size (e.g., "1-10", "11-50", "51-250", "250+"). */
+  companySize?: string
+  /** Website URL. */
+  website?: string
+  /** Registration number, VAT ID, or similar. */
+  registrationNumber?: string
+  /** Verification status of the company (e.g., "verified", "pending", "failed"). */
+  verificationStatus?: string
+  /** Job title / role. */
+  title?: string
+  /** Primary contact's decision-making authority level. */
+  decisionAuthority?: string
+  /** Other stakeholders involved (free text). */
+  otherStakeholders?: string
+
+  // --- Deal Context (M19) ---
+  /** Deal value associated with this contact. */
+  dealValue?: number
+  /** Pipeline stage (links to deal-stages if a deal exists). */
+  pipelineStage?: string
+  /** Source of lead (e.g., "inbound", "cold outreach", "referral"). */
+  leadSource?: string
+  /** Budget indication for this prospect. */
+  budgetIndication?: string
+  /** Timeline/urgency (e.g., "Q1", "ASAP", "TBD"). */
+  timeline?: string
+  /** Competitors in play (free text). */
+  competitors?: string
+  /** Known objections, stored as free text. */
+  knownObjections?: string
+  /** Their current tooling / solutions in use. */
+  currentTooling?: string
+  /** Last contact date as ISO string (yyyy-mm-dd). */
+  lastContactDate?: string
+
+  // --- Personal / Soft (M19) ---
+  /** Preferred language for communication. */
+  preferredLanguage?: string
+  /** Communication style (e.g., "formal", "casual", "email-first"). */
+  communicationStyle?: string
+  /** Timezone (IANA format, e.g., "America/New_York"). */
+  timezone?: string
+  /** Personal notes ("has two kids", "mentions cycling"). */
+  personalNotes?: string
+  /** Large free-text field: "Anything else the AI should know before I meet this person". */
+  briefingNotes?: string
+
   createdAt: string // ISO timestamp
   /** Last modification (create or any edit), ISO timestamp — the ordering key a
    *  future cloud backup would use for "newest wins". Backfilled from createdAt
@@ -52,7 +108,30 @@ export interface ContactCreateInput {
   email?: unknown
   phoneCountry?: unknown
   phone?: unknown
+  phoneE164?: unknown
   notes?: unknown
+  industry?: unknown
+  companySize?: unknown
+  website?: unknown
+  registrationNumber?: unknown
+  verificationStatus?: unknown
+  title?: unknown
+  decisionAuthority?: unknown
+  otherStakeholders?: unknown
+  dealValue?: unknown
+  pipelineStage?: unknown
+  leadSource?: unknown
+  budgetIndication?: unknown
+  timeline?: unknown
+  competitors?: unknown
+  knownObjections?: unknown
+  currentTooling?: unknown
+  lastContactDate?: unknown
+  preferredLanguage?: unknown
+  communicationStyle?: unknown
+  timezone?: unknown
+  personalNotes?: unknown
+  briefingNotes?: unknown
 }
 
 /** Fields the renderer may change. A key present with `null` clears that
@@ -66,7 +145,30 @@ export interface ContactUpdateInput {
   email?: unknown
   phoneCountry?: unknown
   phone?: unknown
+  phoneE164?: unknown
   notes?: unknown
+  industry?: unknown
+  companySize?: unknown
+  website?: unknown
+  registrationNumber?: unknown
+  verificationStatus?: unknown
+  title?: unknown
+  decisionAuthority?: unknown
+  otherStakeholders?: unknown
+  dealValue?: unknown
+  pipelineStage?: unknown
+  leadSource?: unknown
+  budgetIndication?: unknown
+  timeline?: unknown
+  competitors?: unknown
+  knownObjections?: unknown
+  currentTooling?: unknown
+  lastContactDate?: unknown
+  preferredLanguage?: unknown
+  communicationStyle?: unknown
+  timezone?: unknown
+  personalNotes?: unknown
+  briefingNotes?: unknown
 }
 
 // Ids are used to build file paths, so they must be tightly constrained
@@ -80,6 +182,9 @@ const MAX_CID = 100
 const MAX_EMAIL = 320
 const MAX_PHONE = 40
 const MAX_NOTES = 2000
+const MAX_SHORT_TEXT = 100
+const MAX_LONG_TEXT = 1000
+const MAX_BRIEFING = 5000
 
 export function isSafeId(id: unknown): id is string {
   return typeof id === 'string' && ID_RE.test(id)
@@ -122,6 +227,33 @@ function sanitizeMultilineText(value: unknown, max: number): string | undefined 
   return clean ? clean : undefined
 }
 
+/** Validate and bound a currency amount. */
+function sanitizeValue(value: unknown): number | undefined {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  if (!Number.isFinite(n) || n < 0) return undefined
+  return Math.round(n * 100) / 100
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+/** Trim + lowercase, so a calendar attendee's email ("Jane@Acme.com") and a
+ *  hand-typed one ("jane@acme.com") always match on the same normalized
+ *  string — the join key M19 Task 2's calendar/contact matching relies on.
+ *  Rejects anything that doesn't look like an email at all. */
+function sanitizeEmail(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const clean = value.trim().toLowerCase()
+  return EMAIL_RE.test(clean) ? clean.slice(0, MAX_EMAIL) : undefined
+}
+
+// ITU-T E.164: a leading '+', then 7-15 digits, first digit 1-9 (no leading
+// zero after the '+'). Format ONLY is validated here — the country->dial-code
+// table (needed to actually PRODUCE this from phoneCountry+phone) lives in the
+// renderer (src/renderer/src/lib/countries.ts), so main never duplicates it.
+const E164_RE = /^\+[1-9]\d{6,14}$/
+function sanitizePhoneE164(value: unknown): string | undefined {
+  return typeof value === 'string' && E164_RE.test(value.trim()) ? value.trim() : undefined
+}
+
 async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true })
 }
@@ -161,10 +293,33 @@ function sanitizeContactRecord(value: unknown): Contact | null {
     cid: sanitizeOptionalText(v.cid, MAX_CID),
     registeredAt: sanitizeDateOnly(v.registeredAt),
     country: sanitizeCountryCode(v.country),
-    email: sanitizeOptionalText(v.email, MAX_EMAIL),
+    email: sanitizeEmail(v.email),
     phoneCountry: sanitizeCountryCode(v.phoneCountry),
     phone: sanitizeOptionalText(v.phone, MAX_PHONE),
+    phoneE164: sanitizePhoneE164(v.phoneE164),
     notes: sanitizeMultilineText(v.notes, MAX_NOTES),
+    industry: sanitizeOptionalText(v.industry, MAX_SHORT_TEXT),
+    companySize: sanitizeOptionalText(v.companySize, MAX_SHORT_TEXT),
+    website: sanitizeOptionalText(v.website, MAX_LONG_TEXT),
+    registrationNumber: sanitizeOptionalText(v.registrationNumber, MAX_SHORT_TEXT),
+    verificationStatus: sanitizeOptionalText(v.verificationStatus, MAX_SHORT_TEXT),
+    title: sanitizeOptionalText(v.title, MAX_SHORT_TEXT),
+    decisionAuthority: sanitizeOptionalText(v.decisionAuthority, MAX_SHORT_TEXT),
+    otherStakeholders: sanitizeMultilineText(v.otherStakeholders, MAX_LONG_TEXT),
+    dealValue: sanitizeValue(v.dealValue),
+    pipelineStage: sanitizeOptionalText(v.pipelineStage, MAX_SHORT_TEXT),
+    leadSource: sanitizeOptionalText(v.leadSource, MAX_SHORT_TEXT),
+    budgetIndication: sanitizeOptionalText(v.budgetIndication, MAX_SHORT_TEXT),
+    timeline: sanitizeOptionalText(v.timeline, MAX_SHORT_TEXT),
+    competitors: sanitizeMultilineText(v.competitors, MAX_LONG_TEXT),
+    knownObjections: sanitizeMultilineText(v.knownObjections, MAX_LONG_TEXT),
+    currentTooling: sanitizeMultilineText(v.currentTooling, MAX_LONG_TEXT),
+    lastContactDate: sanitizeDateOnly(v.lastContactDate),
+    preferredLanguage: sanitizeOptionalText(v.preferredLanguage, MAX_SHORT_TEXT),
+    communicationStyle: sanitizeOptionalText(v.communicationStyle, MAX_SHORT_TEXT),
+    timezone: sanitizeOptionalText(v.timezone, MAX_SHORT_TEXT),
+    personalNotes: sanitizeMultilineText(v.personalNotes, MAX_LONG_TEXT),
+    briefingNotes: sanitizeMultilineText(v.briefingNotes, MAX_BRIEFING),
     createdAt,
     updatedAt
   }
@@ -185,10 +340,33 @@ export async function createContact(
     cid: sanitizeOptionalText(input?.cid, MAX_CID),
     registeredAt: sanitizeDateOnly(input?.registeredAt),
     country: sanitizeCountryCode(input?.country),
-    email: sanitizeOptionalText(input?.email, MAX_EMAIL),
+    email: sanitizeEmail(input?.email),
     phoneCountry: sanitizeCountryCode(input?.phoneCountry),
     phone: sanitizeOptionalText(input?.phone, MAX_PHONE),
+    phoneE164: sanitizePhoneE164(input?.phoneE164),
     notes: sanitizeMultilineText(input?.notes, MAX_NOTES),
+    industry: sanitizeOptionalText(input?.industry, MAX_SHORT_TEXT),
+    companySize: sanitizeOptionalText(input?.companySize, MAX_SHORT_TEXT),
+    website: sanitizeOptionalText(input?.website, MAX_LONG_TEXT),
+    registrationNumber: sanitizeOptionalText(input?.registrationNumber, MAX_SHORT_TEXT),
+    verificationStatus: sanitizeOptionalText(input?.verificationStatus, MAX_SHORT_TEXT),
+    title: sanitizeOptionalText(input?.title, MAX_SHORT_TEXT),
+    decisionAuthority: sanitizeOptionalText(input?.decisionAuthority, MAX_SHORT_TEXT),
+    otherStakeholders: sanitizeMultilineText(input?.otherStakeholders, MAX_LONG_TEXT),
+    dealValue: sanitizeValue(input?.dealValue),
+    pipelineStage: sanitizeOptionalText(input?.pipelineStage, MAX_SHORT_TEXT),
+    leadSource: sanitizeOptionalText(input?.leadSource, MAX_SHORT_TEXT),
+    budgetIndication: sanitizeOptionalText(input?.budgetIndication, MAX_SHORT_TEXT),
+    timeline: sanitizeOptionalText(input?.timeline, MAX_SHORT_TEXT),
+    competitors: sanitizeMultilineText(input?.competitors, MAX_LONG_TEXT),
+    knownObjections: sanitizeMultilineText(input?.knownObjections, MAX_LONG_TEXT),
+    currentTooling: sanitizeMultilineText(input?.currentTooling, MAX_LONG_TEXT),
+    lastContactDate: sanitizeDateOnly(input?.lastContactDate),
+    preferredLanguage: sanitizeOptionalText(input?.preferredLanguage, MAX_SHORT_TEXT),
+    communicationStyle: sanitizeOptionalText(input?.communicationStyle, MAX_SHORT_TEXT),
+    timezone: sanitizeOptionalText(input?.timezone, MAX_SHORT_TEXT),
+    personalNotes: sanitizeMultilineText(input?.personalNotes, MAX_LONG_TEXT),
+    briefingNotes: sanitizeMultilineText(input?.briefingNotes, MAX_BRIEFING),
     createdAt: now,
     updatedAt: now
   }
@@ -207,18 +385,21 @@ export async function listContacts(
   } catch {
     return []
   }
-  const contacts: Contact[] = []
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue
-    try {
-      const raw = await fs.readFile(join(dir, file), 'utf8')
-      const contact = sanitizeContactRecord(JSON.parse(raw))
-      // Tombstones stay hidden from the app; a future backup reads them via includeDeleted.
-      if (contact && (opts?.includeDeleted || !contact.deleted)) contacts.push(contact)
-    } catch {
-      /* skip unreadable / corrupt file */
-    }
-  }
+  const results = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map(async (file): Promise<Contact | null> => {
+        try {
+          const raw = await fs.readFile(join(dir, file), 'utf8')
+          const contact = sanitizeContactRecord(JSON.parse(raw))
+          // Tombstones stay hidden from the app; a future backup reads them via includeDeleted.
+          return contact && (opts?.includeDeleted || !contact.deleted) ? contact : null
+        } catch {
+          return null // skip unreadable / corrupt file
+        }
+      })
+  )
+  const contacts = results.filter((c): c is Contact => c !== null)
   // Alphabetical by name as a stable default; the renderer applies its own ordering.
   contacts.sort((a, b) => a.name.localeCompare(b.name))
   return contacts
@@ -284,10 +465,33 @@ async function updateContactUnlocked(
   if ('cid' in patch) contact.cid = sanitizeOptionalText(patch.cid, MAX_CID)
   if ('registeredAt' in patch) contact.registeredAt = sanitizeDateOnly(patch.registeredAt)
   if ('country' in patch) contact.country = sanitizeCountryCode(patch.country)
-  if ('email' in patch) contact.email = sanitizeOptionalText(patch.email, MAX_EMAIL)
+  if ('email' in patch) contact.email = sanitizeEmail(patch.email)
   if ('phoneCountry' in patch) contact.phoneCountry = sanitizeCountryCode(patch.phoneCountry)
   if ('phone' in patch) contact.phone = sanitizeOptionalText(patch.phone, MAX_PHONE)
+  if ('phoneE164' in patch) contact.phoneE164 = sanitizePhoneE164(patch.phoneE164)
   if ('notes' in patch) contact.notes = sanitizeMultilineText(patch.notes, MAX_NOTES)
+  if ('industry' in patch) contact.industry = sanitizeOptionalText(patch.industry, MAX_SHORT_TEXT)
+  if ('companySize' in patch) contact.companySize = sanitizeOptionalText(patch.companySize, MAX_SHORT_TEXT)
+  if ('website' in patch) contact.website = sanitizeOptionalText(patch.website, MAX_LONG_TEXT)
+  if ('registrationNumber' in patch) contact.registrationNumber = sanitizeOptionalText(patch.registrationNumber, MAX_SHORT_TEXT)
+  if ('verificationStatus' in patch) contact.verificationStatus = sanitizeOptionalText(patch.verificationStatus, MAX_SHORT_TEXT)
+  if ('title' in patch) contact.title = sanitizeOptionalText(patch.title, MAX_SHORT_TEXT)
+  if ('decisionAuthority' in patch) contact.decisionAuthority = sanitizeOptionalText(patch.decisionAuthority, MAX_SHORT_TEXT)
+  if ('otherStakeholders' in patch) contact.otherStakeholders = sanitizeMultilineText(patch.otherStakeholders, MAX_LONG_TEXT)
+  if ('dealValue' in patch) contact.dealValue = sanitizeValue(patch.dealValue)
+  if ('pipelineStage' in patch) contact.pipelineStage = sanitizeOptionalText(patch.pipelineStage, MAX_SHORT_TEXT)
+  if ('leadSource' in patch) contact.leadSource = sanitizeOptionalText(patch.leadSource, MAX_SHORT_TEXT)
+  if ('budgetIndication' in patch) contact.budgetIndication = sanitizeOptionalText(patch.budgetIndication, MAX_SHORT_TEXT)
+  if ('timeline' in patch) contact.timeline = sanitizeOptionalText(patch.timeline, MAX_SHORT_TEXT)
+  if ('competitors' in patch) contact.competitors = sanitizeMultilineText(patch.competitors, MAX_LONG_TEXT)
+  if ('knownObjections' in patch) contact.knownObjections = sanitizeMultilineText(patch.knownObjections, MAX_LONG_TEXT)
+  if ('currentTooling' in patch) contact.currentTooling = sanitizeMultilineText(patch.currentTooling, MAX_LONG_TEXT)
+  if ('lastContactDate' in patch) contact.lastContactDate = sanitizeDateOnly(patch.lastContactDate)
+  if ('preferredLanguage' in patch) contact.preferredLanguage = sanitizeOptionalText(patch.preferredLanguage, MAX_SHORT_TEXT)
+  if ('communicationStyle' in patch) contact.communicationStyle = sanitizeOptionalText(patch.communicationStyle, MAX_SHORT_TEXT)
+  if ('timezone' in patch) contact.timezone = sanitizeOptionalText(patch.timezone, MAX_SHORT_TEXT)
+  if ('personalNotes' in patch) contact.personalNotes = sanitizeMultilineText(patch.personalNotes, MAX_LONG_TEXT)
+  if ('briefingNotes' in patch) contact.briefingNotes = sanitizeMultilineText(patch.briefingNotes, MAX_BRIEFING)
 
   contact.updatedAt = new Date().toISOString() // mark modified (future backup ordering key)
 
@@ -411,4 +615,30 @@ export async function importContact(
     }
     return contact
   })
+}
+
+// --- Lookups for M19 Task 2's speaker-identification cascade ----------------
+// Both are plain linear scans over listContacts() — fine at the scale this
+// app operates at (a rep's own contacts, not a shared database), and it keeps
+// the lookup honest about reading the SAME sanitized/normalized records every
+// other consumer sees, rather than a separate index that could drift stale.
+
+/** Find a contact by email, case-insensitively (both sides normalized the
+ *  same way sanitizeEmail does). Returns null if no contact has this email,
+ *  or if the input itself isn't a well-formed address. */
+export async function findContactByEmail(dir: string, email: string): Promise<Contact | null> {
+  const normalized = sanitizeEmail(email)
+  if (!normalized) return null
+  const contacts = await listContacts(dir)
+  return contacts.find((c) => c.email === normalized) ?? null
+}
+
+/** Find a contact by E.164 phone number (exact match — the caller is
+ *  responsible for having already normalized the number it's matching
+ *  against, e.g. via the renderer's countryDial() + digit-stripping). */
+export async function findContactByPhone(dir: string, phoneE164: string): Promise<Contact | null> {
+  const normalized = sanitizePhoneE164(phoneE164)
+  if (!normalized) return null
+  const contacts = await listContacts(dir)
+  return contacts.find((c) => c.phoneE164 === normalized) ?? null
 }

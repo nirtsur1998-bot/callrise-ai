@@ -1,19 +1,15 @@
 import type { AIProvider, AIProviderId } from './types'
-import { AnthropicProvider } from './providers/anthropic'
-import { OpenAIProvider } from './providers/openai'
+import { PROVIDER_REGISTRY } from './registry'
 import { loadAppSettings } from '../app-settings'
 
 export * from './types'
-
-const KEY_ENV_BY_PROVIDER: Record<AIProviderId, string> = {
-  anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'OPENAI_API_KEY'
-}
+export { PROVIDER_REGISTRY } from './registry'
+export type { ProviderRegistryEntry } from './registry'
 
 /** Which key env var backs a given provider — ai-keys.ts's loadStoredAiKeysIntoEnv()
  *  populates these at startup from encrypted storage. */
 export function keyEnvNameFor(providerId: AIProviderId): string {
-  return KEY_ENV_BY_PROVIDER[providerId]
+  return PROVIDER_REGISTRY[providerId].keyEnvName
 }
 
 /** Build the active provider for one call, or null if its key isn't configured.
@@ -21,9 +17,10 @@ export function keyEnvNameFor(providerId: AIProviderId): string {
  *  provider switch in Settings) must take effect on the very next call,
  *  not after a restart. Constructing an SDK client is cheap. */
 export function getAIProvider(providerId: AIProviderId): AIProvider | null {
-  const key = process.env[KEY_ENV_BY_PROVIDER[providerId]]?.trim()
+  const entry = PROVIDER_REGISTRY[providerId]
+  const key = process.env[entry.keyEnvName]?.trim()
   if (!key) return null
-  return providerId === 'anthropic' ? new AnthropicProvider(key) : new OpenAIProvider(key)
+  return entry.build(key)
 }
 
 /** The single entry point every call site uses - reads the user's chosen
@@ -40,5 +37,5 @@ export function getActiveAIProvider(): AIProvider | null {
  *  Settings "Test key" flow, which validates a key the user just pasted and
  *  hasn't necessarily saved yet. */
 export function buildProviderForValidation(providerId: AIProviderId, apiKey: string): AIProvider {
-  return providerId === 'anthropic' ? new AnthropicProvider(apiKey) : new OpenAIProvider(apiKey)
+  return PROVIDER_REGISTRY[providerId].build(apiKey)
 }

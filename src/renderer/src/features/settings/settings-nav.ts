@@ -14,12 +14,15 @@ import {
   MessageSquareQuote,
   KeyRound,
   Radar,
+  BellRing,
+  Layers,
   type LucideIcon
 } from 'lucide-react'
 
 export type SettingsPageId =
   | 'account'
   | 'ai-setup'
+  | 'ai-models'
   | 'ai-note-taker'
   | 'call-detection'
   | 'recording-consent'
@@ -30,6 +33,7 @@ export type SettingsPageId =
   | 'objection-library'
   | 'calendar'
   | 'crm'
+  | 'alerts'
   | 'app'
   | 'appearance'
   | 'privacy-data'
@@ -59,7 +63,14 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         label: 'API keys',
         icon: KeyRound,
         description:
-          'Your own Deepgram (transcription) and Anthropic (coaching & summaries) keys — required for those features to work.'
+          'Your own Deepgram (transcription) and text-AI provider keys — required for those features to work.'
+      },
+      {
+        id: 'ai-models',
+        label: 'Model Assignment',
+        icon: Layers,
+        description:
+          'Which model handles each job — live coaching cues, post-call summaries, scorecards, task extraction, and prep briefs — with an automatic fallback chain if one is unavailable.'
       }
     ]
   },
@@ -155,6 +166,18 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         icon: Contact,
         description:
           'Calendar-match suggestions, default country, and auto-numbered customer IDs for Contacts.'
+      }
+    ]
+  },
+  {
+    label: 'Alerts',
+    items: [
+      {
+        id: 'alerts',
+        label: 'Scheduled alerts',
+        icon: BellRing,
+        description:
+          'Reminders for meetings, tasks, cooling deals, and missed next steps — delivered to Telegram, email, or desktop, even when the app is closed.'
       }
     ]
   },

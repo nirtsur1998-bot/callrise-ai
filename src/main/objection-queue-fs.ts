@@ -163,17 +163,19 @@ export async function listQueue(dir: string): Promise<ObjectionQueueItem[]> {
   } catch {
     return []
   }
-  const items: ObjectionQueueItem[] = []
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue
-    try {
-      const raw = await fs.readFile(join(dir, file), 'utf8')
-      const item = sanitizeItem(JSON.parse(raw))
-      if (item) items.push(item)
-    } catch {
-      /* skip unreadable / corrupt file */
-    }
-  }
+  const results = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map(async (file): Promise<ObjectionQueueItem | null> => {
+        try {
+          const raw = await fs.readFile(join(dir, file), 'utf8')
+          return sanitizeItem(JSON.parse(raw))
+        } catch {
+          return null // skip unreadable / corrupt file
+        }
+      })
+  )
+  const items = results.filter((i): i is ObjectionQueueItem => i !== null)
   items.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   return items
 }

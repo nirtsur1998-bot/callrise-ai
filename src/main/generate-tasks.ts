@@ -1,4 +1,5 @@
-import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
+import { AIProviderError, type AITool } from './ai'
+import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
 import type { TaskPriority, TaskType } from './tasks-fs'
 
 const MAX_TEXT_CHARS = 200_000 // keep requests bounded
@@ -92,8 +93,17 @@ const ALLOWED_TYPES = new Set<TaskType>(['follow-up', 'email', 'meeting', 'resea
 const ALLOWED_PRIORITIES = new Set<TaskPriority>(['low', 'medium', 'high'])
 
 function friendlyError(err: unknown): string {
+  if (err instanceof AllModelsExhaustedError) {
+    return 'Every configured AI model failed to generate tasks. Check your keys and free-tier limits in Settings, or try again shortly.'
+  }
   if (err instanceof AIProviderError) return err.message
   return 'Something went wrong while generating tasks. Please try again.'
+}
+
+/** See coach.ts's identical helper — preserves the 'no-key' vs 'failed'
+ *  distinction the renderer's "set up your key" UI depends on. */
+function errorCodeFrom(err: unknown): 'no-key' | 'failed' {
+  return err instanceof AIProviderError && err.code === 'no-key' ? 'no-key' : 'failed'
 }
 
 /** Convert the model's "days from now" estimate into an absolute ISO due date. */
@@ -131,12 +141,9 @@ function toProposedTask(value: unknown): ProposedTask | null {
 
 /** Ask the model for suggested tasks from a call's text. Does not save anything. */
 export async function generateTasks(text: string): Promise<GenerateTasksResult> {
-  const provider = getActiveAIProvider()
-  if (!provider) return { ok: false, error: 'no-key' }
-
   const trimmed = text.slice(0, MAX_TEXT_CHARS)
   try {
-    const result = await provider.complete({
+    const result = await completeWithFallback({
       purpose: 'tasks',
       maxTokens: 4096,
       tool: TASKS_TOOL,
@@ -152,6 +159,6 @@ export async function generateTasks(text: string): Promise<GenerateTasksResult> 
 
     return { ok: true, tasks }
   } catch (err) {
-    return { ok: false, error: 'failed', message: friendlyError(err) }
+    return { ok: false, error: errorCodeFrom(err), message: friendlyError(err) }
   }
 }

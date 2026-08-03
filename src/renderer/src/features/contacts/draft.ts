@@ -11,6 +11,36 @@ export interface ContactDraft {
   phoneCountry: string | undefined
   phone: string
   notes: string
+
+  // --- KYC / Business (M19) ---
+  industry?: string
+  companySize?: string
+  website?: string
+  registrationNumber?: string
+  verificationStatus?: string
+  title?: string
+  decisionAuthority?: string
+  otherStakeholders?: string
+
+  // --- Deal Context (M19) ---
+  dealValue?: number | string
+  pipelineStage?: string
+  leadSource?: string
+  budgetIndication?: string
+  timeline?: string
+  competitors?: string
+  knownObjections?: string
+  currentTooling?: string
+  lastContactDate?: string
+
+  // --- Personal / Soft (M19) ---
+  preferredLanguage?: string
+  communicationStyle?: string
+  timezone?: string
+  personalNotes?: string
+
+  // --- Briefing (M19) ---
+  briefingNotes?: string
 }
 
 /** @param defaultCountry Settings → CRM's "default country for new contacts"
@@ -25,6 +55,28 @@ export function emptyDraft(defaultCountry?: string): ContactDraft {
     email: '',
     phoneCountry: undefined,
     phone: '',
-    notes: ''
+    notes: '',
+    industry: '',
+    companySize: '',
+    website: '',
+    registrationNumber: '',
+    verificationStatus: '',
+    title: '',
+    decisionAuthority: '',
+    otherStakeholders: '',
+    dealValue: undefined,
+    pipelineStage: '',
+    leadSource: '',
+    budgetIndication: '',
+    timeline: '',
+    competitors: '',
+    knownObjections: '',
+    currentTooling: '',
+    lastContactDate: '',
+    preferredLanguage: '',
+    communicationStyle: '',
+    timezone: '',
+    personalNotes: '',
+    briefingNotes: ''
   }
 }

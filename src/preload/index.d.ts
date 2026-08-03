@@ -11,6 +11,8 @@ export interface TranscriptionStateEvent {
 export interface TranscriptWord {
   speaker: number
   text: string
+  /** 0 = the rep's mic, 1 = the other party. Absent on mono calls. */
+  channel?: number
 }
 
 export interface TranscriptResultEvent {
@@ -30,6 +32,52 @@ export interface TranscriptionErrorEvent {
   message: string
 }
 
+export interface PostCallBrief {
+  brief: string
+  nextSteps: string[]
+  email: { subject: string; body: string }
+  model: string
+  createdAt: string
+}
+
+export type PostCallBriefEvent =
+  | { ok: true; brief: PostCallBrief; copied: boolean }
+  | { ok: false; error: 'no-key' | 'failed' | 'empty-call'; message?: string }
+
+/** The durable consent gate: main reads capture permission from disk, never
+ *  from the renderer's word for it (acceptance criterion 11). */
+export interface ConsentGateApi {
+  /** Write this call's consent. Returns false when it does not permit capture. */
+  persist: (sessionId: number, consent: ConsentRecord) => boolean
+  /** Drop the record — call ended, or consent revoked. */
+  clear: () => void
+}
+
+export interface TranscriptionGapEvent {
+  /** How much audio was lost. */
+  durationMs: number
+  /** Why: backlog dropped to rejoin the live edge, queue overflow, or a suspend. */
+  reason: 'reconnect' | 'shed' | 'sleep'
+  /** Ready-to-render marker, e.g. `[gap: 34s]`. */
+  marker: string
+}
+
+export interface TranscriptionHealthEvent {
+  /** Seconds of audio handed to the socket, cumulative across reconnects. */
+  submittedSec: number
+  /** Seconds Deepgram has acknowledged, on the same cumulative scale. */
+  acknowledgedSec: number
+  lagSec: number
+  /** The 5-sample median the watchdog actually acts on. */
+  medianLagSec: number
+  tier: 'none' | 'warn' | 'shed' | 'reset'
+  queuedSec: number
+  shedSec: number
+  resets: number
+  gaps: ReadonlyArray<{ atMs: number; durationMs: number; reason: string }>
+  liveness: 'ok' | 'silent' | 'capture-dead' | 'socket-dead'
+}
+
 export interface TranscriptionApi {
   ensureMicAccess: () => Promise<{ status: MicAccessStatus }>
   openMicSettings: () => Promise<{ ok: boolean }>
@@ -41,6 +89,8 @@ export interface TranscriptionApi {
     expectedSessionId?: number
   }) => Promise<{ ok: boolean; error?: 'no-key' | 'stale'; sessionId?: number }>
   sendAudio: (chunk: ArrayBuffer) => void
+  requestAudioPort: () => void
+  reportAudioDropped: (frames: number) => void
   stop: () => Promise<{ ok: boolean }>
   onState: (cb: (payload: TranscriptionStateEvent) => void) => () => void
   onTranscript: (cb: (payload: TranscriptResultEvent) => void) => () => void
@@ -48,6 +98,21 @@ export interface TranscriptionApi {
   onUtteranceEnd: (cb: (payload: Record<string, never>) => void) => () => void
   /** Fires after a stopped session's connection has fully closed (flush done). */
   onClosed: (cb: (payload: Record<string, never>) => void) => () => void
+  /** Audio that will never be transcribed — shed, discarded on reconnect, or
+   *  lost to a suspend. Surfaced as a `[gap: Ns]` marker in the transcript so
+   *  two distant moments are never silently spliced together. */
+  onGap: (cb: (payload: TranscriptionGapEvent) => void) => () => void
+  /** 1Hz session-health snapshot (lag cursors, queue, shed, liveness). */
+  onHealth: (cb: (payload: TranscriptionHealthEvent) => void) => () => void
+  /** No audio callbacks for ~10s: the capture device is gone, reacquire. */
+  onCaptureLost: (cb: (payload: { forMs: number }) => void) => () => void
+  onBuyerSilent: (cb: (payload: { reason: string }) => void) => () => void
+  /** M19 Task 2 Part A — Deepgram's claimed channel disagreed with which
+   *  channel actually had the energy for a finalized utterance (the
+   *  loudspeaker/echo signature: buyer audio leaking into the mic). Not
+   *  fatal, not a reassignment — just a "this attribution may be wrong,
+   *  consider headphones" signal, same spirit as onBuyerSilent above. */
+  onCrossTalkWarning: (cb: (payload: Record<string, never>) => void) => () => void
   /** Async, non-blocking: a short next-question suggestion for live cues. */
   suggestQuestion: (text: string) => Promise<{ ok: true; question: string } | { ok: false }>
   /** Manual mid-call help: sends the running transcript + the rep's question. */
@@ -65,14 +130,61 @@ export interface TranscriptionApi {
         repSpeaker: number | null
         cue: 'objection' | 'discovery' | 'next-question' | 'buying-signal' | 'none'
         text: string
+        /** M19 Task 2 step 5 — null unless Settings has self-intro
+         *  extraction on AND the other party explicitly said their name. */
+        buyerName: string | null
+        buyerSpeaker: number | null
       }
-    | { ok: false }
+    | {
+        ok: false
+        /** M20 — set only when the whole per-job fallback chain was tried
+         *  and every entry failed this cycle (not on "not enough transcript
+         *  yet"). Renderer shows a small non-blocking "coaching paused"
+         *  indicator, never a modal — see LiveView.tsx. */
+        pausedReason?: 'all-models-unavailable'
+      }
   >
+}
+
+/** Plain-English custom trackers (§4.8) — the rep types a request, gets a
+ *  candidate trigger back, and (once accepted) it's persisted here and fed
+ *  into the live BattlecardMatcher alongside the starter library. */
+export interface TrackersApi {
+  /** Raw, unsanitized AI output — run it through sanitizeGeneratedTrigger
+   *  (features/live/battlecards/from-prompt.ts) before trusting it. */
+  generate: (
+    prompt: string
+  ) => Promise<
+    { ok: true; raw: unknown } | { ok: false; error: 'no-key' | 'failed'; message?: string }
+  >
+  list: () => Promise<StoredTracker[]>
+  /** Replaces the whole persisted list. */
+  save: (trackers: unknown) => Promise<StoredTracker[]>
+}
+
+export type StoredTrackerCategory = 'objection' | 'competitor' | 'pricing' | 'process'
+
+export interface StoredTracker {
+  id: string
+  patterns: string[]
+  card: {
+    id: string
+    label: string
+    say: string
+    category: StoredTrackerCategory
+  }
 }
 
 export interface CallSegment {
   speaker: number
   text: string
+  /** 0 = the rep's mic, 1 = the other party. Absent on mono calls. Identity is
+   *  the (channel, speaker) PAIR — `speaker` alone means different things on
+   *  either side of a mid-call switch to buyer capture. */
+  channel?: number
+  /** A `[gap: Ns]` marker — audio that was never transcribed. Never counted as
+   *  speech and never attributed to a speaker. */
+  kind?: 'gap'
 }
 
 export interface Summary {
@@ -141,6 +253,18 @@ export interface CoachingReport {
 export type CoachResult =
   { ok: true; report: CoachingReport } | { ok: false; error: 'no-key' | 'failed'; message?: string }
 
+export type CommitmentOwner = 'rep' | 'prospect'
+
+export interface Commitment {
+  owner: CommitmentOwner
+  text: string
+  dueDate?: string
+}
+
+export type CommitmentResult =
+  | { ok: true; commitments: Commitment[] }
+  | { ok: false; error: 'no-key' | 'failed' | 'empty-call'; message?: string }
+
 export type ConsentStatus = 'not-asked' | 'disclosed' | 'consented' | 'declined'
 export type ConsentJurisdiction = 'one-party' | 'two-party'
 export type ConsentMethod = 'verbal-on-call' | 'pre-agreed' | 'written'
@@ -189,6 +313,25 @@ export interface CallSummary extends CallBase {
   objectionsMined: boolean
 }
 
+// --- M19 Task 2: resolved speaker identities --------------------------------
+export type SpeakerIdentitySource =
+  | 'user-profile'
+  | 'calendar'
+  | 'contact'
+  | 'participant-list'
+  | 'self-intro'
+  | 'voice-profile'
+  | 'manual'
+export type SpeakerIdentityConfidence = 'high' | 'medium' | 'low'
+/** Keyed by speakerKey() — see src/renderer/src/features/live/segments.ts. */
+export interface SpeakerIdentity {
+  name: string
+  source: SpeakerIdentitySource
+  confidence: SpeakerIdentityConfidence
+  contactId?: string
+  resolvedAt: string
+}
+
 export interface Call extends CallBase {
   segments: CallSegment[]
   summary?: Summary
@@ -196,6 +339,7 @@ export interface Call extends CallBase {
   coaching?: CoachingReport
   consent?: ConsentRecord
   objectionsMinedAt?: string
+  speakerIdentities?: Record<string, SpeakerIdentity>
 }
 
 export interface CallSaveInput {
@@ -335,7 +479,14 @@ export interface ObjectionQueueApi {
 export interface CallsApi {
   list: () => Promise<CallSummary[]>
   get: (id: string) => Promise<Call | null>
-  save: (input: CallSaveInput) => Promise<CallSummary>
+  /** `selfIntro`: M19 Task 2 step 5's live-resolved buyer name, if any —
+   *  applied with source 'self-intro' BEFORE the auto-resolution cascade
+   *  runs, so a higher-confidence calendar/contact match can still override
+   *  it (unlike a 'manual' rename, which the cascade never touches). */
+  save: (
+    input: CallSaveInput,
+    selfIntro?: { key: string; name: string }
+  ) => Promise<CallSummary>
   delete: (id: string) => Promise<{ ok: boolean }>
   addAttachment: (
     callId: string,
@@ -345,6 +496,8 @@ export interface CallsApi {
   summarizeCall: (callId: string) => Promise<SummaryResult>
   summarizeAttachment: (callId: string, attachmentId: string) => Promise<SummaryResult>
   coachCall: (callId: string) => Promise<CoachResult>
+  /** Who promised what on this call, split rep vs. prospect (§4.7). */
+  extractCommitments: (callId: string) => Promise<CommitmentResult>
   /** Objection Library: mine a single call for raw candidates, for the rep to
    *  judge quality — gated on the settings toggle. */
   mineObjectionsTest: (callId: string) => Promise<ObjectionMiningResult>
@@ -370,6 +523,9 @@ export interface CallsApi {
   }>
   /** AI Note Taker's auto-title feature: generate + save a title in one step. */
   generateTitle: (callId: string) => Promise<{ ok: true; title: string } | { ok: false }>
+  /** §4.6 — brief + next steps + follow-up email, written straight to the
+   *  clipboard by the main process (which needs no window focus). */
+  postCallBrief: (callId: string) => Promise<PostCallBriefEvent>
   /** Link (contactId) or clear (null) the contact this call belongs to. */
   setContact: (callId: string, contactId: string | null) => Promise<Call | null>
   /** Bookmark a moment mid-call ("clip this") — atMs from call start, plus the
@@ -381,6 +537,17 @@ export interface CallsApi {
   exportCoachingPdf: (
     callId: string
   ) => Promise<{ ok: true; path: string } | { ok: false; error: string }>
+  /** Rename (or clear, with `null`) a speaker for THIS call — always
+   *  source: 'manual', which the auto-resolution cascade never overwrites.
+   *  `key` is speakerKey()'s format (e.g. "ch1/spk1", "mono/spk0").
+   *  `rememberAsContactId` links the identity to a saved contact so future
+   *  calls with them resolve instantly. */
+  setSpeakerName: (
+    callId: string,
+    key: string,
+    name: string | null,
+    opts?: { rememberAsContactId?: string }
+  ) => Promise<Call | null>
 }
 
 export interface TasksApi {
@@ -400,7 +567,66 @@ export interface ContactComment {
   source: 'user' | 'ai'
 }
 
-export interface Contact {
+/** M19 KYC/deal/personal/briefing fields on the stored Contact record —
+ *  factored out so Contact and the *Input variant below can't drift as
+ *  fields get added (they did drift once already: the M19 Task 3A form
+ *  fields were built without ever being wired into the create/update
+ *  payload, silently discarding everything a user typed into them). */
+interface ContactKycFields {
+  industry?: string
+  companySize?: string
+  website?: string
+  registrationNumber?: string
+  verificationStatus?: string
+  title?: string
+  decisionAuthority?: string
+  otherStakeholders?: string
+  dealValue?: number
+  pipelineStage?: string
+  leadSource?: string
+  budgetIndication?: string
+  timeline?: string
+  competitors?: string
+  knownObjections?: string
+  currentTooling?: string
+  lastContactDate?: string
+  preferredLanguage?: string
+  communicationStyle?: string
+  timezone?: string
+  personalNotes?: string
+  /** Free text: "Anything else the AI should know before I meet this
+   *  person" — the highest-value input to the M19 Task 3B pre-meeting brief. */
+  briefingNotes?: string
+}
+
+/** Same fields, but as a create/update payload: `null` explicitly clears the
+ *  field, `undefined`/absent leaves it untouched (update) or unset (create). */
+interface ContactKycInput {
+  industry?: string | null
+  companySize?: string | null
+  website?: string | null
+  registrationNumber?: string | null
+  verificationStatus?: string | null
+  title?: string | null
+  decisionAuthority?: string | null
+  otherStakeholders?: string | null
+  dealValue?: number | null
+  pipelineStage?: string | null
+  leadSource?: string | null
+  budgetIndication?: string | null
+  timeline?: string | null
+  competitors?: string | null
+  knownObjections?: string | null
+  currentTooling?: string | null
+  lastContactDate?: string | null
+  preferredLanguage?: string | null
+  communicationStyle?: string | null
+  timezone?: string | null
+  personalNotes?: string | null
+  briefingNotes?: string | null
+}
+
+export interface Contact extends ContactKycFields {
   id: string
   name: string
   /** Free-text company name — not a separate entity yet (a later CRM phase). */
@@ -416,6 +642,9 @@ export interface Contact {
   phoneCountry?: string
   /** National number only (no dial code — that's phoneCountry). */
   phone?: string
+  /** E.164 (e.g. "+14155551234"), derived from phoneCountry+phone at write
+   *  time — the join key M19 Task 2's phone-based contact matching uses. */
+  phoneE164?: string
   notes?: string
   createdAt: string
   /** Last modification (create or edit); a future backup's "newest wins" key. */
@@ -423,7 +652,7 @@ export interface Contact {
   comments?: ContactComment[]
 }
 
-export interface ContactCreateInput {
+export interface ContactCreateInput extends ContactKycInput {
   name: string
   company?: string | null
   cid?: string | null
@@ -432,10 +661,11 @@ export interface ContactCreateInput {
   email?: string | null
   phoneCountry?: string | null
   phone?: string | null
+  phoneE164?: string | null
   notes?: string | null
 }
 
-export interface ContactUpdateInput {
+export interface ContactUpdateInput extends ContactKycInput {
   name?: string
   company?: string | null
   cid?: string | null
@@ -444,6 +674,7 @@ export interface ContactUpdateInput {
   email?: string | null
   phoneCountry?: string | null
   phone?: string | null
+  phoneE164?: string | null
   notes?: string | null
 }
 
@@ -672,6 +903,8 @@ export interface LoopbackApi {
   disarm: () => void
   /** Open the macOS Screen & System Audio Recording settings pane. */
   openScreenSettings: () => Promise<{ ok: boolean }>
+  /** Open Windows's sound settings — the fix for the endpoint bug. */
+  openWindowsSoundSettings: () => Promise<{ ok: boolean }>
 }
 
 export interface GoogleCalendarSummary {
@@ -775,7 +1008,16 @@ export interface VirtualMicStatus {
   helperPath: string | null
 }
 
-export type AiKeyName = 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY'
+export type AiKeyName =
+  | 'DEEPGRAM_API_KEY'
+  | 'ANTHROPIC_API_KEY'
+  | 'OPENAI_API_KEY'
+  | 'GROQ_API_KEY'
+  | 'OPENROUTER_API_KEY'
+  | 'GOOGLE_AI_API_KEY'
+  | 'NVIDIA_API_KEY'
+  | 'CEREBRAS_API_KEY'
+  | 'MISTRAL_API_KEY'
 
 export interface AiKeyStatus {
   /** True once real API calls will succeed for this key — a Settings-saved
@@ -785,7 +1027,19 @@ export interface AiKeyStatus {
   hint: string | null
 }
 
-export type AiProviderId = 'anthropic' | 'openai'
+/** 'anthropic'/'openai' are the original M16 pair. The other six (M20) are
+ *  all free-tier providers in the model catalog — see ai/model-catalog.ts
+ *  in the main process; this type must stay in lockstep with
+ *  src/main/ai/types.ts's AIProviderId. */
+export type AiProviderId =
+  | 'anthropic'
+  | 'openai'
+  | 'groq'
+  | 'openrouter'
+  | 'google'
+  | 'nvidia'
+  | 'cerebras'
+  | 'mistral'
 
 export type AiKeyValidateResult = { ok: true; models: string[] } | { ok: false; reason: string }
 
@@ -795,9 +1049,61 @@ export interface AiKeysApi {
   save: (name: AiKeyName, value: string) => Promise<{ ok: boolean; error?: string }>
   clear: (name: AiKeyName) => Promise<{ ok: boolean; error?: string }>
   /** Cheapest possible round-trip against a key the user just pasted (not
-   *  necessarily saved yet) — 'anthropic'/'openai' only, Deepgram has no
-   *  equivalent flow here. */
+   *  necessarily saved yet) — every text-AI provider (not Deepgram, which
+   *  has no equivalent flow here). */
   validate: (providerId: AiProviderId, value: string) => Promise<AiKeyValidateResult>
+}
+
+export type ModelLane = 'speed' | 'quality'
+export type RetentionPosture = 'trains' | 'no-training' | 'unknown'
+
+/** Mirrors main/ai/model-catalog.ts's CatalogEntry. */
+export interface AiCatalogEntry {
+  id: string
+  displayName: string
+  brand: string
+  providerId: AiProviderId
+  lane: ModelLane
+  modelId: string
+  contextWindow: number | null
+  retentionPosture: RetentionPosture
+  retentionUrl: string
+  keyUrl: string
+  knownStale?: string
+}
+
+export interface AiResolvedCatalogEntry extends AiCatalogEntry {
+  hasKey: boolean
+  available: boolean
+}
+
+export interface AiCatalogApi {
+  /** Bundled catalog only — instant, no network. */
+  list: () => Promise<AiCatalogEntry[]>
+  /** Cross-checked against each configured provider's live /models endpoint. */
+  resolve: (forceRefresh?: boolean) => Promise<AiResolvedCatalogEntry[]>
+  /** V1 chain-editing scope — picks one primary model for a job; main
+   *  derives and persists the full fallback chain (promotes the pick to the
+   *  front of the bundled default ordering). Returns the updated AppSettings,
+   *  same shape as settings.update(). */
+  assignPrimaryModel: (purpose: AiPurpose, catalogId: string) => Promise<AppSettings>
+}
+
+export interface AiFallbackEventView {
+  ts: string
+  purpose: AiPurpose
+  fromCatalogId: string
+  toCatalogId: string | null
+  reason: string
+  /** The provider's own error message, when available. */
+  detail?: string
+  fromDisplayName: string
+  toDisplayName: string | null
+}
+
+export interface AiFallbackApi {
+  /** Most-recent-first, last ~20 - for the "recent fallback activity" list. */
+  recentEvents: () => Promise<AiFallbackEventView[]>
 }
 
 export interface VirtualMicApi {
@@ -961,11 +1267,29 @@ export interface DetectionSettings {
   capturePolicy: CapturePolicySettings
 }
 
+/** M20 — must stay in lockstep with src/main/ai/types.ts's AIPurpose. The
+ *  Settings → Model Assignment page exposes 5 of these 6
+ *  ('other' has no UI — its 4 call sites keep using the plain `aiProvider`
+ *  choice forever, an intentional non-goal for this milestone). */
+export type AiPurpose = 'coaching-cue' | 'summary' | 'scorecard' | 'tasks' | 'other' | 'prep-brief'
+
+export interface ModelAssignment {
+  /** Ordered model-catalog entry IDs — see main/ai/model-catalog.ts. Empty
+   *  means "no explicit assignment for this job." */
+  chain: string[]
+}
+
+export type ModelAssignments = Record<AiPurpose, ModelAssignment>
+
 export interface AppSettings {
   /** Master switch: OFF removes all buyer/other-party recording capability.
    *  Can only remove capability, never grant it — per-call consent still
    *  fully governs actual recording. Defaults to true. */
   allowOtherPartyRecording: boolean
+  /** Standing consent: every call starts already consented for buyer capture
+   *  (method 'pre-agreed'), so the per-call consent step is skipped. Records a
+   *  real consent rather than bypassing one. Gated on the master switch. */
+  alwaysRecordOtherParty: boolean
   /** Who the rep is — fed into summary/coaching prompts. Empty by default. */
   personalization: PersonalizationSettings
   /** Language for AI summaries. 'auto' = same language as the source content. */
@@ -986,13 +1310,19 @@ export interface AppSettings {
   objectionMining: ObjectionMiningSettings
   /** Ambient call detection (M15). Defaults OFF. */
   detection: DetectionSettings
-  /** Which text-AI provider coaching/summaries/tasks/etc. use. Defaults to
-   *  'anthropic'. The API key itself is separate, encrypted (see AiKeysApi). */
+  /** Which text-AI provider coaching/summaries/tasks/etc. use when a purpose
+   *  has no aiModelAssignments chain configured. Defaults to 'anthropic'.
+   *  The API key itself is separate, encrypted (see AiKeysApi). */
   aiProvider: AiProviderId
+  /** M20 — ordered per-job model-fallback chains. Empty chain for a purpose
+   *  falls back to `aiProvider` above, then to a bundled default catalog
+   *  chain — see main/ai/complete-with-fallback.ts's resolution rule. */
+  aiModelAssignments: ModelAssignments
 }
 
 export interface AppSettingsPatch {
   allowOtherPartyRecording?: boolean
+  alwaysRecordOtherParty?: boolean
   /** Partial — only the keys present are changed; others are left as-is. */
   personalization?: Partial<PersonalizationSettings>
   summaryLanguage?: SummaryLanguage
@@ -1017,6 +1347,10 @@ export interface AppSettingsPatch {
     }
   }
   aiProvider?: AiProviderId
+  /** M20 — partial per-purpose; only the purposes present are replaced
+   *  (whole-chain replace per purpose, not key-by-key — a chain is authored
+   *  as one unit in the Model Assignment UI). */
+  aiModelAssignments?: Partial<Record<AiPurpose, ModelAssignment>>
 }
 
 export interface AppSettingsApi {
@@ -1094,11 +1428,162 @@ export interface DetectionApi {
   onRequestTogglePause: (cb: () => void) => () => void
 }
 
+// --- Scheduled alerts (M19 Task 1) ------------------------------------------
+
+export type AlertTriggerType = 'meeting_starting' | 'task_due' | 'deal_cold' | 'no_next_step'
+export type AlertChannelType = 'telegram' | 'email' | 'whatsapp' | 'desktop'
+
+export interface NotificationChannel {
+  id: string
+  user_id: string
+  type: AlertChannelType
+  address: string | null
+  label: string | null
+  verified_at: string | null
+  verification_token: string | null
+  verification_expires_at: string | null
+  consecutive_failures: number
+  unhealthy_at: string | null
+  revoked_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AlertRule {
+  id: string
+  user_id: string
+  trigger_type: AlertTriggerType
+  lead_time_minutes: number | null
+  enabled: boolean
+  params: Record<string, unknown>
+  created_at: string
+  updated_at: string
+  alert_rule_channels?: { channel_id: string }[]
+}
+
+export interface UserAlertSettings {
+  user_id: string
+  timezone: string
+  quiet_hours_start: string | null
+  quiet_hours_end: string | null
+  quiet_hours_behavior: 'hold' | 'drop'
+  rate_limit_behavior: 'drop' | 'queue' | 'coalesce'
+  max_alerts_per_hour: number
+  deal_cold_days: number
+  deal_cold_digest_hour: number
+  allow_server_side_brief_generation: boolean
+  updated_at: string
+}
+
+export type TelegramVerifyResult =
+  | { ok: true; channelId: string; deepLink: string | null; qrData: string | null; expiresAt: string }
+  | { ok: false; error: 'not-signed-in' | 'not-configured' | 'create-failed' }
+
+export type EmailVerifyResult =
+  | { ok: true; channelId: string; expiresAt: string }
+  | { ok: false; error: 'not-signed-in' | 'invalid-email' | 'create-failed' | 'send-failed'; channelId?: string }
+
+export type ConfirmEmailCodeResult =
+  | { ok: true }
+  | { ok: false; error: 'invalid-input' | 'not-found' | 'expired' | 'wrong-code' | 'update-failed' }
+
+export type TestSendResult =
+  | { ok: true }
+  | { ok: false; error: 'invalid-input' | 'not-found' | 'unverified' | 'send-failed' | 'not-configured'; message?: string }
+
+export interface AlertsApi {
+  channels: {
+    list: () => Promise<NotificationChannel[]>
+    startTelegramVerify: (label?: string) => Promise<TelegramVerifyResult>
+    startEmailVerify: (address: string) => Promise<EmailVerifyResult>
+    confirmEmailCode: (channelId: string, code: string) => Promise<ConfirmEmailCodeResult>
+    delete: (channelId: string) => Promise<{ ok: boolean }>
+    whatsappStatus: () => Promise<{ configured: boolean }>
+    testSend: (channelId: string) => Promise<TestSendResult>
+  }
+  rules: {
+    list: () => Promise<AlertRule[]>
+    create: (input: {
+      triggerType: AlertTriggerType
+      leadTimeMinutes?: number
+      enabled?: boolean
+      params?: Record<string, unknown>
+      channelIds?: string[]
+    }) => Promise<AlertRule | null>
+    update: (
+      ruleId: string,
+      patch: Partial<{
+        leadTimeMinutes: number
+        enabled: boolean
+        params: Record<string, unknown>
+        channelIds: string[]
+      }>
+    ) => Promise<AlertRule | null>
+    delete: (ruleId: string) => Promise<{ ok: boolean }>
+  }
+  settings: {
+    get: () => Promise<UserAlertSettings | null>
+    update: (patch: Partial<UserAlertSettings>) => Promise<UserAlertSettings | null>
+  }
+  deliveries: {
+    recent: (limit?: number) => Promise<Record<string, unknown>[]>
+  }
+}
+
+export interface PrepBriefAttendee {
+  email: string
+  name?: string
+}
+
+export interface PrepBriefEventInput {
+  eventId: string
+  title: string
+  startIso: string
+  attendees: PrepBriefAttendee[]
+  contactId?: string
+  dealId?: string
+}
+
+export interface PrepBrief {
+  whoYoureMeeting: string
+  dealStatus: string
+  lastTime: string
+  openCommitments: string[]
+  likelyObjections: string[]
+  openers: string[]
+  model: string
+  generatedAt: string
+}
+
+export interface PrepBriefRecord {
+  eventId: string
+  contactId?: string
+  dealId?: string
+  inputHash: string
+  brief: PrepBrief
+  savedAt: string
+}
+
+export type PrepBriefResult =
+  | { ok: true; record: PrepBriefRecord; fromCache: boolean }
+  | { ok: false; error: 'no-key' | 'failed' | 'no-context'; message?: string }
+
+export interface PrepBriefApi {
+  getForEvent: (input: PrepBriefEventInput) => Promise<PrepBriefResult>
+  regenerate: (input: PrepBriefEventInput) => Promise<PrepBriefResult>
+  /** Fired when a callrise://meeting/<eventId> deep link is opened (from a
+   *  meeting_starting alert) — the caller resolves eventId to a full
+   *  PrepBriefEventInput itself (the renderer already holds the merged
+   *  calendar event via useCalendar()) and opens the brief for it. */
+  onOpenRequested: (callback: (eventId: string) => void) => () => void
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
     api: {
       transcription: TranscriptionApi
+      trackers: TrackersApi
       calls: CallsApi
       tasks: TasksApi
       contacts: ContactsApi
@@ -1107,6 +1592,7 @@ declare global {
       events: EventsApi
       auth: AuthApi
       loopback: LoopbackApi
+      consent: ConsentGateApi
       google: GoogleApi
       outlook: OutlookApi
       backup: BackupApi
@@ -1116,7 +1602,11 @@ declare global {
       settings: AppSettingsApi
       app: AppControlApi
       aiKeys: AiKeysApi
+      aiCatalog: AiCatalogApi
+      aiFallback: AiFallbackApi
       detection: DetectionApi
+      alerts: AlertsApi
+      prepBrief: PrepBriefApi
     }
   }
 }

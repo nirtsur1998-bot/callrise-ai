@@ -109,6 +109,26 @@ function createOverlayWindow(): BrowserWindow {
     }
   })
   win.setAlwaysOnTop(true, 'screen-saver')
+
+  // EXCLUDE THIS WINDOW FROM SCREEN CAPTURE. Not a nicety — the entire
+  // live-coaching thesis dies the first time a rep's battlecard about the
+  // prospect's competitor renders on the prospect's own screen during a share.
+  // This overlay floats above everything by design, which is exactly what
+  // makes it leak.
+  //
+  // One call covers both platforms: Electron maps it to NSWindowSharingNone on
+  // macOS and SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) on Windows 10
+  // 2004+ (falling back to WDA_MONITOR on older builds, which blanks the
+  // window in the capture rather than hiding it — still not a leak).
+  //
+  // Applied unconditionally and never exposed as a setting: a toggle here is
+  // one mis-click away from the failure it exists to prevent, and the value of
+  // being able to show the overlay in a share does not come close.
+  //
+  // Our own buyer-side capture is unaffected: getDisplayMedia is opened for
+  // its audio and the video track is stopped immediately (useTranscription).
+  win.setContentProtection(true)
+
   if (process.platform === 'darwin') {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   }

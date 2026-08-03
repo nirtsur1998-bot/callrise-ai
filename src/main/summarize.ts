@@ -2,7 +2,8 @@ import type { Summary } from './calls-fs'
 import { loadAppSettings } from './app-settings'
 import { assemblePersonalizationContext } from './personalization-context'
 import { summaryLanguageInstruction } from './summary-language'
-import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
+import { AIProviderError, type AITool } from './ai'
+import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
 
 const MAX_TEXT_CHARS = 200_000 // keep requests bounded
 
@@ -79,14 +80,20 @@ function toStringArray(value: unknown): string[] {
 }
 
 function friendlyError(err: unknown): string {
+  if (err instanceof AllModelsExhaustedError) {
+    return 'Every configured AI model failed to produce a summary. Check your keys and free-tier limits in Settings, or try again shortly.'
+  }
   if (err instanceof AIProviderError) return err.message
   return 'Something went wrong while generating the summary. Please try again.'
 }
 
-export async function summarize(input: SummarizeInput): Promise<SummaryResult> {
-  const provider = getActiveAIProvider()
-  if (!provider) return { ok: false, error: 'no-key' }
+/** See coach.ts's identical helper — preserves the 'no-key' vs 'failed'
+ *  distinction the renderer's "set up your key" UI depends on. */
+function errorCodeFrom(err: unknown): 'no-key' | 'failed' {
+  return err instanceof AIProviderError && err.code === 'no-key' ? 'no-key' : 'failed'
+}
 
+export async function summarize(input: SummarizeInput): Promise<SummaryResult> {
   const personalization = loadSummaryPersonalization()
   const language = loadSummaryLanguageInstruction()
   const promptWithPersonalization = `${PROMPT}${language ? ` ${language}` : ''}${personalizationSection(personalization)}`
@@ -97,7 +104,7 @@ export async function summarize(input: SummarizeInput): Promise<SummaryResult> {
       : `${promptWithPersonalization}\n\n--- CONTENT ---\n${input.text.slice(0, MAX_TEXT_CHARS)}`
 
   try {
-    const result = await provider.complete({
+    const result = await completeWithFallback({
       purpose: 'summary',
       maxTokens: 4096,
       tool: SUMMARY_TOOL,
@@ -123,6 +130,6 @@ export async function summarize(input: SummarizeInput): Promise<SummaryResult> {
     }
     return { ok: true, summary }
   } catch (err) {
-    return { ok: false, error: 'failed', message: friendlyError(err) }
+    return { ok: false, error: errorCodeFrom(err), message: friendlyError(err) }
   }
 }
