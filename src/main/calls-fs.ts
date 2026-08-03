@@ -3,9 +3,21 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from './atomic-write'
 
+/** 'unknown' is a first-class answer — see the renderer's SpeakerRole. */
+export type SpeakerRole = 'rep' | 'other' | 'unknown'
+
 export interface CallSegment {
   speaker: number
   text: string
+  /** Speaker-label namespace this `speaker` belongs to. Deepgram restarts
+   *  diarization on every reconnect, so the same number across two epochs is
+   *  usually two different people. Absent on calls saved before M21. */
+  epoch?: number
+  /** Who said this, decided when the turn was recorded and never revised.
+   *  Absent on calls saved before M21. */
+  role?: SpeakerRole
+  /** Lowest word confidence Deepgram reported for this turn, when available. */
+  confidence?: number
 }
 
 export interface Summary {
@@ -208,6 +220,11 @@ export interface Call extends CallBase {
   coaching?: CoachingReport
   /** Recording-consent record. Always present on calls saved from M11 on. */
   consent?: ConsentRecord
+  /** True when multichannel buyer capture actually ran during this call, so
+   *  speaker 1 is a real buyer CHANNEL. On a mic-only call speaker 1 is just a
+   *  diarization label and means nothing of the sort. Absent on calls saved
+   *  before M21. */
+  buyerCaptureUsed?: boolean
   /** When this call was last read for Objection Library mining, if ever. */
   objectionsMinedAt?: string
   /** Tombstone: a deleted call is kept as a minimal record (transcript dropped)
@@ -226,6 +243,8 @@ export interface CallSaveInput {
   segments: CallSegment[]
   /** Optional consent captured during the live session; defaulted if absent. */
   consent?: ConsentRecord
+  /** True when multichannel buyer capture ran at any point in this call. */
+  buyerCaptureUsed?: boolean
 }
 
 // Ids are used to build file paths, so they must be tightly constrained
@@ -261,7 +280,23 @@ function sanitizeSegments(value: unknown): CallSegment[] {
     const textRaw = (item as { text?: unknown }).text
     const speaker = Number.isFinite(speakerRaw) ? Math.max(0, Math.trunc(speakerRaw as number)) : 0
     const text = typeof textRaw === 'string' ? textRaw.slice(0, MAX_TEXT) : ''
-    if (text.trim()) out.push({ speaker, text })
+    if (!text.trim()) continue
+    // Attribution decided when the turn was recorded — preserved verbatim so
+    // nothing downstream has to re-derive (and possibly contradict) it.
+    const epochRaw = (item as { epoch?: unknown }).epoch
+    const roleRaw = (item as { role?: unknown }).role
+    const confRaw = (item as { confidence?: unknown }).confidence
+    out.push({
+      speaker,
+      text,
+      ...(Number.isFinite(epochRaw) ? { epoch: Math.trunc(epochRaw as number) } : {}),
+      ...(roleRaw === 'rep' || roleRaw === 'other' || roleRaw === 'unknown'
+        ? { role: roleRaw }
+        : {}),
+      ...(typeof confRaw === 'number' && Number.isFinite(confRaw)
+        ? { confidence: Math.min(1, Math.max(0, confRaw)) }
+        : {})
+    })
   }
   return out
 }
@@ -355,12 +390,39 @@ async function writeCall(dir: string, call: Call): Promise<void> {
 const BUYER_SPEAKER = 1
 
 /**
+ * Did multichannel buyer capture actually run on this call — i.e. is speaker 1
+ * a real CHANNEL rather than a diarization label?
+ *
+ * Calls saved before M21 have no flag, so it's inferred instead: buyer capture
+ * can only ever be started from the consent modal's explicit "they said yes",
+ * which always moves consent off 'not-asked'. A call that was never asked about
+ * is therefore mic-only. The inference deliberately errs toward stripping for
+ * any legacy call where consent was raised at all (even if declined) — for old
+ * data, over-protecting the other party is the safer error.
+ */
+function wasBuyerCaptured(call: Call): boolean {
+  if (typeof call.buyerCaptureUsed === 'boolean') return call.buyerCaptureUsed
+  const status = call.consent?.status
+  return status !== undefined && status !== 'not-asked'
+}
+
+/**
  * Recording-consent RETENTION guard (M12 Step 6). Buyer capture only ever runs
  * after consent (status becomes 'consented'); if recording the other party
  * isn't (still) permitted (recordOtherParty !== true — e.g. "turn recording
  * off", a mid-call decline, or a file tampered to drop the flag), the other
  * party's captured turns are removed. Runs on save AND read AND list, so a
  * revoked/hand-edited call can never surface the other party's words.
+ *
+ * M21: the strip only applies to calls where multichannel buyer capture
+ * actually ran. `BUYER_SPEAKER = 1` is a CHANNEL index — it only means "the
+ * other party" when there were two channels. On a mic-only call the labels come
+ * from diarization, where 1 just means "the second voice this microphone
+ * heard", so this used to delete an arbitrary speaker from every ordinary call:
+ * if the diarizer happened to label the REP as 1, the rep's own words were
+ * destroyed and the remaining voice was later attributed to them (BUG-002).
+ * Capture gating is untouched — buyer capture still cannot start without
+ * consent, so a mic-only call has no consented buyer channel to protect.
  */
 function applyConsentRetention(call: Call): void {
   const c = call.consent
@@ -369,6 +431,7 @@ function applyConsentRetention(call: Call): void {
   // were captured, so the current status must never short-circuit the strip.
   if (!c || c.recordOtherParty === true) return
   if (!Array.isArray(call.segments)) return
+  if (!wasBuyerCaptured(call)) return
   const kept = call.segments.filter((s) => s.speaker !== BUYER_SPEAKER)
   if (kept.length === call.segments.length) return
   call.segments = kept
@@ -400,6 +463,7 @@ export async function saveCall(dir: string, input: CallSaveInput): Promise<CallS
     preview: transcriptText.slice(0, 160),
     segments,
     attachments: [],
+    buyerCaptureUsed: input?.buyerCaptureUsed === true,
     // Every call carries a consent record; the sanitizer enforces the invariant.
     consent: sanitizeConsent(input?.consent)
   }

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { cn } from '@renderer/lib/cn'
-import type { CallSegment } from '@renderer/features/calls/types'
+import type { CallSegment, SpeakerRole } from '@renderer/features/calls/types'
 import { speakerLabel } from '@renderer/features/coaching/meta'
 
 // A distinct color per speaker (cycles for many speakers), using the
@@ -24,9 +24,13 @@ const BUYER_STYLE = { dot: 'bg-faint', label: 'text-muted' }
 function speakerStyle(
   speaker: number,
   repSpeaker: number | null,
-  speakerCount: number
+  speakerCount: number,
+  role?: SpeakerRole
 ): { dot: string; label: string } {
-  if (repSpeaker !== null && speakerCount <= 2) {
+  // The turn's own recorded attribution wins when it has one (M21).
+  if (role === 'rep') return REP_STYLE
+  if (role === 'other' && speakerCount <= 2) return BUYER_STYLE
+  if (role === undefined && repSpeaker !== null && speakerCount <= 2) {
     return speaker === repSpeaker ? REP_STYLE : BUYER_STYLE
   }
   return SPEAKER_STYLES[speaker % SPEAKER_STYLES.length]
@@ -113,14 +117,22 @@ export function SpeakerTranscript({
   return (
     <div ref={containerRef} className="space-y-5">
       {segments.map((seg, index) => {
-        const style = speakerStyle(seg.speaker, repSpeaker, speakerCount)
+        const style = speakerStyle(seg.speaker, repSpeaker, speakerCount, seg.role)
         return (
           <div key={index}>
             <div className="mb-1 flex items-center gap-2">
               <span className={cn('h-1.5 w-1.5 rounded-full', style.dot)} />
               <span className={cn('text-xs font-semibold uppercase tracking-wide', style.label)}>
-                {speakerLabel(seg.speaker, repSpeaker, speakerCount)}
+                {speakerLabel(seg.speaker, repSpeaker, speakerCount, seg.role)}
               </span>
+              {seg.role === 'unknown' && (
+                <span
+                  className="text-[10px] font-medium uppercase tracking-wide text-faint"
+                  title="We could not tell who was speaking here, so this turn is not attributed to anyone."
+                >
+                  unsure
+                </span>
+              )}
             </div>
             <p className="text-[17px] leading-[1.7] text-ink">{renderText(seg.text)}</p>
           </div>

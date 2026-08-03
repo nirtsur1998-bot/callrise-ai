@@ -154,7 +154,11 @@ export function useLiveCues(
   active: boolean,
   enabled: boolean,
   sensitivity: Sensitivity,
-  knownRepSpeaker: number | null = null
+  knownRepSpeaker: number | null = null,
+  /** Told to the transcript the moment the rep is identified, so already-
+   *  recorded turns in this epoch can be back-filled ONCE instead of the UI
+   *  re-deriving attribution from mutable state at render time. */
+  onRepIdentified?: (epoch: number, speaker: number) => void
 ): UseLiveCues {
   const [cue, setCue] = useState<LiveCue | null>(null)
   const [repSpeaker, setRepSpeaker] = useState<number | null>(knownRepSpeaker)
@@ -171,6 +175,14 @@ export function useLiveCues(
   const turnsRef = useRef<Turn[]>([]) // recent speaker-labeled turns
   const lastSpeakerRef = useRef<number | null>(null)
   const repSpeakerRef = useRef<number | null>(null) // locked once identified
+  // Speaker-label namespace the buffered turns belong to. Deepgram restarts
+  // diarization on every reconnect, so turns either side of one are labelled
+  // by different schemes and must never share a rep-lock or a window.
+  const epochRef = useRef<number | null>(null)
+  const onRepIdentifiedRef = useRef(onRepIdentified)
+  useEffect(() => {
+    onRepIdentifiedRef.current = onRepIdentified
+  }, [onRepIdentified])
   // When buyer capture is live the rep is deterministically channel 0.
   const knownRepRef = useRef<number | null>(knownRepSpeaker)
   const lastCallAtRef = useRef(0) // last brain call
@@ -305,8 +317,12 @@ export function useLiveCues(
             // words instead.
             const observedSpeakers = new Set(turnsRef.current.map((t) => t.speaker))
             if (observedSpeakers.has(res.repSpeaker)) {
-              repSpeakerRef.current = res.repSpeaker // lock the rep for the call
+              repSpeakerRef.current = res.repSpeaker // lock the rep for the epoch
               setRepSpeaker(res.repSpeaker)
+              // Back-fill the turns already on screen, once, in this epoch only.
+              if (epochRef.current !== null) {
+                onRepIdentifiedRef.current?.(epochRef.current, res.repSpeaker)
+              }
             }
           }
           if (res.cue !== 'none' && res.text) emit(res.cue, res.text)
@@ -327,9 +343,14 @@ export function useLiveCues(
       debounceRef.current = setTimeout(() => callBrain(Date.now()), DEBOUNCE_MS)
     }
 
-    const onTurnEnd = (now: number): void => {
+    // `endedSpeaker` is passed explicitly rather than read from mutable shared
+    // state. utteranceEnd arrives as a SEPARATE event ~1s after speech stops,
+    // and any transcript landing in that window overwrites lastSpeakerRef
+    // first — so the branch below was routinely decided against the wrong
+    // speaker, firing the rep-only pace cue on the client.
+    const onTurnEnd = (now: number, endedSpeaker: number | null): void => {
       const rep = repSpeakerRef.current
-      if (rep !== null && lastSpeakerRef.current === rep) {
+      if (rep !== null && endedSpeaker === rep) {
         // The rep just finished — the only deterministic cue, on the rep alone.
         if (repWpm(now) > cfgRef.current.paceWpm) emit('pace', 'Slow down a touch')
       } else {
@@ -341,6 +362,22 @@ export function useLiveCues(
     const offTranscript = window.api.transcription.onTranscript((payload) => {
       const now = Date.now()
       if (!payload.isFinal) return
+
+      // A new speaker-label namespace (reconnect, or the mono↔multichannel
+      // swap) invalidates everything buffered: the ids no longer refer to the
+      // same people. Carrying the old rep-lock or window across was what made
+      // post-reconnect cues name the wrong person.
+      if (epochRef.current !== payload.speakerEpoch) {
+        epochRef.current = payload.speakerEpoch
+        turnsRef.current = []
+        lastSpeakerRef.current = null
+        // Multichannel attribution is deterministic (channel 0 is the rep), so
+        // it survives; a diarization guess does not and must be re-earned.
+        repSpeakerRef.current = payload.multichannel ? 0 : knownRepRef.current
+        setRepSpeaker(repSpeakerRef.current)
+        // Discard any brain response still in flight from the old namespace.
+        generationRef.current += 1
+      }
 
       if (payload.words.length > 0) {
         // Group consecutive words into per-speaker turns.
@@ -366,10 +403,14 @@ export function useLiveCues(
       // update — cheap (word-counting over ≤24 turns), no brain/AI call.
       setEngagementScore(computeEngagementScore(turnsRef.current, repSpeakerRef.current))
 
-      if (payload.speechFinal) onTurnEnd(now)
+      if (payload.speechFinal) onTurnEnd(now, lastSpeakerRef.current)
     })
 
-    const offUtteranceEnd = window.api.transcription.onUtteranceEnd(() => onTurnEnd(Date.now()))
+    // Attribute to the turn that actually ended, not to whatever has since
+    // arrived (see onTurnEnd).
+    const offUtteranceEnd = window.api.transcription.onUtteranceEnd(() =>
+      onTurnEnd(Date.now(), turnsRef.current[turnsRef.current.length - 1]?.speaker ?? null)
+    )
 
     return () => {
       offTranscript()

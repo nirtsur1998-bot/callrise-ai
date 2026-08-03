@@ -24,6 +24,20 @@ export interface TranscriptResultEvent {
   speechFinal: boolean
   /** Measured real-time lag from speech to this text, in milliseconds. */
   lagMs: number
+  /** Which speaker-label namespace `words[].speaker` belongs to. Bumped on
+   *  every Deepgram (re)connection and on the mono↔multichannel swap, because
+   *  both restart labelling from scratch. Consumers must not merge or
+   *  attribute across a change. */
+  speakerEpoch: number
+  /** False when Deepgram returned no speaker labels for these words — the old
+   *  code silently defaulted those to speaker 0, which made "unknown" look
+   *  identical to "the rep". */
+  speakerCertain: boolean
+  /** Lowest per-word confidence in this result, when Deepgram reported any. */
+  minConfidence: number | null
+  /** True when labels are CHANNELS (0 = rep, 1 = buyer) rather than a
+   *  diarization guess — i.e. attribution is deterministic. */
+  multichannel: boolean
 }
 
 export interface TranscriptionErrorEvent {
@@ -70,9 +84,19 @@ export interface TranscriptionApi {
   >
 }
 
+export type SpeakerRole = 'rep' | 'other' | 'unknown'
+
 export interface CallSegment {
   speaker: number
   text: string
+  /** Speaker-label namespace this `speaker` belongs to (bumped on every
+   *  Deepgram reconnect and on the mono↔multichannel swap). Absent pre-M21. */
+  epoch?: number
+  /** Who said this, decided when the turn was recorded and never revised.
+   *  Absent on calls saved before M21. */
+  role?: SpeakerRole
+  /** Lowest word confidence Deepgram reported for this turn, when available. */
+  confidence?: number
 }
 
 export interface Summary {
@@ -203,6 +227,10 @@ export interface CallSaveInput {
   durationMs: number
   segments: CallSegment[]
   consent?: ConsentRecord
+  /** True when multichannel buyer capture ran at any point in this call, so
+   *  speaker 1 is a real buyer CHANNEL. The consent-retention strip keys on
+   *  this — on a mic-only call speaker 1 is only a diarization label. */
+  buyerCaptureUsed?: boolean
 }
 
 export type SummaryResult =

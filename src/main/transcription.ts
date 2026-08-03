@@ -15,7 +15,7 @@ interface StartOptions {
   /** When true, stream 2 interleaved channels (0=rep, 1=buyer) via Deepgram
    *  multichannel. Defaults to false (mono + diarize) for mic-only calls. */
   multichannel?: boolean
-  /** When set, the start only proceeds if the CURRENT session has this id —
+  /** When set, the start only proceeds if the CURRENT session has this id �
    *  so a stale in-flight restart (from an already-stopped call) can never
    *  tear down a newer call's session. Omitted for a brand-new call. */
   expectedSessionId?: number
@@ -24,7 +24,7 @@ interface StartOptions {
 // Everything about one live session lives here, so restarts/reconnects can't
 // cross-contaminate (stale timers, stale counters, stale sockets).
 interface Session {
-  /** Monotonically increasing id — lets restarts prove they target the
+  /** Monotonically increasing id � lets restarts prove they target the
    *  session they think they do (see StartOptions.expectedSessionId). */
   id: number
   window: BrowserWindow
@@ -34,6 +34,15 @@ interface Session {
   channels: number
   /** True when streaming 2 channels with per-channel labels (no diarize). */
   multichannel: boolean
+  /** Identifies the SPEAKER-LABEL NAMESPACE these results belong to.
+   *
+   *  Deepgram restarts diarization from scratch on every new connection, so
+   *  "speaker 0" after a reconnect is whoever happens to talk first there — not
+   *  the same person as before. The mono(diarize)↔multichannel(channel) swap
+   *  changes the meaning of the numbers too. Nothing downstream can tell those
+   *  apart from a genuine speaker change, so every result carries the epoch it
+   *  was labelled under and consumers refuse to merge or attribute across one. */
+  speakerEpoch: number
   ws: WebSocket | null
   keepAlive: ReturnType<typeof setInterval> | null
   connectTimer: ReturnType<typeof setTimeout> | null
@@ -41,10 +50,19 @@ interface Session {
   audioSecondsSent: number
   reconnectAttempts: number
   stopping: boolean
+  /** Debug only (see the temporary lag-diagnostic log below): wall-clock time
+   *  the session's socket reached 'open', so logged lag can be cross-checked
+   *  against real elapsed time. */
+  openedAt: number
+  /** Debug only: throttles the temporary lag-diagnostic log to ~1/sec. */
+  lastLagLogAt: number
 }
 
 let session: Session | null = null
 let nextSessionId = 1
+// Monotonic across the whole app run, so an epoch value is never reused and a
+// late/stale result can't be mistaken for the current namespace.
+let nextSpeakerEpoch = 1
 
 function emit(s: Session, channel: string, payload: unknown): void {
   if (!s.window.isDestroyed()) {
@@ -133,9 +151,17 @@ function connect(s: Session): void {
       clearTimeout(s.connectTimer)
       s.connectTimer = null
     }
-    // Deepgram restarts its audio clock per connection — align our counter so
+    // Deepgram restarts its audio clock per connection � align our counter so
     // the latency math stays correct across reconnects.
     s.audioSecondsSent = 0
+    // ...and it restarts DIARIZATION per connection too, so the speaker labels
+    // that follow belong to a brand-new namespace. Bumping the epoch here (not
+    // only on transcription:start) is what makes a mid-call reconnect safe:
+    // without it, post-reconnect "speaker 0" merges straight into a pre-
+    // reconnect run for a different person.
+    s.speakerEpoch = nextSpeakerEpoch++
+    s.openedAt = Date.now()
+    s.lastLagLogAt = 0
     emit(s, 'transcription:state', { state: 'listening' })
     // Only forgive the retry budget once the connection has proven stable.
     s.stableTimer = setTimeout(() => {
@@ -162,7 +188,12 @@ function connect(s: Session): void {
           | {
               alternatives?: Array<{
                 transcript?: string
-                words?: Array<{ speaker?: number; word?: string; punctuated_word?: string }>
+                words?: Array<{
+                  speaker?: number
+                  word?: string
+                  punctuated_word?: string
+                  confidence?: number
+                }>
               }>
             }
           | undefined
@@ -175,25 +206,61 @@ function connect(s: Session): void {
         : null
       const channel =
         channelIndex && typeof channelIndex[0] === 'number' ? (channelIndex[0] as number) : null
-      const words = (alt?.words ?? []).map((w) => ({
-        speaker:
-          s.multichannel && (channel === 0 || channel === 1)
-            ? channel
-            : typeof w.speaker === 'number'
-              ? w.speaker
-              : 0,
-        text: w.punctuated_word ?? w.word ?? ''
-      }))
+      const rawWords = alt?.words ?? []
+      // In multichannel the speaker IS the channel, so attribution is
+      // deterministic and always certain. Under diarization it's a guess, and
+      // Deepgram sometimes omits `speaker` entirely — that used to fall through
+      // to 0, making "no idea who said this" indistinguishable from "definitely
+      // the rep". Track it instead of hiding it.
+      const deterministic = s.multichannel && (channel === 0 || channel === 1)
+      let speakerCertain = true
+      const words = rawWords.map((w) => {
+        if (!deterministic && typeof w.speaker !== 'number') speakerCertain = false
+        return {
+          speaker: deterministic ? channel : typeof w.speaker === 'number' ? w.speaker : 0,
+          text: w.punctuated_word ?? w.word ?? ''
+        }
+      })
+      // Lowest per-word confidence in this result — a single badly-heard word is
+      // enough to make the whole turn's attribution suspect.
+      const confidences = rawWords
+        .map((w) => w.confidence)
+        .filter((c): c is number => typeof c === 'number' && Number.isFinite(c))
+      const minConfidence = confidences.length ? Math.min(...confidences) : null
       const start = typeof msg.start === 'number' ? msg.start : 0
       const duration = typeof msg.duration === 'number' ? msg.duration : 0
       // Real-time lag = how far behind live audio this transcript is.
       const lagMs = Math.max(0, (s.audioSecondsSent - (start + duration)) * 1000)
+      // TEMPORARY diagnostic (remove once the Windows multichannel-lag bug is
+      // root-caused): compares our own "seconds of audio sent" counter against
+      // real wall-clock time since the socket opened, and against Deepgram's
+      // own start+duration for this result. If wallClockElapsed and
+      // audioSecondsSent diverge, our PCM production is running fast/slow
+      // (clock-drift between the mic and loopback sources feeding the
+      // AudioContext). If audioSecondsSent tracks wall-clock fine but
+      // (start+duration) falls further and further behind BOTH, Deepgram
+      // itself is stalling on the multichannel stream, not us.
+      const now = Date.now()
+      if (now - s.lastLagLogAt > 1000) {
+        s.lastLagLogAt = now
+        const wallClockSec = (now - s.openedAt) / 1000
+        console.log(
+          `[transcription:lag-debug] multichannel=${s.multichannel} wallClockSec=${wallClockSec.toFixed(1)} audioSecondsSent=${s.audioSecondsSent.toFixed(1)} dgStart=${start.toFixed(1)} dgDuration=${duration.toFixed(1)} lagMs=${Math.round(lagMs)}`
+        )
+      }
       emit(s, 'transcription:transcript', {
         transcript,
         words,
         isFinal: msg.is_final === true,
         speechFinal: msg.speech_final === true,
-        lagMs
+        lagMs,
+        speakerEpoch: s.speakerEpoch,
+        speakerCertain,
+        minConfidence,
+        // Multichannel labels are the CHANNEL, so speaker 0 is the rep by
+        // construction; diarization labels are a guess with no fixed meaning.
+        // Consumers need to tell those apart to know what a label is worth.
+        multichannel: s.multichannel
       })
     } else if (msg.type === 'UtteranceEnd') {
       emit(s, 'transcription:utteranceEnd', {})
@@ -229,12 +296,12 @@ function connect(s: Session): void {
       s.stableTimer = null
     }
     if (s.stopping) {
-      // Graceful stop finished flushing — the final words have been sent.
+      // Graceful stop finished flushing � the final words have been sent.
       session = null
       emit(s, 'transcription:closed', {})
       return
     }
-    // Unexpected drop — reconnect with exponential backoff.
+    // Unexpected drop � reconnect with exponential backoff.
     if (s.reconnectAttempts < MAX_RECONNECTS) {
       s.reconnectAttempts += 1
       emit(s, 'transcription:state', { state: 'reconnecting', attempt: s.reconnectAttempts })
@@ -274,7 +341,7 @@ export function registerTranscription(): void {
       return { ok: false }
     }
 
-    // A restart that names an expected session must match the CURRENT one —
+    // A restart that names an expected session must match the CURRENT one �
     // otherwise it's a stale request from an older call and must not clobber
     // the newer session. Return without disposing anything.
     const expected = options?.expectedSessionId
@@ -292,15 +359,27 @@ export function registerTranscription(): void {
       sampleRate: Number(options?.sampleRate) > 0 ? Number(options.sampleRate) : 16000,
       channels: multichannel ? 2 : 1,
       multichannel,
+      // Provisional — 'open' assigns the real one. A mono↔multichannel restart
+      // lands here, and channel-index labels mean something different from
+      // diarization labels, so it must never inherit the old epoch.
+      speakerEpoch: nextSpeakerEpoch++,
       ws: null,
       keepAlive: null,
       connectTimer: null,
       stableTimer: null,
       audioSecondsSent: 0,
       reconnectAttempts: 0,
-      stopping: false
+      stopping: false,
+      openedAt: Date.now(),
+      lastLagLogAt: 0
     }
     session = s
+    // TEMPORARY diagnostic (see the lag-debug log above) � marks exactly when
+    // a mono<->multichannel restart happens, so the lag-debug log's timeline
+    // can be lined up against it.
+    console.log(
+      `[transcription:lag-debug] new session id=${s.id} multichannel=${multichannel} sampleRate=${s.sampleRate}`
+    )
     emit(s, 'transcription:state', { state: 'connecting' })
     connect(s)
     return { ok: true as const, sessionId: s.id }
@@ -320,7 +399,7 @@ export function registerTranscription(): void {
     if (byteLength <= 0 || byteLength > MAX_CHUNK_BYTES) return
     s.ws.send(chunk)
     // 16-bit PCM => 2 bytes per sample, times the channel count (stereo when
-    // multichannel) — so the real-time latency math stays correct.
+    // multichannel) � so the real-time latency math stays correct.
     s.audioSecondsSent += byteLength / 2 / s.channels / s.sampleRate
   })
 

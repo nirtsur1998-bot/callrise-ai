@@ -103,6 +103,7 @@ export function LiveView({
     errorMessage,
     analyser,
     savedNotice,
+    identifyRep,
     otherPartyLive,
     otherPartyError,
     start,
@@ -141,7 +142,8 @@ export function LiveView({
     status === 'listening',
     enabled,
     sensitivity,
-    otherPartyLive ? 0 : null
+    otherPartyLive ? 0 : null,
+    identifyRep
   )
 
   // When a call is saved, consent resets to off so it never carries to the next.

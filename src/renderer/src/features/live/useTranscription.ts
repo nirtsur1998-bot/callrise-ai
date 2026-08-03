@@ -3,7 +3,7 @@ import { startRecorder, type Recorder } from './audio/recorder'
 import { groupWords, mergeSegments } from './segments'
 import { supportsOtherPartyCapture } from '@renderer/lib/platform'
 import type { LiveStatus } from './types'
-import type { CallSegment, ConsentRecord } from '@renderer/features/calls/types'
+import type { CallSegment, ConsentRecord, SpeakerRole } from '@renderer/features/calls/types'
 import {
   getAutoSummarize,
   getAutoGenerateTitle,
@@ -39,6 +39,14 @@ interface UseTranscription {
   enableOtherParty: () => Promise<void>
   /** Stop capturing the other party. Idempotent. */
   disableOtherParty: () => Promise<void>
+  /** Tell the transcript who the rep is, once the coaching engine has worked
+   *  it out under diarization. Back-fills only still-unknown turns in that
+   *  epoch; decided turns are never revised. */
+  identifyRep: (epoch: number, speaker: number) => void
+  /** Whether multichannel buyer capture ran at any point in this call. The
+   *  consent-retention strip keys on it: speaker 1 only means "the buyer" when
+   *  it is a CHANNEL. */
+  buyerCaptureUsed: () => boolean
 }
 
 export function useTranscription(
@@ -86,7 +94,55 @@ export function useTranscription(
   // Set at a mono<->multichannel swap so the next transcript starts a fresh
   // segment — speaker ids mean different things across the swap (diarize vs
   // channel), so merging across it would mislabel/collide turns.
+  // Largely superseded by the per-result speakerEpoch (which also covers
+  // reconnects, where this ref was never set), kept as belt-and-braces.
   const speakerBoundaryRef = useRef(false)
+  // Which speaker label is the REP, per label namespace. Multichannel fills
+  // this in immediately (channel 0 is the rep by construction); under
+  // diarization it stays empty until the coaching engine identifies them, and
+  // turns recorded before that are honestly marked 'unknown' rather than
+  // guessed. Keyed by epoch so a reconnect can't carry a stale answer over.
+  const repByEpochRef = useRef<Map<number, number>>(new Map())
+  // Latches true the first time multichannel buyer capture actually starts, and
+  // stays true for the rest of the call even if the buyer is dropped again —
+  // the transcript still contains channel-labelled turns from that window.
+  // This is what tells the consent-retention strip whether "speaker 1" is a
+  // real buyer CHANNEL or just a diarization label on a mic-only call.
+  const buyerCaptureUsedRef = useRef(false)
+
+  /** Decide who said a turn AT THE MOMENT IT IS RECORDED. Never consulted
+   *  again afterwards — that late re-read is what let one `repSpeaker` change
+   *  retroactively relabel an entire call. */
+  const resolveRole = useCallback(
+    (speaker: number, epoch: number, certain: boolean): SpeakerRole => {
+      if (!certain) return 'unknown'
+      const rep = repByEpochRef.current.get(epoch)
+      if (rep === undefined) return 'unknown'
+      return speaker === rep ? 'rep' : 'other'
+    },
+    []
+  )
+
+  /**
+   * Called once the coaching engine identifies the rep under diarization.
+   * Back-fills ONLY turns still marked 'unknown' in that same epoch — already
+   * decided turns are immutable, and other epochs belong to other namespaces
+   * (so a speaker joining mid-call can't retro-relabel earlier segments).
+   */
+  const identifyRep = useCallback((epoch: number, speaker: number) => {
+    if (repByEpochRef.current.get(epoch) === speaker) return
+    repByEpochRef.current.set(epoch, speaker)
+    let changed = false
+    const next = segmentsRef.current.map((s) => {
+      if (s.epoch !== epoch || s.role !== 'unknown') return s
+      changed = true
+      return { ...s, role: s.speaker === speaker ? ('rep' as const) : ('other' as const) }
+    })
+    if (changed) {
+      segmentsRef.current = next
+      setSegments(next)
+    }
+  }, [])
 
   // Arm a save (used by both Stop and mic-unplug, so they can't drift).
   const armSave = useCallback(() => {
@@ -110,7 +166,10 @@ export function useTranscription(
         segments: captured,
         // Consent captured during the session; the main process re-sanitizes it
         // and enforces the "no consent = no capture" invariant on save.
-        consent: consentRef?.current
+        consent: consentRef?.current,
+        // Lets the retention strip tell a buyer CHANNEL from a diarization
+        // label — without it, mic-only calls had speaker-1 turns deleted.
+        buyerCaptureUsed: buyerCaptureUsedRef.current
       })
       .then((saved) => {
         setSavedNotice(true)
@@ -141,14 +200,39 @@ export function useTranscription(
     const offTranscript = window.api.transcription.onTranscript((payload) => {
       const text = payload.transcript.trim()
       if (payload.isFinal) {
+        const epoch = payload.speakerEpoch
+        // Multichannel: the label IS the channel, so the rep is channel 0 by
+        // construction. Record it for this namespace before resolving roles.
+        if (payload.multichannel && !repByEpochRef.current.has(epoch)) {
+          repByEpochRef.current.set(epoch, 0)
+        }
+        const meta = {
+          epoch,
+          role: (speaker: number): SpeakerRole =>
+            resolveRole(speaker, epoch, payload.speakerCertain),
+          ...(payload.minConfidence !== null ? { confidence: payload.minConfidence } : {})
+        }
         let runs: CallSegment[] = []
         if (payload.words.length > 0) {
-          runs = groupWords(payload.words)
+          runs = groupWords(payload.words, meta)
         } else if (text) {
           // Rare: a final with no per-word data. Attribute it to the current
-          // speaker rather than defaulting to Speaker 1.
-          const lastSpeaker = segmentsRef.current.at(-1)?.speaker ?? 0
-          runs = [{ speaker: lastSpeaker, text }]
+          // speaker rather than defaulting to Speaker 1 — but only within the
+          // same epoch; across one, the previous label means someone else.
+          const last = segmentsRef.current.at(-1)
+          const lastSpeaker = last?.epoch === epoch ? last.speaker : 0
+          const sameEpoch = last?.epoch === epoch
+          runs = [
+            {
+              speaker: lastSpeaker,
+              text,
+              epoch,
+              // Carrying over a speaker across an epoch boundary is a guess, so
+              // it is recorded as one rather than asserted.
+              role: sameEpoch ? resolveRole(lastSpeaker, epoch, payload.speakerCertain) : 'unknown',
+              ...(payload.minConfidence !== null ? { confidence: payload.minConfidence } : {})
+            }
+          ]
         }
         if (runs.length > 0) {
           if (speakerBoundaryRef.current) {
@@ -438,6 +522,7 @@ export function useTranscription(
       }
       speakerBoundaryRef.current = true
       recorder.setStereo(true)
+      buyerCaptureUsedRef.current = true
       setOtherPartyLive(true)
     } finally {
       enablingOtherPartyRef.current = false
@@ -465,6 +550,8 @@ export function useTranscription(
     errorMessage,
     analyser,
     savedNotice,
+    identifyRep,
+    buyerCaptureUsed: () => buyerCaptureUsedRef.current,
     otherPartyLive,
     otherPartyError,
     start,

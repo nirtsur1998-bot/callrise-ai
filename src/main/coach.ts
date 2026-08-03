@@ -352,16 +352,36 @@ function str(value: unknown, max = 1500): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : ''
 }
 
+/** The rep's speaker id as recorded DURING the call, if the transcript carries
+ *  attribution (M21). Returns null for pre-M21 calls, or if the recorded roles
+ *  disagree about which id is the rep — which can legitimately happen across a
+ *  reconnect, where the same id means different people in different epochs.
+ *  Ambiguity is reported as "don't know" rather than resolved by guessing. */
+function repSpeakerFromSegments(segments: CallSegment[]): number | null {
+  const repIds = new Set<number>()
+  for (const s of segments) if (s.role === 'rep') repIds.add(s.speaker)
+  return repIds.size === 1 ? [...repIds][0] : null
+}
+
+function modelRepSpeaker(raw: Record<string, unknown>): number | null {
+  return typeof raw.repSpeaker === 'number' && Number.isFinite(raw.repSpeaker)
+    ? Math.trunc(raw.repSpeaker)
+    : null
+}
+
 function assembleReport(
   raw: Record<string, unknown>,
   segments: CallSegment[],
   durationMs: number,
   model: string
 ): CoachingReport | null {
-  const repSpeaker =
-    typeof raw.repSpeaker === 'number' && Number.isFinite(raw.repSpeaker)
-      ? Math.trunc(raw.repSpeaker)
-      : null
+  // Prefer the attribution the LIVE call already established over asking the
+  // model again. The two used to be entirely independent decisions over the
+  // same transcript, which is exactly why a scorecard could name a different
+  // person than the live view had shown for the same call. A recorded 'rep'
+  // role is either deterministic (buyer capture: the rep IS channel 0) or an
+  // already-validated live identification — both beat a fresh guess.
+  const repSpeaker = repSpeakerFromSegments(segments) ?? modelRepSpeaker(raw)
   const verify = makeVerifier(segments, repSpeaker)
   const scrub = makeFreeTextScrubber(segments)
 

@@ -3,7 +3,26 @@ import type { CoachingReport } from '@renderer/features/coaching/types'
 export interface CallSegment {
   speaker: number
   text: string
+  /** Which speaker-label namespace `speaker` belongs to. Deepgram restarts
+   *  diarization on every reconnect, and channel labels mean something
+   *  different from diarization labels, so the same number in two epochs is
+   *  usually two different people. Runs never merge across an epoch.
+   *  Absent on calls saved before M21. */
+  epoch?: number
+  /** WHO said this, decided when the turn was recorded and never revised.
+   *  Previously the UI compared `speaker` against a mutable whole-call
+   *  `repSpeaker` at render time, so the moment that value changed, every
+   *  already-recorded turn in the call silently relabelled. Absent on calls
+   *  saved before M21 (they fall back to the old comparison). */
+  role?: SpeakerRole
+  /** Lowest word confidence Deepgram reported for this turn, when available. */
+  confidence?: number
 }
+
+/** 'unknown' is a first-class answer: before the rep is identified, after a
+ *  speaker-label reassignment, or when Deepgram didn't label the words at all.
+ *  The UI says so rather than asserting a name it can't stand behind. */
+export type SpeakerRole = 'rep' | 'other' | 'unknown'
 
 export interface Summary {
   executive: string

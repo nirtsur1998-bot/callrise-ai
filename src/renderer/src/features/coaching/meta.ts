@@ -1,6 +1,7 @@
 import type { BadgeTone } from '@renderer/components/Badge'
 import type { GaugeTone } from '@renderer/components/ScoreGauge'
 import type { CoachDimensionKey, CoachMetrics } from './types'
+import type { SpeakerRole } from '@renderer/features/calls/types'
 
 export const DIMENSION_ORDER: CoachDimensionKey[] = [
   'discovery',
@@ -82,8 +83,20 @@ export function overallTier(score: number): { label: string; tone: Tone } {
 export function speakerLabel(
   speaker: number,
   repSpeaker: number | null,
-  speakerCount?: number
+  speakerCount?: number,
+  /** Attribution decided when the turn was recorded (M21). When present it
+   *  WINS over the `repSpeaker` comparison, which re-derived the answer at
+   *  render time and so relabelled the whole call whenever that value moved. */
+  role?: SpeakerRole
 ): string {
+  if (role === 'rep') return 'You'
+  if (role === 'other') {
+    return speakerCount !== undefined && speakerCount > 2 ? `Speaker ${speaker + 1}` : 'Buyer'
+  }
+  // 'unknown' means we genuinely don't know who this was — say so rather than
+  // asserting a name. Only pre-M21 segments (no role at all) fall through to
+  // the old comparison.
+  if (role === 'unknown') return `Speaker ${speaker + 1}`
   if (repSpeaker === null) return `Speaker ${speaker + 1}`
   if (speaker === repSpeaker) return 'You'
   if (speakerCount !== undefined && speakerCount > 2) return `Speaker ${speaker + 1}`
