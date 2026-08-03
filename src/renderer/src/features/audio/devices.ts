@@ -4,6 +4,29 @@
 // we only choose which mic we record.
 
 const MIC_KEY = 'salesos.audio.micDeviceId'
+// M21: the LABEL of the chosen mic, stored alongside its id.
+//
+// A browser deviceId is not a stable identity — reinstalling the audio driver
+// mints new device GUIDs while the friendly name stays the same. Because the
+// capture constraint uses `ideal` (a soft hint, deliberately, so an unplugged
+// mic doesn't throw), a stale id doesn't fail: the OS quietly hands back a
+// DIFFERENT microphone and nothing anywhere says so. Keeping the label lets a
+// stale id be re-resolved to the same physical device instead (BUG-005).
+const MIC_LABEL_KEY = 'salesos.audio.micDeviceLabel'
+
+/** Names the noise-cancelling virtual mic goes by. The macOS device kept its
+ *  pre-rebrand name ("Sales OS Microphone") on purpose so existing setups
+ *  weren't orphaned; Windows exposes the denoised endpoint under the mic-array
+ *  names the driver registers. */
+const CALLRISE_MIC_PATTERNS: RegExp[] = [
+  /sales\s*os\s*microphone/i,
+  /callrise/i,
+  /internal microphone array/i
+]
+
+export function isCallRiseMic(label: string): boolean {
+  return CALLRISE_MIC_PATTERNS.some((re) => re.test(label))
+}
 
 export function getSelectedMicId(): string {
   try {
@@ -13,18 +36,93 @@ export function getSelectedMicId(): string {
   }
 }
 
-export function setSelectedMicId(id: string): void {
+export function getSelectedMicLabel(): string {
+  try {
+    return window.localStorage.getItem(MIC_LABEL_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+export function setSelectedMic(id: string, label = ''): void {
   try {
     window.localStorage.setItem(MIC_KEY, id)
+    if (label) window.localStorage.setItem(MIC_LABEL_KEY, label)
+    else window.localStorage.removeItem(MIC_LABEL_KEY)
   } catch {
     /* best-effort: a non-critical preference */
   }
+}
+
+/** Back-compat alias — callers that only know the id. */
+export function setSelectedMicId(id: string): void {
+  setSelectedMic(id, '')
+}
+
+export interface MicChoice {
+  deviceId: string
+  label: string
+}
+
+export type MicResolution =
+  /** The saved device is present under the same id. Nothing to do. */
+  | { status: 'ok'; deviceId: string; label: string }
+  /** The saved id is gone but a device with the same NAME is present — the
+   *  driver-reinstall case. The stored id is repaired to point at it. */
+  | { status: 'repaired'; deviceId: string; label: string }
+  /** Nothing was chosen and the denoising mic is available, so it is picked. */
+  | { status: 'auto-callrise'; deviceId: string; label: string }
+  /** A device was chosen but is not available under any id or name. Capture
+   *  will fall back to the system default — the user needs telling. */
+  | { status: 'missing'; deviceId: ''; label: string }
+  /** Nothing chosen, nothing to auto-pick: the system default is correct. */
+  | { status: 'none'; deviceId: ''; label: '' }
+
+/**
+ * Work out which microphone to actually record from.
+ *
+ * Pure so it can be tested without a browser: `available` is whatever
+ * enumerateDevices() returned. Resolution order matters — an explicit choice
+ * that is still present always wins over auto-selection, so this never
+ * overrides a deliberate pick.
+ */
+export function resolveMic(
+  saved: { deviceId: string; label: string },
+  available: MicChoice[],
+  opts?: { preferCallRise?: boolean }
+): MicResolution {
+  const byId = available.find((d) => d.deviceId === saved.deviceId)
+  if (saved.deviceId && byId) return { status: 'ok', deviceId: byId.deviceId, label: byId.label }
+
+  // Same name, new id: the device is the same one, its id just changed.
+  if (saved.label) {
+    const byLabel = available.find((d) => d.label === saved.label)
+    if (byLabel) {
+      return { status: 'repaired', deviceId: byLabel.deviceId, label: byLabel.label }
+    }
+  }
+
+  // Only auto-pick when the user has not chosen anything. Auto-selecting over
+  // a deliberate choice would be its own silent-wrong-mic bug.
+  if (!saved.deviceId && opts?.preferCallRise) {
+    const callrise = available.find((d) => isCallRiseMic(d.label))
+    if (callrise) {
+      return { status: 'auto-callrise', deviceId: callrise.deviceId, label: callrise.label }
+    }
+  }
+
+  if (saved.deviceId) return { status: 'missing', deviceId: '', label: saved.label }
+  return { status: 'none', deviceId: '', label: '' }
 }
 
 /**
  * getUserMedia audio constraints honoring the chosen mic. Uses `ideal` (not
  * `exact`) so a missing/unplugged device falls back to the system default
  * instead of throwing. Mono + the usual cleanup, matching the original capture.
+ *
+ * The soft `ideal` is why a stale id is dangerous rather than merely broken —
+ * useAudioDevices repairs the stored id on every enumeration so the id read
+ * here is one that actually exists.
  */
 export function getMicConstraints(): MediaTrackConstraints {
   const id = getSelectedMicId()

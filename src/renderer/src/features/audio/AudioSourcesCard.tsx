@@ -4,6 +4,7 @@ import { IconButton } from '@renderer/components/IconButton'
 import { fieldClass } from '@renderer/components/field'
 import { cn } from '@renderer/lib/cn'
 import { useAudioDevices } from './useAudioDevices'
+import { useVirtualMic } from './useVirtualMic'
 import { isMac, isWindows } from '@renderer/lib/platform'
 
 function looksLikeHeadphones(label: string): boolean {
@@ -13,7 +14,13 @@ function looksLikeHeadphones(label: string): boolean {
 /** Home section: choose which microphone the app records, and see where the
  *  call audio is playing (with a headphones reminder to avoid mic echo). */
 export function AudioSourcesCard(): React.JSX.Element {
-  const { mics, outputLabel, selectedMicId, chooseMic, refresh } = useAudioDevices()
+  // While the denoiser is running, its virtual mic is the one worth recording —
+  // auto-select it when the user hasn't made an explicit choice, so turning
+  // noise cancellation on doesn't silently keep using the raw mic.
+  const { status } = useVirtualMic()
+  const { mics, outputLabel, selectedMicId, chooseMic, refresh, micResolution } = useAudioDevices(
+    status?.helperRunning === true
+  )
   const onHeadphones = outputLabel ? looksLikeHeadphones(outputLabel) : false
 
   return (
@@ -40,6 +47,27 @@ export function AudioSourcesCard(): React.JSX.Element {
           </option>
         ))}
       </select>
+      {micResolution?.status === 'missing' && (
+        <p className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-warning/20 bg-warning-soft px-2.5 py-2 text-[11px] text-warning">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>
+            &ldquo;{micResolution.label || 'Your chosen microphone'}&rdquo; isn&rsquo;t available
+            right now, so calls will record from your system default instead. Pick a microphone
+            above, or reconnect that device and hit refresh.
+          </span>
+        </p>
+      )}
+      {micResolution?.status === 'repaired' && (
+        <p className="mt-1.5 text-[11px] text-faint">
+          Reconnected to &ldquo;{micResolution.label}&rdquo; after its device id changed.
+        </p>
+      )}
+      {micResolution?.status === 'auto-callrise' && (
+        <p className="mt-1.5 text-[11px] text-faint">
+          Selected &ldquo;{micResolution.label}&rdquo; automatically so calls get the
+          noise-cancelled audio.
+        </p>
+      )}
       <p className="mt-1.5 text-[11px] text-faint">
         Applied when you start a call. Pick your headset mic for the cleanest split.
       </p>
