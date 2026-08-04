@@ -72,7 +72,18 @@ export function groupWords(
  *  people into one turn — the same reason a gap marker is also a hard
  *  boundary, since speech either side of one can be minutes apart. */
 export function mergeSegments(prev: CallSegment[], runs: CallSegment[]): CallSegment[] {
-  const next = prev.map((s) => ({ ...s }))
+  // Copy-on-write: only the array itself is copied here (cheap — pointers,
+  // not objects). A segment object is cloned only at the moment it is
+  // actually mutated (the "merge into the last turn" branch below), so every
+  // OTHER segment keeps its exact previous reference. That reference
+  // stability is load-bearing, not cosmetic — it's what lets a memoized
+  // per-turn renderer skip re-rendering the whole accumulated transcript on
+  // every incoming message. Live transcripts run for the length of a call, so
+  // an O(segments) full re-clone (the old `prev.map(s => ({...s}))`) on every
+  // finalized result got measurably more expensive turn by turn — worse still
+  // in multichannel, which runs two independent Deepgram result streams and
+  // so calls this roughly twice as often per minute of call time as mono.
+  const next = [...prev]
   for (const run of runs) {
     const last = next[next.length - 1]
     if (
@@ -82,7 +93,7 @@ export function mergeSegments(prev: CallSegment[], runs: CallSegment[]): CallSeg
       sameSpeaker(last, run) &&
       last.epoch === run.epoch
     ) {
-      last.text = `${last.text} ${run.text}`
+      next[next.length - 1] = { ...last, text: `${last.text} ${run.text}` }
     } else {
       next.push({ ...run })
     }

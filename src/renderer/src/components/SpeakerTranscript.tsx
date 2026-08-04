@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Pencil } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import type { CallSegment, SpeakerRole } from '@renderer/features/calls/types'
@@ -55,6 +55,161 @@ function speakerStyle(
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
+
+/** Highlights `query` inside `text`, numbering marks starting at `startIndex`
+ *  (the count of matches already rendered by earlier segments) so a match's
+ *  index stays correct even though each segment now renders independently —
+ *  see the comment on `matchOffsets` below for why that split is safe. */
+function renderHighlighted(
+  text: string,
+  query: string,
+  startIndex: number,
+  activeMatchIndex: number | undefined
+): React.ReactNode {
+  if (!query) return text
+  const re = new RegExp(`(${escapeRegExp(query)})`, 'gi')
+  const parts = text.split(re)
+  if (parts.length === 1) return text
+  let counter = startIndex
+  return parts.map((part, i) => {
+    // `split` with a capturing group interleaves [text, match, text, match, …] —
+    // odd indices are the captured matches.
+    if (i % 2 === 0 || part === '') return part || null
+    const idx = counter++
+    const isActive = idx === activeMatchIndex
+    return (
+      <mark
+        key={i}
+        data-match-index={idx}
+        className={cn('rounded-sm', isActive ? 'bg-accent/45' : 'bg-accent/25')}
+      >
+        {part}
+      </mark>
+    )
+  })
+}
+
+interface SegmentRowProps {
+  seg: CallSegment
+  index: number
+  repSpeaker: number | null
+  speakerCount: number
+  identities?: SpeakerIdentities
+  query: string
+  matchOffset: number
+  activeMatchIndex?: number
+  onRename?: (key: string, name: string) => void
+  isEditing: boolean
+  editValue: string
+  onStartEdit: (index: number, initialValue: string) => void
+  onEditValueChange: (value: string) => void
+  onCommitEdit: () => void
+  onCancelEdit: () => void
+}
+
+/**
+ * One turn (or one gap marker). Memoized so an interim-only update, or a
+ * finalized message that only touches the LATEST turn, does not force React
+ * to re-render and re-diff every earlier turn in the transcript — on a long
+ * call that full-list re-render was growing more expensive turn by turn (see
+ * segments.ts's mergeSegments, which now preserves object identity for every
+ * turn this component didn't touch, making this memoization actually work).
+ */
+const SegmentRow = memo(function SegmentRow({
+  seg,
+  index,
+  repSpeaker,
+  speakerCount,
+  identities,
+  query,
+  matchOffset,
+  activeMatchIndex,
+  onRename,
+  isEditing,
+  editValue,
+  onStartEdit,
+  onEditValueChange,
+  onCommitEdit,
+  onCancelEdit
+}: SegmentRowProps): React.JSX.Element {
+  if (seg.kind === 'gap') {
+    return (
+      <div className="flex items-center gap-3" aria-label="Missing audio">
+        <span className="h-px flex-1 bg-line-soft" />
+        <span className="text-xs font-medium uppercase tracking-wide text-faint tabular-nums">
+          {seg.text}
+        </span>
+        <span className="h-px flex-1 bg-line-soft" />
+      </div>
+    )
+  }
+
+  const style = speakerStyle(seg.speaker, repSpeaker, speakerCount, seg.role)
+  const identity = speakerIdentityFor(seg.speaker, identities, seg.channel)
+  const label = speakerLabel(
+    seg.speaker,
+    repSpeaker,
+    speakerCount,
+    seg.role,
+    identities,
+    seg.channel
+  )
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-2">
+        <span className={cn('h-1.5 w-1.5 rounded-full', style.dot)} />
+        {isEditing ? (
+          <input
+            autoFocus
+            value={editValue}
+            onChange={(e) => onEditValueChange(e.target.value)}
+            onBlur={onCommitEdit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onCommitEdit()
+              if (e.key === 'Escape') onCancelEdit()
+            }}
+            className="rounded border border-line bg-canvas px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-ink outline-none"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => onStartEdit(index, identity?.name ?? '')}
+            disabled={!onRename}
+            className={cn(
+              'group flex items-center gap-1 text-xs font-semibold uppercase tracking-wide',
+              style.label,
+              onRename && 'cursor-pointer hover:underline'
+            )}
+            title={onRename ? 'Click to rename' : undefined}
+          >
+            {label}
+            {onRename && (
+              <Pencil className="h-2.5 w-2.5 opacity-0 transition-opacity group-hover:opacity-60" />
+            )}
+          </button>
+        )}
+        {identity && (
+          <span
+            className={cn('h-1.5 w-1.5 rounded-full', CONFIDENCE_DOT[identity.confidence])}
+            title={SPEAKER_SOURCE_LABEL[identity.source]}
+          />
+        )}
+        {!identity && seg.role === 'unknown' && (
+          <span
+            className="text-[10px] font-medium uppercase tracking-wide text-faint"
+            title="We could not tell who was speaking here, so this turn is not attributed to anyone."
+          >
+            unsure
+          </span>
+        )}
+      </div>
+      <p className="text-[17px] leading-[1.7] text-ink">
+        {renderHighlighted(seg.text, query, matchOffset, activeMatchIndex)}
+      </p>
+    </div>
+  )
+})
 
 interface SpeakerTranscriptProps {
   segments: CallSegment[]
@@ -123,126 +278,92 @@ export function SpeakerTranscript({
     el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }, [activeMatchIndex, query])
 
-  // A plain local variable (not a ref) — recreated fresh on every render call,
-  // so it needs no reset step and never touches `.current` during render.
-  let matchCounter = 0
+  // How many matches appear in every EARLIER segment, per segment — computed
+  // once per (segments, query) pass rather than via a mutable counter shared
+  // across per-segment renders, because each segment now renders through an
+  // independently memoized component and can't share mutable render state
+  // with its siblings. Bails out to an all-zero lookup immediately when
+  // there's no query (the live-call path, which never sets one), so this
+  // costs nothing there.
+  const matchOffsets = useMemo(() => {
+    if (!query) return null
+    const re = new RegExp(escapeRegExp(query), 'gi')
+    const offsets: number[] = []
+    let count = 0
+    for (const seg of segments) {
+      offsets.push(count)
+      if (seg.kind !== 'gap') {
+        const matches = seg.text.match(re)
+        if (matches) count += matches.length
+      }
+    }
+    return offsets
+  }, [segments, query])
 
-  const renderText = (text: string): React.ReactNode => {
-    if (!query) return text
-    const re = new RegExp(`(${escapeRegExp(query)})`, 'gi')
-    const parts = text.split(re)
-    if (parts.length === 1) return text
-    return parts.map((part, i) => {
-      // `split` with a capturing group interleaves [text, match, text, match, …] —
-      // odd indices are the captured matches.
-      if (i % 2 === 0 || part === '') return part || null
-      const idx = matchCounter++
-      const isActive = idx === activeMatchIndex
-      return (
-        <mark
-          key={i}
-          data-match-index={idx}
-          className={cn('rounded-sm', isActive ? 'bg-accent/45' : 'bg-accent/25')}
-        >
-          {part}
-        </mark>
-      )
+  // Latest-value refs for the three stable callbacks below. The callbacks
+  // must keep one identity across renders (they're a prop on every memoized
+  // SegmentRow, and a new identity on every render would invalidate every
+  // row's memo on every message, exactly what this whole restructure exists
+  // to avoid) — but they still need this render's segments/onRename/editValue
+  // when they actually fire, which a useCallback dependency array can't give
+  // them without also changing identity every time those change.
+  const segmentsRef = useRef(segments)
+  const onRenameRef = useRef(onRename)
+  const editValueRef = useRef('')
+  // Synced in an effect, not during render: render can run speculatively
+  // (Strict Mode double-invoke, concurrent rendering) and a mid-render ref
+  // write would leak a value from a render that never actually committed.
+  // An effect only runs after a render commits, and always before the next
+  // user-triggered event (click/keydown) that would read these refs.
+  useEffect(() => {
+    segmentsRef.current = segments
+  }, [segments])
+  useEffect(() => {
+    onRenameRef.current = onRename
+  }, [onRename])
+
+  const startEdit = useCallback((index: number, initialValue: string) => {
+    editValueRef.current = initialValue
+    setEditValue(initialValue)
+    setEditingIndex(index)
+  }, [])
+  const onEditValueChange = useCallback((value: string) => {
+    editValueRef.current = value
+    setEditValue(value)
+  }, [])
+  const cancelEdit = useCallback(() => setEditingIndex(null), [])
+  const commitEdit = useCallback(() => {
+    setEditingIndex((index) => {
+      if (index === null) return null
+      const seg = segmentsRef.current[index]
+      const trimmed = editValueRef.current.trim()
+      if (trimmed && onRenameRef.current && seg) onRenameRef.current(speakerKey(seg), trimmed)
+      return null
     })
-  }
+  }, [])
 
   return (
     <div ref={containerRef} className="space-y-5">
-      {segments.map((seg, index) => {
-        // Missing audio, shown honestly: a labelled break rather than a
-        // seamless join between two moments that may be minutes apart.
-        if (seg.kind === 'gap') {
-          return (
-            <div key={index} className="flex items-center gap-3" aria-label="Missing audio">
-              <span className="h-px flex-1 bg-line-soft" />
-              <span className="text-xs font-medium uppercase tracking-wide text-faint tabular-nums">
-                {seg.text}
-              </span>
-              <span className="h-px flex-1 bg-line-soft" />
-            </div>
-          )
-        }
-        const style = speakerStyle(seg.speaker, repSpeaker, speakerCount, seg.role)
-        const key = speakerKey(seg)
-        const identity = speakerIdentityFor(seg.speaker, identities, seg.channel)
-        const label = speakerLabel(
-          seg.speaker,
-          repSpeaker,
-          speakerCount,
-          seg.role,
-          identities,
-          seg.channel
-        )
-        const isEditing = editingIndex === index
-
-        const startEdit = (): void => {
-          if (!onRename) return
-          setEditValue(identity?.name ?? '')
-          setEditingIndex(index)
-        }
-        const commitEdit = (): void => {
-          const trimmed = editValue.trim()
-          if (trimmed && onRename) onRename(key, trimmed)
-          setEditingIndex(null)
-        }
-
-        return (
-          <div key={index}>
-            <div className="mb-1 flex items-center gap-2">
-              <span className={cn('h-1.5 w-1.5 rounded-full', style.dot)} />
-              {isEditing ? (
-                <input
-                  autoFocus
-                  value={editValue}
-                  onChange={(e) => setEditValue(e.target.value)}
-                  onBlur={commitEdit}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') commitEdit()
-                    if (e.key === 'Escape') setEditingIndex(null)
-                  }}
-                  className="rounded border border-line bg-canvas px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-ink outline-none"
-                />
-              ) : (
-                <button
-                  type="button"
-                  onClick={startEdit}
-                  disabled={!onRename}
-                  className={cn(
-                    'group flex items-center gap-1 text-xs font-semibold uppercase tracking-wide',
-                    style.label,
-                    onRename && 'cursor-pointer hover:underline'
-                  )}
-                  title={onRename ? 'Click to rename' : undefined}
-                >
-                  {label}
-                  {onRename && (
-                    <Pencil className="h-2.5 w-2.5 opacity-0 transition-opacity group-hover:opacity-60" />
-                  )}
-                </button>
-              )}
-              {identity && (
-                <span
-                  className={cn('h-1.5 w-1.5 rounded-full', CONFIDENCE_DOT[identity.confidence])}
-                  title={SPEAKER_SOURCE_LABEL[identity.source]}
-                />
-              )}
-              {!identity && seg.role === 'unknown' && (
-                <span
-                  className="text-[10px] font-medium uppercase tracking-wide text-faint"
-                  title="We could not tell who was speaking here, so this turn is not attributed to anyone."
-                >
-                  unsure
-                </span>
-              )}
-            </div>
-            <p className="text-[17px] leading-[1.7] text-ink">{renderText(seg.text)}</p>
-          </div>
-        )
-      })}
+      {segments.map((seg, index) => (
+        <SegmentRow
+          key={index}
+          seg={seg}
+          index={index}
+          repSpeaker={repSpeaker}
+          speakerCount={speakerCount}
+          identities={identities}
+          query={query}
+          matchOffset={matchOffsets ? matchOffsets[index] : 0}
+          activeMatchIndex={activeMatchIndex}
+          onRename={onRename}
+          isEditing={editingIndex === index}
+          editValue={editingIndex === index ? editValue : ''}
+          onStartEdit={startEdit}
+          onEditValueChange={onEditValueChange}
+          onCommitEdit={commitEdit}
+          onCancelEdit={cancelEdit}
+        />
+      ))}
       {interimText ? <p className="text-[17px] leading-[1.7] text-faint">{interimText}</p> : null}
     </div>
   )

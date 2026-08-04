@@ -165,6 +165,30 @@ describe('mergeSegments', () => {
     expect(prev[0].text).toBe('original')
   })
 
+  // Live-call perf bug (found 2026-08-04, buyer-side/multichannel rising-lag
+  // report): the old implementation cloned EVERY segment on EVERY call
+  // (`prev.map(s => ({...s}))`), which meant a memoized per-turn renderer had
+  // no chance — every turn got a fresh object identity on every incoming
+  // message, so React had to re-diff the entire accumulated transcript every
+  // time, growing more expensive as the call got longer. Only the segment
+  // actually being touched should ever get a new reference.
+  it('keeps untouched segments referentially identical, so a memoized renderer can skip them', () => {
+    const untouched1: CallSegment = { speaker: 0, text: 'turn one', epoch: 1 }
+    const untouched2: CallSegment = { speaker: 1, text: 'turn two', epoch: 1, channel: 1 }
+    const prev: CallSegment[] = [untouched1, untouched2]
+    const next = mergeSegments(prev, [{ speaker: 0, text: 'turn three', epoch: 1 }])
+    expect(next[0]).toBe(untouched1)
+    expect(next[1]).toBe(untouched2)
+    expect(next[2]).not.toBe(untouched1)
+  })
+
+  it('gives the merged (mutated) turn a new reference, not the old one', () => {
+    const original: CallSegment = { speaker: 0, text: 'hello', epoch: 1 }
+    const next = mergeSegments([original], [{ speaker: 0, text: 'again', epoch: 1 }])
+    expect(next[0]).not.toBe(original)
+    expect(original.text).toBe('hello') // still unmutated
+  })
+
   it('preserves each turn’s own recorded attribution when appending', () => {
     const prev: CallSegment[] = [{ speaker: 0, text: 'rep talking', epoch: 1, role: 'rep' }]
     const next = mergeSegments(prev, [
