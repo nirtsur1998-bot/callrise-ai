@@ -100,7 +100,7 @@ export class AudioQueue {
   push(frame: AudioFrame): ShedSummary {
     this.frames.push(frame)
     this.bufferedSec += frame.seconds
-    return this.enforceCap()
+    return this.shedToward(this.capSec)
   }
 
   /** Oldest frame, or null when empty. */
@@ -116,13 +116,18 @@ export class AudioQueue {
   }
 
   /**
-   * Bring the queue back under its cap: silence first (oldest silent frame
-   * each pass), then oldest-overall once no silence is left.
+   * Bring the queue down to (at most) `targetSec` of buffered audio: silence
+   * first (oldest silent frame each pass), then oldest-overall once no
+   * silence is left. This is the ONGOING shed policy — used both to enforce
+   * the queue's own cap on every push, and by the health tick's 'shed' verdict
+   * when lag is elevated but there has been no disconnect. Unlike
+   * `trimToReplayCap`, it never discards more than it has to just to reach the
+   * target, and it always prefers silence over speech.
    */
-  private enforceCap(): ShedSummary {
-    if (this.bufferedSec <= this.capSec + EPSILON_SEC) return EMPTY_SHED
+  shedToward(targetSec: number): ShedSummary {
+    if (this.bufferedSec <= targetSec + EPSILON_SEC) return EMPTY_SHED
     const summary: ShedSummary = { droppedSec: 0, silentFrames: 0, voicedFrames: 0 }
-    while (this.bufferedSec > this.capSec + EPSILON_SEC && this.frames.length > 0) {
+    while (this.bufferedSec > targetSec + EPSILON_SEC && this.frames.length > 0) {
       let index = this.frames.findIndex((f) => isSilent(f.rms))
       // No silence to spare — fall back to the head. Never the tail.
       if (index === -1) index = 0

@@ -172,6 +172,71 @@ describe('AudioQueue replay cap', () => {
   })
 })
 
+describe('AudioQueue.shedToward — the ongoing-lag shed policy', () => {
+  // Live-call bug (found 2026-08-04, first real test after the M18 merge):
+  // healthTick's 'shed' verdict — ordinary elevated lag, no disconnect — was
+  // calling trimToReplayCap(), which is documented as a POST-DISCONNECT-ONLY
+  // tool and drops from the head regardless of silence or speech. Reused for
+  // ordinary lag, it discarded real, never-yet-sent voiced audio on every
+  // tick lag stayed elevated — producing a garbled, discontinuous transcript
+  // even though nothing had actually disconnected. shedToward() is the fix:
+  // same target-driven trim, but silence-first, matching what push()'s own
+  // overflow handling has always done.
+
+  it('sheds silence before ANY voiced frame, unlike trimToReplayCap', () => {
+    const q = new AudioQueue(60)
+    // Mostly silence with real speech at the front — the ordinary shape of a
+    // sales call backlog per this module's own design comment.
+    for (let i = 0; i < 20; i++) q.push(voiced())
+    for (let i = 0; i < 80; i++) q.push(silent())
+    expect(q.queuedSeconds).toBeCloseTo(10, 5) // 20*0.1 + 80*0.1
+
+    const shed = q.shedToward(3)
+    expect(q.queuedSeconds).toBeLessThanOrEqual(3 + 1e-9)
+    // All 20 voiced frames must have survived — only silence should be gone
+    // until there is no silence left to shed.
+    expect(shed.voicedFrames).toBe(0)
+    let remaining = 0
+    for (let f = q.shift(); f; f = q.shift()) if (!isSilent(f.rms)) remaining++
+    expect(remaining).toBe(20)
+  })
+
+  it('falls back to the head only once silence is exhausted — never the tail', () => {
+    const q = new AudioQueue(60)
+    for (let i = 0; i < 50; i++) q.push(voiced()) // 5s, no silence anywhere
+    const last = voiced()
+    q.push(last)
+
+    q.shedToward(1)
+    const remaining: ArrayBuffer[] = []
+    for (let f = q.shift(); f; f = q.shift()) remaining.push(f.bytes)
+    // The newest frame is the one worth keeping — mid-word audio, not old.
+    expect(remaining.at(-1)).toBe(last.bytes)
+  })
+
+  it('is a no-op when already under the target', () => {
+    const q = new AudioQueue(60)
+    for (let i = 0; i < 5; i++) q.push(voiced()) // 0.5s
+    const shed = q.shedToward(3)
+    expect(shed.droppedSec).toBe(0)
+    expect(q.queuedSeconds).toBeCloseTo(0.5, 5)
+  })
+
+  it('reproduces the live-call bug when the old (wrong) function is used instead', () => {
+    // Same scenario as the first test, but using trimToReplayCap — proves the
+    // fix actually changes behavior rather than the queue never having had a
+    // voiced frame to lose in the first place.
+    const q = new AudioQueue(60)
+    for (let i = 0; i < 20; i++) q.push(voiced())
+    for (let i = 0; i < 80; i++) q.push(silent())
+
+    const shed = q.trimToReplayCap(3)
+    // The blunt, disconnect-only tool chops from the head with no regard for
+    // silence — every one of the 20 voiced frames at the front is destroyed.
+    expect(shed.voicedFrames).toBe(20)
+  })
+})
+
 describe('AudioQueue.clear', () => {
   it('reports the full cost of discarding a sleep backlog', () => {
     const q = new AudioQueue(10_000)

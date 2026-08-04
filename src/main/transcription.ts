@@ -376,7 +376,16 @@ function healthTick(s: Session): void {
     return
   }
   if (verdict.action === 'shed') {
-    const dropped = s.queue.trimToReplayCap()
+    // Ongoing high lag with no disconnect — trim the LOCAL queue back toward
+    // the live edge the same way the queue always sheds on overflow: silence
+    // first. `trimToReplayCap()` is deliberately NOT used here — it exists
+    // for the post-disconnect backlog case (its own doc comment says so) and
+    // chops blindly from the head regardless of whether the frame is silence
+    // or real speech. Reusing it for ordinary ongoing lag discarded real,
+    // never-yet-sent words on every tick lag stayed elevated, which is what
+    // was producing garbled, discontinuous transcripts under exactly the
+    // network conditions this tier exists to recover gracefully from.
+    const dropped = s.queue.shedToward(HEALTH_TUNING.replayCapSec)
     queueShed(s, dropped.droppedSec, 'shed')
   }
 
