@@ -209,18 +209,21 @@ export async function listTasks(dir: string, opts?: { includeDeleted?: boolean }
   } catch {
     return []
   }
-  const tasks: Task[] = []
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue
-    try {
-      const raw = await fs.readFile(join(dir, file), 'utf8')
-      const task = sanitizeTaskRecord(JSON.parse(raw))
-      // Tombstones stay hidden from the app; the backup reads them via includeDeleted.
-      if (task && (opts?.includeDeleted || !task.deleted)) tasks.push(task)
-    } catch {
-      /* skip unreadable / corrupt file */
-    }
-  }
+  const results = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map(async (file): Promise<Task | null> => {
+        try {
+          const raw = await fs.readFile(join(dir, file), 'utf8')
+          const task = sanitizeTaskRecord(JSON.parse(raw))
+          // Tombstones stay hidden from the app; the backup reads them via includeDeleted.
+          return task && (opts?.includeDeleted || !task.deleted) ? task : null
+        } catch {
+          return null // skip unreadable / corrupt file
+        }
+      })
+  )
+  const tasks = results.filter((t): t is Task => t !== null)
   // Newest first as a stable default; the renderer applies its own ordering.
   tasks.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   return tasks

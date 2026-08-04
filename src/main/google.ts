@@ -510,6 +510,15 @@ async function withoutTombstoned(events: GoogleEvent[]): Promise<GoogleEvent[]> 
   return gone.size ? events.filter((e) => !gone.has(linkKey(e.provider, e.externalId))) : events
 }
 
+/** Main-process accessor for the pulled/cached Google events (with
+ *  attendees) — same data the `google:cachedEvents` IPC handler returns to
+ *  the renderer, but importable directly by other main-process code (M19
+ *  Task 2's calendar-overlap speaker-identity matching) without a redundant
+ *  IPC round-trip. Read-only; never mutates the cache. */
+export async function getCachedGoogleEvents(): Promise<GoogleEvent[]> {
+  return withoutTombstoned(await readCache())
+}
+
 // --- Push local events OUT to Google (M14 two-way sync) --------------------
 
 // The events endpoint for a given calendar. App-created events go to 'primary';

@@ -159,6 +159,8 @@ export function DealsView({
               type="button"
               onClick={() => setView('board')}
               title="Board view"
+              aria-label="Board view"
+              aria-pressed={view === 'board'}
               className={cn(
                 'grid h-8 w-8 place-items-center rounded-md transition',
                 view === 'board' ? 'bg-accent-soft text-ink' : 'text-muted hover:text-ink'
@@ -170,6 +172,8 @@ export function DealsView({
               type="button"
               onClick={() => setView('list')}
               title="List view"
+              aria-label="List view"
+              aria-pressed={view === 'list'}
               className={cn(
                 'grid h-8 w-8 place-items-center rounded-md transition',
                 view === 'list' ? 'bg-accent-soft text-ink' : 'text-muted hover:text-ink'
@@ -327,6 +331,7 @@ function FilterChip({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
       className={cn(
         'rounded-lg px-3 py-1.5 text-[13px] font-medium transition',
         active ? 'bg-accent-soft text-ink' : 'text-muted hover:bg-elevated hover:text-ink'

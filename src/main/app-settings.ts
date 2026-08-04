@@ -28,6 +28,13 @@ import {
   type CapturePolicyValue,
   type AppOverride
 } from './detection/policy'
+import type { AIProviderId } from './ai/types'
+import {
+  DEFAULT_MODEL_ASSIGNMENTS,
+  sanitizeModelAssignments,
+  mergeModelAssignments,
+  type ModelAssignments
+} from './ai/model-assignments'
 
 /**
  * Objection Library mining — reads call transcripts to suggest reusable
@@ -56,6 +63,58 @@ function mergeObjectionMining(
   if (!patch || typeof patch !== 'object') return current
   const p = patch as Record<string, unknown>
   return { enabled: 'enabled' in p ? p.enabled === true : current.enabled }
+}
+
+/**
+ * Speaker identification (M19 Task 2) — auto-resolving real names for
+ * transcript speakers. Three independent switches with different risk
+ * profiles, so one privacy-sensitive step being off never silently disables
+ * the safe ones:
+ *
+ * - `enabled`: the cascade itself (user profile / calendar attendee / contact
+ *   match / fallback "Speaker N") — none of these send anything to an LLM or
+ *   a third party, so this defaults ON (the headline "resolved automatically"
+ *   behavior).
+ * - `allowSelfIntroExtraction`: extends the EXISTING M9 live-coaching LLM call
+ *   (which already reads the transcript to find the REP's self-intro) to also
+ *   extract the BUYER's name from their own self-intro. Off by default — this
+ *   is buyer speech reaching a third-party LLM, which M11's consent framing
+ *   never explicitly covered; ship it opt-in until that copy is reviewed.
+ * - `voiceProfileMatching`: biometric voice-embedding matching across calls.
+ *   Real regulatory weight (GDPR, BIPA) — off by default, and the matching
+ *   engine itself is schema-only in this milestone (see voice-profile.ts).
+ */
+export interface SpeakerIdSettings {
+  enabled: boolean
+  allowSelfIntroExtraction: boolean
+  voiceProfileMatching: boolean
+}
+
+const EMPTY_SPEAKER_ID: SpeakerIdSettings = {
+  enabled: true,
+  allowSelfIntroExtraction: false,
+  voiceProfileMatching: false
+}
+
+function sanitizeSpeakerId(value: unknown): SpeakerIdSettings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return {
+    enabled: typeof v.enabled === 'boolean' ? v.enabled : EMPTY_SPEAKER_ID.enabled,
+    allowSelfIntroExtraction: v.allowSelfIntroExtraction === true,
+    voiceProfileMatching: v.voiceProfileMatching === true
+  }
+}
+
+function mergeSpeakerId(current: SpeakerIdSettings, patch: unknown): SpeakerIdSettings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return {
+    enabled: 'enabled' in p ? p.enabled === true : current.enabled,
+    allowSelfIntroExtraction:
+      'allowSelfIntroExtraction' in p ? p.allowSelfIntroExtraction === true : current.allowSelfIntroExtraction,
+    voiceProfileMatching:
+      'voiceProfileMatching' in p ? p.voiceProfileMatching === true : current.voiceProfileMatching
+  }
 }
 
 /**
@@ -201,6 +260,21 @@ export interface AppSettings {
    * fully governs actual recording. Defaults to true (today's behavior).
    */
   allowOtherPartyRecording: boolean
+  /**
+   * Standing consent: treat every call as already consented for buyer-side
+   * capture, so the rep never clicks through the per-call consent step.
+   *
+   * This does NOT bypass consent — it RECORDS one. Each call still gets a real
+   * ConsentRecord (status 'consented', method 'pre-agreed', timestamped), so
+   * the sanitizeConsent invariant is untouched and the audit trail stays
+   * honest about how consent was obtained. It is gated on
+   * `allowOtherPartyRecording`, so the master switch still removes capability.
+   *
+   * Off by default: it is only defensible when the rep genuinely has a
+   * standing basis (a recorded-line notice, a contract, or a one-party
+   * jurisdiction), which only they can know.
+   */
+  alwaysRecordOtherParty: boolean
   /** Who the rep is — fed into summary/coaching prompts. Empty by default. */
   personalization: PersonalizationSettings
   /** Language for AI summaries. 'auto' = same language as the source content. */
@@ -225,26 +299,51 @@ export interface AppSettings {
   objectionMining: ObjectionMiningSettings
   /** Ambient call detection (M15) - feature flag + capture policy. Defaults OFF. */
   detection: DetectionSettings
-  /** Which text-AI provider coaching/summaries/tasks/etc. use - see
-   *  src/main/ai/. Defaults to 'anthropic' (unchanged behavior for every
-   *  existing install). The actual API key lives separately, encrypted, in
+  /** Speaker identification (M19 Task 2) - auto-name-resolution cascade +
+   *  two separate privacy-sensitive opt-ins. See SpeakerIdSettings. */
+  speakerId: SpeakerIdSettings
+  /** Which text-AI provider coaching/summaries/tasks/etc. use when a
+   *  purpose has no aiModelAssignments chain configured - see src/main/ai/.
+   *  Defaults to 'anthropic' (unchanged behavior for every existing
+   *  install). The actual API key lives separately, encrypted, in
    *  ai-keys.ts - this is just which one is active, not a secret. */
   aiProvider: AIProviderId
+  /** M20 - ordered per-job (AIPurpose) model-fallback chains, catalog-entry
+   *  IDs. Empty chain for a purpose means "no explicit assignment" -
+   *  completeWithFallback()'s resolution rule falls back to `aiProvider`
+   *  above (if configured) before ever reaching the bundled default catalog
+   *  chain, so an existing M16 install sees zero behavior change unless it
+   *  opts into the new Settings → Model Assignment page. See
+   *  ai/model-assignments.ts and ai/complete-with-fallback.ts. */
+  aiModelAssignments: ModelAssignments
 }
 
-/** Kept as a plain local union (not imported from src/main/ai/) so this
- *  settings module never depends on the AI layer - only the AI layer reads
- *  this setting, never the other way around. */
-export type AIProviderId = 'anthropic' | 'openai'
+// AIProviderId is re-exported here (not re-declared) so existing importers
+// of app-settings.ts's AIProviderId keep working unchanged - the type now
+// lives in src/main/ai/types.ts, the single source of truth (M20; this
+// module used to hand-duplicate a 2-value union here, which was already a
+// silent-drift risk at 2 providers and would have been worse at 8).
+export type { AIProviderId } from './ai/types'
 
 function sanitizeAIProvider(value: unknown): AIProviderId {
-  return value === 'openai' ? 'openai' : 'anthropic'
+  const valid: AIProviderId[] = [
+    'anthropic',
+    'openai',
+    'groq',
+    'openrouter',
+    'google',
+    'nvidia',
+    'cerebras',
+    'mistral'
+  ]
+  return valid.includes(value as AIProviderId) ? (value as AIProviderId) : 'anthropic'
 }
 
 const EPOCH = new Date(0).toISOString()
 
 const DEFAULT_SETTINGS: AppSettings = {
   allowOtherPartyRecording: true,
+  alwaysRecordOtherParty: false,
   personalization: EMPTY_PERSONALIZATION,
   summaryLanguage: 'auto',
   syncScope: EMPTY_SYNC_SCOPE,
@@ -254,7 +353,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   crm: EMPTY_CRM_SETTINGS,
   objectionMining: EMPTY_OBJECTION_MINING,
   detection: EMPTY_DETECTION_SETTINGS,
-  aiProvider: 'anthropic'
+  speakerId: EMPTY_SPEAKER_ID,
+  aiProvider: 'anthropic',
+  aiModelAssignments: DEFAULT_MODEL_ASSIGNMENTS
 }
 
 function settingsPath(): string {
@@ -302,6 +403,10 @@ export function loadAppSettings(): AppSettings {
         typeof parsed.allowOtherPartyRecording === 'boolean'
           ? parsed.allowOtherPartyRecording
           : DEFAULT_SETTINGS.allowOtherPartyRecording,
+      alwaysRecordOtherParty:
+        typeof parsed.alwaysRecordOtherParty === 'boolean'
+          ? parsed.alwaysRecordOtherParty
+          : DEFAULT_SETTINGS.alwaysRecordOtherParty,
       personalization: sanitizePersonalization(parsed.personalization),
       summaryLanguage: sanitizeSummaryLanguage(parsed.summaryLanguage),
       syncScope: sanitizeSyncScope(parsed.syncScope),
@@ -315,7 +420,9 @@ export function loadAppSettings(): AppSettings {
       crm: sanitizeCrmSettings(parsed.crm),
       objectionMining: sanitizeObjectionMining(parsed.objectionMining),
       detection: sanitizeDetectionSettings(parsed.detection),
-      aiProvider: sanitizeAIProvider(parsed.aiProvider)
+      speakerId: sanitizeSpeakerId(parsed.speakerId),
+      aiProvider: sanitizeAIProvider(parsed.aiProvider),
+      aiModelAssignments: sanitizeModelAssignments(parsed.aiModelAssignments)
     }
   } catch {
     return {
@@ -323,7 +430,9 @@ export function loadAppSettings(): AppSettings {
       personalization: { ...EMPTY_PERSONALIZATION },
       crm: { ...EMPTY_CRM_SETTINGS },
       objectionMining: { ...EMPTY_OBJECTION_MINING },
-      detection: { ...EMPTY_DETECTION_SETTINGS }
+      detection: { ...EMPTY_DETECTION_SETTINGS },
+      speakerId: { ...EMPTY_SPEAKER_ID },
+      aiModelAssignments: { ...DEFAULT_MODEL_ASSIGNMENTS }
     }
   }
 }
@@ -335,6 +444,10 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
       typeof p.allowOtherPartyRecording === 'boolean'
         ? p.allowOtherPartyRecording
         : current.allowOtherPartyRecording,
+    alwaysRecordOtherParty:
+      typeof p.alwaysRecordOtherParty === 'boolean'
+        ? p.alwaysRecordOtherParty
+        : current.alwaysRecordOtherParty,
     personalization: mergePersonalization(current.personalization, p.personalization),
     summaryLanguage:
       'summaryLanguage' in p ? sanitizeSummaryLanguage(p.summaryLanguage) : current.summaryLanguage,
@@ -351,7 +464,9 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
     crm: mergeCrmSettings(current.crm, p.crm),
     objectionMining: mergeObjectionMining(current.objectionMining, p.objectionMining),
     detection: mergeDetectionSettings(current.detection, p.detection),
-    aiProvider: 'aiProvider' in p ? sanitizeAIProvider(p.aiProvider) : current.aiProvider
+    speakerId: mergeSpeakerId(current.speakerId, p.speakerId),
+    aiProvider: 'aiProvider' in p ? sanitizeAIProvider(p.aiProvider) : current.aiProvider,
+    aiModelAssignments: mergeModelAssignments(current.aiModelAssignments, p.aiModelAssignments)
   }
 }
 
@@ -460,6 +575,19 @@ export function isObjectionMiningEnabled(): boolean {
 /** The ff_ambient_detection gate - detection-service.ts must check this before starting any adapter. */
 export function isAmbientDetectionEnabled(): boolean {
   return loadAppSettings().detection.enabled
+}
+
+/** M19 Task 2's cascade gate — calendar/contact/fallback resolution only. */
+export function isSpeakerIdEnabled(): boolean {
+  return loadAppSettings().speakerId.enabled
+}
+
+/** The specific gate live-cue.ts must check before asking the LLM to extract
+ *  the BUYER's name from their self-intro — buyer speech reaching a
+ *  third-party LLM, opt-in only. */
+export function isSelfIntroExtractionAllowed(): boolean {
+  const s = loadAppSettings().speakerId
+  return s.enabled && s.allowSelfIntroExtraction
 }
 
 let registered = false

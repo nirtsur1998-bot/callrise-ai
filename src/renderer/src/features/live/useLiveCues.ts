@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { CueLatencyTracker, type CueLatencyReport } from './cue-latency'
+import { BattlecardMatcher, type Battlecard } from './battlecards/match'
+import { STARTER_TRIGGERS } from './battlecards/library'
+import { MonologueTracker, type MonologueState } from './monologue'
+import { speakerKey } from './segments'
 
 // Live in-call coaching cues. The substance comes from a conversation-aware
 // Claude call (window.api.transcription.liveCue) over a SPEAKER-LABELED
@@ -6,13 +11,45 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // about what the client just said. The only deterministic cue is a rep-only
 // "slow down" (so it can never fire on the client).
 
-export type CueKind = 'pace' | 'objection' | 'discovery' | 'next-question' | 'buying-signal'
+export type CueKind =
+  'pace' | 'battlecard' | 'objection' | 'discovery' | 'next-question' | 'buying-signal'
 export type Sensitivity = 'low' | 'medium' | 'high'
+
+/**
+ * Which channel a cue is allowed to use — the two-tier split (§4.3).
+ *
+ * A deterministic trigger lands in roughly 400ms (ASR partial ~300 + match ~50
+ * + render ~50). An LLM-generated one realistically lands in 1.5–2.5s, which
+ * is past the threshold where an interruption starts costing the rep more
+ * attention than it returns. So the slow tier is structurally forbidden from
+ * interrupting: it goes to a side rail the rep reads when they choose to.
+ *
+ * This is enforced by construction rather than by convention — `tierFor`
+ * derives the tier from the kind, so there is no code path that can put an
+ * LLM cue on the interrupt channel.
+ */
 
 export interface LiveCue {
   id: number
   kind: CueKind
   text: string
+  /** Monotonic ms when this cue was rendered — used for the side rail's age. */
+  at: number
+}
+
+/**
+ * Which kinds may take over the rep's attention.
+ *
+ * Note that being deterministic is NECESSARY but not sufficient. A battlecard
+ * is produced by phrase match and lands just as fast as the pace cue, yet it
+ * belongs in the rail: it is reference material the rep consults, not a nudge
+ * about something they are doing wrong right now. Speed earns the right to
+ * interrupt; it does not create the reason to.
+ */
+const INTERRUPT_KINDS: ReadonlySet<CueKind> = new Set<CueKind>(['pace'])
+
+export function tierFor(kind: CueKind): 'interrupt' | 'suggestion' {
+  return INTERRUPT_KINDS.has(kind) ? 'interrupt' : 'suggestion'
 }
 
 export const SENSITIVITIES: Sensitivity[] = ['low', 'medium', 'high']
@@ -35,8 +72,21 @@ const MAX_TURNS = 80 // cap the in-memory turn buffer
 const PACE_WINDOW_MS = 15_000 // window for the rep-only words/min estimate
 const CALL_GAP_MS = 2_500 // minimum gap between brain (LLM) calls
 const DEBOUNCE_MS = 400 // wait after a client turn-end before calling the brain
-const AUTO_DISMISS_MS = 10_000 // a cue fades on its own if not dismissed
+/** How long an interrupt cue stays before fading. Exported because the card's
+ *  countdown bar animates against it — two copies of this number drift the
+ *  moment either is tuned, and the symptom is a bar that finishes early or
+ *  hangs full while the cue vanishes underneath it. */
+export const AUTO_DISMISS_MS = 10_000
 const MIN_CHARS = 30 // not enough transcript to coach on yet
+/** Per-turn tracing. On the hot path — a 40-minute call fires these hundreds
+ *  of times — so it is compiled out of a production build rather than
+ *  shipping console noise (and the template-literal work behind it) to users. */
+const trace: (message: string) => void = import.meta.env.DEV
+  ? (message) => console.log(message)
+  : () => {}
+
+const MAX_SUGGESTIONS = 3 // side rail depth — a reading list, not a backlog
+const SUGGESTION_TTL_MS = 90_000 // advice about a moment that has passed is noise
 
 // --- Engagement gauge (deterministic, no AI call) ---------------------------
 // A rough, client-side-only approximation of how "live" the conversation
@@ -131,8 +181,15 @@ function computeEngagementScore(turns: Turn[], repSpeaker: number | null): numbe
 }
 
 export interface UseLiveCues {
+  /** The INTERRUPT channel: deterministic cues only, one at a time. */
   cue: LiveCue | null
   dismiss: () => void
+  /** The side rail: model-generated suggestions, newest first. Never
+   *  interrupts, never blocks a deterministic cue, never steals focus. */
+  suggestions: LiveCue[]
+  dismissSuggestion: (id: number) => void
+  /** Measured turn-end → cue-rendered latency, per tier (§1.7). */
+  latency: CueLatencyReport
   /** The rep's speaker id once identified (deterministic or brain-guessed), for
    *  labeling the transcript "You"/"Buyer". Null until known. */
   repSpeaker: number | null
@@ -140,6 +197,20 @@ export interface UseLiveCues {
    *  now (see computeEngagementScore) — NOT a coaching or AI-derived score.
    *  Null until at least MIN_TURNS_FOR_ENGAGEMENT turns have been seen. */
   engagementScore: number | null
+  /** The current run of uninterrupted rep speech (§4.2) — a passive read,
+   *  never an interrupt. Null before the rep is identified. */
+  monologue: MonologueState | null
+  /** M19 Task 2 step 5 — the buyer's name, once they've explicitly
+   *  introduced themselves AND Settings has self-intro extraction on. Null
+   *  otherwise. Paired with buyerIdentityKey (speakerKey() format) so the
+   *  caller can build a SpeakerIdentities map for live display. */
+  buyerName: string | null
+  buyerIdentityKey: string | null
+  /** M20 — every model in the fallback chain failed the most recent
+   *  liveCue() attempt. Non-blocking: transcription is unaffected, this
+   *  just means AI cues are temporarily unavailable. Clears itself the
+   *  moment a call succeeds again. */
+  coachingPaused: boolean
 }
 
 /**
@@ -161,8 +232,18 @@ export function useLiveCues(
   onRepIdentified?: (epoch: number, speaker: number) => void
 ): UseLiveCues {
   const [cue, setCue] = useState<LiveCue | null>(null)
+  const [suggestions, setSuggestions] = useState<LiveCue[]>([])
+  const [latency, setLatency] = useState<CueLatencyReport>(() => new CueLatencyTracker().report())
   const [repSpeaker, setRepSpeaker] = useState<number | null>(knownRepSpeaker)
   const [engagementScore, setEngagementScore] = useState<number | null>(null)
+  const [monologue, setMonologue] = useState<MonologueState | null>(null)
+  const [buyerName, setBuyerName] = useState<string | null>(null)
+  const [buyerIdentityKey, setBuyerIdentityKey] = useState<string | null>(null)
+  // M20 — every configured model in the fallback chain failed this cycle.
+  // Non-blocking: transcription keeps running, this just says AI cues are
+  // temporarily unavailable. Cleared the moment a call succeeds again.
+  const [coachingPaused, setCoachingPaused] = useState(false)
+  const monologueRef = useRef(new MonologueTracker())
 
   const cfgRef = useRef<Thresholds>(SENSITIVITY_THRESHOLDS[sensitivity])
   useEffect(() => {
@@ -183,6 +264,7 @@ export function useLiveCues(
   useEffect(() => {
     onRepIdentifiedRef.current = onRepIdentified
   }, [onRepIdentified])
+  const buyerNameRef = useRef<string | null>(null) // one-shot per call, like repSpeakerRef
   // When buyer capture is live the rep is deterministically channel 0.
   const knownRepRef = useRef<number | null>(knownRepSpeaker)
   const lastCallAtRef = useRef(0) // last brain call
@@ -193,6 +275,33 @@ export function useLiveCues(
   // Bumped on every reset/fresh-start so an in-flight brain response from a
   // previous listening session is discarded instead of leaking into this one.
   const generationRef = useRef(0)
+  const latencyRef = useRef(new CueLatencyTracker())
+  const battlecardsRef = useRef(new BattlecardMatcher(STARTER_TRIGGERS))
+  // When the turn that a cue is answering ended — the clock §1.7 measures from.
+  const lastTurnEndAtRef = useRef<number | null>(null)
+
+  // Custom trackers (§4.8) load asynchronously from disk, so the matcher
+  // starts with just the starter library and is rebuilt once they arrive —
+  // always well before any call is live, since this hook mounts with the
+  // whole Live Calls screen, not per-call. A brand new instance rather than
+  // mutating the existing one: BattlecardMatcher has no "add trigger" method,
+  // and adding one just for this would be more surface for one-time startup
+  // work that never repeats mid-call.
+  useEffect(() => {
+    let cancelled = false
+    window.api.trackers
+      .list()
+      .then((custom) => {
+        if (cancelled || custom.length === 0) return
+        battlecardsRef.current = new BattlecardMatcher([...STARTER_TRIGGERS, ...custom])
+      })
+      .catch(() => {
+        /* starter library alone is still a fully working set */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     mountedRef.current = true
@@ -213,7 +322,27 @@ export function useLiveCues(
     repSpeakerRef.current = knownRepSpeaker
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mirror the ref for the transcript label when buyer capture starts/stops mid-call
     setRepSpeaker(knownRepSpeaker)
+
+    // A self-intro resolved BEFORE buyer capture went live was necessarily
+    // keyed to a mono speaker number (the only regime that existed then) —
+    // see the one-shot resolution below. Once multichannel is now active,
+    // the buyer is unambiguously channel 1 (a fixed loopback/hardware fact,
+    // never a guess), so recompute the key to match. Without this, the
+    // already-resolved name stays stuck under the stale mono key: new
+    // segments recorded after the switch (now channel-tagged) never match
+    // it for live display, and resolve.ts's own current-regime filter
+    // ignores the stale-regime key entirely at save time. The reverse
+    // transition (multichannel -> mono) is deliberately left alone — mono
+    // has no fixed buyer index to recompute onto, so the name is kept as-is
+    // rather than guessed at.
+    if (knownRepSpeaker === 0 && buyerNameRef.current !== null) {
+      setBuyerIdentityKey(speakerKey({ speaker: 1, channel: 1 }))
+    }
   }, [knownRepSpeaker])
+
+  const dismissSuggestion = useCallback((id: number) => {
+    setSuggestions((prev) => prev.filter((s) => s.id !== id))
+  }, [])
 
   const clearCue = useCallback(() => {
     if (dismissTimerRef.current) {
@@ -236,8 +365,18 @@ export function useLiveCues(
       if (debounceRef.current) clearTimeout(debounceRef.current)
       // eslint-disable-next-line react-hooks/set-state-in-effect -- clear a visible cue when cues mute / the call stops
       clearCue()
+      setSuggestions([])
+      latencyRef.current.reset()
+      battlecardsRef.current.reset()
+      setLatency(latencyRef.current.report())
+      lastTurnEndAtRef.current = null
       setRepSpeaker(knownRepRef.current)
       setEngagementScore(null)
+      monologueRef.current.reset()
+      setMonologue(null)
+      buyerNameRef.current = null
+      setBuyerName(null)
+      setBuyerIdentityKey(null)
       return
     }
 
@@ -248,22 +387,73 @@ export function useLiveCues(
     repSpeakerRef.current = knownRepRef.current
     inFlightRef.current = false
     lastCallAtRef.current = 0
+    lastTurnEndAtRef.current = null
+    battlecardsRef.current.reset()
     setRepSpeaker(knownRepRef.current)
     setEngagementScore(null)
+    monologueRef.current.reset()
+    setMonologue(null)
 
-    const emit = (kind: CueKind, text: string): boolean => {
+    // Record turn-end → rendered for whichever tier just delivered (§1.7).
+    const noteLatency = (tier: 'deterministic' | 'model'): void => {
+      const startedAt = lastTurnEndAtRef.current
+      if (startedAt === null) return
+      latencyRef.current.record(tier, performance.now() - startedAt)
+      setLatency(latencyRef.current.report())
+    }
+
+    // THE INTERRUPT CHANNEL — deterministic cues only.
+    //
+    // Keeps the strict one-at-a-time slot and the cooldown, because an
+    // interruption mid-sentence is expensive and has to earn its place. Only
+    // reachable for kinds `tierFor` classifies as deterministic; there is no
+    // path from a model response to here.
+    const emitInterrupt = (kind: CueKind, text: string): boolean => {
+      if (tierFor(kind) !== 'interrupt') return false // unreachable by construction
       const now = Date.now()
       if (cueRef.current) return false // one cue at a time
       if (now - lastCueAtRef.current < cfgRef.current.cooldownMs) return false // hard cooldown
       lastCueAtRef.current = now
-      const next: LiveCue = { id: ++idRef.current, kind, text }
+      const next: LiveCue = { id: ++idRef.current, kind, text, at: performance.now() }
       cueRef.current = next
       setCue(next)
+      noteLatency('deterministic')
       if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current)
       dismissTimerRef.current = setTimeout(() => {
         if (mountedRef.current) clearCue()
       }, AUTO_DISMISS_MS)
       return true
+    }
+
+    // THE SIDE RAIL — model-generated suggestions.
+    //
+    // Deliberately none of the interrupt channel's machinery: no single slot,
+    // no cooldown, no auto-dismiss timer stealing it away mid-read, and no
+    // check against whether a deterministic cue is showing. A suggestion
+    // arriving cannot delay, replace or suppress an interrupt, and an
+    // interrupt showing cannot suppress a suggestion — that independence IS
+    // the two-tier architecture.
+    //
+    // Bounded and aged instead: three at most, newest first, and anything
+    // older than the TTL is dropped on the way in, because advice about a
+    // moment that has already passed is noise wearing the clothes of help.
+    const pushSuggestion = (
+      kind: CueKind,
+      text: string,
+      source: 'deterministic' | 'model'
+    ): void => {
+      const at = performance.now()
+      const next: LiveCue = { id: ++idRef.current, kind, text, at }
+      setSuggestions((prev) =>
+        [next, ...prev.filter((s) => at - s.at < SUGGESTION_TTL_MS)].slice(0, MAX_SUGGESTIONS)
+      )
+      noteLatency(source)
+    }
+
+    // A battlecard is deterministic and therefore fast, but it is reference
+    // material rather than a nudge — so it takes the rail, not the interrupt.
+    const pushBattlecard = (card: Battlecard): void => {
+      pushSuggestion('battlecard', `${card.label} — ${card.say}`, 'deterministic')
     }
 
     const windowText = (): string => {
@@ -288,13 +478,15 @@ export function useLiveCues(
     // actually show one — so API calls track display opportunities, not chatter.
     const callBrain = (now: number): void => {
       if (inFlightRef.current) {
-        console.log('[live-cue] skip: a request is already in flight')
+        trace('[live-cue] skip: a request is already in flight')
         return
       }
       if (now - lastCallAtRef.current < CALL_GAP_MS) return
-      if (cueRef.current) return // a cue is already showing
-      const repKnown = repSpeakerRef.current !== null
-      if (repKnown && now - lastCueAtRef.current < cfgRef.current.cooldownMs) return
+      // Deliberately NOT gated on a visible interrupt or on the interrupt
+      // cooldown any more. Those guards belong to the interrupt channel;
+      // applying them here made a deterministic "slow down" silently suppress
+      // the side rail for the whole cooldown, which re-couples the two tiers
+      // the split exists to separate.
       const transcript = windowText()
       if (transcript.length < MIN_CHARS) return
 
@@ -302,11 +494,16 @@ export function useLiveCues(
       inFlightRef.current = true
       const startedAt = now
       const generation = generationRef.current // discard the response if the session resets
-      console.log(`[live-cue] → request (${turnsRef.current.length} turns buffered)`)
+      trace(`[live-cue] → request (${turnsRef.current.length} turns buffered)`)
       void window.api.transcription
         .liveCue(transcript, repSpeakerRef.current)
         .then((res) => {
-          if (!mountedRef.current || generation !== generationRef.current || !res.ok) return
+          if (!mountedRef.current || generation !== generationRef.current) return
+          if (!res.ok) {
+            setCoachingPaused(res.pausedReason === 'all-models-unavailable')
+            return
+          }
+          setCoachingPaused(false)
           if (repSpeakerRef.current === null && res.repSpeaker !== null) {
             // Same guard as coach.ts's batch path (speakers.has(repSpeaker)):
             // never lock onto a speaker id that hasn't actually appeared in
@@ -325,14 +522,28 @@ export function useLiveCues(
               }
             }
           }
-          if (res.cue !== 'none' && res.text) emit(res.cue, res.text)
+          // One-shot: once resolved, keep it — a later window with no
+          // self-intro in view must not un-name someone who already said it.
+          if (buyerNameRef.current === null && res.buyerName && res.buyerSpeaker !== null) {
+            // knownRepRef.current === 0 signals multichannel-active (see the
+            // hook's own JSDoc above) — in that mode speaker IS the channel.
+            const channel = knownRepRef.current === 0 ? res.buyerSpeaker : undefined
+            const key = speakerKey({ speaker: res.buyerSpeaker, channel })
+            buyerNameRef.current = res.buyerName
+            setBuyerName(res.buyerName)
+            setBuyerIdentityKey(key)
+          }
+          // Side rail, always. This is the line §4.3 exists to enforce: a
+          // model response arrives 1.5-2.5s after the moment it describes,
+          // which is too late to justify taking over the rep's attention.
+          if (res.cue !== 'none' && res.text) pushSuggestion(res.cue, res.text, 'model')
         })
         .catch(() => {
           /* ignore — try again on the next turn */
         })
         .finally(() => {
           inFlightRef.current = false
-          console.log(`[live-cue] ← done in ${Date.now() - startedAt}ms`)
+          trace(`[live-cue] ← done in ${Date.now() - startedAt}ms`)
         })
     }
 
@@ -349,10 +560,13 @@ export function useLiveCues(
     // first — so the branch below was routinely decided against the wrong
     // speaker, firing the rep-only pace cue on the client.
     const onTurnEnd = (now: number, endedSpeaker: number | null): void => {
+      // The moment the measurement starts: everything after this is our
+      // latency, not the speaker's.
+      lastTurnEndAtRef.current = performance.now()
       const rep = repSpeakerRef.current
       if (rep !== null && endedSpeaker === rep) {
         // The rep just finished — the only deterministic cue, on the rep alone.
-        if (repWpm(now) > cfgRef.current.paceWpm) emit('pace', 'Slow down a touch')
+        if (repWpm(now) > cfgRef.current.paceWpm) emitInterrupt('pace', 'Slow down a touch')
       } else {
         // The client just finished (or we don't know the rep yet) — coach it.
         scheduleBrain()
@@ -361,6 +575,29 @@ export function useLiveCues(
 
     const offTranscript = window.api.transcription.onTranscript((payload) => {
       const now = Date.now()
+
+      // Battlecards match the ROLLING PARTIAL buffer, before the isFinal gate
+      // below. That is the whole ~400ms budget: waiting for a finalized turn
+      // would add a second or more, by which point the moment to answer the
+      // objection has usually gone.
+      //
+      // Skipped while the REP is the one talking — a rep restating an
+      // objection back to the buyer should not fire a card at themselves. The
+      // clock also starts here rather than at turn-end, because this cue is
+      // answering the words as they arrive, not the turn.
+      const partial = payload.transcript.trim()
+      if (partial) {
+        const rep = repSpeakerRef.current
+        const lastSpeaker = payload.words[payload.words.length - 1]?.speaker ?? null
+        if (rep === null || lastSpeaker !== rep) {
+          const cards = battlecardsRef.current.match(partial, now)
+          if (cards.length > 0) {
+            lastTurnEndAtRef.current = performance.now()
+            for (const card of cards) pushBattlecard(card)
+          }
+        }
+      }
+
       if (!payload.isFinal) return
 
       // A new speaker-label namespace (reconnect, or the mono↔multichannel
@@ -402,6 +639,9 @@ export function useLiveCues(
       // Recompute the deterministic engagement gauge on every finalized turn
       // update — cheap (word-counting over ≤24 turns), no brain/AI call.
       setEngagementScore(computeEngagementScore(turnsRef.current, repSpeakerRef.current))
+      // Same pass updates the monologue meter (§4.2) — a passive read of the
+      // rep's current uninterrupted-speech run, never an interrupt.
+      setMonologue(monologueRef.current.update(turnsRef.current, repSpeakerRef.current, now))
 
       if (payload.speechFinal) onTurnEnd(now, lastSpeakerRef.current)
     })
@@ -419,5 +659,17 @@ export function useLiveCues(
     }
   }, [active, enabled, clearCue])
 
-  return { cue, dismiss: clearCue, repSpeaker, engagementScore }
+  return {
+    cue,
+    dismiss: clearCue,
+    suggestions,
+    dismissSuggestion,
+    latency,
+    repSpeaker,
+    engagementScore,
+    monologue,
+    buyerName,
+    buyerIdentityKey,
+    coachingPaused
+  }
 }

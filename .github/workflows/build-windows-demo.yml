@@ -69,27 +69,25 @@ jobs:
             done
           } > FAILURE-DIAGNOSTICS.md
 
-      - name: Rename artifacts for the demo
+      - name: Rename artifact for the demo
         if: success()
         shell: bash
         run: |
           mv "dist/CallRise AI Windows.exe" "dist/CallRise-AI-DEMO-Windows.exe"
-          mv "dist/CallRise AI Windows Portable.exe" "dist/CallRise-AI-DEMO-Windows-Portable.exe"
           ls -la dist/*.exe
 
-      # Runs on both success (ships the installer + portable exe) and failure
-      # (ships the diagnostics log) - a public Release asset is downloadable
-      # by anyone without a GitHub login, unlike step logs and job summaries
-      # which this public repo still requires sign-in to view.
+      # Runs on both success (ships the installer) and failure (ships the
+      # diagnostics log) - a public Release asset is downloadable by anyone
+      # without a GitHub login, unlike step logs and job summaries which this
+      # public repo still requires sign-in to view.
       - name: Publish result as a GitHub Release
         if: always()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: "CallRise AI - Windows demo build (${{ job.status }})"
-          body: "Automated Windows demo build (x64) from commit ${{ github.sha }}. Status: ${{ job.status }}. Two artifacts: the NSIS installer (CallRise-AI-DEMO-Windows.exe) and a no-install portable exe (CallRise-AI-DEMO-Windows-Portable.exe) - try the portable one if the installer won't launch. Unsigned - Windows SmartScreen will warn on first run (More info -> Run anyway)."
+          body: "Automated Windows demo build (x64) from commit ${{ github.sha }}. Status: ${{ job.status }}. NSIS installer (CallRise-AI-DEMO-Windows.exe) - the portable exe was dropped after being confirmed on real hardware to never launch, for any version of this app. Unsigned - Windows SmartScreen will warn on first run (More info -> Run anyway)."
           files: |
             dist/CallRise-AI-DEMO-Windows.exe
-            dist/CallRise-AI-DEMO-Windows-Portable.exe
             FAILURE-DIAGNOSTICS.md
           prerelease: true

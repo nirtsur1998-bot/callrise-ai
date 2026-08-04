@@ -19,7 +19,9 @@ const MODEL_BY_PURPOSE: Record<AIPurpose, string> = {
   summary: 'claude-sonnet-4-6',
   scorecard: 'claude-sonnet-4-6',
   tasks: 'claude-sonnet-4-6',
-  other: 'claude-sonnet-4-6'
+  other: 'claude-sonnet-4-6',
+  // No consumer yet (M19 Task 3B not built) - same tier as 'other'.
+  'prep-brief': 'claude-sonnet-4-6'
 }
 
 // Rough per-million-token pricing for usage/cost display (Settings -> AI).
@@ -116,7 +118,10 @@ export class AnthropicProvider implements AIProvider {
 
   async complete(req: AICompletionRequest): Promise<AICompletionResult> {
     const policy = LATENCY_POLICY[req.purpose]
-    const model = MODEL_BY_PURPOSE[req.purpose]
+    // M20: completeWithFallback() sets req.model explicitly when a catalog
+    // entry is driving this call. Unset (every M16-era call site) falls back
+    // to exactly today's per-purpose default - zero behavior change.
+    const model = req.model ?? MODEL_BY_PURPOSE[req.purpose]
     try {
       const response = await this.client.messages.create(
         {
@@ -151,7 +156,7 @@ export class AnthropicProvider implements AIProvider {
 
   stream(req: AICompletionRequest): AIStreamResult {
     const policy = LATENCY_POLICY[req.purpose]
-    const model = MODEL_BY_PURPOSE[req.purpose]
+    const model = req.model ?? MODEL_BY_PURPOSE[req.purpose]
     const client = this.client
     const tools = this.tools(req)
     const toolChoice = this.toolChoice(req)

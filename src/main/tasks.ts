@@ -9,7 +9,7 @@ import {
   type TaskCreateInput,
   type TaskUpdateInput
 } from './tasks-fs'
-import { getCall } from './calls-fs'
+import { getCall, speechSegments } from './calls-fs'
 import { listDeals } from './deals-fs'
 import { loadDealStages } from './deal-stages'
 import { generateTasks, type GenerateTasksResult } from './generate-tasks'
@@ -120,7 +120,10 @@ export function registerTasks(): void {
             message: 'This call has no transcript to generate tasks from.'
           }
         }
-        const text = buildCallText({ summary: call.summary, segments: call.segments })
+        const text = buildCallText({
+          summary: call.summary,
+          segments: speechSegments(call.segments)
+        })
         return await generateTasks(text)
       } catch {
         return { ok: false, error: 'failed', message: 'Something went wrong. Please try again.' }

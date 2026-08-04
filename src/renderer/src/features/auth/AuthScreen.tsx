@@ -80,13 +80,13 @@ function NotConfigured(): React.JSX.Element {
         {packaged ? (
           <>
             a <code className="rounded bg-canvas px-1 py-0.5 text-warning">.env</code> file at{' '}
-            <code className="rounded bg-canvas px-1 py-0.5 text-warning">{envLocation}</code>,
-            then quit and reopen the app.
+            <code className="rounded bg-canvas px-1 py-0.5 text-warning">{envLocation}</code>, then
+            quit and reopen the app.
           </>
         ) : (
           <>
-            your <code className="rounded bg-canvas px-1 py-0.5 text-warning">.env</code> file,
-            then fully restart the app (stop{' '}
+            your <code className="rounded bg-canvas px-1 py-0.5 text-warning">.env</code> file, then
+            fully restart the app (stop{' '}
             <code className="rounded bg-canvas px-1 py-0.5 text-warning">npm run dev</code> and
             start it again).
           </>

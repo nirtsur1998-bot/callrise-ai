@@ -25,6 +25,15 @@ export interface CallSegment {
    *  the rep would assert every label-less turn as the rep, since 0 is usually
    *  the rep's own number. */
   unlabelled?: boolean
+  /** Which capture channel this came from: 0 = the rep's mic, 1 = the other
+   *  party's loopback. Undefined for mono (mic-only) calls and for anything
+   *  saved before this existed. A hardware fact, never a diarization guess —
+   *  the only signal the consent-retention strip trusts (see calls-fs.ts). */
+  channel?: number
+  /** A `[gap: Ns]` marker rather than someone's words — audio that was shed,
+   *  discarded to rejoin the live edge, or lost to a suspend. Rendered as a
+   *  divider, never attributed to a speaker. */
+  kind?: 'gap'
 }
 
 /** 'unknown' is a first-class answer: before the rep is identified, after a
@@ -39,6 +48,16 @@ export interface Summary {
   questions: string[]
   model: string
   createdAt: string
+}
+
+export type CommitmentOwner = 'rep' | 'prospect'
+
+export interface Commitment {
+  owner: CommitmentOwner
+  /** What was promised, in the promiser's own terms. */
+  text: string
+  /** ISO date, only when a date was actually stated. */
+  dueDate?: string
 }
 
 export type ConsentStatus = 'not-asked' | 'disclosed' | 'consented' | 'declined'
@@ -96,13 +115,37 @@ export interface CallSummary extends CallBase {
   coachScore?: number
 }
 
+// --- M19 Task 2: resolved speaker identities --------------------------------
+// Kept as a local type (not imported from features/coaching/meta.ts, which
+// re-declares the identical shape) so this foundational, widely-imported
+// file doesn't couple to the coaching feature.
+export type SpeakerIdentitySource =
+  | 'user-profile'
+  | 'calendar'
+  | 'contact'
+  | 'participant-list'
+  | 'self-intro'
+  | 'voice-profile'
+  | 'manual'
+export type SpeakerIdentityConfidence = 'high' | 'medium' | 'low'
+/** Keyed by speakerKey() — see live/segments.ts. */
+export interface SpeakerIdentity {
+  name: string
+  source: SpeakerIdentitySource
+  confidence: SpeakerIdentityConfidence
+  contactId?: string
+  resolvedAt: string
+}
+
 export interface Call extends CallBase {
   segments: CallSegment[]
   summary?: Summary
   attachments?: Attachment[]
   coaching?: CoachingReport
+  commitments?: Commitment[]
   consent?: ConsentRecord
   bookmarks?: Bookmark[]
+  speakerIdentities?: Record<string, SpeakerIdentity>
 }
 
 export type SummaryResult =

@@ -4,13 +4,21 @@ import { groupWords, mergeSegments } from './segments'
 import { supportsOtherPartyCapture } from '@renderer/lib/platform'
 import type { LiveStatus } from './types'
 import type { CallSegment, ConsentRecord, SpeakerRole } from '@renderer/features/calls/types'
+import type { TranscriptionHealthEvent } from '../../../../preload/index.d'
 import {
   getAutoSummarize,
   getAutoGenerateTitle,
+  getAutoPostCallBrief,
   addSeenApp
 } from '@renderer/features/settings/prefs'
 
 type LivePhase = Exclude<LiveStatus, 'paused'>
+
+/** Starting takes longer than this → show an interstitial rather than leaving
+ *  the rep staring at an unchanged screen. */
+const SLOW_START_MS = 400
+/** The microphone check is still pending after this → a real OS prompt is up. */
+const MIC_PROMPT_MS = 250
 
 export type OtherPartyError = 'denied' | 'no-audio' | 'interrupted' | null
 
@@ -26,6 +34,20 @@ interface UseTranscription {
   otherPartyLive: boolean
   /** Last buyer-capture problem, if any (drives a recovery banner). */
   otherPartyError: OtherPartyError
+  /** 1Hz session-health snapshot, or null before the first tick. */
+  health: TranscriptionHealthEvent | null
+  /** True only while the OS microphone permission prompt is actually showing. */
+  micPrompting: boolean
+  /** True once the post-call brief + follow-up email are on the clipboard. */
+  briefCopied: boolean
+  /** True once main has spotted "mic live, buyer bit-silent" long enough to
+   *  look like the Windows endpoint bug (docs/windows-capture.md, §7). */
+  buyerSilentWarning: boolean
+  dismissBuyerSilentWarning: () => void
+  /** M19 Task 2 Part A — Deepgram's claimed channel disagreed with actual
+   *  audio energy (the loudspeaker/echo signature). Advisory. */
+  crossTalkWarning: boolean
+  dismissCrossTalkWarning: () => void
   start: () => Promise<void>
   /** The main-process transcription session id for the call in progress, or
    *  null before a session exists / after a failed start. A function (not a
@@ -43,10 +65,6 @@ interface UseTranscription {
    *  it out under diarization. Back-fills only still-unknown turns in that
    *  epoch; decided turns are never revised. */
   identifyRep: (epoch: number, speaker: number) => void
-  /** Whether multichannel buyer capture ran at any point in this call. The
-   *  consent-retention strip keys on it: speaker 1 only means "the buyer" when
-   *  it is a CHANNEL. */
-  buyerCaptureUsed: () => boolean
 }
 
 export function useTranscription(
@@ -55,7 +73,12 @@ export function useTranscription(
   /** AI Note Taker's "auto-open meeting page" — fired with the saved call's
    *  id after every successful save. Kept in a ref so it's always current
    *  without forcing flushPendingSave to be recreated on every render. */
-  onSaved?: (callId: string) => void
+  onSaved?: (callId: string) => void,
+  /** M19 Task 2 step 5 — set by useLiveCues (a sibling hook, so this can
+   *  only be a ref bridge, not a hook argument) when the buyer's self-intro
+   *  resolves live. Read once, at save time, so it's not lost with the rest
+   *  of the in-progress session's local state. */
+  buyerIdentityRef?: { current: { key: string; name: string } | null }
 ): UseTranscription {
   const onSavedRef = useRef(onSaved)
   useEffect(() => {
@@ -72,6 +95,21 @@ export function useTranscription(
   const [savedNotice, setSavedNotice] = useState(false)
   const [otherPartyLive, setOtherPartyLive] = useState(false)
   const [otherPartyError, setOtherPartyError] = useState<OtherPartyError>(null)
+  const [health, setHealth] = useState<TranscriptionHealthEvent | null>(null)
+  // The zero-native-code Windows endpoint-bug mitigation (§7): main flags
+  // "mic live, buyer bit-silent" and this is what turns it into a banner. Null
+  // once dismissed OR once the underlying condition clears — see onClosed.
+  const [buyerSilentWarning, setBuyerSilentWarning] = useState(false)
+  /** M19 Task 2 Part A — Deepgram's claimed channel disagreed with actual
+   *  per-channel audio energy at least once (the loudspeaker/echo
+   *  signature). Advisory only — no reassignment happens, just a "you may
+   *  want headphones" nudge. */
+  const [crossTalkWarning, setCrossTalkWarning] = useState(false)
+  /** True only while the OS microphone prompt is genuinely pending, so the
+   *  startup copy can name it instead of guessing. */
+  const [micPrompting, setMicPrompting] = useState(false)
+  /** True once a post-call brief has been written to the clipboard. */
+  const [briefCopied, setBriefCopied] = useState(false)
 
   const recorderRef = useRef<Recorder | null>(null)
   // Id of the main-process session THIS call owns. Passed as expectedSessionId
@@ -80,6 +118,7 @@ export function useTranscription(
   const sessionIdRef = useRef<number | null>(null)
   // Re-entrancy guard: a rapid double-click on Try again/Resume must not run
   // two arm-then-getDisplayMedia sequences concurrently.
+  const startingRef = useRef(false)
   const enablingOtherPartyRef = useRef(false)
   // Same guard, mirrored for the disable path — defense in depth alongside
   // the natural isLoopbackAttached() idempotency check below.
@@ -103,13 +142,6 @@ export function useTranscription(
   // turns recorded before that are honestly marked 'unknown' rather than
   // guessed. Keyed by epoch so a reconnect can't carry a stale answer over.
   const repByEpochRef = useRef<Map<number, number>>(new Map())
-  // Latches true the first time multichannel buyer capture actually starts, and
-  // stays true for the rest of the call even if the buyer is dropped again —
-  // the transcript still contains channel-labelled turns from that window.
-  // This is what tells the consent-retention strip whether "speaker 1" is a
-  // real buyer CHANNEL or just a diarization label on a mic-only call.
-  const buyerCaptureUsedRef = useRef(false)
-
   /** Decide who said a turn AT THE MOMENT IT IS RECORDED. Never consulted
    *  again afterwards — that late re-read is what let one `repSpeaker` change
    *  retroactively relabel an entire call. */
@@ -164,29 +196,40 @@ export function useTranscription(
     const captured = segmentsRef.current
     if (captured.length === 0) return
     void window.api.calls
-      .save({
-        startedAt: startedAtRef.current,
-        durationMs: durationMsRef.current,
-        segments: captured,
-        // Consent captured during the session; the main process re-sanitizes it
-        // and enforces the "no consent = no capture" invariant on save.
-        consent: consentRef?.current,
-        // Lets the retention strip tell a buyer CHANNEL from a diarization
-        // label — without it, mic-only calls had speaker-1 turns deleted.
-        buyerCaptureUsed: buyerCaptureUsedRef.current
-      })
+      .save(
+        {
+          startedAt: startedAtRef.current,
+          durationMs: durationMsRef.current,
+          segments: captured,
+          // Consent captured during the session; the main process re-sanitizes it
+          // and enforces the "no consent = no capture" invariant on save.
+          consent: consentRef?.current
+        },
+        buyerIdentityRef?.current ?? undefined
+      )
       .then((saved) => {
         setSavedNotice(true)
         // AI Note Taker: fire-and-forget the opted-in auto-behaviors. Each is
         // independent — one failing (or being off) never affects the others.
         if (getAutoSummarize()) void window.api.calls.summarizeCall(saved.id).catch(() => {})
         if (getAutoGenerateTitle()) void window.api.calls.generateTitle(saved.id).catch(() => {})
+        // §4.6 — the brief lands on the clipboard without anyone clicking.
+        // Main does the clipboard write, so this works while the rep is still
+        // looking at Zoom and our window has no focus.
+        if (getAutoPostCallBrief()) {
+          void window.api.calls
+            .postCallBrief(saved.id)
+            .then((res) => {
+              if (res.ok && res.copied) setBriefCopied(true)
+            })
+            .catch(() => {})
+        }
         onSavedRef.current?.(saved.id)
       })
       .catch(() => {
         /* non-fatal: the transcript is still on screen */
       })
-  }, [consentRef])
+  }, [consentRef, buyerIdentityRef])
 
   useEffect(() => {
     const offState = window.api.transcription.onState((payload) => {
@@ -197,6 +240,8 @@ export function useTranscription(
         setPhase('error')
         setPaused(false)
         setOtherPartyLive(false)
+        setBuyerSilentWarning(false)
+        setCrossTalkWarning(false)
         savePendingRef.current = false
       }
     })
@@ -273,10 +318,63 @@ export function useTranscription(
       setPhase('error')
       setPaused(false)
       setOtherPartyLive(false)
+      setBuyerSilentWarning(false)
+      setCrossTalkWarning(false)
       savePendingRef.current = false
       recorderRef.current?.stop()
       recorderRef.current = null
       setAnalyser(null)
+    })
+
+    // Audio that will never be transcribed. Recorded inline so the transcript
+    // never silently splices two moments that are minutes apart — an honest
+    // hole is far more useful than a seamless-looking lie.
+    const offGap = window.api.transcription.onGap((payload) => {
+      // Speaker 0 rather than a sentinel: the main-process sanitizer clamps
+      // speaker ids to >= 0, so a sentinel would not survive a save anyway.
+      // Everything that matters keys off `kind`, never the id.
+      const marker: CallSegment = { speaker: 0, text: payload.marker, kind: 'gap' }
+      segmentsRef.current = [...segmentsRef.current, marker]
+      setSegments(segmentsRef.current)
+      // Whatever comes next is a fresh turn, not a continuation of what the
+      // gap interrupted.
+      speakerBoundaryRef.current = true
+    })
+
+    const offHealth = window.api.transcription.onHealth((payload) => {
+      setHealth(payload)
+    })
+
+    const offBuyerSilent = window.api.transcription.onBuyerSilent(() => {
+      setBuyerSilentWarning(true)
+    })
+
+    // M19 Task 2 Part A — Deepgram's claimed channel disagreed with actual
+    // per-channel energy for a finalized utterance. The main-process gate
+    // can fire this repeatedly through a sustained cross-talk stretch;
+    // React bails out on an identical setState, so the banner just stays up
+    // rather than re-rendering per utterance.
+    const offCrossTalk = window.api.transcription.onCrossTalkWarning(() => {
+      setCrossTalkWarning(true)
+    })
+
+    // Main's liveness watchdog noticed no audio callback at all for 10s while
+    // the session was live (session-health.md calls this "capture-dead →
+    // reacquire") — the capture device is gone even though nothing at the
+    // browser level (the mic track's own 'ended' event) said so. Recovers the
+    // same way an unplugged mic does: end the session and surface the
+    // existing "Microphone disconnected" / Reconnect flow rather than leaving
+    // the rep on a call that main can see has gone silent forever.
+    const offCaptureLost = window.api.transcription.onCaptureLost(() => {
+      armSave()
+      recorderRef.current?.stop()
+      recorderRef.current = null
+      setAnalyser(null)
+      setOtherPartyLive(false)
+      setBuyerSilentWarning(false)
+      setCrossTalkWarning(false)
+      void window.api.transcription.stop()
+      setPhase('no-device')
     })
 
     // The session fully closed after a stop — the final flushed words are in,
@@ -289,11 +387,16 @@ export function useTranscription(
       offState()
       offTranscript()
       offError()
+      offGap()
+      offHealth()
+      offBuyerSilent()
+      offCrossTalk()
+      offCaptureLost()
       offClosed()
     }
-  }, [flushPendingSave])
+  }, [armSave, flushPendingSave])
 
-  const start = useCallback(async () => {
+  const beginSession = useCallback(async (): Promise<void> => {
     // If a previous call is still waiting to be saved, save it before we reset.
     flushPendingSave()
     // Each new call starts with consent reset to off — it never carries over.
@@ -316,21 +419,53 @@ export function useTranscription(
     setSavedNotice(false)
     setOtherPartyLive(false)
     setOtherPartyError(null)
+    setHealth(null)
+    setBuyerSilentWarning(false)
+    setCrossTalkWarning(false)
+    setBriefCopied(false)
     segmentsRef.current = []
     latencySamples.current = []
     savePendingRef.current = false
     sessionIdRef.current = null
     // Per-CALL state, and this hook instance outlives a single call (LiveView
-    // stays mounted between them). Leaving it latched made the next mic-only
-    // call report buyerCaptureUsed:true, which re-armed the retention strip and
-    // permanently deleted its speaker-1 turns on save — the exact data loss
-    // this flag exists to prevent.
-    buyerCaptureUsedRef.current = false
+    // stays mounted between them) — reset so the rep identified in a PREVIOUS
+    // call's epoch(s) can never be assumed for a new one.
     repByEpochRef.current = new Map()
-    setPhase('requesting')
 
-    const access = await window.api.transcription.ensureMicAccess()
+    // Starting a call used to swap the whole screen twice in under a second:
+    // hero → a full-page "Requesting microphone access… Approve the prompt to
+    // begin." → the call UI. On the overwhelmingly common path the permission
+    // is ALREADY granted, so no prompt ever appears and that middle screen was
+    // both a flash and a lie.
+    //
+    // So it is now earned rather than assumed: nothing changes for the first
+    // 400ms, and the interstitial only appears if starting genuinely takes long
+    // enough to need feedback. Its copy names the microphone prompt only when a
+    // prompt is really pending.
+    const settleTimer = setTimeout(() => setPhase('requesting'), SLOW_START_MS)
+    const promptTimer = setTimeout(() => {
+      setMicPrompting(true)
+      setPhase('requesting')
+    }, MIC_PROMPT_MS)
+    const finishStartup = (): void => {
+      clearTimeout(settleTimer)
+      clearTimeout(promptTimer)
+      setMicPrompting(false)
+    }
+
+    let access: { status: string }
+    try {
+      access = await window.api.transcription.ensureMicAccess()
+    } catch {
+      finishStartup()
+      setPhase('error')
+      setErrorMessage('Could not check microphone access. Please try again.')
+      return
+    }
+    clearTimeout(promptTimer)
+    setMicPrompting(false)
     if (access.status !== 'granted') {
+      finishStartup()
       setPhase('denied')
       return
     }
@@ -346,11 +481,15 @@ export function useTranscription(
           recorderRef.current = null
           setAnalyser(null)
           setOtherPartyLive(false)
+          setBuyerSilentWarning(false)
+          setCrossTalkWarning(false)
           void window.api.transcription.stop()
           setPhase('no-device')
-        }
+        },
+        (frames) => window.api.transcription.reportAudioDropped(frames)
       )
     } catch (err) {
+      finishStartup()
       const name = err instanceof DOMException ? err.name : ''
       if (name === 'NotAllowedError' || name === 'SecurityError') setPhase('denied')
       else if (name === 'NotFoundError' || name === 'OverconstrainedError') setPhase('no-device')
@@ -365,6 +504,7 @@ export function useTranscription(
       return
     }
 
+    finishStartup()
     recorderRef.current = recorder
     setAnalyser(recorder.analyser)
     startedAtRef.current = new Date().toISOString()
@@ -390,6 +530,20 @@ export function useTranscription(
     }
   }, [armSave, flushPendingSave, onStartReset])
 
+  const start = useCallback(async () => {
+    // The screen no longer changes the instant Start is pressed (see the
+    // startup-interstitial note below), so the button that triggered this is
+    // still on screen and still clickable. Without this guard a double-click
+    // would open two microphones and two sockets.
+    if (startingRef.current) return
+    startingRef.current = true
+    try {
+      await beginSession()
+    } finally {
+      startingRef.current = false
+    }
+  }, [beginSession])
+
   const getSessionId = useCallback(() => sessionIdRef.current, [])
 
   const stop = useCallback(async () => {
@@ -400,6 +554,8 @@ export function useTranscription(
     setPaused(false)
     setOtherPartyLive(false)
     setOtherPartyError(null)
+    setBuyerSilentWarning(false)
+    setCrossTalkWarning(false)
     await window.api.transcription.stop()
     setInterimText('')
     setPhase('idle')
@@ -431,6 +587,12 @@ export function useTranscription(
       if (!recorder || !recorder.isLoopbackAttached()) return
       setOtherPartyLive(false)
       setOtherPartyError(null)
+      // Whatever prompted the buyer warning no longer applies once buyer
+      // capture itself has been turned off — a stale "audio has been silent,
+      // check your routing" banner about a channel that's no longer running
+      // reads as contradicting whatever banner explains WHY it stopped.
+      setBuyerSilentWarning(false)
+      setCrossTalkWarning(false)
       recorder.detachLoopback() // stop capturing the buyer immediately
       speakerBoundaryRef.current = true
       try {
@@ -486,12 +648,16 @@ export function useTranscription(
         if (display.getAudioTracks().length === 0) {
           display.getTracks().forEach((t) => t.stop())
           setOtherPartyError('no-audio')
+          setBuyerSilentWarning(false)
+          setCrossTalkWarning(false)
           return
         }
         audio = new MediaStream(display.getAudioTracks())
       } catch {
         window.api.loopback.disarm()
         setOtherPartyError('denied')
+        setBuyerSilentWarning(false)
+        setCrossTalkWarning(false)
         return
       }
 
@@ -510,6 +676,8 @@ export function useTranscription(
         // Loopback ended on its own (OS revoked screen recording / stopped sharing).
         void disableOtherParty()
         setOtherPartyError('interrupted')
+        setBuyerSilentWarning(false)
+        setCrossTalkWarning(false)
       })
 
       // Switch the socket to multichannel FIRST, then flip the worklet to stereo —
@@ -532,11 +700,12 @@ export function useTranscription(
         // Roll back cleanly so the worklet and socket never disagree.
         recorder.detachLoopback()
         setOtherPartyError('denied')
+        setBuyerSilentWarning(false)
+        setCrossTalkWarning(false)
         return
       }
       speakerBoundaryRef.current = true
       recorder.setStereo(true)
-      buyerCaptureUsedRef.current = true
       setOtherPartyLive(true)
     } finally {
       enablingOtherPartyRef.current = false
@@ -565,9 +734,15 @@ export function useTranscription(
     analyser,
     savedNotice,
     identifyRep,
-    buyerCaptureUsed: () => buyerCaptureUsedRef.current,
     otherPartyLive,
     otherPartyError,
+    health,
+    micPrompting,
+    briefCopied,
+    buyerSilentWarning,
+    dismissBuyerSilentWarning: useCallback(() => setBuyerSilentWarning(false), []),
+    crossTalkWarning,
+    dismissCrossTalkWarning: useCallback(() => setCrossTalkWarning(false), []),
     start,
     getSessionId,
     stop,

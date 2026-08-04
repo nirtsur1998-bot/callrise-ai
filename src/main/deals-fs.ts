@@ -164,6 +164,27 @@ function sanitizeRiskAssessmentHistory(value: unknown): DealRiskAssessment[] | u
   return clean.length ? clean : undefined
 }
 
+const MAX_STAGE_HISTORY = 200
+
+/** Every past stage transition survives a disk round-trip only if this reads
+ *  it back — without it, sanitizeDealRecord silently drops the field on every
+ *  load, so `updateDealUnlocked`'s getDeal() always sees an empty history and
+ *  each new transition overwrites the last instead of appending to it. */
+function sanitizeStageHistory(
+  value: unknown
+): { stageId: string; changedAt: string }[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const clean: { stageId: string; changedAt: string }[] = []
+  for (const item of value.slice(-MAX_STAGE_HISTORY)) {
+    if (!item || typeof item !== 'object') continue
+    const r = item as Record<string, unknown>
+    if (!isSafeId(r.stageId)) continue
+    if (typeof r.changedAt !== 'string' || Number.isNaN(Date.parse(r.changedAt))) continue
+    clean.push({ stageId: r.stageId, changedAt: r.changedAt })
+  }
+  return clean.length ? clean : undefined
+}
+
 async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true })
 }
@@ -201,6 +222,7 @@ function sanitizeDealRecord(value: unknown): Deal | null {
     updatedAt,
     riskAssessment: sanitizeRiskAssessment(v.riskAssessment),
     riskAssessmentHistory: sanitizeRiskAssessmentHistory(v.riskAssessmentHistory),
+    stageHistory: sanitizeStageHistory(v.stageHistory),
     deleted: v.deleted === true ? true : undefined
   }
 }
@@ -240,17 +262,20 @@ export async function listDeals(dir: string, opts?: { includeDeleted?: boolean }
   } catch {
     return []
   }
-  const deals: Deal[] = []
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue
-    try {
-      const raw = await fs.readFile(join(dir, file), 'utf8')
-      const deal = sanitizeDealRecord(JSON.parse(raw))
-      if (deal && (opts?.includeDeleted || !deal.deleted)) deals.push(deal)
-    } catch {
-      /* skip unreadable / corrupt file */
-    }
-  }
+  const results = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map(async (file): Promise<Deal | null> => {
+        try {
+          const raw = await fs.readFile(join(dir, file), 'utf8')
+          const deal = sanitizeDealRecord(JSON.parse(raw))
+          return deal && (opts?.includeDeleted || !deal.deleted) ? deal : null
+        } catch {
+          return null // skip unreadable / corrupt file
+        }
+      })
+  )
+  const deals = results.filter((d): d is Deal => d !== null)
   // Newest first as a stable default; the pipeline board applies its own ordering.
   deals.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   return deals

@@ -24,6 +24,10 @@ files:
   - '!**/*.7z'
   - '!dist{,/**}'
   - '!out/**/*.map'
+# Lock the Electron fuses on every packaged binary (see scripts/apply-fuses.js).
+# Runs before signing, because flipping a fuse invalidates a signature.
+afterPack: scripts/apply-fuses.js
+
 asarUnpack:
   - resources/**
   # mac-audio-activity/win-audio-sessions native addons - a .node binary can't
@@ -36,19 +40,22 @@ asarUnpack:
   - native/*/build/Release/*.node
 win:
   executableName: CallRiseAI
+  # The "portable" target was added as a debugging alternative to the NSIS
+  # installer, then reportedly confirmed on real hardware to never launch, and
+  # was dropped for a time. RESTORED (M21+M20 merge, 2026-08-04): launch-tested
+  # directly, twice, on a build made AFTER `da45760` (the asar-corruption fix —
+  # a stray file left mid-write in the repo root during packaging silently
+  # de-syncs the archive and every packaged target dies with a bare exit 1, no
+  # error anywhere). That symptom is indistinguishable from "never launches on
+  # real hardware," so the prior "confirmed dead" conclusion was very likely
+  # the same asar-corruption bug, not something specific to the portable format.
+  # If this regresses again, verify with `npx @electron/asar extract-file
+  # app.asar package.json` before concluding the target itself is broken.
   target:
     - target: nsis
       arch:
         - x64
         - arm64
-    # A second, structurally different artifact alongside the NSIS installer:
-    # one self-contained exe, no install step, no NSIS stub/uninstaller at
-    # all. Added as a debugging alternative after the NSIS installer
-    # repeatedly failed to launch on real Windows test machines with
-    # "This app can't run on your PC" despite a verified-intact download -
-    # if the portable exe launches where the installer didn't, that isolates
-    # the problem to something NSIS-specific in the installer packaging
-    # rather than the app bundle itself.
     - target: portable
       arch:
         - x64
@@ -100,7 +107,18 @@ linux:
   category: Utility
 appImage:
   artifactName: ${name}-${version}-${arch}.${ext}
+# Off everywhere, not just Windows: a real hash mismatch was confirmed on
+# Windows hardware (this option genuinely fixed that specific error), but an
+# adversarial re-check disproved the original theory of WHY - electron-builder's
+# resedit-based exe rewrite was reproduced byte-for-byte and does not corrupt
+# anything. The real Windows launch failure turned out to be unrelated (see
+# win.target's comment - the portable format itself, never this option).
+# Left off regardless: there's no per-platform switch for it, and a fuse that
+# says "verify integrity" with no embedded data to check against (which is
+# what Mac would get if its own plist-based embed were skipped) fails the
+# same way integrity checks always fail when misconfigured.
 npmRebuild: false
+disableAsarIntegrity: true
 publish:
   provider: generic
   url: https://example.com/auto-updates

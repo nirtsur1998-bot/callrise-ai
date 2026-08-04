@@ -154,6 +154,23 @@ function checkForNewDetection(): void {
 function handleDetectorEvent(event: DetectorEvent): void {
   broadcast('detection:state-changed', { state: detector?.getState() })
   broadcast('detection:event', event)
+
+  // The detector deciding a call is over has to actually END the recording.
+  //
+  // It did not before: the FSM emitted `capture-ended` and every UI surface
+  // updated to say "not capturing", while the microphone and the Deepgram
+  // session kept running until someone opened the app and pressed Stop. The
+  // call was never saved either, since the save only fires when the session
+  // closes. Only the MANUAL stops went through stopCapture(), which is what
+  // does both halves — so the one path nobody drives by hand was the one that
+  // never stopped anything.
+  //
+  // 'user-stopped' is excluded because it arrives FROM stopCapture(), which
+  // has already broadcast; re-broadcasting would be harmless but dishonest
+  // about where the request came from.
+  if (event.type === 'capture-ended' && event.reason !== 'user-stopped') {
+    broadcast('detection:requestStopCapture', undefined)
+  }
   if (event.type === 'switch-offered') {
     broadcast('detection:switch-offered', { current: event.current, pending: event.pending })
   }
