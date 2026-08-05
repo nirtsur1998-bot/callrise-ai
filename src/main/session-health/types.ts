@@ -52,11 +52,24 @@ export const HEALTH_TUNING = {
   /** Net rise across the window that counts as a genuine ratchet. */
   risingMinRiseSec: 1.5,
 
-  // Resets are themselves disruptive — an unbudgeted reset loop is a reconnect
-  // storm that looks exactly like the bug it is trying to fix.
+  // Resets are themselves disruptive, so they're paced by `resetBackoffMs`
+  // (below), not hard-capped — a hard cap used to exist here and turned into
+  // the M22 lag-never-recovers bug the moment a connection had a SUSTAINED
+  // deficit: once the cap was hit, nothing bounded lag again for the rest of
+  // `resetWindowMs`. `resetsInWindow`/`maxResetsPerWindow` still describe the
+  // same 10-minute window, repurposed as the signal for "this deficit is
+  // sustained, not a one-off" — see healthTick's multichannel fallback.
+  /** Resets within this trailing window count as the SAME sustained episode
+   *  for `resetsInWindow` — reaching `maxResetsPerWindow` here is what tells
+   *  the caller to stop reset-and-hoping and address the actual cause. */
   maxResetsPerWindow: 3,
   resetWindowMs: 10 * 60_000,
-  /** Backoff before the Nth reset in the current window. */
+  /** Backoff before the Nth reset since the tracker was created (or since
+   *  the last long calm stretch let it settle — see lag.ts). The array's
+   *  LAST entry becomes the steady-state minimum gap once a session has
+   *  reset more times than the array has entries: this is what keeps a
+   *  reset-and-hope loop from becoming a reconnect storm, and — critically —
+   *  it never refuses outright, so lag is always eventually bounded again. */
   resetBackoffMs: [0, 2_000, 8_000],
 
   // --- Shed policy (§1.3) ---------------------------------------------------

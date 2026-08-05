@@ -48,6 +48,11 @@ interface UseTranscription {
    *  audio energy (the loudspeaker/echo signature). Advisory. */
   crossTalkWarning: boolean
   dismissCrossTalkWarning: () => void
+  /** M22 — main dropped buyer capture mid-call because it kept needing lag
+   *  corrections faster than they could recover (a sustained deficit, not a
+   *  one-off blip). The call continues mic-only; this just explains why. */
+  multichannelFallbackNotice: boolean
+  dismissMultichannelFallbackNotice: () => void
   start: () => Promise<void>
   /** The main-process transcription session id for the call in progress, or
    *  null before a session exists / after a failed start. A function (not a
@@ -105,6 +110,9 @@ export function useTranscription(
    *  signature). Advisory only — no reassignment happens, just a "you may
    *  want headphones" nudge. */
   const [crossTalkWarning, setCrossTalkWarning] = useState(false)
+  /** M22 — set once when main signals it dropped buyer capture because the
+   *  connection couldn't sustain it (see onMultichannelFallback below). */
+  const [multichannelFallbackNotice, setMultichannelFallbackNotice] = useState(false)
   /** True only while the OS microphone prompt is genuinely pending, so the
    *  startup copy can name it instead of guessing. */
   const [micPrompting, setMicPrompting] = useState(false)
@@ -422,6 +430,7 @@ export function useTranscription(
     setHealth(null)
     setBuyerSilentWarning(false)
     setCrossTalkWarning(false)
+    setMultichannelFallbackNotice(false)
     setBriefCopied(false)
     segmentsRef.current = []
     latencySamples.current = []
@@ -712,6 +721,21 @@ export function useTranscription(
     }
   }, [consentRef, disableOtherParty])
 
+  // M22 — main decided buyer capture can't keep up in real time on this
+  // connection (repeated lag corrections that kept coming back faster than
+  // they could recover — a sustained deficit, not a network blip) and wants
+  // it dropped. Mechanically identical to the rep manually turning buyer
+  // capture off: `disableOtherParty` already only touches capture, never the
+  // recorded consent, so nothing here needs to re-prompt if the rep manually
+  // re-enables it later in the same call.
+  useEffect(() => {
+    const off = window.api.transcription.onMultichannelFallback(() => {
+      setMultichannelFallbackNotice(true)
+      void disableOtherParty()
+    })
+    return off
+  }, [disableOtherParty])
+
   useEffect(() => {
     return () => {
       // Save a stopped-but-not-yet-flushed call before tearing down.
@@ -743,6 +767,8 @@ export function useTranscription(
     dismissBuyerSilentWarning: useCallback(() => setBuyerSilentWarning(false), []),
     crossTalkWarning,
     dismissCrossTalkWarning: useCallback(() => setCrossTalkWarning(false), []),
+    multichannelFallbackNotice,
+    dismissMultichannelFallbackNotice: useCallback(() => setMultichannelFallbackNotice(false), []),
     start,
     getSessionId,
     stop,

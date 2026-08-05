@@ -127,6 +127,11 @@ export interface TranscriptionApi {
    *  fatal, not a reassignment — just a "this attribution may be wrong,
    *  consider headphones" signal, same spirit as onBuyerSilent above. */
   onCrossTalkWarning: (cb: (payload: Record<string, never>) => void) => () => void
+  /** M22 — buyer-side capture needed lag corrections faster than they could
+   *  recover (a sustained deficit, e.g. Deepgram's own multichannel compute
+   *  cost, not a one-off network blip), so main dropped it and the call
+   *  continues mic-only. Fired at most once per call. */
+  onMultichannelFallback: (cb: (payload: Record<string, never>) => void) => () => void
   /** Async, non-blocking: a short next-question suggestion for live cues. */
   suggestQuestion: (text: string) => Promise<{ ok: true; question: string } | { ok: false }>
   /** Manual mid-call help: sends the running transcript + the rep's question. */

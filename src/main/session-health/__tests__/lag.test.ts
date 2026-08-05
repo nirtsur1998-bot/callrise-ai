@@ -213,39 +213,75 @@ describe('LagTracker rising-slope guard', () => {
   })
 })
 
-describe('LagTracker reset budget', () => {
+describe('LagTracker reset backoff — never permanently blocked (M22)', () => {
   /** Re-establish a 20s lag on a fresh connection, as a real reset would. */
   function sickAgain(tracker: LagTracker, fromMs: number): number {
     const connection = new FakeConnection(tracker).primeLag(20)
     return run(connection, 10, () => 20, fromMs)
   }
 
-  it('allows at most 3 resets per 10 minutes, then degrades instead', () => {
+  // The live-call bug (found 2026-08, M22): the OLD implementation had a
+  // hard `maxResetsPerWindow` cap — past 3 resets in 10 minutes, a
+  // reset-worthy tick degraded to 'shed' UNCONDITIONALLY, with no further
+  // reset possible until the window rolled over. 'shed' only trims the
+  // local queue, which is a no-op once the queue is already near-empty (the
+  // socket keeps accepting bytes fine; it's Deepgram's acknowledgement
+  // that's behind) — so once a SUSTAINED deficit burned through the budget,
+  // nothing bounded lag again for up to 10 minutes. Reproduced on a live
+  // buyer-side call: lag grew linearly and unbounded past 47s with zero
+  // recovery. Proven here: past 3 resets, spaced well outside every backoff
+  // window, a reset-worthy tick STILL gets 'reset', not 'shed' forever.
+  it('keeps allowing resets past the old 3-per-10-minute cap, spaced by backoff alone', () => {
     const tracker = new LagTracker()
     let at = 0
-    for (let i = 0; i < HEALTH_TUNING.maxResetsPerWindow; i++) {
+    // Six resets — twice the old cap — each one well outside the longest
+    // backoff entry (8s), so only the (removed) hard budget could still be
+    // blocking this.
+    for (let i = 0; i < HEALTH_TUNING.maxResetsPerWindow * 2; i++) {
       at = sickAgain(tracker, at + 60_000)
-      expect(tracker.evaluate(at).action).toBe('reset')
+      const verdict = tracker.evaluate(at)
+      expect(verdict.action).toBe('reset')
+      expect(verdict.suppressed).toBeUndefined()
       tracker.noteReset(at)
       tracker.resumeAtLiveEdge()
     }
-    at = sickAgain(tracker, at + 60_000)
-    const verdict = tracker.evaluate(at)
-    expect(verdict.action).toBe('shed') // never 'reset' — no storm
-    expect(verdict.suppressed).toBe('budget')
-    expect(tracker.resetCount).toBe(HEALTH_TUNING.maxResetsPerWindow)
+    expect(tracker.resetCount).toBe(HEALTH_TUNING.maxResetsPerWindow * 2)
   })
 
-  it('lets the budget refill once the window rolls past', () => {
+  // The exact scenario from the live report: resets keep being NEEDED faster
+  // than the backoff between them (a sustained deficit, not one-off blips).
+  // The system should degrade to periodic, BOUNDED corrections — never a
+  // single stall that never recovers.
+  it('bounds lag to roughly one backoff window of growth, even under a sustained deficit', () => {
     const tracker = new LagTracker()
     let at = 0
-    for (let i = 0; i < HEALTH_TUNING.maxResetsPerWindow; i++) {
+    const observedLagsAtReset: number[] = []
+    for (let i = 0; i < 8; i++) {
+      at = sickAgain(tracker, at + 5_000) // sick again well within any backoff
+      const verdict = tracker.evaluate(at)
+      if (verdict.action === 'reset') {
+        observedLagsAtReset.push(verdict.medianLagSec)
+        tracker.noteReset(at)
+        tracker.resumeAtLiveEdge()
+      }
+    }
+    // The old bug produced lag climbing to 47+ seconds with zero corrections
+    // after the 3rd. Here, resets keep happening — the tracker is never
+    // stuck accumulating lag indefinitely.
+    expect(observedLagsAtReset.length).toBeGreaterThan(HEALTH_TUNING.maxResetsPerWindow)
+  })
+
+  it('resetsInWindow reports the sustained-deficit signal the caller needs for M22 Phase 1b', () => {
+    const tracker = new LagTracker()
+    let at = 0
+    for (let i = 0; i < HEALTH_TUNING.maxResetsPerWindow + 1; i++) {
       at = sickAgain(tracker, at + 60_000)
       tracker.noteReset(at)
       tracker.resumeAtLiveEdge()
     }
-    at = sickAgain(tracker, at + HEALTH_TUNING.resetWindowMs + 1000)
-    expect(tracker.evaluate(at).action).toBe('reset')
+    expect(tracker.resetsInWindow(at)).toBe(HEALTH_TUNING.maxResetsPerWindow + 1)
+    // Long after the window has rolled past, the old resets no longer count.
+    expect(tracker.resetsInWindow(at + HEALTH_TUNING.resetWindowMs + 1000)).toBe(0)
   })
 
   it('holds off the immediate next reset with a backoff', () => {

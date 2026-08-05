@@ -130,6 +130,12 @@ interface Session {
 
   reconnectAttempts: number
   stopping: boolean
+  /** M22 — set once this session has told the renderer to drop buyer
+   *  capture because it kept needing lag corrections faster than they could
+   *  recover (see healthTick's 'reset' branch). Guards against re-emitting
+   *  the fallback event on every subsequent tick while the renderer's own
+   *  `transcription:start({multichannel:false})` restart is still in flight. */
+  multichannelFallbackSignaled: boolean
 }
 
 let session: Session | null = null
@@ -368,6 +374,20 @@ function healthTick(s: Session): void {
   s.lag.sample(at)
   const verdict = s.lag.evaluate(at)
   if (verdict.action === 'reset') {
+    // M22 — a reset-worthy tick on a multichannel session that has ALREADY
+    // needed `maxResetsPerWindow` resets in the trailing `resetWindowMs` is
+    // not a one-off blip; it's the shape of a SUSTAINED deficit (Deepgram's
+    // own multichannel processing cost is the leading suspect, confirmed as
+    // real in M22's investigation). Reconnecting again just buys another few
+    // seconds before the same tick fires again. Tell the renderer to drop
+    // buyer capture and continue mic-only instead — it owns the loopback
+    // teardown, this session doesn't. Signaled once per session so the
+    // renderer's own restart (which replaces this session outright) isn't
+    // raced by repeat signals on the next 1s tick.
+    if (s.multichannel && !s.multichannelFallbackSignaled && s.lag.resetsInWindow(at) >= HEALTH_TUNING.maxResetsPerWindow) {
+      s.multichannelFallbackSignaled = true
+      emit(s, 'transcription:multichannelFallback', {})
+    }
     s.lag.noteReset(at)
     console.warn(
       `[transcription] lag reset: median=${verdict.medianLagSec.toFixed(1)}s rising=${verdict.rising}`
@@ -847,7 +867,8 @@ export function registerTranscription(): void {
       pendingShedReason: 'shed',
       connectedOnce: false,
       reconnectAttempts: 0,
-      stopping: false
+      stopping: false,
+      multichannelFallbackSignaled: false
     }
     session = s
     s.liveness.start(timeline.elapsedMs())

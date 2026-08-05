@@ -39,6 +39,11 @@ const api = {
     onBuyerSilent: (cb: (payload: unknown) => void) => subscribe('transcription:buyerSilent', cb),
     onCrossTalkWarning: (cb: (payload: unknown) => void) =>
       subscribe('transcription:crossTalkWarning', cb),
+    /** M22 — buyer-side capture kept needing lag corrections faster than they
+     *  could recover (a sustained deficit, not a one-off blip), so main
+     *  dropped it and the call continues mic-only. Fired once per call. */
+    onMultichannelFallback: (cb: (payload: unknown) => void) =>
+      subscribe('transcription:multichannelFallback', cb),
     suggestQuestion: (text: string) => ipcRenderer.invoke('live:suggestQuestion', text),
     askCoach: (transcript: string, question: string) =>
       ipcRenderer.invoke('live:askCoach', { transcript, question }),

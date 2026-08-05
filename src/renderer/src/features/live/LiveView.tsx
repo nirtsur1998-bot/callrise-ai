@@ -150,6 +150,8 @@ export function LiveView({
     dismissBuyerSilentWarning,
     crossTalkWarning,
     dismissCrossTalkWarning,
+    multichannelFallbackNotice,
+    dismissMultichannelFallbackNotice,
     start,
     getSessionId,
     stop,
@@ -817,6 +819,24 @@ export function LiveView({
             <button
               type="button"
               onClick={dismissCrossTalkWarning}
+              className="no-drag rounded-lg bg-warning-soft px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/20"
+            >
+              Dismiss
+            </button>
+          </span>
+        </InlineBanner>
+      )}
+      {multichannelFallbackNotice && (
+        <InlineBanner tone="warning">
+          <span>
+            Buyer-side capture couldn&rsquo;t keep up in real time on this connection, so it&rsquo;s
+            been turned off for the rest of this call — your side is still being transcribed
+            normally. This can happen on a slow or congested connection.
+          </span>
+          <span className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              onClick={dismissMultichannelFallbackNotice}
               className="no-drag rounded-lg bg-warning-soft px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/20"
             >
               Dismiss

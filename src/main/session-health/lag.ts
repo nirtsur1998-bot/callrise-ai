@@ -24,8 +24,11 @@ export interface LagVerdict {
    *  the ratchet guard. Worth surfacing separately: a small-but-climbing lag
    *  is the shape of the bug, and the absolute number looks fine. */
   rising: boolean
-  /** Populated when `action` is 'reset' but the budget refused it. */
-  suppressed?: 'budget' | 'backoff'
+  /** Populated when `action` would have been 'reset' but the backoff since
+   *  the last one hasn't elapsed yet. Always temporary — unlike the old
+   *  'budget' tier this replaced, there is no ceiling that refuses forever
+   *  (see the M22 doc comment on `evaluate`). */
+  suppressed?: 'backoff'
 }
 
 export class LagTracker {
@@ -165,10 +168,35 @@ export class LagTracker {
   }
 
   /**
-   * What should happen right now. `reset` is only ever returned when the reset
-   * budget actually permits it — otherwise the verdict degrades to `shed` with
-   * `suppressed` set, so the caller can never build a reconnect storm out of a
-   * condition it cannot fix.
+   * What should happen right now. `reset` is only ever returned when the
+   * backoff actually permits it — otherwise the verdict degrades to `shed`
+   * with `suppressed` set, so a burst of reset-worthy ticks can't build a
+   * reconnect storm out of a condition one reset already handled.
+   *
+   * There used to be a second gate here — a hard cap of `maxResetsPerWindow`
+   * resets per `resetWindowMs`, beyond which a reset-worthy tick was refused
+   * outright rather than merely delayed. Found on a live call (M22, 2026-08):
+   * once a connection has a SUSTAINED (not transient) throughput deficit —
+   * confirmed for buyer-side/multichannel capture, whose two independent
+   * Deepgram result streams cost more than mono to keep up with — every
+   * reset buys only a brief reprieve before lag climbs straight back to the
+   * reset threshold, burning through that cap within the first minute or so
+   * of a call. Once capped, the verdict degraded to `shed`, which only trims
+   * the LOCAL queue — a no-op once the queue is already near-empty because
+   * the socket keeps accepting bytes fine; it's Deepgram's ACKNOWLEDGEMENT
+   * that's behind, not local buffering. With nothing left to correct it, lag
+   * grew perfectly linearly and unbounded for the rest of the 10-minute
+   * window — reproduced in a test streaming a sustained sub-realtime mock:
+   * 47+ seconds of lag with zero recovery, matching a real report of lag
+   * climbing past 70 seconds mid-call.
+   *
+   * The backoff alone is enough of a reconnect-storm guard on its own
+   * (`resetBackoffMs`'s last entry becomes the steady-state minimum gap once
+   * a session has reset more times than the array has entries) — it just
+   * must never have a ceiling that refuses forever. `resetsInWindow` still
+   * tracks the same count for a DIFFERENT purpose now: recognizing a
+   * sustained deficit so the caller can address the actual cause (falling
+   * back out of multichannel) instead of just reconnecting on a loop.
    */
   evaluate(atMs: number): LagVerdict {
     const median = this.medianLagSec()
@@ -176,13 +204,12 @@ export class LagTracker {
     const wantsReset = median >= HEALTH_TUNING.resetLagSec || rising
 
     if (wantsReset) {
-      const gate = this.resetGate(atMs)
-      if (gate === 'ok') return { action: 'reset', medianLagSec: median, rising }
+      if (atMs >= this.nextResetAllowedAtMs) return { action: 'reset', medianLagSec: median, rising }
       return {
         action: median >= HEALTH_TUNING.shedLagSec ? 'shed' : 'warn',
         medianLagSec: median,
         rising,
-        suppressed: gate
+        suppressed: 'backoff'
       }
     }
     if (median >= HEALTH_TUNING.shedLagSec) return { action: 'shed', medianLagSec: median, rising }
@@ -190,12 +217,14 @@ export class LagTracker {
     return { action: 'none', medianLagSec: median, rising }
   }
 
-  private resetGate(atMs: number): 'ok' | 'budget' | 'backoff' {
+  /** Resets in the trailing `resetWindowMs` — a live-connection signal that
+   *  the deficit is SUSTAINED rather than a one-off blip, distinct from
+   *  `resetCount`'s all-time total. Used by the caller to decide when a
+   *  reset-and-hope loop should stop being the strategy (see the M22 doc
+   *  comment on `evaluate`). */
+  resetsInWindow(atMs: number): number {
     const windowStart = atMs - HEALTH_TUNING.resetWindowMs
-    this.resetAtMs = this.resetAtMs.filter((t) => t >= windowStart)
-    if (this.resetAtMs.length >= HEALTH_TUNING.maxResetsPerWindow) return 'budget'
-    if (atMs < this.nextResetAllowedAtMs) return 'backoff'
-    return 'ok'
+    return this.resetAtMs.filter((t) => t >= windowStart).length
   }
 
   /**
