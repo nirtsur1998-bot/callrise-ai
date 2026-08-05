@@ -249,7 +249,8 @@ function ErrorState({
         <p className="font-medium">Add your Anthropic API key</p>
         <p className="mt-1 opacity-90">
           Generating tasks needs an Anthropic key. Get one at console.anthropic.com, paste it into{' '}
-          <span className="text-ink">Settings → API keys</span>, then restart the app.
+          <span className="text-ink">Settings → API keys</span>, then try again — it takes effect
+          immediately, no restart needed.
         </p>
       </div>
     )

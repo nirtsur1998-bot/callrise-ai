@@ -356,6 +356,11 @@ export function LiveView({
   // The must-ask checklist (§4.5). Ambient: it fills in as the call goes and
   // says nothing until the rep is about to hang up.
   const checklistRef = useRef(new MustAskChecklist())
+  // How many of `segments` have already been scored against the checklist —
+  // reset alongside checklistRef.current.reset() below, so a new call's
+  // segment count (starting back at 0) is never compared against a stale
+  // count left over from the previous call.
+  const scoredSegmentCountRef = useRef(0)
   // Seeded from the module, not from the ref — reading a ref during render is
   // exactly the pattern that makes concurrent rendering tear.
   const [checklist, setChecklist] = useState(emptyChecklistState)
@@ -385,6 +390,7 @@ export function LiveView({
   useEffect(() => {
     if (status !== 'idle') return
     checklistRef.current.reset()
+    scoredSegmentCountRef.current = 0
     // The rendered checklist has to follow the instance it mirrors; leaving it
     // stale would show the previous call's ticks against the next call.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -409,8 +415,20 @@ export function LiveView({
   // Score the newest words against the checklist. Only the tail is scored:
   // coverage is sticky and observe() is idempotent, so re-reading the whole
   // transcript on every update would burn work to reach the same answer.
+  //
+  // "The tail" means every segment appended since the last time this ran,
+  // not just segments.at(-1) — groupWords can append MORE than one new
+  // segment in a single finalized-transcript update (a speaker change
+  // falling inside one Deepgram final result), and reading only the last
+  // one silently dropped whichever earlier segment landed in the same
+  // batch. A budget number mentioned right before a mid-result speaker
+  // switch would never reach the checklist, and preHangupWarning would
+  // wrongly claim it was never asked.
   useEffect(() => {
-    const tail = `${segments.at(-1)?.text ?? ''} ${interimText}`.trim()
+    const scoredCount = scoredSegmentCountRef.current
+    const newSegments = segments.length > scoredCount ? segments.slice(scoredCount) : []
+    scoredSegmentCountRef.current = segments.length
+    const tail = `${newSegments.map((s) => s.text).join(' ')} ${interimText}`.trim()
     if (!tail) return
     if (checklistRef.current.observe(tail).length > 0) {
       setChecklist(checklistRef.current.state())

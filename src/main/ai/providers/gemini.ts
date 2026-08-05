@@ -53,11 +53,31 @@ interface GeminiContent {
 // outright (root-caused 2026-08-03 from a real user's "chain exhausted"
 // reports - every attempt failed with the generic 'failed' code, consistent
 // with a structural 400 on every single request, not an auth/quota issue).
-// Recurses into properties/items since a deeper tool could nest the same
+//
+// M22 bug hunt found a second, narrower instance of the same class of bug:
+// live-cue.ts's optional buyerName/buyerSpeaker fields use JSON Schema
+// 2020-12's `type: ['string', 'null']` nullable convention (which Anthropic/
+// OpenAI both also accept natively) - Gemini's restricted Schema object does
+// not support `type` as an array at all, only a single type value plus a
+// separate `nullable: true` flag (OpenAPI 3.0's convention). Sent as-is, this
+// 400s the request the moment self-intro extraction is on and a live-cue job
+// is assigned to a Gemini model - unreachable through the default SPEED_CHAIN
+// (Gemini isn't in it), but reachable the instant a user assigns Gemini as
+// coaching-cue's primary model in Settings, same as the schema bug above.
+//
+// Recurses into properties/items since a deeper tool could nest either
 // keyword in a sub-schema.
 export function toGeminiSchema(schema: Record<string, unknown>): Record<string, unknown> {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- destructure-to-omit is the standard way to strip named keys from an object
   const { additionalProperties: _additionalProperties, $schema: _$schema, ...rest } = schema
+  if (Array.isArray(rest.type)) {
+    const types = rest.type as unknown[]
+    const nullable = types.includes('null')
+    const real = types.find((t) => t !== 'null')
+    if (real !== undefined) rest.type = real
+    else delete rest.type
+    if (nullable) rest.nullable = true
+  }
   if (rest.properties && typeof rest.properties === 'object') {
     rest.properties = Object.fromEntries(
       Object.entries(rest.properties as Record<string, unknown>).map(([key, value]) => [

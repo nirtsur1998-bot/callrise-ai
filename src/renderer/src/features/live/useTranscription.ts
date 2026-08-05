@@ -522,6 +522,20 @@ export function useTranscription(
 
     try {
       const result = await window.api.transcription.start({ sampleRate: recorder.sampleRate })
+      // The rep may have clicked Stop while this awaited the real Deepgram
+      // handshake — stop() nulls recorderRef.current synchronously, so this
+      // is the same "was I superseded" check enable/disableOtherParty already
+      // use after their own awaits (M22 bug hunt: this one was missing here).
+      // Without it, a stale failure would snap the UI to an error/no-key
+      // screen for a call the rep already left, and a stale success would
+      // silently leave main's session running with no recorder ever attached
+      // to drive it — startingRef.current stays true for this whole
+      // beginSession call, so no OTHER start() could have raced in and made
+      // this session id stale in some other way; it's this call's own.
+      if (recorderRef.current !== recorder) {
+        if (result.ok) void window.api.transcription.stop()
+        return
+      }
       if (!result.ok) {
         recorder.stop()
         recorderRef.current = null
@@ -531,6 +545,7 @@ export function useTranscription(
         sessionIdRef.current = typeof result.sessionId === 'number' ? result.sessionId : null
       }
     } catch {
+      if (recorderRef.current !== recorder) return
       recorder.stop()
       recorderRef.current = null
       setAnalyser(null)

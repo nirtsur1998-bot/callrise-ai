@@ -986,7 +986,8 @@ function NoKeyBanner(): React.JSX.Element {
       <p className="font-medium">Add your Anthropic API key</p>
       <p className="mt-1 text-warning/80">
         AI summaries need an Anthropic key. Get one at console.anthropic.com, paste it into{' '}
-        <span className="text-warning">Settings → API keys</span>, then restart the app.
+        <span className="text-warning">Settings → API keys</span>, then try again — it takes
+        effect immediately, no restart needed.
       </p>
     </div>
   )

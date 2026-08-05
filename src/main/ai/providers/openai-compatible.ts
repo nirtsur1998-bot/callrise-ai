@@ -27,6 +27,16 @@ export interface OpenAICompatibleConfig {
   /** Cheapest/fastest model for the "Test key" 1-token round trip. Defaults
    *  to defaultModel when the provider doesn't need a distinct one. */
   testModel?: string
+  /** Which max-tokens field name this provider's Chat Completions endpoint
+   *  actually accepts. Defaults to `max_completion_tokens` (OpenAI's current
+   *  field, and what Groq/OpenRouter/NVIDIA/Cerebras all accept). Mistral's
+   *  API only recognizes the older `max_tokens` and 422s the ENTIRE request
+   *  on an unrecognized field ("Extra inputs are not permitted") — found in
+   *  the M22 bug hunt: this meant every Mistral completion (and "Test key",
+   *  which sends the same request shape) failed deterministically, the same
+   *  class of bug as the Gemini schema-field issue fixed earlier the same
+   *  session, just a request PARAMETER instead of a tool SCHEMA field. */
+  maxTokensParam?: 'max_tokens' | 'max_completion_tokens'
 }
 
 /** Best-effort x-ratelimit-* snapshot per provider, for Settings display
@@ -174,6 +184,17 @@ function toProviderError(displayName: string, err: unknown): AIProviderError {
   return new AIProviderError('failed', `Something went wrong calling ${displayName}. Please try again.`)
 }
 
+/** The one max-tokens field a given provider config actually accepts, as a
+ *  spreadable object — see OpenAICompatibleConfig.maxTokensParam's doc
+ *  comment. A standalone function (not a class method) so it's testable
+ *  without standing up a real OpenAI client, the same way toGeminiSchema is. */
+export function resolveMaxTokensField(
+  config: Pick<OpenAICompatibleConfig, 'maxTokensParam'>,
+  maxTokens: number
+): Record<string, number> {
+  return { [config.maxTokensParam ?? 'max_completion_tokens']: maxTokens }
+}
+
 class OpenAICompatibleProvider implements AIProvider {
   readonly id: AIProviderId
   readonly displayName: string
@@ -187,6 +208,10 @@ class OpenAICompatibleProvider implements AIProvider {
     this.client = new OpenAI({ apiKey, baseURL: config.baseURL })
   }
 
+  private maxTokensField(maxTokens: number): Record<string, number> {
+    return resolveMaxTokensField(this.config, maxTokens)
+  }
+
   async complete(req: AICompletionRequest): Promise<AICompletionResult> {
     const policy = LATENCY_POLICY[req.purpose]
     const model = req.model ?? this.config.defaultModel
@@ -195,7 +220,7 @@ class OpenAICompatibleProvider implements AIProvider {
         .create(
           {
             model,
-            max_completion_tokens: req.maxTokens,
+            ...this.maxTokensField(req.maxTokens),
             temperature: req.temperature,
             messages: toMessages(req),
             tools: toTools(req),
@@ -221,6 +246,7 @@ class OpenAICompatibleProvider implements AIProvider {
     const model = req.model ?? this.config.defaultModel
     const client = this.client
     const displayName = this.displayName
+    const maxTokensField = this.maxTokensField(req.maxTokens)
 
     let resolveUsage: (u: AIUsage) => void
     const usage = new Promise<AIUsage>((resolve) => {
@@ -232,7 +258,7 @@ class OpenAICompatibleProvider implements AIProvider {
         const stream = await client.chat.completions.create(
           {
             model,
-            max_completion_tokens: req.maxTokens,
+            ...maxTokensField,
             temperature: req.temperature,
             messages: toMessages(req),
             tools: toTools(req),
@@ -269,7 +295,7 @@ class OpenAICompatibleProvider implements AIProvider {
       await probe.chat.completions.create(
         {
           model: this.config.testModel ?? this.config.defaultModel,
-          max_completion_tokens: 1,
+          ...this.maxTokensField(1),
           messages: [{ role: 'user', content: 'hi' }]
         },
         { timeout: 10_000, maxRetries: 0 }

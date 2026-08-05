@@ -45,11 +45,23 @@ export function useCalls(): UseCalls {
   }, [refresh])
 
   useEffect(() => {
-    // Cancel any pending real-deletes if the hook unmounts first — the timer
-    // callback below guards on this same map, so clearing it is enough.
     const timers = timersRef.current
     return () => {
-      for (const timer of timers.values()) clearTimeout(timer)
+      // A pending delete already told the user "deleted, with an Undo option"
+      // — hiding it in `pendingDeleteIds` and showing the toast. Just clearing
+      // the timer here (without ever calling calls.delete) would silently
+      // resurrect it: navigate away inside the 6s window (this hook unmounts
+      // per-tab, per MainApp's `key={active}` remount) and the call the user
+      // believes is gone — transcript included — comes back next time Past
+      // Calls loads. The promise the UI already made has to be honored, not
+      // cancelled — fire the real delete for every call still pending instead
+      // of dropping it.
+      for (const [id, timer] of timers) {
+        clearTimeout(timer)
+        void window.api.calls.delete(id).catch(() => {
+          /* nothing left mounted to report this to; best-effort */
+        })
+      }
       timers.clear()
     }
   }, [])

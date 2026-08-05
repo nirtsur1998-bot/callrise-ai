@@ -242,6 +242,7 @@ describe('applyConsentRetention (via getCall)', () => {
     speakerIdentities: Record<string, { name: string; source: string; confidence: string; resolvedAt: string }>
     repSpeaker?: number | null
     recordOtherParty?: boolean
+    bookmarks?: { id: string; atMs: number; text: string; createdAt: string }[]
   }
 
   async function writeRawCall(opts: RawCallOpts): Promise<void> {
@@ -261,6 +262,7 @@ describe('applyConsentRetention (via getCall)', () => {
         recordOtherParty: opts.recordOtherParty === true
       },
       speakerIdentities: opts.speakerIdentities,
+      ...(opts.bookmarks ? { bookmarks: opts.bookmarks } : {}),
       ...(opts.repSpeaker !== undefined
         ? { coaching: { metrics: { repSpeaker: opts.repSpeaker } } }
         : {})
@@ -399,5 +401,39 @@ describe('applyConsentRetention (via getCall)', () => {
       'mono guess before the switch',
       'rep after switching to buyer capture'
     ])
+  })
+
+  // M22 bug hunt: bookmarks ("clip this") are flattened, unattributed text —
+  // the Bookmark shape carries no channel/speaker, so there is no surgical
+  // strip available the way there is for segments. Before this fix,
+  // applyConsentRetention stripped segments and speakerIdentities but left
+  // call.bookmarks untouched, so a buyer's verbatim words clipped mid-call
+  // survived a later consent revoke indefinitely (and could reach cloud
+  // backup if transcript sync was on).
+  it('strips bookmarks entirely when consent is not held — no per-word strip is possible', async () => {
+    await writeRawCall({
+      id: 'bookmarks-no-consent',
+      segments: [{ speaker: 0, channel: 0, text: 'rep line' }],
+      speakerIdentities: {},
+      recordOtherParty: false,
+      bookmarks: [
+        { id: 'b1', atMs: 1000, text: "the buyer's actual words", createdAt: new Date().toISOString() }
+      ]
+    })
+    const call = await getCall(dir, 'bookmarks-no-consent')
+    expect(call?.bookmarks).toEqual([])
+  })
+
+  it('keeps bookmarks once consent is actually held', async () => {
+    await writeRawCall({
+      id: 'bookmarks-consented',
+      segments: [{ speaker: 0, channel: 0, text: 'rep line' }],
+      speakerIdentities: {},
+      recordOtherParty: true,
+      bookmarks: [{ id: 'b1', atMs: 1000, text: 'a clipped moment', createdAt: new Date().toISOString() }]
+    })
+    const call = await getCall(dir, 'bookmarks-consented')
+    expect(call?.bookmarks).toHaveLength(1)
+    expect(call?.bookmarks?.[0]?.text).toBe('a clipped moment')
   })
 })

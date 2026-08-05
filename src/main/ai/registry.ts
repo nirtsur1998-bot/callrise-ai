@@ -104,7 +104,11 @@ export const PROVIDER_REGISTRY: Record<AIProviderId, ProviderRegistryEntry> = {
           id: 'mistral',
           displayName: 'Mistral',
           baseURL: 'https://api.mistral.ai/v1',
-          defaultModel: 'mistral-small-latest'
+          defaultModel: 'mistral-small-latest',
+          // Mistral's Chat Completions endpoint only accepts `max_tokens` —
+          // sending the (OpenAI-current) `max_completion_tokens` 422s the
+          // whole request. See OpenAICompatibleConfig.maxTokensParam.
+          maxTokensParam: 'max_tokens'
         },
         key
       )

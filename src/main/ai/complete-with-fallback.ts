@@ -93,7 +93,9 @@ function legacyStep(): ResolvedStep | null {
   return { catalogId: `legacy:${provider.id}`, providerId: provider.id, modelId: '' }
 }
 
-function resolveChain(purpose: AIPurpose): ResolvedStep[] {
+// Exported for direct unit testing (mocking loadAppSettings + process.env is
+// simpler and faster than driving the whole completeWithFallback path).
+export function resolveChain(purpose: AIPurpose): ResolvedStep[] {
   const configured = loadAppSettings().aiModelAssignments[purpose].chain
   const candidateIds = configured.length > 0 ? configured : null
 
@@ -102,6 +104,19 @@ function resolveChain(purpose: AIPurpose): ResolvedStep[] {
     for (const id of candidateIds) {
       const entry = catalogEntry(id)
       if (!entry) continue
+      // A model the catalog itself already knows is dead (delisted/404,
+      // see model-catalog.ts's per-entry `knownStale` comments) will fail
+      // every single time it's tried — skip it here the same way a missing
+      // key is skipped, rather than spending one of a possibly short chain's
+      // few slots (coaching-cue is capped at 2, specifically "so a miss never
+      // means dead air") on a guaranteed failure. Settings still lets a user
+      // pick it — the picker shows the same red "Unavailable" signal this
+      // reads — but the runtime should never attempt it blind. This only
+      // catches statically-known-dead entries; a model that goes stale
+      // WITHOUT `knownStale` being set is a separate, live-check gap
+      // (resolveCatalog's async availability check isn't wired into this
+      // synchronous hot path) — not fixed here.
+      if (entry.knownStale) continue
       const keyEnvName = PROVIDER_REGISTRY[entry.providerId].keyEnvName
       if (!process.env[keyEnvName]?.trim()) continue // skip - no key configured
       steps.push({ catalogId: entry.id, providerId: entry.providerId, modelId: entry.modelId })
@@ -119,6 +134,7 @@ function resolveChain(purpose: AIPurpose): ResolvedStep[] {
   for (const id of DEFAULT_CATALOG_CHAIN[purpose]) {
     const entry = catalogEntry(id)
     if (!entry) continue
+    if (entry.knownStale) continue
     const keyEnvName = PROVIDER_REGISTRY[entry.providerId].keyEnvName
     if (!process.env[keyEnvName]?.trim()) continue
     steps.push({ catalogId: entry.id, providerId: entry.providerId, modelId: entry.modelId })

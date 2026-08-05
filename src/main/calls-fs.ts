@@ -577,6 +577,18 @@ function applyConsentRetention(call: Call): void {
     }
   }
 
+  // Bookmarks ("clip this") are flattened, unattributed text — captureClip
+  // snapshots the last few turns on screen with no per-speaker filtering, so
+  // a bookmark taken during buyer capture routinely contains the other
+  // party's own words with nothing on the Bookmark shape (id/atMs/text/
+  // createdAt — no channel, no speaker) that a later pass could use to strip
+  // surgically. Unlike segments, there is no safe partial strip available,
+  // so — same as this function's segments/speakerIdentities handling —
+  // consent-off means the whole field goes. Losing a rep-only bookmark this
+  // way is an acceptable cost; keeping the buyer's verbatim words after
+  // consent was revoked is not.
+  if (call.bookmarks && call.bookmarks.length > 0) call.bookmarks = []
+
   if (!Array.isArray(call.segments)) return
   // A gap marker is not the buyer's speech — it belongs to nobody, so it
   // survives the strip regardless of the speaker id it happens to carry.
@@ -1463,6 +1475,20 @@ function sanitizeEvidence(
   // confirms the buyer's own line isn't being shown as the rep's evidence.
   const match = turns.find((t) => t.speaker === claimedSpeaker && t.text.includes(nq))
   const verified = !!match && repSpeaker !== null && claimedSpeaker === repSpeaker
+  // M22 bug hunt: coach.ts's own report-generation path only ever keeps
+  // evidence once verified — an unverified quote never enters a freshly
+  // generated report in the first place. This persistence-time sanitizer
+  // (the re-check a saved/imported/hand-edited file goes through) used to
+  // keep the quote anyway with verified:false, which is the one shape that
+  // was never supposed to be reachable: a non-rep or unmatched quote sitting
+  // in a coaching report as "evidence". No live call site plants one today
+  // (confirmed: setCallCoaching's only caller passes an already-verified-only
+  // report, and importCall's coaching payload never carries evidence at all),
+  // but a hand-edited or future-format local file re-imported through this
+  // same function is exactly the case this sanitizer exists to defend
+  // against — so drop it here too, matching coach.ts, instead of leaving a
+  // gap that's only closed by every current caller happening to avoid it.
+  if (!verified) return undefined
   return {
     quote,
     speaker: match ? match.speaker : claimedSpeaker,
