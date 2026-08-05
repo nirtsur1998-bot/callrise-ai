@@ -26,6 +26,8 @@ function Field({ label, children }: { label: string; children: ReactNode }): Rea
   )
 }
 
+const REMINDER_OPTIONS = [5, 10, 15, 20, 30, 45, 60]
+
 interface EventDialogProps {
   initial: EventDraft
   isEdit: boolean
@@ -35,6 +37,10 @@ interface EventDialogProps {
   /** M19 Task 3B — present only when editing an existing event (a new,
    *  unsaved event has no identity to key a brief on). */
   onOpenPrepBrief?: () => void
+  /** True when two-way sync is on for Google and/or Outlook — reminders only
+   *  reach the user's phone/desktop once this event actually pushes to one
+   *  of those, so the picker explains itself when neither is connected. */
+  syncEnabled?: boolean
 }
 
 export function EventDialog({
@@ -43,7 +49,8 @@ export function EventDialog({
   onClose,
   onSubmit,
   onDelete,
-  onOpenPrepBrief
+  onOpenPrepBrief,
+  syncEnabled = false
 }: EventDialogProps): React.JSX.Element {
   const [draft, setDraft] = useState<EventDraft>(initial)
   const [busy, setBusy] = useState(false)
@@ -224,6 +231,38 @@ export function EventDialog({
             </select>
           </Field>
         )}
+        <Field label="Reminders">
+          <div className="flex flex-wrap gap-1.5">
+            {REMINDER_OPTIONS.map((m) => {
+              const active = draft.reminderMinutes.includes(m)
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() =>
+                    set({
+                      reminderMinutes: active
+                        ? draft.reminderMinutes.filter((x) => x !== m)
+                        : [...draft.reminderMinutes, m].sort((a, b) => a - b)
+                    })
+                  }
+                  className={`rounded-md border px-2.5 py-1 text-[12px] font-medium transition ${
+                    active
+                      ? 'border-accent bg-accent-soft text-accent'
+                      : 'border-line-soft bg-canvas text-muted hover:text-ink'
+                  }`}
+                >
+                  {m < 60 ? `${m}m` : '1h'}
+                </button>
+              )
+            })}
+          </div>
+          <p className="mt-1.5 text-[11px] text-faint">
+            {syncEnabled
+              ? 'Fires as a real push notification in Google/Outlook once this event syncs. Outlook only supports one lead time — the soonest picked is used.'
+              : 'Only takes effect once two-way sync is on for Google or Outlook — connect one above to get real push reminders.'}
+          </p>
+        </Field>
         {isEdit && onOpenPrepBrief && (
           <Button variant="secondary" size="sm" icon={Sparkles} onClick={onOpenPrepBrief}>
             Prep brief

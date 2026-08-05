@@ -272,6 +272,7 @@ export function CalendarView({
           onOpenPrepBrief={
             dialog.event ? () => setPrepBriefMeeting(meetingFromEvent(dialog.event!)) : undefined
           }
+          syncEnabled={googleWritable || outlookWritable}
         />
       )}
 

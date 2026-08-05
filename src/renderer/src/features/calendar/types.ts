@@ -27,6 +27,12 @@ export interface CalendarEvent {
    *  pushed to Google/Outlook. Powers the follow-up dashboard. */
   contactId?: string
   dealId?: string
+  /** Minutes-before-start lead times for a REAL reminder pushed to the
+   *  linked Google/Outlook event (that provider's own app fires the actual
+   *  push notification) — distinct from CallRise's own in-app alerts. Only
+   *  takes effect once the event is actually synced in two-way mode; see
+   *  EventDialog's reminder picker. */
+  reminderMinutes?: number[]
   createdAt: string
   updatedAt: string
 }
@@ -65,4 +71,6 @@ export interface EventDraft {
   notes: string
   contactId?: string
   dealId?: string
+  /** See CalendarEvent.reminderMinutes — the picker offers 5/10/15/20/30/45/60. */
+  reminderMinutes: number[]
 }

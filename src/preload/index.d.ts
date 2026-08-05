@@ -845,6 +845,11 @@ export interface CalendarEvent {
    *  the follow-up dashboard's "next scheduled meeting" line. */
   contactId?: string
   dealId?: string
+  /** Minutes-before-start lead times for a REAL reminder pushed to the
+   *  linked Google/Outlook event — that provider's own app fires the actual
+   *  push notification. Distinct from CallRise's own in-app alerts (see
+   *  AlertsApi). Only takes effect once synced in two-way (readwrite) mode. */
+  reminderMinutes?: number[]
   createdAt: string
   updatedAt: string
 }
@@ -857,6 +862,7 @@ export interface EventCreateInput {
   notes?: string | null
   contactId?: string | null
   dealId?: string | null
+  reminderMinutes?: number[]
 }
 
 /** Editing/deleting a Google/Outlook event carries its link so the change
@@ -875,6 +881,7 @@ export interface EventUpdateInput {
   notes?: string | null
   contactId?: string | null
   dealId?: string | null
+  reminderMinutes?: number[]
 }
 
 export interface EventsApi {

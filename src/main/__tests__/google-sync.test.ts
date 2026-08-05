@@ -140,6 +140,28 @@ describe('toGoogleBody', () => {
   })
 })
 
+describe('toGoogleBody reminders', () => {
+  it('sends useDefault:false with popup overrides for each selected minute', () => {
+    const body = toGoogleBody(baseEvent({ reminderMinutes: [10, 30] })) as {
+      reminders: { useDefault: boolean; overrides: { method: string; minutes: number }[] }
+    }
+    expect(body.reminders).toEqual({
+      useDefault: false,
+      overrides: [
+        { method: 'popup', minutes: 10 },
+        { method: 'popup', minutes: 30 }
+      ]
+    })
+  })
+
+  it('still sends an explicit empty overrides list when no reminders are set', () => {
+    // Must be explicit (not omitted) so a PATCH actually clears reminders
+    // previously set, rather than leaving Google's prior value in place.
+    const body = toGoogleBody(baseEvent()) as { reminders: { useDefault: boolean; overrides: unknown[] } }
+    expect(body.reminders).toEqual({ useDefault: false, overrides: [] })
+  })
+})
+
 describe('httpStatus', () => {
   it('extracts the status from a GaxiosError-shaped response', () => {
     expect(httpStatus({ response: { status: 404 } })).toBe(404)

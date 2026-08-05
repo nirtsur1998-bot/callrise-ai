@@ -606,7 +606,8 @@ export async function pushInsertEvent(ev: CalendarEvent, calId = 'primary'): Pro
 }
 
 /** Update the linked Google event with PATCH (only the fields we manage —
- *  Google-only fields like attendees/reminders are left untouched). An event
+ *  Google-only fields like attendees are left untouched; reminders ARE
+ *  managed and sent explicitly every time, see toGoogleBody). An event
  *  that was never linked is created instead (adoption); one that Google no
  *  longer has (404/410) is re-created. */
 export async function pushUpdateEvent(ev: CalendarEvent): Promise<PushResult> {
