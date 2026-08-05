@@ -27,10 +27,9 @@ export function Done({
   const cuesTone: BadgeTone = o.cuesEnabled ? 'positive' : 'neutral'
   const recording = o.recordBothSides ? 'Both sides, with consent' : 'My side only'
 
-  // Checked rather than assumed: most fresh installs have no keys yet (BYO,
-  // never pre-filled), and "Start my first call" failing with no warning at
-  // all — after two minutes of setup that never mentioned this — is a worse
-  // first impression than a one-line heads-up here.
+  // The previous step already offered to add this key — this only re-checks
+  // in case it was skipped there too, so "Start my first call" failing with
+  // no warning at all isn't the first surprise after setup.
   const [missingKey, setMissingKey] = useState(false)
   useEffect(() => {
     let cancelled = false

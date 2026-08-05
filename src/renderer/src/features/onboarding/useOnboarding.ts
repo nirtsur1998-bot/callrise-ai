@@ -20,13 +20,13 @@ function writeLocal(key: string, value: string): void {
   }
 }
 
-export type StepId = 'welcome' | 'about' | 'sell' | 'recording' | 'cues' | 'done'
+export type StepId = 'welcome' | 'about' | 'sell' | 'recording' | 'cues' | 'apiKey' | 'done'
 
 /** Ordered list of steps; drives the progress bar and Back/Continue. */
-export const STEPS: StepId[] = ['welcome', 'about', 'sell', 'recording', 'cues', 'done']
+export const STEPS: StepId[] = ['welcome', 'about', 'sell', 'recording', 'cues', 'apiKey', 'done']
 
 /** Steps that count toward the "Step N of M" marker (welcome/done are chromeless). */
-const NUMBERED: StepId[] = ['about', 'sell', 'recording', 'cues']
+const NUMBERED: StepId[] = ['about', 'sell', 'recording', 'cues', 'apiKey']
 
 export interface OnboardingState {
   // personalization drafts

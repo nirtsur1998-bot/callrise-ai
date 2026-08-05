@@ -16,7 +16,7 @@ type AiProviderId = Parameters<typeof window.api.aiKeys.validate>[0]
 
 export type RetentionPosture = 'trains' | 'no-training' | 'unknown'
 
-interface KeyCardConfig {
+export interface KeyCardConfig {
   name: AiKeyName
   title: string
   blurb: string
@@ -182,7 +182,11 @@ const STATUS_DOT_LABEL: Record<KeyStatusDot, string> = {
   'rate-limited': 'Rate limited'
 }
 
-function KeyCard({
+/** Reused by the onboarding flow's ApiKey step (single-card, Deepgram-only)
+ *  so both places share the exact same save/test/clear logic. */
+export const DEEPGRAM_KEY_CONFIG: KeyCardConfig = KEYS[0]
+
+export function KeyCard({
   config,
   status,
   onChanged
