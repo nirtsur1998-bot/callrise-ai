@@ -215,7 +215,13 @@ function connect(scopes: string[], mode: SyncMode): Promise<ConnectResult> {
           codeVerifier = pkce.codeVerifier
           const authUrl = oauth.generateAuthUrl({
             access_type: 'offline', // ask for a refresh token
-            prompt: 'consent', // ensure a refresh token is returned
+            // 'consent' alone forces the consent screen but NOT the account
+            // chooser — if the system browser already has an active Google
+            // session, Google silently reuses that account and connect()
+            // never gives the rep a chance to pick a different one. Fixed to
+            // match outlook.ts's connect(), which already uses
+            // prompt: 'select_account' for exactly this reason.
+            prompt: 'select_account consent', // force the account picker AND ensure a refresh token
             include_granted_scopes: true, // incremental: new grant also covers prior scopes
             scope: scopes,
             code_challenge_method: CodeChallengeMethod.S256,
