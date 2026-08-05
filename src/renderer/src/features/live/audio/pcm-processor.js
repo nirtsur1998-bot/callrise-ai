@@ -38,6 +38,21 @@ class PCMProcessor extends AudioWorkletProcessor {
       if (data.type === 'mode') {
         const stereo = data.stereo === true
         if (stereo !== this.stereo) {
+          // Flush whatever's already buffered in the OLD layout before
+          // switching, instead of silently dropping it. It's a complete,
+          // self-consistent chunk (just shorter than a full buffer) in the
+          // layout the main process still expects at this point in the
+          // stream, so the existing postMessage path handles it exactly like
+          // any other chunk — no special framing needed. Without this, up to
+          // one buffer's worth (~128ms at 16kHz) of audio captured in the
+          // instant before a mono<->stereo switch (i.e. buyer capture
+          // turning on/off) was lost with no trace in the transcript's own
+          // [gap: Ns] mechanism. Only relevant on the postMessage path — the
+          // ring path (this.ring set) never advances this.offset in the
+          // first place, since process() returns before reaching it.
+          if (this.offset > 0 && !this.ring) {
+            this.port.postMessage(this.buffer.buffer.slice(0, this.offset * 2))
+          }
           this.stereo = stereo
           // New layout → fresh buffer + reset, so one chunk never mixes layouts.
           // Stereo buffer is even (a multiple of 2 × 128) so an L/R pair is never

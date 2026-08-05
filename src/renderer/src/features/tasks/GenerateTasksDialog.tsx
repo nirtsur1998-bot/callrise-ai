@@ -98,21 +98,38 @@ export function GenerateTasksDialog({
   const save = async (): Promise<void> => {
     setSaving(true)
     setSaveError(null)
+    const totalToSave = rows.length
+    // M23 bug hunt: if the Nth create() throws, rows 1..N-1 are already
+    // persisted, but `rows` state used to stay untouched — clicking "Save"
+    // again (the error message's own instruction) resubmitted EVERYTHING,
+    // duplicating every task that had already succeeded, with no way to
+    // tell which ones were the dupes. `remaining` is a plain local snapshot
+    // (not React state read back mid-loop, which would depend on exactly
+    // when React flushes the setRows() below relative to the next
+    // iteration — not something to build correctness on) shrunk by one on
+    // every successful create(); setRows() alongside it only drives what's
+    // displayed. A retry only ever re-attempts whatever's actually left in
+    // `rows` at the moment "Save" is clicked again.
+    let remaining = rows
     try {
-      for (const { draft } of rows) {
+      while (remaining.length > 0) {
+        const row = remaining[0]
         await window.api.tasks.create({
-          title: draft.title.trim() || 'Untitled task',
-          type: draft.type,
-          priority: draft.priority,
-          dueAt: draft.dueAt ?? null,
-          clientName: draft.clientName.trim() || null,
-          note: draft.note.trim() || null,
+          title: row.draft.title.trim() || 'Untitled task',
+          type: row.draft.type,
+          priority: row.draft.priority,
+          dueAt: row.draft.dueAt ?? null,
+          clientName: row.draft.clientName.trim() || null,
+          note: row.draft.note.trim() || null,
           callId,
           callTitle,
           source: 'ai'
         })
+        remaining = remaining.slice(1)
+        if (!mountedRef.current) return
+        setRows(remaining)
       }
-      onSaved(rows.length) // parent unmounts the dialog
+      onSaved(totalToSave) // parent unmounts the dialog
     } catch {
       if (mountedRef.current) {
         setSaving(false)

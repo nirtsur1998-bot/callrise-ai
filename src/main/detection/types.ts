@@ -90,7 +90,14 @@ export const DETECTION_TUNING = {
   /** How long (ms) the switch-capture prompt stays up before defaulting to "keep current". */
   switchPromptTimeoutMs: 30_000,
 
-  /** If the original call ends within this long (ms) of a switch, don't offer to switch back to it. */
+  /** After the rep switches AWAY from a call, don't offer to switch BACK to
+   *  it for this long (ms) — longer than the general `hysteresisMs` re-detect
+   *  window on purpose: re-surfacing "switch back to the call you just left"
+   *  is a more specific, more jarring interruption than the generic "don't
+   *  instantly re-flag a just-stopped app as a brand new candidate" case
+   *  hysteresisMs exists for, so it gets more breathing room. (M23: found
+   *  declared but never wired into stateMachine.ts, which used only the
+   *  generic 20s hysteresisMs for this — fixed.) */
   switchBackSuppressMs: 60_000,
 
   /** Calendar event counts as "live" starting this many ms before its start time. */

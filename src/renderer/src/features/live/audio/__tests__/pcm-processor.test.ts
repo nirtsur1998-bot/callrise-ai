@@ -145,6 +145,50 @@ describe('pcm-processor', () => {
     expect((posted[0] as ArrayBuffer).byteLength).toBe(4096)
   })
 
+  // M23 bug hunt: a mono<->stereo mode switch used to silently drop whatever
+  // was already sitting in the buffer at that moment — up to one full
+  // buffer's worth (~128ms), discarded with no trace, right at the instant
+  // buyer capture turns on or off. Fixed to flush the partial buffer first.
+  it('flushes whatever is already buffered before a mode switch, instead of dropping it', () => {
+    const p = new PCMProcessor()
+    posted.length = 0
+    // 256 mono samples written — well short of the 2048-sample mono buffer,
+    // so nothing has flushed via the normal fill-triggered path yet.
+    p.process([[quantum(new Array(256).fill(0.5))]])
+    p.process([[quantum(new Array(128).fill(-0.25))]])
+    expect(posted.length).toBe(0) // confirms nothing has auto-flushed yet
+
+    p.port.onmessage?.({ data: { type: 'mode', stereo: true } })
+
+    expect(posted.length).toBe(1)
+    const flushed = new Int16Array(posted[0] as ArrayBuffer)
+    expect(flushed.length).toBe(256 + 128) // exactly what was buffered, no more
+    expect(flushed[0]).toBe(toPcm(0.5))
+    expect(flushed[256]).toBe(toPcm(-0.25))
+  })
+
+  it('does not flush an empty buffer on a mode switch with nothing pending', () => {
+    const p = new PCMProcessor()
+    posted.length = 0
+    p.port.onmessage?.({ data: { type: 'mode', stereo: true } })
+    expect(posted.length).toBe(0)
+  })
+
+  it('after the flush, the new-layout buffer starts genuinely empty (no leftover offset)', () => {
+    const p = new PCMProcessor()
+    posted.length = 0
+    p.process([[quantum(new Array(300).fill(0.5))]]) // partial mono buffer, flushed on switch
+    p.port.onmessage?.({ data: { type: 'mode', stereo: true } })
+    expect(posted.length).toBe(1) // just the flush so far
+
+    // A small stereo write, nowhere near filling the fresh 4096-sample
+    // stereo buffer. If the offset reset hadn't happened (old bug reused the
+    // stale count), this could either double-flush immediately or corrupt
+    // the buffer's fill point — neither should happen here.
+    p.process([[quantum([0.1, 0.2]), quantum([0.3, 0.4])]])
+    expect(posted.length).toBe(1) // still just the one flush; nothing new triggered
+  })
+
   it('stops using the ring when detached', () => {
     const p = new PCMProcessor()
     const reader = attachRing(p)

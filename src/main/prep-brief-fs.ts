@@ -154,12 +154,31 @@ interface AssembledContext {
  *  AI-facing context text and the cache-invalidation inputs. Mirrors
  *  resolve.ts's calendar-match spirit (1:1 attendee → contact by email) but
  *  simpler: a direct single-purpose lookup, not an identity cascade. */
-async function assembleContext(input: PrepBriefEventInput): Promise<AssembledContext> {
+// Exported for direct unit testing — mocking contacts-fs/deals-fs/calls-fs
+// is far simpler than standing up real temp-dir fixtures for three data
+// types plus the AI generation call just to exercise context assembly.
+export async function assembleContext(input: PrepBriefEventInput): Promise<AssembledContext> {
   let contact: Contact | null = null
   if (input.contactId) {
     contact = await getContact(contactsDir(), input.contactId)
-  } else if (input.attendees.length === 1 && input.attendees[0]?.email) {
-    contact = await findContactByEmail(contactsDir(), input.attendees[0].email)
+  } else {
+    // M23 bug hunt: this used to only try matching when there was exactly
+    // ONE attendee, so any group meeting (a demo with two people from the
+    // buyer's side, a call with the buyer plus a colleague) silently skipped
+    // contact matching entirely and produced a near-empty brief — no error,
+    // no indication matching was even attempted. Try every attendee's email
+    // now; the first one that resolves to a known contact wins. Order
+    // follows whatever order the calendar API returned attendees in — not a
+    // perfect "which one is the buyer" signal, but strictly better than
+    // skipping every meeting with more than one attendee.
+    for (const attendee of input.attendees) {
+      if (!attendee.email) continue
+      const match = await findContactByEmail(contactsDir(), attendee.email)
+      if (match) {
+        contact = match
+        break
+      }
+    }
   }
 
   let deal: Deal | null = null
@@ -233,12 +252,17 @@ async function assembleContext(input: PrepBriefEventInput): Promise<AssembledCon
       dealId: deal?.id,
       dealUpdatedAt: deal?.updatedAt,
       lastCallId,
-      lastCallUpdatedAt
+      lastCallUpdatedAt,
+      // M23 bug hunt: personalization wasn't part of the cache key, so
+      // editing personalization settings (tone, style, etc.) after a brief
+      // was cached had no effect on that meeting's brief until a manual
+      // "Regenerate" — reopening it kept silently serving the stale version.
+      personalization
     }
   }
 }
 
-function computeInputHash(hashInputs: Record<string, string | number | undefined>): string {
+export function computeInputHash(hashInputs: Record<string, string | number | undefined>): string {
   const stable = Object.keys(hashInputs)
     .sort()
     .map((k) => `${k}=${hashInputs[k] ?? ''}`)

@@ -502,3 +502,136 @@ describe('second-call switch prompt', () => {
     ])
   })
 })
+
+// M23: switchBackSuppressMs (60s) was declared in types.ts but never
+// consumed anywhere in this file — a switch-back offer was gated by the
+// same general hysteresisMs (20s) every other re-detection uses. Regression
+// coverage for the fix: after switching away from a call, re-offering it as
+// a switch-back candidate must wait the LONGER switchBackSuppressMs window,
+// not just hysteresisMs.
+describe('switch-back suppression (switchBackSuppressMs)', () => {
+  /** Zoom -> Teams: capturing zoom, switch to teams, then start capturing
+   *  teams too, so zoom is a real switch-back candidate afterward. */
+  function switchedAwayFromZoom(): { context: FsmContext; now: number } {
+    const zoom = candidate({ appId: 'zoom', pid: 1, confidence: 0.65 })
+    let now = T0
+    let context = step(initialFsmContext, { now, candidates: [zoom] }).context
+    now += DETECTION_TUNING.startSustainMs
+    context = step(context, { now, candidates: [zoom] }).context
+    context = step(context, {
+      now,
+      candidates: [zoom],
+      command: {
+        type: 'start-capture',
+        callId: detectedCallId(context),
+        sessionId: 's-zoom',
+        mode: 'mic-only'
+      }
+    }).context
+
+    const teams = candidate({ appId: 'teams', pid: 2, confidence: 0.65 })
+    now += 1_000
+    context = step(context, { now, candidates: [zoom, teams] }).context
+    now += DETECTION_TUNING.startSustainMs
+    context = step(context, { now, candidates: [zoom, teams] }).context
+    expect(context.state.name).toBe('capturing-with-pending')
+
+    const switched = step(context, {
+      now,
+      candidates: [zoom, teams],
+      command: { type: 'respond-to-switch', decision: 'switch' }
+    })
+    context = switched.context
+    expect(context.state.name).toBe('detected') // now on teams
+
+    context = step(context, {
+      now,
+      candidates: [zoom, teams],
+      command: {
+        type: 'start-capture',
+        callId: detectedCallId(context),
+        sessionId: 's-teams',
+        mode: 'mic-only'
+      }
+    }).context
+    expect(context.state.name).toBe('capturing') // now capturing teams
+
+    return { context, now }
+  }
+
+  it('does not re-offer zoom as a switch-back candidate at 30s (past hysteresisMs, still under switchBackSuppressMs)', () => {
+    let { context, now } = switchedAwayFromZoom()
+    const zoom = candidate({ appId: 'zoom', pid: 1, confidence: 0.7 })
+    const teams = candidate({ appId: 'teams', pid: 2, confidence: 0.65 })
+
+    expect(DETECTION_TUNING.hysteresisMs).toBeLessThan(30_000)
+    expect(DETECTION_TUNING.switchBackSuppressMs).toBeGreaterThan(30_000)
+
+    now += 30_000
+    context = step(context, { now, candidates: [teams, zoom] }).context
+    now += DETECTION_TUNING.startSustainMs
+    const result = step(context, { now, candidates: [teams, zoom] })
+    // Old (buggy) behavior: hysteresisMs alone had already elapsed by now,
+    // so zoom would have been offered back. Fixed behavior: still suppressed.
+    expect(result.context.state.name).toBe('capturing')
+    expect(result.events).toEqual([])
+  })
+
+  it('re-offers zoom as a switch-back candidate once switchBackSuppressMs has fully elapsed', () => {
+    let { context, now } = switchedAwayFromZoom()
+    const zoom = candidate({ appId: 'zoom', pid: 1, confidence: 0.7 })
+    const teams = candidate({ appId: 'teams', pid: 2, confidence: 0.65 })
+
+    now += DETECTION_TUNING.switchBackSuppressMs + 1_000
+    context = step(context, { now, candidates: [teams, zoom] }).context
+    now += DETECTION_TUNING.startSustainMs
+    const result = step(context, { now, candidates: [teams, zoom] })
+    expect(result.context.state.name).toBe('capturing-with-pending')
+    expect(result.events).toEqual([
+      {
+        type: 'switch-offered',
+        current: expect.objectContaining({ appId: 'teams' }),
+        pending: expect.objectContaining({ appId: 'zoom' })
+      }
+    ])
+  })
+
+  it('a call that genuinely ends (not a switch) still only gets the shorter hysteresisMs, not switchBackSuppressMs', () => {
+    // Confirms the fix is scoped to switch-away specifically — an ordinary
+    // hangup must not become 3x harder to re-detect as a side effect.
+    const zoom = candidate({ appId: 'zoom', pid: 1, confidence: 0.65 })
+    let now = T0
+    let context = step(initialFsmContext, { now, candidates: [zoom] }).context
+    now += DETECTION_TUNING.startSustainMs
+    context = step(context, { now, candidates: [zoom] }).context
+    context = step(context, {
+      now,
+      candidates: [zoom],
+      command: {
+        type: 'start-capture',
+        callId: detectedCallId(context),
+        sessionId: 's-zoom',
+        mode: 'mic-only'
+      }
+    }).context
+    expect(context.state.name).toBe('capturing')
+
+    // zoom vanishes for real (a genuine hangup), not a switch.
+    now += 1_000
+    context = step(context, { now, candidates: [] }).context
+    expect(context.state.name).toBe('ending')
+    now += DETECTION_TUNING.endSustainMs + 1
+    context = step(context, { now, candidates: [] }).context
+    expect(context.state.name).toBe('idle')
+
+    expect(context.recentlyEnded).toEqual([
+      expect.objectContaining({ appId: 'zoom', reason: 'ended' })
+    ])
+
+    // Just past hysteresisMs (not switchBackSuppressMs) — should be
+    // re-detectable again as an ordinary new candidate.
+    now += DETECTION_TUNING.hysteresisMs + 1_000
+    const result = step(context, { now, candidates: [zoom] })
+    expect(result.context.state.name).toBe('candidate')
+  })
+})

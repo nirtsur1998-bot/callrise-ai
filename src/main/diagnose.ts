@@ -19,6 +19,7 @@
 
 import { app } from 'electron'
 import { runChannelSelfTest } from './session-health/channel-test'
+import { loadRealWorkletRender } from './session-health/real-worklet-render'
 import { HEALTH_TUNING } from './session-health/types'
 import { transcriptionAudioPath, transcriptionHealth } from './transcription'
 import { readActiveConsent } from './consent-gate'
@@ -84,13 +85,24 @@ export function buildDiagnoseReport(): string {
   push()
 
   push('CHANNEL SELF-TEST')
-  // Runs the real interleaver against a known tone per channel. Catches the
+  // Runs the real interleaver (pcm-processor.js, sandboxed — see
+  // real-worklet-render.ts) against a known tone per channel. Catches the
   // failure where mic and buyer are swapped — which produces no error at all,
-  // just a transcript that attributes the rep's words to the prospect.
-  const stereo = runChannelSelfTest(16000, 2)
+  // just a transcript that attributes the rep's words to the prospect. Falls
+  // back to channel-test.ts's own reimplementation only if the real worklet
+  // asset can't be found/loaded (e.g. `npm run dev`, which never emits a
+  // hashed asset file) — reported honestly either way, per this file's own
+  // "never claim a check ran when it did not" rule: a PASS against the
+  // fallback proves the reimplementation is internally consistent, not that
+  // the live code is correct.
+  const realRender = safe(() => loadRealWorkletRender(), null)
+  push(
+    `  using             : ${realRender ? 'the real live worklet (pcm-processor.js)' : 'FALLBACK reimplementation — real worklet asset not found (expected under `npm run dev`)'}`
+  )
+  const stereo = realRender ? runChannelSelfTest(16000, 2, realRender) : runChannelSelfTest(16000, 2)
   push(`  stereo (rep+buyer): ${stereo.pass ? 'PASS' : 'FAIL'} — ${stereo.detail}`)
   push(`  measured rms      : ${stereo.rms.map((r) => r.toFixed(3)).join(', ')}`)
-  const mono = runChannelSelfTest(16000, 1)
+  const mono = realRender ? runChannelSelfTest(16000, 1, realRender) : runChannelSelfTest(16000, 1)
   push(`  mono (mic only)   : ${mono.pass ? 'PASS' : 'FAIL'} — ${mono.detail}`)
   push()
 
