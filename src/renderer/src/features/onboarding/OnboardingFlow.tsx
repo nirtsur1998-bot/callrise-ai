@@ -7,6 +7,7 @@ import { Welcome } from './steps/Welcome'
 import { AboutYou } from './steps/AboutYou'
 import { WhatYouSell } from './steps/WhatYouSell'
 import { RecordingConsent } from './steps/RecordingConsent'
+import { MicAccess } from './steps/MicAccess'
 import { CoachingCues } from './steps/CoachingCues'
 import { ApiKey } from './steps/ApiKey'
 import { Done } from './steps/Done'
@@ -79,6 +80,7 @@ export function OnboardingFlow({
             {o.step === 'about' && <AboutYou o={o} />}
             {o.step === 'sell' && <WhatYouSell o={o} />}
             {o.step === 'recording' && <RecordingConsent o={o} />}
+            {o.step === 'mic' && <MicAccess />}
             {o.step === 'cues' && <CoachingCues o={o} />}
             {o.step === 'apiKey' && <ApiKey />}
             {o.step === 'done' && (

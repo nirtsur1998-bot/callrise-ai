@@ -99,12 +99,14 @@ export function Done({
         </button>
       </div>
 
-      {/* Two real features this flow never asks about — off by default, so
-          the only way to know they exist at all is Settings. One line here
-          beats them staying permanently undiscovered. */}
+      {/* Real features this flow never asks about — off/unconnected by
+          default, so the only way to know they exist at all is Settings or
+          the Calendar tab. One line here beats them staying permanently
+          undiscovered. */}
       <p className="mx-auto mt-5 max-w-xs text-[11px] leading-relaxed text-faint">
         Settings also has automatic call detection (start capturing without a click) and optional
-        cloud backup for your calls, tasks, and calendar.
+        cloud backup for your calls, tasks, and calendar. The Calendar tab can connect Google or
+        Outlook for two-way sync and meeting prep.
       </p>
     </div>
   )
