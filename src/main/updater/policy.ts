@@ -50,6 +50,28 @@ export function isTrustedFeed(rawUrl: string | undefined | null): UpdateVerdict 
   return { ok: true }
 }
 
+/**
+ * If an already-trusted feed URL points at a github.com repo, extract
+ * `{owner, repo}` so the caller can use electron-updater's dedicated
+ * 'github' provider — which reads a repo's Releases assets and its own
+ * generated `latest.yml` directly — instead of the 'generic' HTTP provider.
+ * Returns null for any other host; a plain https feed still works unchanged
+ * via 'generic'. This is a parsing convenience, not a trust decision — call
+ * it only AFTER isTrustedFeed has already accepted the URL.
+ */
+export function githubRepoFromFeed(rawUrl: string): { owner: string; repo: string } | null {
+  let url: URL
+  try {
+    url = new URL(rawUrl)
+  } catch {
+    return null
+  }
+  if (url.hostname !== 'github.com' && url.hostname !== 'www.github.com') return null
+  const [owner, repo] = url.pathname.split('/').filter(Boolean)
+  if (!owner || !repo) return null
+  return { owner, repo: repo.replace(/\.git$/, '') }
+}
+
 /** A strictly-parsed version. Anything unparseable is rejected rather than
  *  coerced, because a version we cannot read is one we cannot compare. */
 interface ParsedVersion {

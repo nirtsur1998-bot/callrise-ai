@@ -1,5 +1,6 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type { DetectedCall, DetectorEvent, DetectorState } from '../main/detection/types'
+import type { UpdateStatus } from '../main/updater'
 
 export type MicAccessStatus = 'granted' | 'denied' | 'restricted' | 'not-determined'
 
@@ -1430,6 +1431,8 @@ export interface AppControlApi {
    *  via `npm run dev` — lets the renderer show the right "how to fix this"
    *  instructions (relaunch the app vs. restart the dev server). */
   isPackaged: () => Promise<boolean>
+  /** The version string from package.json, for the Settings "Software update" section. */
+  getVersion: () => Promise<string>
 }
 
 /**
@@ -1474,6 +1477,17 @@ export interface DetectionApi {
   requestTogglePause: () => Promise<void>
   onRequestStopCapture: (cb: () => void) => () => void
   onRequestTogglePause: (cb: () => void) => () => void
+}
+
+// --- Auto-update (§5.3) -----------------------------------------------------
+
+export interface UpdaterApi {
+  status: () => Promise<UpdateStatus>
+  check: () => Promise<UpdateStatus>
+  download: () => Promise<UpdateStatus>
+  /** Quits and installs — only succeeds from a 'downloaded' state; main
+   *  re-verifies this itself rather than trusting the renderer's call. */
+  install: () => Promise<{ ok: boolean }>
 }
 
 // --- Scheduled alerts (M19 Task 1) ------------------------------------------
@@ -1655,6 +1669,7 @@ declare global {
       detection: DetectionApi
       alerts: AlertsApi
       prepBrief: PrepBriefApi
+      updater: UpdaterApi
     }
   }
 }

@@ -18,5 +18,10 @@ export const DEFAULT_CONFIG = {
   // to "In production" before this works for any user besides those test
   // accounts (OAuth consent screen page → Publish app).
   GOOGLE_CLIENT_ID: '877875490182-d6gu698b28n8b5giod7q7kuo6vbh3p0t.apps.googleusercontent.com',
-  GOOGLE_CLIENT_SECRET: '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'
+  GOOGLE_CLIENT_SECRET: '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',
+  // M23: the repo itself, not a secret — a plain public URL. updater/index.ts
+  // parses this as a github.com repo URL and uses electron-updater's 'github'
+  // provider, which reads the repo's Releases assets directly; no token
+  // needed to CHECK for updates on a public repo (only to publish one).
+  UPDATE_FEED_URL: 'https://github.com/nirtsur1998-bot/callrise-ai'
 } as const

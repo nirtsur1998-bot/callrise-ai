@@ -119,6 +119,13 @@ appImage:
 # same way integrity checks always fail when misconfigured.
 npmRebuild: false
 disableAsarIntegrity: true
+# M23: GitHub Releases on the public callrise-ai repo. `electron-builder
+# --publish always` (needs a GH_TOKEN with repo scope) creates the release
+# and uploads the installers + the latest.yml manifest electron-updater
+# reads at runtime — see src/main/updater/index.ts and default-config.ts's
+# UPDATE_FEED_URL, which points the RUNNING app at this same repo. No token
+# is needed just to check for updates on a public repo, only to publish one.
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: nirtsur1998-bot
+  repo: callrise-ai

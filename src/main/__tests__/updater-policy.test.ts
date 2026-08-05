@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   compareVersions,
+  githubRepoFromFeed,
   isSafeFilename,
   isTrustedFeed,
   isWellFormedSha512,
@@ -178,5 +179,57 @@ describe('validateUpdate', () => {
     const v = validateUpdate({}, '1.0.0')
     expect(v.ok).toBe(false)
     if (!v.ok) expect(v.reason.length).toBeGreaterThan(10)
+  })
+})
+
+// M23: lets registerUpdater() pick electron-updater's dedicated 'github'
+// provider (reads a repo's Releases assets directly) for a feed that's a
+// github.com repo URL, without changing isTrustedFeed's own trust decision
+// at all — this is pure parsing, called only after the URL is already
+// accepted.
+describe('githubRepoFromFeed', () => {
+  it('extracts owner/repo from a plain github.com repo URL', () => {
+    expect(githubRepoFromFeed('https://github.com/nirtsur1998-bot/callrise-ai')).toEqual({
+      owner: 'nirtsur1998-bot',
+      repo: 'callrise-ai'
+    })
+  })
+
+  it('tolerates a trailing slash and extra path segments', () => {
+    expect(githubRepoFromFeed('https://github.com/nirtsur1998-bot/callrise-ai/')).toEqual({
+      owner: 'nirtsur1998-bot',
+      repo: 'callrise-ai'
+    })
+    expect(githubRepoFromFeed('https://github.com/nirtsur1998-bot/callrise-ai/releases')).toEqual({
+      owner: 'nirtsur1998-bot',
+      repo: 'callrise-ai'
+    })
+  })
+
+  it('strips a .git suffix', () => {
+    expect(githubRepoFromFeed('https://github.com/nirtsur1998-bot/callrise-ai.git')).toEqual({
+      owner: 'nirtsur1998-bot',
+      repo: 'callrise-ai'
+    })
+  })
+
+  it('accepts www.github.com too', () => {
+    expect(githubRepoFromFeed('https://www.github.com/nirtsur1998-bot/callrise-ai')).toEqual({
+      owner: 'nirtsur1998-bot',
+      repo: 'callrise-ai'
+    })
+  })
+
+  it('returns null for a non-github host — the generic provider handles it instead', () => {
+    expect(githubRepoFromFeed('https://updates.callrise.ai/')).toBeNull()
+  })
+
+  it('returns null for a github.com URL with no repo path (just the host)', () => {
+    expect(githubRepoFromFeed('https://github.com/')).toBeNull()
+    expect(githubRepoFromFeed('https://github.com/onlyowner')).toBeNull()
+  })
+
+  it('returns null rather than throwing on an unparseable URL', () => {
+    expect(githubRepoFromFeed('not a url')).toBeNull()
   })
 })

@@ -19,7 +19,7 @@
 
 import { app, ipcMain } from 'electron'
 import { autoUpdater } from 'electron-updater'
-import { isTrustedFeed, validateUpdate } from './policy'
+import { githubRepoFromFeed, isTrustedFeed, validateUpdate } from './policy'
 
 export type UpdateStatus =
   | { state: 'disabled'; reason: string }
@@ -59,7 +59,19 @@ export function registerUpdater(): void {
   }
 
   enabled = true
-  autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl() as string })
+  const url = feedUrl() as string
+  // A github.com repo URL gets electron-updater's dedicated 'github'
+  // provider (reads the repo's Releases assets + its own generated
+  // latest.yml directly) instead of 'generic' — no behavior change to the
+  // trust check above, isTrustedFeed already accepted this exact URL either
+  // way; this only decides which HTTP client electron-updater uses to fetch
+  // update metadata from it.
+  const gh = githubRepoFromFeed(url)
+  if (gh) {
+    autoUpdater.setFeedURL({ provider: 'github', owner: gh.owner, repo: gh.repo })
+  } else {
+    autoUpdater.setFeedURL({ provider: 'generic', url })
+  }
 
   // Nothing downloads or installs without the user asking. An updater that
   // stages an install on quit takes the decision away from the person whose
@@ -134,6 +146,16 @@ export function registerUpdater(): void {
       }
     }
     return status
+  })
+
+  // Only from 'downloaded' — same reasoning as 'download' above: this is a
+  // quit-and-relaunch, so it must be a state OUR gate already verified this
+  // update against, not something the renderer can trigger unconditionally.
+  // No status transition on success: the app is about to quit.
+  ipcMain.handle('updater:install', () => {
+    if (!enabled || status.state !== 'downloaded') return { ok: false as const }
+    autoUpdater.quitAndInstall()
+    return { ok: true as const }
   })
 
   status = { state: 'idle' }

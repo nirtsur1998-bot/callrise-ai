@@ -323,7 +323,8 @@ const api = {
     getActiveApp: () => ipcRenderer.invoke('app:getActiveApp'),
     getLastExternalApp: () => ipcRenderer.invoke('app:getLastExternalApp'),
     onCallDetected: (cb: (appName: string) => void) => subscribe('app:callDetected', cb),
-    isPackaged: () => ipcRenderer.invoke('app:isPackaged')
+    isPackaged: () => ipcRenderer.invoke('app:isPackaged'),
+    getVersion: () => ipcRenderer.invoke('app:getVersion')
   },
   detection: {
     getState: () => ipcRenderer.invoke('detection:getState') as Promise<DetectorState | undefined>,
@@ -356,6 +357,14 @@ const api = {
     requestTogglePause: () => ipcRenderer.invoke('detection:requestTogglePause'),
     onRequestStopCapture: (cb: () => void) => subscribe('detection:requestStopCapture', cb),
     onRequestTogglePause: (cb: () => void) => subscribe('detection:requestTogglePause', cb)
+  },
+  updater: {
+    status: () => ipcRenderer.invoke('updater:status'),
+    check: () => ipcRenderer.invoke('updater:check'),
+    download: () => ipcRenderer.invoke('updater:download'),
+    /** Quits and installs — only succeeds from a 'downloaded' state; main
+     *  re-verifies this itself rather than trusting the renderer's call. */
+    install: () => ipcRenderer.invoke('updater:install')
   }
 }
 

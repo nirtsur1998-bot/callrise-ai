@@ -3,6 +3,7 @@ import { Card } from '@renderer/components/Card'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
 import { isMac, isWindows } from '@renderer/lib/platform'
 import { SettingRow } from './SettingRow'
+import { SoftwareUpdateSection } from './SoftwareUpdateSection'
 
 export function AppSection(): React.JSX.Element {
   const [launchAtLogin, setLaunchAtLoginState] = useState(false)
@@ -32,19 +33,22 @@ export function AppSection(): React.JSX.Element {
   const osName = isMac ? 'macOS' : isWindows ? 'Windows' : 'your computer'
 
   return (
-    <Card className="mb-5">
-      <SettingRow
-        title="Launch at login"
-        description={`Start CallRise AI automatically when you log into ${osName}. Only takes effect in the installed app, not while running in development.`}
-        control={
-          <ToggleSwitch
-            checked={launchAtLogin}
-            disabled={loading}
-            onChange={(v) => void setLaunchAtLogin(v)}
-            label="Launch at login"
-          />
-        }
-      />
-    </Card>
+    <>
+      <Card className="mb-5">
+        <SettingRow
+          title="Launch at login"
+          description={`Start CallRise AI automatically when you log into ${osName}. Only takes effect in the installed app, not while running in development.`}
+          control={
+            <ToggleSwitch
+              checked={launchAtLogin}
+              disabled={loading}
+              onChange={(v) => void setLaunchAtLogin(v)}
+              label="Launch at login"
+            />
+          }
+        />
+      </Card>
+      <SoftwareUpdateSection />
+    </>
   )
 }

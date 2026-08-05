@@ -131,4 +131,7 @@ export function registerActiveApp(): void {
   // Lets the renderer show the right "fix this" instructions — a packaged
   // install has no `npm run dev` to restart, it just needs relaunching.
   ipcMain.handle('app:isPackaged', (): boolean => app.isPackaged)
+
+  // The Settings "Software update" section's current-version display.
+  ipcMain.handle('app:getVersion', (): string => app.getVersion())
 }
