@@ -1374,6 +1374,10 @@ export interface AppSettings {
    *  falls back to `aiProvider` above, then to a bundled default catalog
    *  chain — see main/ai/complete-with-fallback.ts's resolution rule. */
   aiModelAssignments: ModelAssignments
+  /** M23 — when true, the updater downloads and installs new versions on
+   *  its own (no clicks) instead of requiring manual Download/Restart
+   *  clicks. Off by default. */
+  autoUpdateEnabled: boolean
 }
 
 export interface AppSettingsPatch {
@@ -1407,6 +1411,7 @@ export interface AppSettingsPatch {
    *  (whole-chain replace per purpose, not key-by-key — a chain is authored
    *  as one unit in the Model Assignment UI). */
   aiModelAssignments?: Partial<Record<AiPurpose, ModelAssignment>>
+  autoUpdateEnabled?: boolean
 }
 
 export interface AppSettingsApi {

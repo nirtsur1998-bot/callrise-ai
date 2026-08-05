@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Download, Loader2, RefreshCw, RotateCw } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { Button } from '@renderer/components/Button'
+import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
 import { SettingRow } from './SettingRow'
+import { useAppSettings } from './useAppSettings'
 import type { UpdateStatus } from '../../../../main/updater'
 
 /** One line explaining the current updater state — never the raw status
@@ -39,6 +41,7 @@ export function SoftwareUpdateSection(): React.JSX.Element {
   const [status, setStatus] = useState<UpdateStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const mountedRef = useRef(true)
+  const { settings, update: updateSettings } = useAppSettings()
 
   useEffect(() => {
     mountedRef.current = true
@@ -127,6 +130,19 @@ export function SoftwareUpdateSection(): React.JSX.Element {
   return (
     <Card className="mb-5">
       <SettingRow title="Software update" description={statusLine(status, version)} control={action()} />
+      <div className="mt-3 border-t border-line-soft pt-3">
+        <SettingRow
+          title="Update automatically"
+          description="Download and install new versions on their own — no clicks needed. Off by default; the Check/Download/Restart buttons above still work either way."
+          control={
+            <ToggleSwitch
+              checked={settings.autoUpdateEnabled}
+              onChange={(v) => void updateSettings({ autoUpdateEnabled: v })}
+              label="Update automatically"
+            />
+          }
+        />
+      </div>
     </Card>
   )
 }

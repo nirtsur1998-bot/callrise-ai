@@ -45,7 +45,8 @@ const DEFAULT_SETTINGS: AppSettings = {
     tasks: { chain: [] },
     other: { chain: [] },
     'prep-brief': { chain: [] }
-  }
+  },
+  autoUpdateEnabled: false
 }
 
 export interface UseAppSettings {

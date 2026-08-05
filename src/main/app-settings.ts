@@ -316,6 +316,14 @@ export interface AppSettings {
    *  opts into the new Settings → Model Assignment page. See
    *  ai/model-assignments.ts and ai/complete-with-fallback.ts. */
   aiModelAssignments: ModelAssignments
+  /** M23 — when true, the updater downloads a newly available version
+   *  automatically (no click needed) and installs it on the app's next
+   *  natural quit, instead of requiring Download + Restart to be clicked
+   *  manually. Off by default: matches every other opt-in in this file —
+   *  the updater's own module doc explains why nothing installs without
+   *  the user asking at least once, and this IS that one ask. Manual
+   *  Check/Download/Install buttons keep working regardless of this. */
+  autoUpdateEnabled: boolean
 }
 
 // AIProviderId is re-exported here (not re-declared) so existing importers
@@ -355,7 +363,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   detection: EMPTY_DETECTION_SETTINGS,
   speakerId: EMPTY_SPEAKER_ID,
   aiProvider: 'anthropic',
-  aiModelAssignments: DEFAULT_MODEL_ASSIGNMENTS
+  aiModelAssignments: DEFAULT_MODEL_ASSIGNMENTS,
+  autoUpdateEnabled: false
 }
 
 function settingsPath(): string {
@@ -422,7 +431,8 @@ export function loadAppSettings(): AppSettings {
       detection: sanitizeDetectionSettings(parsed.detection),
       speakerId: sanitizeSpeakerId(parsed.speakerId),
       aiProvider: sanitizeAIProvider(parsed.aiProvider),
-      aiModelAssignments: sanitizeModelAssignments(parsed.aiModelAssignments)
+      aiModelAssignments: sanitizeModelAssignments(parsed.aiModelAssignments),
+      autoUpdateEnabled: parsed.autoUpdateEnabled === true
     }
   } catch {
     return {
@@ -466,7 +476,9 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
     detection: mergeDetectionSettings(current.detection, p.detection),
     speakerId: mergeSpeakerId(current.speakerId, p.speakerId),
     aiProvider: 'aiProvider' in p ? sanitizeAIProvider(p.aiProvider) : current.aiProvider,
-    aiModelAssignments: mergeModelAssignments(current.aiModelAssignments, p.aiModelAssignments)
+    aiModelAssignments: mergeModelAssignments(current.aiModelAssignments, p.aiModelAssignments),
+    autoUpdateEnabled:
+      'autoUpdateEnabled' in p ? p.autoUpdateEnabled === true : current.autoUpdateEnabled
   }
 }
 
@@ -502,6 +514,17 @@ export function setDetectionEnabledChangedListener(fn: () => void): void {
   onDetectionEnabledChanged = fn
 }
 
+/**
+ * Called whenever a save flips `autoUpdateEnabled` — updater/index.ts
+ * registers this so toggling the Settings switch starts/stops the periodic
+ * background check immediately, instead of only taking effect on next
+ * launch. Same callback-registration shape as onDetectionEnabledChanged.
+ */
+let onAutoUpdateEnabledChanged: (() => void) | null = null
+export function setAutoUpdateEnabledChangedListener(fn: () => void): void {
+  onAutoUpdateEnabledChanged = fn
+}
+
 export function saveAppSettings(patch: unknown): AppSettings {
   const current = loadAppSettings()
   const next = mergeSettings(current, patch)
@@ -520,6 +543,13 @@ export function saveAppSettings(patch: unknown): AppSettings {
   if (current.detection.enabled !== next.detection.enabled && onDetectionEnabledChanged) {
     try {
       onDetectionEnabledChanged()
+    } catch {
+      /* never fail the settings save over this */
+    }
+  }
+  if (current.autoUpdateEnabled !== next.autoUpdateEnabled && onAutoUpdateEnabledChanged) {
+    try {
+      onAutoUpdateEnabledChanged()
     } catch {
       /* never fail the settings save over this */
     }
@@ -560,6 +590,13 @@ export function applyPulledSettings(payload: unknown, cloudUpdatedAt: string): A
       /* never fail the pull over this */
     }
   }
+  if (current.autoUpdateEnabled !== next.autoUpdateEnabled && onAutoUpdateEnabledChanged) {
+    try {
+      onAutoUpdateEnabledChanged()
+    } catch {
+      /* never fail the pull over this */
+    }
+  }
   return next
 }
 
@@ -580,6 +617,12 @@ export function isAmbientDetectionEnabled(): boolean {
 /** M19 Task 2's cascade gate — calendar/contact/fallback resolution only. */
 export function isSpeakerIdEnabled(): boolean {
   return loadAppSettings().speakerId.enabled
+}
+
+/** The gate updater/index.ts checks before enabling autoDownload/
+ *  autoInstallOnAppQuit and starting its periodic background check. */
+export function isAutoUpdateEnabled(): boolean {
+  return loadAppSettings().autoUpdateEnabled
 }
 
 /** The specific gate live-cue.ts must check before asking the LLM to extract
