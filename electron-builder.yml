@@ -129,8 +129,14 @@ publish:
   provider: github
   owner: nirtsur1998-bot
   repo: callrise-ai
-  # electron-builder defaults to draft:true, which leaves the release
-  # invisible on the public page AND unreachable by the running app's
-  # auto-updater (it only reads published releases). v1.0.0 shipped as a
-  # silent draft the first time because of this default — publish live.
-  draft: false
+  # electron-builder defaults releaseType to 'draft', which leaves the
+  # release invisible on the public page AND unreachable by the running
+  # app's auto-updater (it only reads published releases). v1.0.0 shipped
+  # as a silent draft the first time because of this default. NOTE: an
+  # earlier fix here used `draft: false` — that property doesn't exist in
+  # this electron-builder version's schema (see node_modules/app-builder-lib
+  # /scheme.json's GithubOptions — it's `releaseType`, not a boolean
+  # `draft`), so every build after that "fix" was actually failing schema
+  # validation outright rather than publishing a draft. `release` is the
+  # correct value to publish live immediately.
+  releaseType: release
