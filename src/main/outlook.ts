@@ -225,7 +225,17 @@ function connect(scopes: string[], mode: SyncMode): Promise<ConnectResult> {
       if (err) return finish({ ok: false, error: err })
       const code = url.searchParams.get('code')
       if (!code) return finish({ ok: false, error: 'no-code' })
-      const redirectUri = `http://127.0.0.1:${port}`
+      // Must be 'localhost', not '127.0.0.1' — the underlying loopback
+      // address is the same, but Azure's redirect-URI matcher treats them as
+      // different hosts. For a "Mobile and desktop applications" platform
+      // registration, registering the bare http://localhost (no port) is
+      // Microsoft's documented convenience: it then matches ANY port at
+      // runtime — but ONLY for the literal 'localhost' hostname, not
+      // '127.0.0.1'. The listening socket below still binds to 127.0.0.1
+      // directly (server.listen), which is unaffected by this — 'localhost'
+      // resolves to it locally either way, this only changes what URI we
+      // send Microsoft and exchange the code against.
+      const redirectUri = `http://localhost:${port}`
       void pca
         .acquireTokenByCode({ code, codeVerifier: verifier, redirectUri, scopes })
         .then(async (result) => {
@@ -244,7 +254,17 @@ function connect(scopes: string[], mode: SyncMode): Promise<ConnectResult> {
       const addr = server.address()
       port = addr && typeof addr === 'object' ? addr.port : 0
       if (!port) return finish({ ok: false, error: 'no-port' })
-      const redirectUri = `http://127.0.0.1:${port}`
+      // Must be 'localhost', not '127.0.0.1' — the underlying loopback
+      // address is the same, but Azure's redirect-URI matcher treats them as
+      // different hosts. For a "Mobile and desktop applications" platform
+      // registration, registering the bare http://localhost (no port) is
+      // Microsoft's documented convenience: it then matches ANY port at
+      // runtime — but ONLY for the literal 'localhost' hostname, not
+      // '127.0.0.1'. The listening socket below still binds to 127.0.0.1
+      // directly (server.listen), which is unaffected by this — 'localhost'
+      // resolves to it locally either way, this only changes what URI we
+      // send Microsoft and exchange the code against.
+      const redirectUri = `http://localhost:${port}`
       pca
         .getAuthCodeUrl({
           scopes,
