@@ -8,5 +8,18 @@
     <true/>
     <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
+    <!-- Hardened Runtime gates Camera/Microphone behind their own "Resource
+    Access" entitlements even outside the App Sandbox - without these, macOS
+    denies getUserMedia() before it ever reaches the OS permission prompt, so
+    the app's mic-permission "Try again" flow silently does nothing forever
+    on a signed build (confirmed on this build: no TCC prompt appears at all,
+    only System Settings shows stale entries from earlier unsigned/dev runs).
+    Info.plist already declares NSMicrophoneUsageDescription/
+    NSCameraUsageDescription (see electron-builder.yml's mac.extendInfo) - a
+    usage string with no matching entitlement is exactly this failure mode. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
+    <true/>
   </dict>
 </plist>
