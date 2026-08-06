@@ -108,6 +108,17 @@ export const CONFERENCING_APPS: ConferencingAppEntry[] = [
     processNames: ['whatsapp']
   },
   {
+    appId: 'squaretalk',
+    displayName: 'Squaretalk',
+    // Confirmed via Task Manager on a real tester's Windows machine during a
+    // live Squaretalk call (2026-08-06): 'Squaretalk.exe'. Improves ambient
+    // call DETECTION only — it does NOT fix buyer-side audio capture for
+    // VoIP softphones (see loopback.ts's documented Windows limitation);
+    // that needs the separate native per-process loopback capture work.
+    windowsExeNames: ['squaretalk.exe'],
+    processNames: ['squaretalk']
+  },
+  {
     appId: 'microsip',
     displayName: 'MicroSIP',
     windowsExeNames: ['microsip.exe'],
