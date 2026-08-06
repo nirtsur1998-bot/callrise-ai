@@ -102,10 +102,15 @@ export interface TranscriptionApi {
     /** Only restart if the current main-process session has this id (guards
      *  against a stale restart from an older call clobbering a newer one). */
     expectedSessionId?: number
+    /** Names the capture pipeline that will feed this session. Main refuses
+     *  audio from any other producer in the same window — see
+     *  StartOptions.producerId in main/transcription.ts for why the window
+     *  alone was insufficient. */
+    producerId?: number
   }) => Promise<{ ok: boolean; error?: 'no-key' | 'stale'; sessionId?: number }>
-  sendAudio: (chunk: ArrayBuffer) => void
+  sendAudio: (chunk: ArrayBuffer, producerId?: number) => void
   requestAudioPort: () => void
-  reportAudioDropped: (frames: number) => void
+  reportAudioDropped: (frames: number, producerId?: number) => void
   stop: () => Promise<{ ok: boolean }>
   onState: (cb: (payload: TranscriptionStateEvent) => void) => () => void
   onTranscript: (cb: (payload: TranscriptResultEvent) => void) => () => void

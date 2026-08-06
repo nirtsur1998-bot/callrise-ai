@@ -18,15 +18,25 @@ const api = {
   transcription: {
     ensureMicAccess: () => ipcRenderer.invoke('mic:ensureAccess'),
     openMicSettings: () => ipcRenderer.invoke('mic:openSettings'),
-    start: (options: { sampleRate: number; multichannel?: boolean; expectedSessionId?: number }) =>
-      ipcRenderer.invoke('transcription:start', options),
-    sendAudio: (chunk: ArrayBuffer) => ipcRenderer.send('transcription:audio', chunk),
+    start: (options: {
+      sampleRate: number
+      multichannel?: boolean
+      expectedSessionId?: number
+      producerId?: number
+    }) => ipcRenderer.invoke('transcription:start', options),
+    /** `producerId` names the capture pipeline this chunk came from — main
+     *  refuses audio from any producer other than the one the session was
+     *  started for, so a recorder that outlived its call can't feed the next
+     *  one (see StartOptions.producerId in main/transcription.ts). */
+    sendAudio: (chunk: ArrayBuffer, producerId?: number) =>
+      ipcRenderer.send('transcription:audio', chunk, producerId),
     /** Ask main for a direct port for the audio worker (§1.4). The port itself
      *  arrives as a window message, not through this bridge — see below. */
     requestAudioPort: () => ipcRenderer.send('audio-port:request'),
     /** Ring overrun — audio the worker could not drain in time. Reported so it
      *  shows up as a gap marker instead of words that silently never existed. */
-    reportAudioDropped: (frames: number) => ipcRenderer.send('transcription:audioDropped', frames),
+    reportAudioDropped: (frames: number, producerId?: number) =>
+      ipcRenderer.send('transcription:audioDropped', frames, producerId),
     stop: () => ipcRenderer.invoke('transcription:stop'),
     onState: (cb: (payload: unknown) => void) => subscribe('transcription:state', cb),
     onTranscript: (cb: (payload: unknown) => void) => subscribe('transcription:transcript', cb),

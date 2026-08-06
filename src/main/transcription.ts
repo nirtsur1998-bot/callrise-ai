@@ -65,6 +65,21 @@ interface StartOptions {
    *  so a stale in-flight restart (from an already-stopped call) can never
    *  tear down a newer call's session. Omitted for a brand-new call. */
   expectedSessionId?: number
+  /** Identifies the CAPTURE PIPELINE (one renderer-side Recorder) that will
+   *  feed this session. Audio from any OTHER producer in the same window is
+   *  refused.
+   *
+   *  The window alone was never sufficient authority. A Recorder that outlives
+   *  its call — an abandoned AudioContext whose worklet is still posting PCM
+   *  into sendAudio — lives in the same window and was therefore just as
+   *  authorised as the live one. Two producers each pushing at 1x realtime,
+   *  against Deepgram's ~1.25x ingest cap, is a ~0.75s-per-second lag ratchet
+   *  that nothing recovers from and only a process restart clears. That is the
+   *  "first call perfect, every call after it unusable" bug.
+   *
+   *  Optional: when absent no producer check applies, so existing callers and
+   *  tests that never mint an id keep working exactly as before. */
+  producerId?: number
 }
 
 // Everything about one live session lives here, so restarts/reconnects can't
@@ -89,6 +104,9 @@ interface Session {
    *  apart from a genuine speaker change, so every result carries the epoch it
    *  was labelled under and consumers refuse to merge or attribute across one. */
   speakerEpoch: number
+  /** The one capture pipeline allowed to feed this session (see
+   *  StartOptions.producerId). null = no producer check (legacy callers). */
+  producerId: number | null
   ws: WebSocket | null
   keepAlive: ReturnType<typeof setInterval> | null
   connectTimer: ReturnType<typeof setTimeout> | null
@@ -848,6 +866,7 @@ export function registerTranscription(): void {
       // lands here, and channel-index labels mean something different from
       // diarization labels, so it must never inherit the old epoch.
       speakerEpoch: nextSpeakerEpoch++,
+      producerId: typeof options?.producerId === 'number' ? options.producerId : null,
       ws: null,
       keepAlive: null,
       connectTimer: null,
@@ -881,11 +900,18 @@ export function registerTranscription(): void {
     return { ok: true as const, sessionId: s.id }
   })
 
-  ipcMain.on('transcription:audio', (event, chunk: ArrayBuffer) => {
+  ipcMain.on('transcription:audio', (event, chunk: ArrayBuffer, producerId?: unknown) => {
     const s = session
     if (!s) return
     // Only the window that owns the session may stream audio.
     if (BrowserWindow.fromWebContents(event.sender) !== s.window) return
+    // ...and within that window, only the capture pipeline this session was
+    // started for. Same authority model as expectedSessionId on start: the
+    // window is not enough, because a stopped call's Recorder lives in the
+    // same window and — if the renderer ever fails to stop it — keeps posting
+    // PCM forever. Two producers at 1x realtime against a ~1.25x ingest cap
+    // ratchets lag ~0.75s per second, permanently. Drop the impostor's audio.
+    if (s.producerId !== null && producerId !== s.producerId) return
     audioPath = 'renderer'
     ingestAudio(s, chunk)
   })
@@ -893,10 +919,14 @@ export function registerTranscription(): void {
   // The ring dropped audio because the worker fell behind. Same user-visible
   // meaning as a shed queue — a stretch that will never be transcribed — so it
   // gets the same marker rather than a new vocabulary word.
-  ipcMain.on('transcription:audioDropped', (event, frames: unknown) => {
+  ipcMain.on('transcription:audioDropped', (event, frames: unknown, producerId?: unknown) => {
     const s = session
     if (!s) return
     if (BrowserWindow.fromWebContents(event.sender) !== s.window) return
+    // Same producer check as the audio path above — an orphaned recorder's
+    // drop reports would otherwise punch bogus gap markers into a call it has
+    // nothing to do with.
+    if (s.producerId !== null && producerId !== s.producerId) return
     if (typeof frames !== 'number' || !Number.isFinite(frames) || frames <= 0) return
     queueShed(s, frames / s.sampleRate, 'shed')
   })

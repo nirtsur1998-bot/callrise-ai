@@ -192,6 +192,13 @@ export async function startRecorder(
     stop: (): void => {
       if (stopped) return
       stopped = true
+      // Cut the chunk path FIRST, before anything that can throw. This used to
+      // sit after detachLoopback(), which stops loopback tracks outside a
+      // try — a throw there aborted stop() with `stopped` already true and
+      // `onmessage` still wired, leaving a recorder that no longer looks
+      // live but keeps posting PCM into sendAudio forever, with no reference
+      // left to stop it. Nulling a handler cannot throw, so it goes first.
+      worklet.port.onmessage = null
       if (pump) {
         // Explicit rather than relying on merger.disconnect() to starve the
         // worklet's input into silence: without this the worklet's `ring`
@@ -203,7 +210,6 @@ export async function startRecorder(
       }
       detachLoopback()
       micTrack?.removeEventListener('ended', handleEnded)
-      worklet.port.onmessage = null
       try {
         micSource.disconnect()
         merger.disconnect()

@@ -20,6 +20,13 @@ const SLOW_START_MS = 400
 /** The microphone check is still pending after this → a real OS prompt is up. */
 const MIC_PROMPT_MS = 250
 
+/** Process-wide, monotonic. Every Recorder gets one, and main only accepts
+ *  audio tagged with the id the current session was started for — so a
+ *  Recorder that outlives its call cannot feed the next one. Module scope (not
+ *  a ref) because the identity must be unique across every mount of this hook,
+ *  not just within one. See StartOptions.producerId in main/transcription.ts. */
+let nextProducerId = 1
+
 export type OtherPartyError = 'denied' | 'no-audio' | 'interrupted' | null
 
 interface UseTranscription {
@@ -124,6 +131,11 @@ export function useTranscription(
   // on the mono<->multichannel restarts so a stale in-flight toggle from an
   // already-stopped call can never tear down a newer call's session.
   const sessionIdRef = useRef<number | null>(null)
+  // The producer id of the Recorder this call owns. Sent with every audio
+  // chunk and on the mono<->multichannel restarts (same recorder, so same
+  // producer — omitting it there would silently disable the guard for the
+  // rest of any call that touches buyer capture).
+  const producerIdRef = useRef<number | null>(null)
   // Re-entrancy guard: a rapid double-click on Try again/Resume must not run
   // two arm-then-getDisplayMedia sequences concurrently.
   const startingRef = useRef(false)
@@ -479,10 +491,23 @@ export function useTranscription(
       return
     }
 
+    // A Recorder from a previous take must never survive into this one: it
+    // holds a live mic and its worklet is still posting PCM into sendAudio.
+    // Every caller is *supposed* to have stopped it already, but that
+    // invariant was spread across five separate call sites with no guard
+    // here — and two paths below (the post-await supersession checks) could
+    // abandon one outright. stop() is idempotent, so this is safe even when
+    // the ref is already clean.
+    recorderRef.current?.stop()
+    recorderRef.current = null
+
+    const producerId = nextProducerId++
+    producerIdRef.current = producerId
+
     let recorder: Recorder
     try {
       recorder = await startRecorder(
-        (chunk) => window.api.transcription.sendAudio(chunk),
+        (chunk) => window.api.transcription.sendAudio(chunk, producerId),
         () => {
           // Mic unplugged mid-session — save what we have, then end the session.
           armSave()
@@ -495,7 +520,7 @@ export function useTranscription(
           void window.api.transcription.stop()
           setPhase('no-device')
         },
-        (frames) => window.api.transcription.reportAudioDropped(frames)
+        (frames) => window.api.transcription.reportAudioDropped(frames, producerId)
       )
     } catch (err) {
       finishStartup()
@@ -513,6 +538,17 @@ export function useTranscription(
       return
     }
 
+    // Stop (or another terminal path) may have landed while startRecorder was
+    // still awaiting. recorderRef was null for that whole window, so nothing
+    // could tear THIS recorder down — installing it now would leave a live mic
+    // and a running worklet attached to a call that is already over, and it
+    // would keep posting PCM into whatever session starts next.
+    if (producerIdRef.current !== producerId) {
+      recorder.stop()
+      finishStartup()
+      return
+    }
+
     finishStartup()
     recorderRef.current = recorder
     setAnalyser(recorder.analyser)
@@ -521,7 +557,10 @@ export function useTranscription(
     setPhase('connecting')
 
     try {
-      const result = await window.api.transcription.start({ sampleRate: recorder.sampleRate })
+      const result = await window.api.transcription.start({
+        sampleRate: recorder.sampleRate,
+        producerId
+      })
       // The rep may have clicked Stop while this awaited the real Deepgram
       // handshake — stop() nulls recorderRef.current synchronously, so this
       // is the same "was I superseded" check enable/disableOtherParty already
@@ -533,6 +572,12 @@ export function useTranscription(
       // beginSession call, so no OTHER start() could have raced in and made
       // this session id stale in some other way; it's this call's own.
       if (recorderRef.current !== recorder) {
+        // Stop the recorder THIS call built before walking away from it.
+        // Without this it is orphaned: mic still open, AudioContext still
+        // running, worklet still posting PCM — and unreachable, so nothing
+        // can ever stop it again. Two live producers against Deepgram's
+        // ingest cap is the unbounded-lag bug.
+        recorder.stop()
         if (result.ok) void window.api.transcription.stop()
         return
       }
@@ -545,7 +590,10 @@ export function useTranscription(
         sessionIdRef.current = typeof result.sessionId === 'number' ? result.sessionId : null
       }
     } catch {
-      if (recorderRef.current !== recorder) return
+      if (recorderRef.current !== recorder) {
+        recorder.stop() // same orphan-prevention as the supersession check above
+        return
+      }
       recorder.stop()
       recorderRef.current = null
       setAnalyser(null)
@@ -574,6 +622,13 @@ export function useTranscription(
     armSave()
     recorderRef.current?.stop() // also detaches any loopback
     recorderRef.current = null
+    // Renounce the producer claim too. If a beginSession is mid-flight inside
+    // `await startRecorder(...)`, recorderRef is still null — so the stop above
+    // cannot reach the recorder being built. Clearing this is what tells that
+    // beginSession, when it resumes, that it was superseded and must throw its
+    // recorder away rather than install a live capture pipeline into a call the
+    // rep already ended (which would then feed the NEXT session).
+    producerIdRef.current = null
     setAnalyser(null)
     setPaused(false)
     setOtherPartyLive(false)
@@ -619,24 +674,35 @@ export function useTranscription(
       setCrossTalkWarning(false)
       recorder.detachLoopback() // stop capturing the buyer immediately
       speakerBoundaryRef.current = true
+      // Switch the socket back to mono FIRST, then flip the worklet layout — so
+      // the worklet never emits mono into the still-open multichannel socket.
+      // expectedSessionId makes this a no-op in main if it lands after a newer
+      // call already replaced the session (never clobber the new call).
+      let ok = false
       try {
-        // Switch the socket back to mono FIRST, then flip the worklet layout — so
-        // the worklet never emits mono into the still-open multichannel socket.
-        // expectedSessionId makes this a no-op in main if it lands after a newer
-        // call already replaced the session (never clobber the new call).
         const res = await window.api.transcription.start({
           sampleRate: recorder.sampleRate,
           multichannel: false,
-          expectedSessionId: sessionIdRef.current ?? undefined
+          expectedSessionId: sessionIdRef.current ?? undefined,
+          // Same recorder, so same producer — main replaces the session, and a
+          // session started without this id would accept ANY producer for the
+          // rest of the call, silently disabling the orphan guard.
+          producerId: producerIdRef.current ?? undefined
         })
-        if (res.ok && typeof res.sessionId === 'number') sessionIdRef.current = res.sessionId
+        ok = res?.ok === true
+        if (ok && typeof res.sessionId === 'number') sessionIdRef.current = res.sessionId
       } catch {
-        /* socket failures surface via the state/error handlers */
+        ok = false
       }
       // The call may have stopped (or restarted) during the await — this recorder
       // is then already torn down and mustn't be touched.
       if (recorderRef.current !== recorder) return
-      recorder.setStereo(false)
+      // Only flip the worklet once the socket really IS mono — mirroring what
+      // enableOtherParty already does for the other direction. Flipping it after
+      // a failed restart ('stale'/'no-key') leaves a mono worklet feeding a
+      // still-multichannel socket, so every frame is counted as half its real
+      // duration and the transcript garbles.
+      if (ok) recorder.setStereo(false)
     } finally {
       disablingOtherPartyRef.current = false
     }
@@ -713,7 +779,9 @@ export function useTranscription(
         const res = await window.api.transcription.start({
           sampleRate: recorder.sampleRate,
           multichannel: true,
-          expectedSessionId: sessionIdRef.current ?? undefined
+          expectedSessionId: sessionIdRef.current ?? undefined,
+          // Same recorder, so same producer (see disableOtherParty).
+          producerId: producerIdRef.current ?? undefined
         })
         ok = res?.ok === true
         if (ok && typeof res.sessionId === 'number') sessionIdRef.current = res.sessionId
