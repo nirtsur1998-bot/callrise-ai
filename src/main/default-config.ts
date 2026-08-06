@@ -19,6 +19,15 @@ export const DEFAULT_CONFIG = {
   // accounts (OAuth consent screen page → Publish app).
   GOOGLE_CLIENT_ID: '877875490182-d6gu698b28n8b5giod7q7kuo6vbh3p0t.apps.googleusercontent.com',
   GOOGLE_CLIENT_SECRET: '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',
+  // Added 2026-08-06 — this was previously only ever set in one machine's
+  // local .env override, so every OTHER install (including packaged builds
+  // handed to testers) showed "Add OUTLOOK_CLIENT_ID to your .env" and could
+  // never connect Outlook at all. Registered on portal.azure.com under
+  // "Mobile and desktop applications" (a public client) — like Google's
+  // installed-app client ID above, Microsoft's own docs treat this as not
+  // confidential; the real protection is the redirect URI + PKCE, not
+  // hiding this value. See outlook.ts for the OAuth flow itself.
+  OUTLOOK_CLIENT_ID: 'd02b5c14-3fd5-4fec-aa85-5baaa2aa6a6a',
   // M23: the repo itself, not a secret — a plain public URL. updater/index.ts
   // parses this as a github.com repo URL and uses electron-updater's 'github'
   // provider, which reads the repo's Releases assets directly; no token
