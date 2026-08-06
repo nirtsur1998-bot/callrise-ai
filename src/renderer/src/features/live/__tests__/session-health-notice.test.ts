@@ -14,6 +14,8 @@ function health(overrides: Partial<TranscriptionHealthEvent> = {}): Transcriptio
     resets: 0,
     gaps: [],
     liveness: 'ok',
+    driftPpm: 0,
+    rejectedProducerFrames: 0,
     ...overrides
   }
 }

@@ -227,6 +227,10 @@ describe('orphaned producer cannot contaminate the next session', () => {
     // THE LOAD-BEARING ASSERTION: the ghost's audio never reached the socket.
     // Pre-fix this is ~2x liveProducerSec, because main accepted both producers.
     expect(health.submittedSec).toBeLessThan(liveProducerSec * 1.2)
+    // The new diagnostic counter (session-health.log / --diagnose / the health
+    // event) must actually see the rejection — this is what turns "still
+    // slow tomorrow" into a one-bit answer about which mechanism is at fault.
+    expect(health.rejectedProducerFrames).toBe(TICKS)
 
     // ...and therefore lag never ratchets and words keep flowing.
     expect(health.lagSec).toBeLessThan(HEALTH_TUNING.warnLagSec)

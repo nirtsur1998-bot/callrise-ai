@@ -91,6 +91,14 @@ export interface TranscriptionHealthEvent {
   resets: number
   gaps: ReadonlyArray<{ atMs: number; durationMs: number; reason: string }>
   liveness: 'ok' | 'silent' | 'capture-dead' | 'socket-dead'
+  /** Parts-per-million deviation of the declared sample rate from the actual
+   *  arrival rate. A healthy clock sits inside roughly ±100ppm. */
+  driftPpm: number
+  /** Audio frames this session refused because they came from a capture
+   *  pipeline other than the one it was started for — e.g. a recorder left
+   *  over from an earlier, already-ended call. Any value above 0 means that
+   *  happened during this session. */
+  rejectedProducerFrames: number
 }
 
 export interface TranscriptionApi {

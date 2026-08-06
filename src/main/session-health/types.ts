@@ -130,4 +130,17 @@ export interface HealthSnapshot {
   shedSec: number
   resets: number
   gaps: readonly TimelineGap[]
+  /** Parts-per-million deviation of the declared sample rate from the actual
+   *  arrival rate — see session-health/drift.ts. A healthy clock sits inside
+   *  roughly ±100ppm; a number far outside that means audio is arriving
+   *  faster or slower than the rate we told Deepgram (e.g. two capture
+   *  pipelines both feeding one socket looks like ~1,000,000ppm). */
+  driftPpm: number
+  /** Audio frames this session refused because they were tagged with a
+   *  DIFFERENT producer id than the one the session was started for — i.e.
+   *  a capture pipeline from an earlier, already-ended call still trying to
+   *  feed this one. Any value above 0 means that scenario is happening; 0
+   *  across a whole session means it did not, for this call. See
+   *  StartOptions.producerId. */
+  rejectedProducerFrames: number
 }

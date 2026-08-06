@@ -1,4 +1,5 @@
 import {
+  app,
   ipcMain,
   BrowserWindow,
   MessageChannelMain,
@@ -6,6 +7,8 @@ import {
   systemPreferences,
   shell
 } from 'electron'
+import { appendFileSync } from 'fs'
+import { join } from 'path'
 import WebSocket from 'ws'
 import { keyRejectedHint } from './ai-keys'
 import { SessionTimeline, SleepDetector, formatGapMarker } from './session-health/timeline'
@@ -107,6 +110,9 @@ interface Session {
   /** The one capture pipeline allowed to feed this session (see
    *  StartOptions.producerId). null = no producer check (legacy callers). */
   producerId: number | null
+  /** Frames refused because they came from a DIFFERENT producer than
+   *  `producerId` above — see HealthSnapshot.rejectedProducerFrames. */
+  rejectedProducerFrames: number
   ws: WebSocket | null
   keepAlive: ReturnType<typeof setInterval> | null
   connectTimer: ReturnType<typeof setTimeout> | null
@@ -244,6 +250,7 @@ function teardown(s: Session): void {
 
 function failSession(s: Session, message: string): void {
   if (session !== s) return
+  logSessionSummary(s)
   teardown(s)
   emit(s, 'transcription:error', { message })
   emit(s, 'transcription:state', { state: 'error' })
@@ -356,6 +363,37 @@ function resetToLiveEdge(s: Session, reason: GapReason): void {
   connect(s)
 }
 
+/**
+ * A one-line, human-readable summary appended on every call end, to a plain
+ * text file in the app's own data folder (`session-health.log`, next to
+ * `app-settings.json`). Not a general logging system — one line per session,
+ * cheap and synchronous.
+ *
+ * WHY THIS EXISTS: diagnosing a live-call performance report normally means
+ * "open DevTools and read the console", which does not work on a machine
+ * that has never had it enabled (a real support case, 2026-08-06) and is not
+ * something to ask a non-technical tester to do reliably anyway. This file
+ * is something anyone can open in Notepad and paste into a message, with the
+ * exact numbers ANY diagnosis of "still slow" needs first: was a rejected-
+ * producer ever non-zero (an orphaned-recorder ghost, see StartOptions.
+ * producerId), and did drift/lag ever leave the healthy range. Never throws —
+ * a logging failure must never affect a live call.
+ */
+function logSessionSummary(s: Session): void {
+  try {
+    const snap = snapshot(s)
+    const line =
+      `${new Date().toISOString()} session=${s.id} producerId=${s.producerId ?? 'none'} ` +
+      `multichannel=${s.multichannel} submittedSec=${snap.submittedSec} ` +
+      `acknowledgedSec=${snap.acknowledgedSec} maxLagSec=${snap.lagSec} ` +
+      `medianLagSec=${snap.medianLagSec} resets=${snap.resets} driftPpm=${snap.driftPpm} ` +
+      `rejectedProducerFrames=${snap.rejectedProducerFrames}\n`
+    appendFileSync(join(app.getPath('userData'), 'session-health.log'), line, 'utf8')
+  } catch {
+    /* logging must never break a real call */
+  }
+}
+
 function snapshot(s: Session): HealthSnapshot {
   const at = s.timeline.elapsedMs()
   const verdict = s.lag.evaluate(at)
@@ -368,7 +406,9 @@ function snapshot(s: Session): HealthSnapshot {
     queuedSec: Math.round(s.queue.queuedSeconds * 100) / 100,
     shedSec: Math.round(s.queue.shedSeconds * 100) / 100,
     resets: s.lag.resetCount,
-    gaps: s.timeline.gapMarkers()
+    gaps: s.timeline.gapMarkers(),
+    driftPpm: s.drift.read().ppm,
+    rejectedProducerFrames: s.rejectedProducerFrames
   }
 }
 
@@ -803,9 +843,9 @@ export function disposeTranscription(): void {
 }
 
 /** Current session health, for the `--diagnose` report. Null when idle. */
-export function transcriptionHealth(): (HealthSnapshot & { driftPpm: number }) | null {
+export function transcriptionHealth(): HealthSnapshot | null {
   if (!session) return null
-  return { ...snapshot(session), driftPpm: session.drift.read().ppm }
+  return snapshot(session)
 }
 
 /** Which route audio last took. See `audioPath`. */
@@ -867,6 +907,7 @@ export function registerTranscription(): void {
       // diarization labels, so it must never inherit the old epoch.
       speakerEpoch: nextSpeakerEpoch++,
       producerId: typeof options?.producerId === 'number' ? options.producerId : null,
+      rejectedProducerFrames: 0,
       ws: null,
       keepAlive: null,
       connectTimer: null,
@@ -911,7 +952,10 @@ export function registerTranscription(): void {
     // same window and — if the renderer ever fails to stop it — keeps posting
     // PCM forever. Two producers at 1x realtime against a ~1.25x ingest cap
     // ratchets lag ~0.75s per second, permanently. Drop the impostor's audio.
-    if (s.producerId !== null && producerId !== s.producerId) return
+    if (s.producerId !== null && producerId !== s.producerId) {
+      s.rejectedProducerFrames++
+      return
+    }
     audioPath = 'renderer'
     ingestAudio(s, chunk)
   })
@@ -926,7 +970,10 @@ export function registerTranscription(): void {
     // Same producer check as the audio path above — an orphaned recorder's
     // drop reports would otherwise punch bogus gap markers into a call it has
     // nothing to do with.
-    if (s.producerId !== null && producerId !== s.producerId) return
+    if (s.producerId !== null && producerId !== s.producerId) {
+      s.rejectedProducerFrames++
+      return
+    }
     if (typeof frames !== 'number' || !Number.isFinite(frames) || frames <= 0) return
     queueShed(s, frames / s.sampleRate, 'shed')
   })
@@ -936,6 +983,7 @@ export function registerTranscription(): void {
   ipcMain.handle('transcription:stop', () => {
     const s = session
     if (!s) return { ok: true as const }
+    logSessionSummary(s)
     s.stopping = true
     s.liveness.setSending(false)
     if (s.keepAlive) {
