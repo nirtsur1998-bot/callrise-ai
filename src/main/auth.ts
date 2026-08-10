@@ -1,6 +1,6 @@
 import { app, ipcMain, BrowserWindow, safeStorage } from 'electron'
 import { join } from 'node:path'
-import { chmodSync, readFileSync, writeFile } from 'node:fs'
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs'
 import {
   createClient,
   AuthError,
@@ -53,9 +53,10 @@ let initialized = false
  * process has no localStorage, so we persist Supabase's auth token to a small
  * file in the app's user-data folder — encrypted via Electron safeStorage
  * (macOS Keychain) and written owner-only (0600), mirroring google.ts's
- * refresh-token storage.
+ * refresh-token storage. Exported for BUG-029's regression test only — not
+ * part of the module's real public surface.
  */
-function makeFileStorage(path: string): SupportedStorage {
+export function makeFileStorage(path: string): SupportedStorage {
   const canEncrypt = safeStorage.isEncryptionAvailable()
   let memory: Record<string, string> = {}
   try {
@@ -78,8 +79,20 @@ function makeFileStorage(path: string): SupportedStorage {
     // Never write tokens we can't encrypt — the session just won't survive
     // a restart, which is safer than a plaintext token on disk.
     if (!canEncrypt) return
-    // 0600: owner-only, defense-in-depth on top of the encryption.
-    writeFile(path, safeStorage.encryptString(JSON.stringify(memory)), { mode: 0o600 }, () => {}) // best-effort async write
+    // Synchronous (BUG-029): Supabase rotates the refresh token roughly
+    // hourly while the app runs, and the previous async fire-and-forget
+    // write left a gap where a quit racing that rotation could leave the
+    // on-disk file holding the now-invalidated OLD token, bouncing the user
+    // to a surprise re-login next launch. before-quit has no hook to await a
+    // pending async write from here; writing synchronously removes the gap
+    // entirely instead. Session files are tiny and this isn't hot-path code
+    // (an occasional auth event, not the audio thread), so the blocking cost
+    // is negligible. 0600: owner-only, defense-in-depth on top of encryption.
+    try {
+      writeFileSync(path, safeStorage.encryptString(JSON.stringify(memory)), { mode: 0o600 })
+    } catch {
+      // best-effort — the session just won't survive a restart this time
+    }
   }
   return {
     getItem: (key) => (key in memory ? memory[key] : null),
