@@ -1,8 +1,8 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { saveCall, getCall, setSpeakerIdentity, speakerIdentityKey } from '../calls-fs'
+import { saveCall, getCall, setSpeakerIdentity, speakerIdentityKey, addBookmark } from '../calls-fs'
 
 describe('speakerIdentityKey', () => {
   it('keys multichannel by channel, not just speaker', () => {
@@ -435,5 +435,44 @@ describe('applyConsentRetention (via getCall)', () => {
     const call = await getCall(dir, 'bookmarks-consented')
     expect(call?.bookmarks).toHaveLength(1)
     expect(call?.bookmarks?.[0]?.text).toBe('a clipped moment')
+  })
+
+  // BUG-028: addBookmark() appended straight to the raw record and wrote it
+  // without re-applying applyConsentRetention, unlike every other write path
+  // (saveCall/getCall/listCalls/importCall). A bookmark clipped live — e.g.
+  // right before a mid-call consent revoke — could persist the other
+  // party's verbatim words to the RAW on-disk file, even though every
+  // app-level read already filtered it back out (so this was invisible in
+  // the UI, but present on disk for anything reading the file directly:
+  // a future feature, or a third-party backup tool mirroring userData).
+  it('does not persist a new bookmark to the raw file when consent is not held', async () => {
+    await writeRawCall({
+      id: 'bookmarks-write-no-consent',
+      segments: [{ speaker: 0, channel: 0, text: 'rep line' }],
+      speakerIdentities: {},
+      recordOtherParty: false
+    })
+
+    const result = await addBookmark(dir, 'bookmarks-write-no-consent', 1000, "the buyer's actual words")
+    // The in-memory return value reflects the same strip, immediately.
+    expect(result?.bookmarks).toEqual([])
+
+    const raw = JSON.parse(await readFile(join(dir, 'bookmarks-write-no-consent.json'), 'utf8'))
+    expect(raw.bookmarks ?? []).toEqual([])
+  })
+
+  it('does persist a new bookmark to the raw file when consent is held', async () => {
+    await writeRawCall({
+      id: 'bookmarks-write-consented',
+      segments: [{ speaker: 0, channel: 0, text: 'rep line' }],
+      speakerIdentities: {},
+      recordOtherParty: true
+    })
+
+    await addBookmark(dir, 'bookmarks-write-consented', 1000, 'a clipped moment')
+
+    const raw = JSON.parse(await readFile(join(dir, 'bookmarks-write-consented.json'), 'utf8'))
+    expect(raw.bookmarks).toHaveLength(1)
+    expect(raw.bookmarks[0].text).toBe('a clipped moment')
   })
 })

@@ -1316,6 +1316,15 @@ export async function addBookmark(
     }
     call.bookmarks = [...(call.bookmarks ?? []), bookmark]
     call.updatedAt = new Date().toISOString()
+    // BUG-028: re-apply retention on this exact write, not just on the next
+    // read. getCall() above already stripped the call as of its own read,
+    // but a bookmark captured live (before a mid-call consent revoke) can
+    // still contain the other party's verbatim words with nothing on the
+    // Bookmark shape to strip surgically — same reasoning applyConsentRetention's
+    // own bookmark handling documents. Without this, the write below would
+    // persist it to the raw on-disk file even though every app-level read
+    // already filters it back out.
+    applyConsentRetention(call)
     await writeCall(dir, call)
     return call
   })
