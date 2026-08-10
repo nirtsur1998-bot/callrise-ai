@@ -5,6 +5,7 @@
 // isObjectionMiningEnabled() first (the settings toggle is the one gate).
 import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
 import type { CallSegment } from './calls-fs'
+import { sameTurn } from './coach-attribution'
 
 const MAX_TEXT_CHARS = 200_000
 const MIN_QUOTE_CHARS = 6
@@ -115,15 +116,21 @@ function normalize(s: string): string {
 /** Same shape as coach.ts's verifier: merge consecutive same-speaker segments
  *  into turns, then require the quote appear within a single turn spoken by
  *  the claimed speaker — anti-hallucination grounding. Exported so the
- *  enqueue IPC handler can re-verify renderer-sent candidates in main. */
+ *  enqueue IPC handler can re-verify renderer-sent candidates in main.
+ *
+ *  Merges via `sameTurn` (same epoch, same recorded role), not the raw
+ *  speaker number alone (BUG-023) — Deepgram restarts diarization on every
+ *  reconnect, so gluing turns on the number across that boundary can splice
+ *  two different people's words into one "turn" a quote is checked against.
+ */
 export function makeVerifier(
   segments: CallSegment[]
 ): (quote: unknown, speaker: unknown) => boolean {
-  const turns: { speaker: number; text: string }[] = []
+  const turns: { speaker: number; text: string; seg: CallSegment }[] = []
   for (const s of segments) {
     const last = turns[turns.length - 1]
-    if (last && last.speaker === s.speaker) last.text += ` ${s.text}`
-    else turns.push({ speaker: s.speaker, text: s.text })
+    if (last && sameTurn(last.seg, s)) last.text += ` ${s.text}`
+    else turns.push({ speaker: s.speaker, text: s.text, seg: s })
   }
   const entries = turns.map((t) => ({ speaker: t.speaker, text: normalize(t.text) }))
 
