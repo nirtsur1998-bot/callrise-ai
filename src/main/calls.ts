@@ -1,7 +1,9 @@
 import { app, ipcMain } from 'electron'
 import { join } from 'node:path'
 import mammoth from 'mammoth'
+import { generatePostCallBrief, type PostCallBriefResult } from './post-call-brief'
 import {
+  speechSegments,
   saveCall,
   listCalls,
   getCall,
@@ -12,24 +14,32 @@ import {
   setCallSummary,
   setAttachmentSummary,
   setCallCoaching,
+  setCallCommitments,
   setCallTitle,
   setCallContact,
   setCallObjectionsMined,
   setCallCrmNoteGenerated,
   addBookmark,
   removeBookmark,
+  setSpeakerIdentity,
   type CallSaveInput,
   type CallSummary
 } from './calls-fs'
 import { summarize, type SummarizeInput, type SummaryResult } from './summarize'
 import { coachCall, type CoachResult } from './coach'
+import { extractCommitments, type CommitmentResult } from './commitments'
 import { generateCallTitle, type GenerateTitleResult } from './call-title'
 import { mineObjections, makeVerifier, type ObjectionMiningResult } from './objection-mining'
 import { addToQueue, purgeQueueForCall } from './objection-queue-fs'
-import { isObjectionMiningEnabled, loadAppSettings } from './app-settings'
+import {
+  isObjectionMiningEnabled,
+  loadAppSettings,
+  isSelfIntroExtractionAllowed
+} from './app-settings'
 import { scheduleBackup, queueAttachmentBlobDeletes } from './backup'
 import { addComment } from './contacts-fs'
 import { generateCrmNote } from './crm-notes'
+import { resolveAndSaveIdentities } from './speaker-identity/resolve-for-call'
 
 function objectionQueueDir(): string {
   return join(app.getPath('userData'), 'objection-queue')
@@ -63,7 +73,7 @@ async function mineCallIntoQueue(callId: string): Promise<{ ok: boolean; added: 
     // Re-check on the fresh read: another path may have finished mining this
     // call after the caller built its eligible list.
     if (call.objectionsMinedAt) return { ok: true, added: 0 }
-    const result = await mineObjections(call.segments)
+    const result = await mineObjections(speechSegments(call.segments))
     if (!result.ok) return { ok: false, added: 0 }
     const items = await addToQueue(objectionQueueDir(), result.candidates, callId, call.title)
     await setCallObjectionsMined(callsDir(), callId)
@@ -93,7 +103,9 @@ async function maybeGenerateCrmNote(callId: string): Promise<void> {
     if (!call || call.crmNoteGeneratedAt || !call.contactId) return
     const content = call.summary?.executive
       ? [call.summary.executive, ...call.summary.keyPoints].join('\n')
-      : (call.segments ?? []).map((s) => `Speaker ${s.speaker + 1}: ${s.text}`).join('\n')
+      : speechSegments(call.segments)
+          .map((s) => `Speaker ${s.speaker + 1}: ${s.text}`)
+          .join('\n')
     if (!content.trim()) return
     const result = await generateCrmNote(content)
     if (!result.ok) return
@@ -151,17 +163,55 @@ export function registerCalls(): void {
 
   ipcMain.handle('calls:list', () => listCalls(callsDir()))
   ipcMain.handle('calls:get', (_event, id: string) => getCall(callsDir(), id))
-  ipcMain.handle('calls:save', async (_event, input: CallSaveInput) => {
-    const summary = await saveCall(callsDir(), input)
-    scheduleBackup() // metadata only reaches the cloud (segments never included)
-    // Fire-and-forget: never block the save on an AI call. Only runs when the
-    // Objection Library toggle is on — this is the "new calls going forward"
-    // half of the mining scope (the other half is the manual scan below).
-    if (isObjectionMiningEnabled()) {
-      void mineCallIntoQueue(summary.id).catch(() => {})
+  ipcMain.handle(
+    'calls:save',
+    async (_event, input: CallSaveInput, selfIntro?: { key: string; name: string }) => {
+      const summary = await saveCall(callsDir(), input)
+      scheduleBackup() // metadata only reaches the cloud (segments never included)
+      // Fire-and-forget: never block the save on an AI call. Only runs when the
+      // Objection Library toggle is on — this is the "new calls going forward"
+      // half of the mining scope (the other half is the manual scan below).
+      if (isObjectionMiningEnabled()) {
+        void mineCallIntoQueue(summary.id).catch(() => {})
+      }
+      // M19 Task 2 step 5 — applied and AWAITED before the cascade below
+      // starts, so ordering is deterministic: self-intro lands first as a
+      // placeholder, then the cascade (fully async, fire-and-forget) can
+      // still overwrite it with a higher-confidence calendar/contact match,
+      // exactly the priority the naming cascade is supposed to have. Guarded
+      // by the same setting the cascade itself checks — a self-intro name
+      // extracted while the setting was on shouldn't survive it being turned
+      // off between the call and the save (a narrow window, but a real one).
+      //
+      // ALSO gated on the call's OWN consent, re-read fresh here (not trusted
+      // from the renderer, which can only send a stale snapshot from whenever
+      // the self-intro resolved) — selfIntro.key always names the OTHER
+      // party, and writing their real name is exactly the kind of personal
+      // data the M11 consent-retention invariant governs. A rep can revoke
+      // buyer consent mid-call (after a self-intro already resolved) and the
+      // save must not persist their name once that happens, matching the
+      // same-save segment strip applyConsentRetention already performs
+      // (which now also strips any speakerIdentities entry that DOES get
+      // written outside consent, as a second line of defense — see its own
+      // doc comment in calls-fs.ts — but the write is prevented here too,
+      // rather than relying solely on next-read cleanup).
+      if (selfIntro?.key && selfIntro.name && isSelfIntroExtractionAllowed()) {
+        const current = await getCall(callsDir(), summary.id)
+        if (current?.consent?.recordOtherParty === true) {
+          await setSpeakerIdentity(callsDir(), summary.id, selfIntro.key, {
+            name: selfIntro.name,
+            source: 'self-intro',
+            confidence: 'medium'
+          }).catch(() => {})
+        }
+      }
+      // Fire-and-forget, same as objection mining above — never block the save.
+      // Fully resolves multichannel calls (channel 0/1 are deterministic);
+      // mono calls only get "me" once coaching supplies repSpeaker (see below).
+      void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, summary.id).catch(() => {})
+      return summary
     }
-    return summary
-  })
+  )
   ipcMain.handle('calls:delete', async (_event, id: string) => {
     // Capture the attachment list BEFORE the tombstone strips it, so any
     // blobs uploaded to the cloud bucket can be queued for deletion too.
@@ -204,6 +254,30 @@ export function registerCalls(): void {
     return call
   })
 
+  // --- Speaker identification (M19 Task 2) -----------------------------------
+  // The one write path for both an inline rename and the "remember this
+  // person" checkbox — always source: 'manual', which the auto-resolution
+  // cascade (resolve-for-call.ts) is guaranteed to never overwrite.
+  ipcMain.handle(
+    'calls:setSpeakerName',
+    async (
+      _event,
+      callId: string,
+      key: string,
+      name: string | null,
+      opts?: { rememberAsContactId?: string }
+    ) => {
+      const call = await setSpeakerIdentity(callsDir(), callId, key, {
+        name,
+        source: 'manual',
+        confidence: 'high',
+        contactId: opts?.rememberAsContactId
+      })
+      if (call) scheduleBackup()
+      return call
+    }
+  )
+
   // --- Bookmarks ("clip this moment") ---------------------------------------
   ipcMain.handle(
     'calls:addBookmark',
@@ -227,7 +301,9 @@ export function registerCalls(): void {
       if (!call.segments?.length) {
         return { ok: false, error: 'failed', message: 'This call has no transcript to summarize.' }
       }
-      const text = call.segments.map((s) => `Speaker ${s.speaker + 1}: ${s.text}`).join('\n')
+      const text = speechSegments(call.segments)
+        .map((s) => `Speaker ${s.speaker + 1}: ${s.text}`)
+        .join('\n')
       const result = await summarize({ kind: 'text', text })
       if (result.ok) {
         const saved = await setCallSummary(callsDir(), callId, result.summary)
@@ -302,7 +378,7 @@ export function registerCalls(): void {
       if (!call.segments?.length) {
         return { ok: false, error: 'failed', message: 'This call has no transcript to coach.' }
       }
-      const result = await coachCall(call.segments, call.durationMs)
+      const result = await coachCall(speechSegments(call.segments), call.durationMs)
       if (result.ok) {
         const saved = await setCallCoaching(callsDir(), callId, result.report)
         if (!saved) {
@@ -313,6 +389,10 @@ export function registerCalls(): void {
           }
         }
         scheduleBackup() // quote-free scores/advice sync; evidence quotes never do
+        // repSpeaker is only known from here on for a mono call — re-run so
+        // its "me" key (and therefore single-other-party detection) can
+        // resolve for the first time.
+        void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, callId).catch(() => {})
       }
       return result
     } catch {
@@ -323,6 +403,35 @@ export function registerCalls(): void {
       }
     }
   })
+
+  // --- Commitments (§4.7) — who promised what -------------------------------
+  ipcMain.handle(
+    'commitments:extract',
+    async (_event, callId: string): Promise<CommitmentResult> => {
+      try {
+        const call = await getCall(callsDir(), callId)
+        if (!call) return { ok: false, error: 'failed', message: 'Call not found.' }
+        const result = await extractCommitments(speechSegments(call.segments))
+        if (result.ok) {
+          const saved = await setCallCommitments(callsDir(), callId, result.commitments)
+          if (!saved) {
+            return {
+              ok: false,
+              error: 'failed',
+              message: 'The commitments could not be saved. Please try again.'
+            }
+          }
+        }
+        return result
+      } catch {
+        return {
+          ok: false,
+          error: 'failed',
+          message: 'The commitments could not be saved. Please try again.'
+        }
+      }
+    }
+  )
 
   // --- Objection Library: mine a call for raw candidates --------------------
   // Gated on the SAME toggle that will later gate new-call mining + the
@@ -343,7 +452,7 @@ export function registerCalls(): void {
         if (!call.segments?.length) {
           return { ok: false, error: 'failed', message: 'This call has no transcript to mine.' }
         }
-        return await mineObjections(call.segments)
+        return await mineObjections(speechSegments(call.segments))
       } catch {
         return {
           ok: false,
@@ -372,7 +481,7 @@ export function registerCalls(): void {
         // transcript check mining used, against THIS call's segments. This
         // also catches candidates mined from one call but enqueued under
         // another call's id.
-        const verify = makeVerifier(call.segments ?? [])
+        const verify = makeVerifier(speechSegments(call.segments))
         const list = (Array.isArray(candidates) ? candidates : []).map((raw) => {
           if (!raw || typeof raw !== 'object') return raw
           const c = raw as Record<string, unknown>
@@ -455,6 +564,24 @@ export function registerCalls(): void {
     }
   )
 
+  // §4.6 — the instant post-call brief. Generates the brief, next steps and a
+  // follow-up email, and puts the lot on the clipboard. The clipboard write
+  // deliberately happens in MAIN (see post-call-brief.ts): this fires the
+  // moment a call ends, when the rep is still looking at Zoom, so the renderer
+  // is exactly not focused and navigator.clipboard would refuse.
+  ipcMain.handle(
+    'calls:postCallBrief',
+    async (_event, callId: string): Promise<PostCallBriefResult> => {
+      try {
+        const call = await getCall(callsDir(), callId)
+        if (!call?.segments?.length) return { ok: false, error: 'empty-call' as const }
+        return await generatePostCallBrief(speechSegments(call.segments), call.title)
+      } catch {
+        return { ok: false, error: 'failed' as const }
+      }
+    }
+  )
+
   // AI Note Taker's auto-title feature: generate + save a title in one step.
   ipcMain.handle(
     'calls:generateTitle',
@@ -462,7 +589,7 @@ export function registerCalls(): void {
       try {
         const call = await getCall(callsDir(), callId)
         if (!call?.segments?.length) return { ok: false }
-        const result = await generateCallTitle(call.segments)
+        const result = await generateCallTitle(speechSegments(call.segments))
         if (!result.ok) return result
         const saved = await setCallTitle(callsDir(), callId, result.title)
         if (!saved) return { ok: false }

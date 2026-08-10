@@ -12,9 +12,18 @@ const MIC_SETTINGS_PATH = isMac
   : 'Settings → Privacy & security → Microphone → allow apps to access your microphone, then return here.'
 
 /** The big "press to start" hero shown before the first session. */
-export function IdleHero({ onStart }: { onStart: () => void }): React.JSX.Element {
+export function IdleHero({
+  onStart,
+  banner
+}: {
+  onStart: () => void
+  /** M19 Task 3B — "show the prep brief again at call start": an upcoming/
+   *  current-meeting banner rendered above the hero, not a separate layout. */
+  banner?: ReactNode
+}): React.JSX.Element {
   return (
     <div className="flex h-full flex-col items-center justify-center text-center">
+      {banner && <div className="mb-6 w-full max-w-sm">{banner}</div>}
       <div className="relative">
         <span
           className="pulse-ring absolute inset-0 rounded-full bg-accent/30"
@@ -23,6 +32,7 @@ export function IdleHero({ onStart }: { onStart: () => void }): React.JSX.Elemen
         <button
           type="button"
           onClick={onStart}
+          aria-label="Start live transcription"
           className="press no-drag relative grid h-24 w-24 place-items-center rounded-full bg-accent text-white shadow-lg shadow-accent/20 transition hover:brightness-110"
         >
           <Mic className="h-9 w-9" strokeWidth={2} />

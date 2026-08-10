@@ -215,6 +215,73 @@
     }
   }
 
+  /* --- Glass HUD ---------------------------------------------------------
+     The shared surface for the app's floating, over-everything popups: the
+     ambient-detection overlay and the call-detected banner. One definition so
+     the two can never drift apart, because a rep sees them in the same second.
+
+     Three things make this read as a real material rather than a grey box:
+
+     - saturate() on the backdrop. Blur alone renders whatever is behind as
+       flat mud; pushing saturation back up is what makes the colour underneath
+       show through, which is the whole illusion.
+     - a specular top edge. Physical glass catches light along its upper
+       curve, so a one-pixel gradient there does more for the effect than any
+       amount of extra blur.
+     - a large, soft, low-opacity shadow that lifts it off the desktop instead
+       of outlining it.
+
+     The radius is set by the caller — a wide bar wants a capsule, a taller
+     card wants a large squircle — but both come from this same material. */
+  .glass-hud {
+    background: color-mix(in oklab, var(--color-surface) 72%, transparent);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    backdrop-filter: blur(30px) saturate(180%);
+    /* In dark mode --color-ink is near-white, so this is a light hairline;
+       the light-theme block below flips it to a pale one. */
+    border: 1px solid color-mix(in oklab, var(--color-ink) 12%, transparent);
+    box-shadow:
+      0 1px 0 0 color-mix(in oklab, white 14%, transparent) inset,
+      0 20px 50px -16px rgb(0 0 0 / 0.5),
+      0 4px 12px -4px rgb(0 0 0 / 0.28);
+  }
+
+  /* The light catching the top curve. Sits inside a `relative` parent. */
+  .glass-sheen {
+    position: absolute;
+    top: 0;
+    left: 12%;
+    right: 12%;
+    height: 1px;
+    pointer-events: none;
+    background: linear-gradient(
+      to right,
+      transparent,
+      color-mix(in oklab, white 55%, transparent),
+      transparent
+    );
+  }
+
+  /* Light theme wants far less shadow, a brighter pane and a paler edge, or
+     the material reads as a smudge on a white desktop rather than as glass.
+     Matches the `.light` class the theme switcher puts on <html>. */
+  :root.light .glass-hud {
+    background: color-mix(in oklab, var(--color-surface) 82%, transparent);
+    border-color: color-mix(in oklab, var(--color-ink) 8%, transparent);
+    box-shadow:
+      0 1px 0 0 color-mix(in oklab, white 70%, transparent) inset,
+      0 18px 44px -16px rgb(16 18 29 / 0.22),
+      0 3px 10px -3px rgb(16 18 29 / 0.1);
+  }
+  :root.light .glass-sheen {
+    background: linear-gradient(
+      to right,
+      transparent,
+      color-mix(in oklab, white 90%, transparent),
+      transparent
+    );
+  }
+
   /* Tactile press feedback — the whole-app "this responds" cue on buttons and
      tappable cards. Pairs with the existing hover states. */
   .press {

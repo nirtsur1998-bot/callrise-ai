@@ -38,7 +38,19 @@ export function useTasks(): UseTasks {
     const timeouts = timeoutsRef.current
     return () => {
       mountedRef.current = false
-      for (const handle of timeouts.values()) clearTimeout(handle)
+      // A pending delete already told the user "deleted, with an Undo option"
+      // — hiding it in `pendingDeleteIds` and showing the toast. Just clearing
+      // the timer here (without ever calling tasks.delete) would silently
+      // resurrect it: navigate away inside the 6s window and the task the
+      // user believes is gone comes back the next time this list loads. The
+      // promise the UI already made has to be honored, not cancelled — fire
+      // the real delete for every task still pending instead of dropping it.
+      for (const [id, handle] of timeouts) {
+        clearTimeout(handle)
+        void window.api.tasks.delete(id).catch(() => {
+          /* nothing left mounted to report this to; best-effort */
+        })
+      }
       timeouts.clear()
     }
   }, [])

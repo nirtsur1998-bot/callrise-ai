@@ -38,7 +38,18 @@ export function useDeals(): UseDeals {
   useEffect(() => {
     const timeouts = timeoutsRef.current
     return () => {
-      for (const handle of timeouts.values()) clearTimeout(handle)
+      // A pending delete already told the user "deleted, with an Undo option"
+      // — hiding it in `pendingDeleteIds` and showing the toast. Just clearing
+      // the timer here (without ever calling deals.delete) would silently
+      // resurrect it: navigate away inside the undo window and the deal the
+      // user believes is gone comes back the next time this list loads. Fire
+      // the real delete for every deal still pending instead of dropping it.
+      for (const [id, handle] of timeouts) {
+        clearTimeout(handle)
+        void window.api.deals.delete(id).catch(() => {
+          /* nothing left mounted to report this to; best-effort */
+        })
+      }
       timeouts.clear()
     }
   }, [])

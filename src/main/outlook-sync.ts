@@ -16,9 +16,16 @@ export { linkKey } from './google-sync'
  * of UTC.
  */
 export function toGraphBody(ev: CalendarEvent): Record<string, unknown> {
+  // Graph only carries ONE reminder value (unlike Google's array of
+  // overrides) — use the soonest requested lead time so the user is never
+  // reminded later than they asked for.
+  const minutes = ev.reminderMinutes ?? []
+  const reminderMinutesBeforeStart = minutes.length ? Math.min(...minutes) : 0
   const base: Record<string, unknown> = {
     subject: ev.title,
-    body: { contentType: 'text', content: ev.notes ?? '' }
+    body: { contentType: 'text', content: ev.notes ?? '' },
+    isReminderOn: minutes.length > 0,
+    reminderMinutesBeforeStart
   }
   if (ev.allDay) {
     const s = new Date(ev.start)

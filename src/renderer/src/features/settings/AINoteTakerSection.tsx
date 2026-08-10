@@ -13,6 +13,8 @@ import {
   setAutoSummarize,
   getAutoGenerateTitle,
   setAutoGenerateTitle,
+  getAutoPostCallBrief,
+  setAutoPostCallBrief,
   getExcludedApps,
   setExcludedApps,
   getSeenApps
@@ -24,6 +26,7 @@ export function AINoteTakerSection(): React.JSX.Element {
   const [autoOpen, setAutoOpenState] = useState(() => getAutoOpenMeetingPage())
   const [autoSummarize, setAutoSummarizeState] = useState(() => getAutoSummarize())
   const [autoTitle, setAutoTitleState] = useState(() => getAutoGenerateTitle())
+  const [autoBrief, setAutoBriefState] = useState(() => getAutoPostCallBrief())
   const [excluded, setExcludedState] = useState<string[]>(() => getExcludedApps())
   const [seenApps] = useState<string[]>(() => getSeenApps())
   const [detectionAvailable, setDetectionAvailable] = useState<boolean | null>(null)
@@ -110,6 +113,22 @@ export function AINoteTakerSection(): React.JSX.Element {
                     setAutoTitleState(v)
                   }}
                   label="Automatically generate AI meeting title"
+                />
+              }
+            />
+          </div>
+          <div className="pt-4">
+            <SettingRow
+              title="Instant follow-up on your clipboard"
+              description="The moment a call ends, write a short brief, the next steps and a ready-to-send follow-up email straight to your clipboard — nothing to click. Works even while you're still in Zoom or Teams."
+              control={
+                <ToggleSwitch
+                  checked={autoBrief}
+                  onChange={(v) => {
+                    setAutoPostCallBrief(v)
+                    setAutoBriefState(v)
+                  }}
+                  label="Instant follow-up on your clipboard"
                 />
               }
             />

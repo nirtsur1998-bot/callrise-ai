@@ -43,7 +43,18 @@ export function dateStrFromParts(d: Date): string {
  * the stored (inclusive) end.
  */
 export function toGoogleBody(ev: CalendarEvent): Record<string, unknown> {
-  const base: Record<string, unknown> = { summary: ev.title, description: ev.notes ?? '' }
+  // Always sent explicitly (even empty) so a reminder removed in CallRise is
+  // actually cleared on Google too, rather than leaving Google's own default
+  // reminders in place from a prior PATCH that omitted this field.
+  const reminders = {
+    useDefault: false,
+    overrides: (ev.reminderMinutes ?? []).map((minutes) => ({ method: 'popup', minutes }))
+  }
+  const base: Record<string, unknown> = {
+    summary: ev.title,
+    description: ev.notes ?? '',
+    reminders
+  }
   if (ev.allDay) {
     const s = new Date(ev.start)
     const e = new Date(ev.end)

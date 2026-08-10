@@ -59,6 +59,7 @@ export function ViewCallModal({
           <SpeakerTranscript
             segments={call.segments}
             repSpeaker={call.coaching?.metrics.repSpeaker ?? null}
+            identities={call.speakerIdentities}
           />
         )}
       </div>

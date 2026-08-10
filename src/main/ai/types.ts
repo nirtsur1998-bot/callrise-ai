@@ -10,17 +10,32 @@
 // `stream()` is still implemented on both providers for completeness/future
 // use, but `complete()` with a `tool` set is the primitive that matters.
 
-export type AIProviderId = 'anthropic' | 'openai'
+/** 'anthropic'/'openai' are the original M16 pair. The other six are M20's
+ *  addition — five OpenAI-Chat-Completions-compatible providers (each built
+ *  by providers/openai-compatible.ts, parameterised by base URL) plus
+ *  'google' (Gemini, its own REST adapter — not OpenAI-compatible). */
+export type AIProviderId =
+  | 'anthropic'
+  | 'openai'
+  | 'groq'
+  | 'openrouter'
+  | 'google'
+  | 'nvidia'
+  | 'cerebras'
+  | 'mistral'
 
 export interface AIMessage {
   role: 'user' | 'assistant'
   content: string
 }
 
-/** What the call is FOR — this drives model selection (each provider maps
- *  purpose -> its own concrete model) and the latency policy below, so
- *  call sites never hardcode a model string or a retry/timeout value. */
-export type AIPurpose = 'coaching-cue' | 'summary' | 'scorecard' | 'tasks' | 'other'
+/** What the call is FOR — this drives the latency policy below and (for M16's
+ *  original two providers, when no explicit `model` is set on the request)
+ *  each provider's own internal model default. M20 adds 'prep-brief' for the
+ *  M19 pre-meeting prep brief - no consumer exists yet (M19 Task 3B isn't
+ *  built), but the model-assignment UI needs a purpose to assign a chain to
+ *  ahead of that consumer landing. */
+export type AIPurpose = 'coaching-cue' | 'summary' | 'scorecard' | 'tasks' | 'other' | 'prep-brief'
 
 /** A single tool the model is FORCED to call — every real call site today
  *  needs structured JSON back, never free text. `inputSchema` is a plain
@@ -41,6 +56,11 @@ export interface AICompletionRequest {
   maxTokens: number
   temperature?: number
   purpose: AIPurpose
+  /** Explicit model ID, set by completeWithFallback() when a catalog entry
+   *  is driving this call (M20). Falls back to the provider's own internal
+   *  MODEL_BY_PURPOSE[purpose] default when unset — every M16-era call site
+   *  that never sets this behaves exactly as it did before M20. */
+  model?: string
   /** When set, the model is forced to call exactly this tool and `text` on
    *  the result is empty — the answer is in `toolInput`. */
   tool?: AITool
@@ -85,8 +105,17 @@ export interface AIProvider {
 
 /** Uniform failure shape every call site already expects (mirrors the old
  *  per-file `friendlyError` helpers this replaces) — `error` is a stable
- *  code for programmatic handling, `message` is what a rep actually reads. */
-export type AIProviderErrorCode = 'no-key' | 'auth' | 'rate-limit' | 'network' | 'failed'
+ *  code for programmatic handling, `message` is what a rep actually reads.
+ *  'model-not-found' and 'timeout' are M20 additions — completeWithFallback()
+ *  advances the chain on either of these, same as 'rate-limit'/'network'. */
+export type AIProviderErrorCode =
+  | 'no-key'
+  | 'auth'
+  | 'rate-limit'
+  | 'network'
+  | 'failed'
+  | 'model-not-found'
+  | 'timeout'
 
 export class AIProviderError extends Error {
   constructor(
@@ -113,5 +142,29 @@ export const LATENCY_POLICY: Record<AIPurpose, LatencyPolicyEntry> = {
   summary: { maxRetries: 2, timeoutMs: 60_000 },
   scorecard: { maxRetries: 2, timeoutMs: 60_000 },
   tasks: { maxRetries: 2, timeoutMs: 30_000 },
-  other: { maxRetries: 1, timeoutMs: 30_000 }
+  other: { maxRetries: 1, timeoutMs: 30_000 },
+  // No consumer yet (M19 Task 3B not built) - same shape as 'other' until a
+  // real call site exists to tell us its actual latency needs.
+  'prep-brief': { maxRetries: 1, timeoutMs: 30_000 }
+}
+
+/** Total wall-clock budget for a whole completeWithFallback() chain on this
+ *  purpose, and the max number of chain entries it may contain. Only
+ *  'coaching-cue' is capped today - M9 already fixed one multi-second
+ *  dead-air regression on this exact path (see docs/ai-providers.md), and a
+ *  naive chain walk giving each entry its own full LATENCY_POLICY timeout
+ *  would reintroduce a worse version of it (a 3-entry chain under bad
+ *  network conditions -> 18s of dead air). completeWithFallback() splits
+ *  `totalBudgetMs` across whatever chain length is configured (capped at
+ *  `maxChainLength`) via a per-attempt AbortController deadline, instead of
+ *  giving every attempt the full LATENCY_POLICY timeout independently.
+ *  Other purposes are post-call, not time-critical the same way, so they
+ *  keep using LATENCY_POLICY's per-attempt timeout uncapped. */
+export interface ChainBudget {
+  totalBudgetMs: number
+  maxChainLength: number
+}
+
+export const CHAIN_BUDGET: Partial<Record<AIPurpose, ChainBudget>> = {
+  'coaching-cue': { totalBudgetMs: LATENCY_POLICY['coaching-cue'].timeoutMs, maxChainLength: 2 }
 }

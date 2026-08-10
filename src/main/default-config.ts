@@ -11,6 +11,26 @@ export const DEFAULT_CONFIG = {
   SUPABASE_URL: 'https://fphvsuvpskqwkcpiocfz.supabase.co',
   SUPABASE_ANON_KEY:
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZwaHZzdXZwc2txd2tjcGlvY2Z6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MTcyNDEsImV4cCI6MjA5ODM5MzI0MX0.FGtBQ3FmOd0JAS55ctb6eLNQ2GoN2haocaki7LkUm-E',
-  GOOGLE_CLIENT_ID: '601852733978-3u90vbgqnlcoigqd5g5mm6v8nr81sava.apps.googleusercontent.com',
-  GOOGLE_CLIENT_SECRET: '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'
+  // Replaced 2026-08-05 — moved to a new Google Cloud project ('callrise-ai-504616')
+  // under a different Google account, per explicit user request. The OAuth
+  // consent screen for this new client starts in "Testing" status, which
+  // restricts login to explicitly-added test users only — must be published
+  // to "In production" before this works for any user besides those test
+  // accounts (OAuth consent screen page → Publish app).
+  GOOGLE_CLIENT_ID: '877875490182-d6gu698b28n8b5giod7q7kuo6vbh3p0t.apps.googleusercontent.com',
+  GOOGLE_CLIENT_SECRET: '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',
+  // Added 2026-08-06 — this was previously only ever set in one machine's
+  // local .env override, so every OTHER install (including packaged builds
+  // handed to testers) showed "Add OUTLOOK_CLIENT_ID to your .env" and could
+  // never connect Outlook at all. Registered on portal.azure.com under
+  // "Mobile and desktop applications" (a public client) — like Google's
+  // installed-app client ID above, Microsoft's own docs treat this as not
+  // confidential; the real protection is the redirect URI + PKCE, not
+  // hiding this value. See outlook.ts for the OAuth flow itself.
+  OUTLOOK_CLIENT_ID: 'd02b5c14-3fd5-4fec-aa85-5baaa2aa6a6a',
+  // M23: the repo itself, not a secret — a plain public URL. updater/index.ts
+  // parses this as a github.com repo URL and uses electron-updater's 'github'
+  // provider, which reads the repo's Releases assets directly; no token
+  // needed to CHECK for updates on a public repo (only to publish one).
+  UPDATE_FEED_URL: 'https://github.com/nirtsur1998-bot/callrise-ai'
 } as const

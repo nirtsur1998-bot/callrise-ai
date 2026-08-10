@@ -33,11 +33,16 @@ function formatElapsed(ms: number): string {
 function OverlayShell({ children }: { children: ReactNode }): React.JSX.Element {
   return (
     <div className="h-full w-full p-4">
+      {/* Same glass material as the call-detected banner (.glass-hud), because
+          a rep can see both within the same second and two different-looking
+          floating panels read as two different apps. The radius is larger here
+          — a taller card wants a generous squircle where a single-row bar
+          wants a capsule. */}
       <div
         style={DRAG}
-        className="animate-pop relative flex h-full flex-col justify-center gap-2.5 overflow-hidden rounded-[26px] border border-white/10 bg-surface/75 p-4 shadow-[0_0_0_1px_rgba(110,123,242,0.12),0_16px_40px_-12px_rgba(0,0,0,0.55)] backdrop-blur-2xl"
+        className="glass-hud animate-pop relative flex h-full flex-col justify-center gap-2.5 overflow-hidden rounded-[32px] p-4"
       >
-        <div className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
+        <span className="glass-sheen" />
         {children}
       </div>
     </div>
@@ -133,7 +138,7 @@ function SourceMonogram({
   const color = hashColor(appId)
   return (
     <span
-      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[13px] font-bold text-white shadow-[0_2px_8px_-2px_rgba(0,0,0,0.5)]"
+      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[13px] text-[13px] font-bold text-white shadow-[0_2px_8px_-2px_rgba(0,0,0,0.5)]"
       style={{ backgroundColor: color }}
       aria-hidden="true"
     >
@@ -145,7 +150,7 @@ function SourceMonogram({
 /** Uppercase source-name pill — "the answer to which source is being used." */
 function SourceNameChip({ displayName }: { displayName: string }): React.JSX.Element {
   return (
-    <span className="inline-flex w-fit items-center rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-ink uppercase">
+    <span className="inline-flex w-fit items-center rounded-full bg-white/[0.08] px-2 py-0.5 text-[10px] font-bold tracking-wide text-ink uppercase">
       {displayName}
     </span>
   )

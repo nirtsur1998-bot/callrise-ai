@@ -94,9 +94,9 @@ export function NoiseCancellationCard(): React.JSX.Element | null {
             The &ldquo;Sales OS Microphone&rdquo; audio device isn&rsquo;t installed yet.
           </p>
           <p className="mt-1.5 text-[11px] text-faint">
-            One-time setup installs a system audio device. macOS will ask for your admin
-            password — that part&rsquo;s unavoidable for any app installing a system audio
-            device, but there&rsquo;s nothing else to do.
+            One-time setup installs a system audio device. macOS will ask for your admin password —
+            that part&rsquo;s unavoidable for any app installing a system audio device, but
+            there&rsquo;s nothing else to do.
           </p>
           <button
             type="button"

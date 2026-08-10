@@ -235,7 +235,8 @@ export function newDraft(day: Date, hour?: number): EventDraft {
     endDate: date,
     startTime: format(start, 'HH:mm'),
     endTime: format(end, 'HH:mm'),
-    notes: ''
+    notes: '',
+    reminderMinutes: []
   }
 }
 
@@ -253,7 +254,8 @@ export function draftFromEvent(e: CalendarEvent): EventDraft {
     endTime: format(end, 'HH:mm'),
     notes: e.notes ?? '',
     contactId: e.contactId,
-    dealId: e.dealId
+    dealId: e.dealId,
+    reminderMinutes: e.reminderMinutes ?? []
   }
 }
 
@@ -268,11 +270,13 @@ export function draftToInput(draft: EventDraft): {
   notes: string | null
   contactId: string | null
   dealId: string | null
+  reminderMinutes: number[]
 } {
   const title = draft.title.trim() || 'Untitled event'
   const notes = draft.notes.trim() || null
   const contactId = draft.contactId ?? null
   const dealId = draft.dealId ?? null
+  const reminderMinutes = draft.reminderMinutes
   const endDate = draft.endDate >= draft.startDate ? draft.endDate : draft.startDate // never before start
   if (draft.allDay) {
     const [ey, em, ed] = endDate.split('-').map(Number)
@@ -283,7 +287,8 @@ export function draftToInput(draft: EventDraft): {
       allDay: true,
       notes,
       contactId,
-      dealId
+      dealId,
+      reminderMinutes
     }
   }
   return {
@@ -293,6 +298,7 @@ export function draftToInput(draft: EventDraft): {
     allDay: false,
     notes,
     contactId,
-    dealId
+    dealId,
+    reminderMinutes
   }
 }

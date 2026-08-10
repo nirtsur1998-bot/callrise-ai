@@ -211,7 +211,13 @@ function friendlyError(err: unknown): string {
  *  block for both the new-call hook and the manual scan (later steps). */
 export async function mineObjections(segments: CallSegment[]): Promise<ObjectionMiningResult> {
   const provider = getActiveAIProvider()
-  if (!provider) return { ok: false, error: 'no-key' }
+  if (!provider) {
+    // Without a message, the renderer's fallback ("Could not mine this call
+    // for objections") reads identically to a real transient failure — a
+    // user with no key configured at all gets no hint that adding one is
+    // the actual fix.
+    return { ok: false, error: 'no-key', message: 'Add an AI provider API key in Settings first.' }
+  }
   if (!segments.length) {
     return { ok: false, error: 'failed', message: 'This call has no transcript to mine.' }
   }

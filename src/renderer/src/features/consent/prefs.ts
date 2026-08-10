@@ -45,9 +45,39 @@ export function saveScript(s: string): void {
   writeLocal(SCRIPT_KEY, s)
 }
 
-/** A fresh consent record for a new call — other-party recording always OFF. */
-export function freshConsent(): ConsentRecord {
-  return { status: 'not-asked', jurisdiction: loadDefaultJurisdiction(), recordOtherParty: false }
+/**
+ * The consent record a new call starts with.
+ *
+ * Normally that is "not asked" with other-party recording OFF — the rep has to
+ * ask on this call, on the record, before the buyer is ever captured.
+ *
+ * With STANDING consent on (Settings → "Always record the other party"), a new
+ * call instead starts already consented, with `method: 'pre-agreed'`. Note what
+ * this does and does not do: it does not bypass consent, it RECORDS one. The
+ * call still carries a real, timestamped ConsentRecord saying consent was
+ * pre-agreed, so `sanitizeConsent`'s invariant is untouched and the saved call
+ * is honest about how consent was obtained. What the rep skips is the clicking,
+ * not the consent — which is only defensible when a standing basis genuinely
+ * exists, and only they can know that.
+ */
+export function freshConsent(standing = false): ConsentRecord {
+  const jurisdiction = loadDefaultJurisdiction()
+  if (!standing) return { status: 'not-asked', jurisdiction, recordOtherParty: false }
+  const now = new Date().toISOString()
+  return {
+    status: 'consented',
+    jurisdiction,
+    method: 'pre-agreed',
+    recordOtherParty: true,
+    disclosedAt: now,
+    decidedAt: now
+  }
+}
+
+/** Whether a record's consent came from the standing setting rather than from
+ *  the rep asking on this specific call. */
+export function isStandingConsent(r: ConsentRecord): boolean {
+  return r.status === 'consented' && r.method === 'pre-agreed'
 }
 
 /** Renderer mirror of the main-process invariant (no consent ⇒ no capture). */

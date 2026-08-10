@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { join } from 'node:path'
-import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
+import { AIProviderError, type AITool } from './ai'
+import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
 import type {
   CallSegment,
   CoachingReport,
@@ -10,6 +11,7 @@ import type {
   CoachImprovement,
   CoachMetrics
 } from './calls-fs'
+import { isRepSegment, sameTurn, repSpeakerFromSegments } from './coach-attribution'
 import { listEntries } from './knowledge-fs'
 import { assembleKnowledgeContext } from './knowledge-context'
 import { loadAppSettings } from './app-settings'
@@ -210,7 +212,7 @@ TONE: encouraging, growth-mindset, specific, and kind — never harsh or generic
 
 // --- Evidence verification --------------------------------------------------
 
-function normalize(s: string): string {
+export function normalize(s: string): string {
   return s
     .toLowerCase()
     .replace(/^speaker\s*\d+\s*:\s*/i, '') // strip an accidental speaker label
@@ -229,18 +231,22 @@ function normalize(s: string): string {
  * said/did this" — because matching the transcript alone never confirms the
  * speaker was the rep at all.
  */
-function makeVerifier(
+export function makeVerifier(
   segments: CallSegment[],
   repSpeaker: number | null
 ): (quote: unknown, speaker: unknown) => CoachEvidence | undefined {
   // Merge consecutive same-speaker segments into turns (same merge logic as computeMetrics).
-  const turns: { speaker: number; text: string }[] = []
+  const turns: { seg: CallSegment; speaker: number; text: string }[] = []
   for (const s of segments) {
     const last = turns[turns.length - 1]
-    if (last && last.speaker === s.speaker) last.text += ` ${s.text}`
-    else turns.push({ speaker: s.speaker, text: s.text })
+    if (last && sameTurn(last.seg, s)) last.text += ` ${s.text}`
+    else turns.push({ seg: s, speaker: s.speaker, text: s.text })
   }
-  const entries = turns.map((t) => ({ speaker: t.speaker, text: normalize(t.text) }))
+  const entries = turns.map((t) => ({
+    seg: t.seg,
+    speaker: t.speaker,
+    text: normalize(t.text)
+  }))
 
   return (quote, speaker) => {
     const q = typeof quote === 'string' ? quote.trim() : ''
@@ -252,7 +258,10 @@ function makeVerifier(
     // the quote AND that speaker is the rep being coached — evidence for
     // coaching the rep can never be the buyer's own words.
     const match = entries.find((e) => e.speaker === sp && e.text.includes(nq))
-    const verified = !!match && repSpeaker !== null && sp === repSpeaker
+    // The matched TURN must itself be the rep's — checking only that the
+    // claimed number equals repSpeaker lets a buyer turn from another epoch
+    // (where that number means someone else) pass as rep evidence.
+    const verified = !!match && isRepSegment(match.seg, repSpeaker)
     return { quote: q.slice(0, 500), speaker: match ? match.speaker : sp, verified }
   }
 }
@@ -266,7 +275,7 @@ const OVERLAP_WINDOW_WORDS = 8
  * If a field contains a long verbatim run of transcript words (8+ consecutive
  * words), cut the text off before the leak — never ship it as-is.
  */
-function makeFreeTextScrubber(segments: CallSegment[]): (text: string) => string {
+export function makeFreeTextScrubber(segments: CallSegment[]): (text: string) => string {
   const haystack = normalize(segments.map((s) => s.text).join(' '))
   return (text) => {
     if (!text) return text
@@ -289,7 +298,7 @@ function countWords(text: string): number {
   return m ? m.length : 0
 }
 
-function computeMetrics(
+export function computeMetrics(
   segments: CallSegment[],
   durationMs: number,
   repSpeaker: number | null
@@ -300,21 +309,24 @@ function computeMetrics(
   const repValid = repIdx >= 0
 
   // Merge consecutive same-speaker segments into turns (for monologue length).
-  const turns: { speaker: number; words: number }[] = []
+  const turns: { seg: CallSegment; speaker: number; words: number }[] = []
   for (const s of segments) {
     const words = countWords(s.text)
     const last = turns[turns.length - 1]
-    if (last && last.speaker === s.speaker) last.words += words
-    else turns.push({ speaker: s.speaker, words })
+    // Same rule as the verifier: a turn never spans a speaker-label epoch.
+    if (last && sameTurn(last.seg, s)) last.words += words
+    else turns.push({ seg: s, speaker: s.speaker, words })
   }
 
   const totalWords = segments.reduce((sum, s) => sum + countWords(s.text), 0)
   const repWords = repValid
-    ? segments.filter((s) => s.speaker === repIdx).reduce((sum, s) => sum + countWords(s.text), 0)
+    ? segments
+        .filter((s) => isRepSegment(s, repIdx))
+        .reduce((sum, s) => sum + countWords(s.text), 0)
     : 0
   const talkRatio = repValid && totalWords > 0 ? repWords / totalWords : null
   const longestMonologueWords = repValid
-    ? turns.filter((t) => t.speaker === repIdx).reduce((mx, t) => Math.max(mx, t.words), 0)
+    ? turns.filter((t) => isRepSegment(t.seg, repIdx)).reduce((mx, t) => Math.max(mx, t.words), 0)
     : 0
 
   const minutes = durationMs > 0 ? durationMs / 60000 : null
@@ -324,7 +336,7 @@ function computeMetrics(
       ? Math.round((longestMonologueWords / wordsPerMinute) * 10) / 10
       : null
 
-  const questionSource = repValid ? segments.filter((s) => s.speaker === repIdx) : segments
+  const questionSource = repValid ? segments.filter((s) => isRepSegment(s, repIdx)) : segments
   const questionCount = (
     questionSource
       .map((s) => s.text)
@@ -352,16 +364,25 @@ function str(value: unknown, max = 1500): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : ''
 }
 
+function modelRepSpeaker(raw: Record<string, unknown>): number | null {
+  return typeof raw.repSpeaker === 'number' && Number.isFinite(raw.repSpeaker)
+    ? Math.trunc(raw.repSpeaker)
+    : null
+}
+
 function assembleReport(
   raw: Record<string, unknown>,
   segments: CallSegment[],
   durationMs: number,
   model: string
 ): CoachingReport | null {
-  const repSpeaker =
-    typeof raw.repSpeaker === 'number' && Number.isFinite(raw.repSpeaker)
-      ? Math.trunc(raw.repSpeaker)
-      : null
+  // Prefer the attribution the LIVE call already established over asking the
+  // model again. The two used to be entirely independent decisions over the
+  // same transcript, which is exactly why a scorecard could name a different
+  // person than the live view had shown for the same call. A recorded 'rep'
+  // role is either deterministic (buyer capture: the rep IS channel 0) or an
+  // already-validated live identification — both beat a fresh guess.
+  const repSpeaker = repSpeakerFromSegments(segments) ?? modelRepSpeaker(raw)
   const verify = makeVerifier(segments, repSpeaker)
   const scrub = makeFreeTextScrubber(segments)
 
@@ -437,15 +458,27 @@ function assembleReport(
 // --- Friendly errors --------------------------------------------------------
 
 function friendlyError(err: unknown): string {
+  if (err instanceof AllModelsExhaustedError) {
+    return 'Every configured AI model failed to produce a coaching report. Check your keys and free-tier limits in Settings, or try again shortly.'
+  }
   if (err instanceof AIProviderError) return err.message
   return 'Something went wrong while coaching this call. Please try again.'
+}
+
+/** completeWithFallback() throws AIProviderError('no-key', …) — not
+ *  AllModelsExhaustedError — when nothing is configured at all (empty
+ *  chain, nothing to even attempt), same as getActiveAIProvider() returning
+ *  null used to. The renderer's "set up your key" UI (CallDetail.tsx,
+ *  RiskAssessmentCard.tsx, GenerateTasksDialog.tsx, CoachingSection.tsx)
+ *  depends on this exact code surviving — collapsing it into 'failed' would
+ *  silently break that path for anyone with zero keys configured. */
+function errorCodeFrom(err: unknown): 'no-key' | 'failed' {
+  return err instanceof AIProviderError && err.code === 'no-key' ? 'no-key' : 'failed'
 }
 
 // --- Public entry point -----------------------------------------------------
 
 export async function coachCall(segments: CallSegment[], durationMs: number): Promise<CoachResult> {
-  const provider = getActiveAIProvider()
-  if (!provider) return { ok: false, error: 'no-key' }
   if (!segments.length) {
     return { ok: false, error: 'failed', message: 'This call has no transcript to coach.' }
   }
@@ -459,7 +492,7 @@ export async function coachCall(segments: CallSegment[], durationMs: number): Pr
   const personalization = loadCoachPersonalization()
 
   try {
-    const result = await provider.complete({
+    const result = await completeWithFallback({
       purpose: 'scorecard',
       maxTokens: 8192,
       tool: COACH_TOOL,
@@ -481,6 +514,6 @@ export async function coachCall(segments: CallSegment[], durationMs: number): Pr
     }
     return { ok: true, report }
   } catch (err) {
-    return { ok: false, error: 'failed', message: friendlyError(err) }
+    return { ok: false, error: errorCodeFrom(err), message: friendlyError(err) }
   }
 }

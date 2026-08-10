@@ -16,7 +16,18 @@ import {
  */
 export interface FsmContext {
   state: DetectorState
-  recentlyEnded: Array<{ appId: string; pid?: number; endedAt: number }>
+  /** `reason` picks which tuning window guards re-detection: 'switched-away'
+   *  (the rep left this call for another one) uses the longer
+   *  `switchBackSuppressMs`; 'ended' (a real hangup, decline, or error) uses
+   *  the shorter general `hysteresisMs`. Both share one list because both are
+   *  "don't re-surface this app+pid yet" facts checked the same way — only
+   *  the window differs. */
+  recentlyEnded: Array<{
+    appId: string
+    pid?: number
+    endedAt: number
+    reason: 'switched-away' | 'ended'
+  }>
   otherCandidate?: { call: DetectedCall; since: number }
   activeSessionId?: string
   pendingOfferedAt?: number
@@ -56,6 +67,15 @@ function findMatch(candidates: FusedCandidate[], call: DetectedCall): FusedCandi
   return candidates.find((c) => c.key === key)
 }
 
+/** Each entry's own window — 'switched-away' gets the longer, more specific
+ *  switch-back suppression; every other reason gets the general hysteresis. */
+function windowFor(
+  reason: FsmContext['recentlyEnded'][number]['reason'],
+  tuning: DetectionTuning
+): number {
+  return reason === 'switched-away' ? tuning.switchBackSuppressMs : tuning.hysteresisMs
+}
+
 function isBlockedByHysteresis(
   candidate: FusedCandidate,
   recentlyEnded: FsmContext['recentlyEnded'],
@@ -64,7 +84,7 @@ function isBlockedByHysteresis(
 ): boolean {
   return recentlyEnded.some(
     (e) =>
-      now - e.endedAt < tuning.hysteresisMs &&
+      now - e.endedAt < windowFor(e.reason, tuning) &&
       e.appId === candidate.appId &&
       (e.pid ?? null) === (candidate.pid ?? null)
   )
@@ -75,7 +95,7 @@ function pruneRecentlyEnded(
   now: number,
   tuning: DetectionTuning
 ): FsmContext['recentlyEnded'] {
-  return recentlyEnded.filter((e) => now - e.endedAt < tuning.hysteresisMs)
+  return recentlyEnded.filter((e) => now - e.endedAt < windowFor(e.reason, tuning))
 }
 
 let callCounter = 0
@@ -123,7 +143,7 @@ function endCapture(
     context: {
       state: { name: 'idle' },
       recentlyEnded: pruneRecentlyEnded(
-        [...context.recentlyEnded, { appId: call.appId, pid: call.pid, endedAt: now }],
+        [...context.recentlyEnded, { appId: call.appId, pid: call.pid, endedAt: now, reason: 'ended' }],
         now,
         tuning
       )
@@ -220,7 +240,10 @@ export function step(
             ...context,
             state: { name: 'idle' },
             recentlyEnded: pruneRecentlyEnded(
-              [...recentlyEnded, { appId: state.call.appId, pid: state.call.pid, endedAt: now }],
+              [
+                ...recentlyEnded,
+                { appId: state.call.appId, pid: state.call.pid, endedAt: now, reason: 'ended' }
+              ],
               now,
               tuning
             )
@@ -346,7 +369,10 @@ export function step(
               activeSessionId: undefined,
               pendingOfferedAt: undefined,
               recentlyEnded: pruneRecentlyEnded(
-                [...recentlyEnded, { appId: state.call.appId, pid: state.call.pid, endedAt: now }],
+                [
+                  ...recentlyEnded,
+                  { appId: state.call.appId, pid: state.call.pid, endedAt: now, reason: 'switched-away' }
+                ],
                 now,
                 tuning
               )

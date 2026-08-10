@@ -4,11 +4,13 @@ export type AppSettings = Awaited<ReturnType<typeof window.api.settings.get>>
 export type AppSettingsPatch = Parameters<typeof window.api.settings.update>[0]
 export type SummaryLanguage = AppSettings['summaryLanguage']
 export type CrmSettings = AppSettings['crm']
+export type AiModelAssignments = AppSettings['aiModelAssignments']
 
 // The safe default (matches main's own fallback) shown until the real value
 // loads — never more permissive than what loadAppSettings() would return.
 const DEFAULT_SETTINGS: AppSettings = {
   allowOtherPartyRecording: true,
+  alwaysRecordOtherParty: false,
   personalization: { name: '', role: '', pronoun: '', about: '' },
   summaryLanguage: 'auto',
   syncScope: {
@@ -35,7 +37,16 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
   objectionMining: { enabled: false },
   detection: { enabled: false, capturePolicy: { autoCapturePolicy: 'mic-only', appOverrides: {} } },
-  aiProvider: 'anthropic'
+  aiProvider: 'anthropic',
+  aiModelAssignments: {
+    'coaching-cue': { chain: [] },
+    summary: { chain: [] },
+    scorecard: { chain: [] },
+    tasks: { chain: [] },
+    other: { chain: [] },
+    'prep-brief': { chain: [] }
+  },
+  autoUpdateEnabled: false
 }
 
 export interface UseAppSettings {

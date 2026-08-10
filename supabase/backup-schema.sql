@@ -14,6 +14,22 @@
 -- holds tasks, calendar events, and call metadata/summaries/quote-free coaching.
 -- ============================================================================
 
+-- The server's own clock, readable by the app.
+-- The app calls this on every sync to measure how far THIS device's clock is
+-- from the server's, then converts its local timestamps onto the server's
+-- timeline before comparing them. Without it the app compared device time
+-- against server time directly, so a device with a badly wrong clock could
+-- restore a stale copy over a newer one.
+-- Safe by construction: reads nothing, writes nothing, exposes no user data.
+create or replace function public.server_now()
+returns timestamptz
+language sql
+stable
+set search_path = ''
+as $$ select now() $$;
+
+grant execute on function public.server_now() to authenticated;
+
 -- Authoritative server timestamp. This trigger stamps `server_updated_at` on
 -- every insert/update, so "newest wins" is decided by the SERVER's clock, never
 -- a device's clock (which could be wrong and silently overwrite a newer edit).
@@ -389,3 +405,67 @@ create policy "own attachment delete" on storage.objects
   for delete using (
     bucket_id = 'attachments' and (storage.foldername(name))[1] = auth.uid()::text
   );
+
+-- ============================================================================
+-- M21 Phase B — clock-skew repair migration
+--
+-- Older rows were uploaded with the DEVICE's own `updated_at`. On a machine
+-- with a wrong clock that value can sit far in the future relative to the
+-- server, and because `updated_at` is the newest-wins ordering input, such a
+-- row out-ranks genuinely newer edits indefinitely.
+--
+-- `server_updated_at` was always stamped by the server, so the TRUE order is
+-- recoverable: it is simply the server timestamp. This repairs each affected
+-- row by clamping its ordering key back to the server's own value, and FLAGS
+-- it (clock_skew_repaired) so nothing is silently rewritten without a trace.
+--
+-- The trigger MUST be disabled while this runs. set_server_updated_at()
+-- returns OLD whenever the incoming updated_at is not strictly newer than the
+-- stored one — and this repair deliberately moves updated_at BACKWARDS — so
+-- with the trigger live every repair would be silently discarded and the
+-- migration would report success while changing nothing.
+--
+-- Idempotent and safe to re-run: rows already consistent are left untouched.
+-- One minute of tolerance absorbs ordinary insert/commit latency.
+-- ============================================================================
+
+do $$
+declare
+  t text;
+  n bigint;
+  total bigint := 0;
+begin
+  foreach t in array array[
+    'backup_tasks', 'backup_events', 'backup_calls',
+    'backup_knowledge', 'backup_contacts', 'backup_deals',
+    'backup_settings', 'backup_deal_stages'
+  ] loop
+    -- Optional-category tables were added later; a project that has not
+    -- created one yet must not abort the whole migration.
+    if to_regclass('public.' || t) is null then
+      continue;
+    end if;
+
+    execute format(
+      'alter table public.%I add column if not exists clock_skew_repaired boolean not null default false',
+      t
+    );
+
+    execute format('alter table public.%I disable trigger trg_server_updated_at', t);
+
+    execute format(
+      'update public.%I set updated_at = server_updated_at, clock_skew_repaired = true'
+      ' where updated_at > server_updated_at + interval ''1 minute''',
+      t
+    );
+    get diagnostics n = row_count;
+    total := total + n;
+
+    execute format('alter table public.%I enable trigger trg_server_updated_at', t);
+
+    if n > 0 then
+      raise notice 'clock-skew repair: % row(s) repaired in public.%', n, t;
+    end if;
+  end loop;
+  raise notice 'clock-skew repair: % row(s) repaired in total', total;
+end $$;

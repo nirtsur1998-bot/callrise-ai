@@ -61,11 +61,30 @@ async function autoCreateHighRiskTask(deal: Deal): Promise<void> {
 }
 
 /** A deal's stageId must reference a real, current stage — falls back to the
- *  pipeline's first stage if missing/unrecognized (never an orphaned id). */
+ *  pipeline's first stage if missing/unrecognized (never an orphaned id).
+ *
+ *  M23 bug hunt: this substitution was completely silent — a deal move sent
+ *  with a stale stageId (e.g. another window/session deleted or renamed the
+ *  stage after this one last refreshed its stage list, per useDealStages
+ *  only refetching on mount or a cloud-sync event, not on a local peer's
+ *  edit) would land in "whatever the first stage happens to be" with zero
+ *  indication anything unusual happened — the deal just quietly appears in
+ *  the wrong column. Logging it doesn't fix the root refresh-staleness gap
+ *  (a bigger change: either push stage-list updates cross-window, or version
+ *  the stage list so a stale write can be rejected outright), but it turns
+ *  an invisible data-integrity surprise into something a `--diagnose` run or
+ *  a support conversation can actually trace. */
 function resolveStageId(input: unknown): string {
   const stages = loadDealStages()
   const requested = typeof input === 'string' ? input : undefined
   const match = requested ? stages.find((s) => s.id === requested) : undefined
+  if (requested && !match) {
+    console.warn(
+      `[deals] stageId "${requested}" does not match any current stage — falling back to ` +
+        `"${stages[0]?.id ?? 'none'}". This usually means the stage was deleted/renamed in ` +
+        `another window since this one last loaded its stage list.`
+    )
+  }
   return (match ?? stages[0]).id
 }
 
