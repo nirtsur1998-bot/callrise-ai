@@ -188,6 +188,7 @@ const api = {
     resendCode: (email: string) => ipcRenderer.invoke('auth:resendCode', { email }),
     updateName: (name: string) => ipcRenderer.invoke('auth:updateName', { name }),
     signOut: () => ipcRenderer.invoke('auth:signOut'),
+    wipeDeviceData: () => ipcRenderer.invoke('auth:wipeDeviceData'),
     onChange: (cb: (user: unknown) => void) => subscribe('auth:changed', cb)
   },
   loopback: {

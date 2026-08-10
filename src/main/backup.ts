@@ -44,6 +44,7 @@ import {
   toDeviceIso,
   type CloudRow
 } from './backup-core'
+import { readOwner, claimOwnershipIfUnset } from './device-owner'
 
 function tasksDir(): string {
   return join(app.getPath('userData'), 'tasks')
@@ -65,9 +66,6 @@ function dealsDir(): string {
 }
 function statePath(): string {
   return join(app.getPath('userData'), 'backup-state.json')
-}
-function ownerPath(): string {
-  return join(app.getPath('userData'), 'backup-owner.json')
 }
 function pendingBlobDeletesPath(): string {
   return join(app.getPath('userData'), 'backup-pending-blob-deletes.json')
@@ -242,32 +240,11 @@ const ATTACHMENT_MIME: Record<string, string> = {
 }
 
 // This device's local data belongs to exactly ONE account (the app is
-// single-user per machine). We pin that owner the first time an account signs
-// in, and REFUSE to back up when a different account is signed in — otherwise a
-// shared machine could upload account A's leftover local files into account B's
+// single-user per machine) — readOwner/claimOwnershipIfUnset live in
+// device-owner.ts (shared with auth.ts's sign-in guard, BUG-022). Refuse to
+// back up when a different account is signed in — otherwise a shared
+// machine could upload account A's leftover local files into account B's
 // cloud (RLS can't catch it: the rows would be legitimately stamped as B).
-// Clearing/reassigning this belongs to a later "reset this device" feature.
-async function readOwner(): Promise<string | null> {
-  try {
-    const v = JSON.parse(await fs.readFile(ownerPath(), 'utf8')) as { userId?: unknown }
-    return typeof v.userId === 'string' && v.userId ? v.userId : null
-  } catch {
-    return null
-  }
-}
-/**
- * Pin this device's data to `userId` if no owner is set yet. Uses an EXCLUSIVE
- * create ('wx'), so if two accounts ever race to claim a fresh machine the FIRST
- * writer wins atomically and later claims get EEXIST and leave the winner intact
- * — the "pin to first account" invariant is race-proof, never a lost/torn claim.
- */
-async function claimOwnershipIfUnset(userId: string): Promise<void> {
-  try {
-    await fs.writeFile(ownerPath(), JSON.stringify({ userId }), { encoding: 'utf8', flag: 'wx' })
-  } catch {
-    /* already owned (EEXIST) or unwritable — leave any existing owner untouched */
-  }
-}
 
 export interface BackupState {
   lastPushAt?: string

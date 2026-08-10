@@ -70,6 +70,16 @@ async function clearKey(name: AiKeyName): Promise<void> {
   await fs.unlink(keyPath(name)).catch(() => {})
 }
 
+/** BUG-022 — wipe every stored key (not just the encrypted file: also the
+ *  in-memory env var, so a key cleared mid-session stops working immediately
+ *  rather than surviving until restart like a normal Settings edit does). */
+export async function clearAllAiKeys(): Promise<void> {
+  for (const name of KEY_NAMES) {
+    await clearKey(name)
+    delete process.env[name]
+  }
+}
+
 /** Populate process.env from any stored keys — call once at startup, before
  *  any AI-consuming module runs. A .env value (dev) always wins. */
 export async function loadStoredAiKeysIntoEnv(): Promise<void> {

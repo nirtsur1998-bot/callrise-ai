@@ -248,7 +248,8 @@ async function getStatus(): Promise<{ connected: boolean; configured: boolean; m
   return { connected, configured, mode }
 }
 
-async function disconnect(): Promise<{ ok: boolean }> {
+/** Exported as disconnectGoogle for BUG-022's device-wipe flow. */
+export async function disconnect(): Promise<{ ok: boolean }> {
   const token = await loadRefreshToken()
   const c = creds()
   if (token && c) {

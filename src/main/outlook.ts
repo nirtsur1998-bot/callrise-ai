@@ -296,7 +296,8 @@ async function getStatus(): Promise<{ connected: boolean; configured: boolean; m
   return { connected, configured, mode }
 }
 
-async function disconnect(): Promise<{ ok: boolean }> {
+/** Exported as disconnectOutlook for BUG-022's device-wipe flow. */
+export async function disconnect(): Promise<{ ok: boolean }> {
   await clearCache(pcaClient())
   await clearMode()
   await clearOutlookCache()
