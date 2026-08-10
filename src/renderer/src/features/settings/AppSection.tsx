@@ -67,6 +67,21 @@ export function AppSection(): React.JSX.Element {
           }
         />
       </Card>
+      <Card className="mb-5">
+        <SettingRow
+          title="Error log"
+          description="If something goes wrong, this file has the details — open it and attach it when reporting a problem."
+          control={
+            <button
+              type="button"
+              onClick={() => void window.api.app.openLogsFolder()}
+              className="rounded-lg border border-line px-3.5 py-2 text-sm font-medium text-muted transition hover:bg-elevated hover:text-ink"
+            >
+              Open log file
+            </button>
+          }
+        />
+      </Card>
       <SoftwareUpdateSection />
     </>
   )

@@ -1458,6 +1458,12 @@ export interface AppControlApi {
   isPackaged: () => Promise<boolean>
   /** The version string from package.json, for the Settings "Software update" section. */
   getVersion: () => Promise<string>
+  /** Full path to the on-disk error log, for display/copy in Settings. */
+  getLogsPath: () => Promise<string>
+  /** Reveals the log file in the OS file explorer (creating it first if nothing has logged yet). */
+  openLogsFolder: () => Promise<void>
+  /** Forwards a renderer-side crash/error into the same persistent log file as the main process. */
+  logRendererError: (scope: string, message: string) => Promise<void>
 }
 
 /**
