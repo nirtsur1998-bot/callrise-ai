@@ -12,7 +12,11 @@ export interface UseTasks {
   loading: boolean
   refresh: () => Promise<void>
   create: (input: TaskCreateInput) => Promise<void>
-  update: (id: string, patch: TaskUpdateInput) => Promise<void>
+  /** Returns false (and shows an error toast) when the write actually failed
+   *  on disk — e.g. a file briefly locked by antivirus/cloud sync — so a
+   *  caller like the edit dialog can stay open instead of closing as if the
+   *  edit saved (BUG-024). */
+  update: (id: string, patch: TaskUpdateInput) => Promise<boolean>
   /** Optimistically hides the task and schedules the real delete ~6s later,
    *  giving `undoDelete` a window to cancel it. */
   remove: (id: string) => void
@@ -93,10 +97,18 @@ export function useTasks(): UseTasks {
 
   const update = useCallback(
     async (id: string, patch: TaskUpdateInput) => {
-      await window.api.tasks.update(id, patch)
+      let ok = true
+      try {
+        const result = await window.api.tasks.update(id, patch)
+        ok = result !== null
+      } catch {
+        ok = false
+      }
+      if (!ok) toast.error('Could not save that change. Please try again.')
       await refresh()
+      return ok
     },
-    [refresh]
+    [refresh, toast]
   )
 
   const remove = useCallback(
@@ -106,7 +118,8 @@ export function useTasks(): UseTasks {
         timeoutsRef.current.delete(id)
         void (async () => {
           try {
-            await window.api.tasks.delete(id)
+            const result = await window.api.tasks.delete(id)
+            if (!result.ok) throw new Error('delete returned ok:false')
           } catch {
             toast.error('Could not delete the task. Please try again.')
           }
