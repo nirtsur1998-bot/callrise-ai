@@ -44,7 +44,7 @@ Full detail on each of these is in the Bug Tracker's own entries (BUG-001 throug
 
 ## 3. New bugs found in the full sweep audit — fixed now
 
-I ran six parallel audits (live transcription/audio, diarization/coaching, tasks/calendar sync, backup/auth, consent-flow verification, virtual mic/call detection) across every core flow, plus your own report about reminders not working. Two were **Critical** (real, deterministic bugs affecting core features), seven were **High**. All nine are fixed, tested, and committed — one commit each on the branch.
+I ran six parallel audits (live transcription/audio, diarization/coaching, tasks/calendar sync, backup/auth, consent-flow verification, virtual mic/call detection) across every core flow, plus your own reports about reminders and "Ask the coach" not working. Two were **Critical** (real, deterministic bugs affecting core features), eight were **High** (including the "Ask the coach" provider bug you found while I was writing up this report). All ten are fixed, tested, and committed — one commit each on the branch.
 
 ### Critical
 
@@ -82,6 +82,14 @@ Same bug class as the fix from last week (BUG-014), in a second code path that f
 **BUG-029 — Quitting at the wrong moment could corrupt your saved login.**
 Your login session was saved to disk asynchronously with no way to guarantee it finished before the app closes. Supabase rotates your login token roughly every hour; quitting in that narrow window could leave a broken, half-updated session file, forcing a surprise re-login next time. Fixed by writing it synchronously (it's a tiny file, not a performance concern).
 
+**BUG-039 — "Ask the coach" (and a few other features) only ever worked with Claude or ChatGPT, even though you have many more providers available.**
+*Found by you, using the app.* The Live Calls "Ask the coach" box, custom trackers, objection mining, call titles, CRM notes, and deal-risk scoring all pick their AI model through one setting — "Default text AI provider" — and that setting's picker in Settings was hardcoded to show only Claude and ChatGPT, even though the app has supported 8 providers (Groq, OpenRouter, Gemini, NVIDIA, Cerebras, Mistral too) since M20. If you configured a key for any of those other 6, this specific setting could never be pointed at it, so these features kept saying "add your Claude or ChatGPT key" — misleading, since you had a perfectly good key already. (Live coaching *cues* were unaffected — they already fall back across whichever providers you've configured.)
+*Fix, per your request for a smooth default with room to go advanced:*
+- The picker now shows all 8 providers, so you can explicitly choose any of them.
+- Saving **any** provider's key now automatically sets it as the default the moment it has no working provider selected yet — add a key, and everything just works, no extra Settings step. It never overrides a provider that's already working, so nothing changes for an install that already has Claude or OpenAI configured and you're just adding a backup key.
+- The stale "Claude or ChatGPT" wording is gone from both places it appeared.
+*Status:* FIXED-VERIFIED (5 new tests, confirmed to fail without the fix).
+
 ---
 
 ## 4. New findings — Medium/Low, listed for a future pass (not fixed now)
@@ -118,9 +126,9 @@ Per your instructions, these are logged but not touched this pass.
 ## 7. Everything verified before merge
 
 - `npm run typecheck` (node + web): clean, zero errors, on every commit.
-- `npm test` (vitest): **74 test files, 879 tests passing, 9 pre-existing skips, 0 failures** — includes 66 regression tests added or updated in this pass.
+- `npm test` (vitest): **75 test files, 884 tests passing, 9 pre-existing skips, 0 failures** — includes 71 regression tests added or updated in this pass.
 - `npx eslint` on every changed file: 0 errors (only pre-existing Windows line-ending warnings, unrelated to this work — see note below).
-- For the 6 most safety-critical fixes (BUG-021, 022, 023, 024, 028), I specifically verified the new test **fails without the fix and passes with it**, by temporarily reverting the code and re-running — not just that the test passes now.
+- For the 7 most safety-critical fixes (BUG-021, 022, 023, 024, 028, and 039), I specifically verified the new test **fails without the fix and passes with it**, by temporarily reverting the code and re-running — not just that the test passes now.
 
 **A small note on those line-ending warnings:** `git config core.autocrlf` is set to `true` on this Windows checkout, which converts every file to Windows line endings (CRLF) on disk — including files that were already there before this session. ESLint's formatting rule (which expects Unix line endings, LF) flags all of them. This is a pre-existing environment quirk, not something introduced by this work, and I deliberately did not do a repo-wide reformat to "fix" it, since that would be exactly the kind of unrelated mass-formatting change you asked me to avoid.
 
@@ -150,6 +158,7 @@ Everything below is a *manual* check on top of the automated tests — things on
 10. **BUG-026/027 — call auto-detection respects your settings.** In Settings, set one specific app (e.g. WhatsApp) to "Never" under per-app detection overrides, and make sure "Auto-transcribe calls" is on. Bring that app to the foreground (no real call needed). Confirm CallRise AI does **NOT** jump into a recording session for it. Then try an app you left on default settings — confirm it still offers the normal "call detected" prompt.
 11. **Existing regression: virtual mic / noise cancellation.** Since this pass touched several core files, do one full pass with your usual virtual-mic setup: confirm the denoised mic still works in a real call, with no new latency or dropouts versus what you're used to.
 12. **Existing regression: consent flow.** Decline consent on a call — confirm the "other party" indicator never turns on. Grant it — confirm it does. Revoke it mid-call — confirm the indicator drops back to "mic only" within a second or two, not just after the call ends.
+13. **BUG-039 — "Ask the coach" works with any provider.** Remove all AI keys in Settings, confirm "Default text AI provider" shows all 8 options now (not just Claude/ChatGPT). Save a key for a provider that isn't Claude or OpenAI (e.g. Groq or Gemini) — confirm "Default text AI provider" automatically switches to it without you touching that setting. Start a live call and use "Ask the coach" — confirm you get a real reply, not the old "add your Claude or ChatGPT key" message.
 
 ### Mac steps
 
@@ -176,7 +185,7 @@ git pull origin main
 git merge --no-ff bugfix/once-and-for-all
 ```
 
-If that comes back clean (it should — this branch is 116 commits ahead of `main` with no divergent changes: 106 from the already-completed M21/M22 work plus 10 new commits from this session), then:
+If that comes back clean (it should — this branch is 118 commits ahead of `main` with no divergent changes: 106 from the already-completed M21/M22 work plus 12 new commits from this session), then:
 
 ```bash
 git push origin main
