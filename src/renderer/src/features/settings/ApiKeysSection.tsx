@@ -363,17 +363,33 @@ export function KeyCard({
   )
 }
 
-const PROVIDER_OPTIONS = [
-  { id: 'anthropic' as const, label: 'Claude' },
-  { id: 'openai' as const, label: 'ChatGPT' }
-]
+// Short labels for the compact selector — KEYS' own `title` (e.g. "Gemini
+// (Google AI Studio)") is right for the key-entry cards below but too long
+// for a segmented control with 8 options.
+const PROVIDER_SHORT_LABEL: Record<AiProviderId, string> = {
+  anthropic: 'Claude',
+  openai: 'ChatGPT',
+  groq: 'Groq',
+  openrouter: 'OpenRouter',
+  google: 'Gemini',
+  nvidia: 'NVIDIA',
+  cerebras: 'Cerebras',
+  mistral: 'Mistral'
+}
 
-/** M16's original default: which of the two ORIGINAL providers backs any job
- *  that has no explicit model assigned on the new Model Assignment page.
- *  Left exactly as-is (Claude/ChatGPT only) — the 6 free-tier providers
- *  below participate only through per-job model assignment, never through
- *  this global switch, so an existing install that never opens the new page
- *  sees zero behavior change. */
+/** Bug found by the founder: "Ask the coach" and a few other features
+ *  (custom trackers, objection mining, call titles, CRM notes, deal risk)
+ *  resolve their model through THIS single setting, not the Model
+ *  Assignment page's per-purpose fallback chains — so with the selector
+ *  hardcoded to only Claude/ChatGPT, a user who configured a different
+ *  provider (Groq, Gemini, ...) saw those features fail with "add your
+ *  Claude or ChatGPT key" even though a perfectly good key was already
+ *  saved. All 8 providers are offered here now, matching every key card
+ *  below and PROVIDER_REGISTRY. */
+const PROVIDER_OPTIONS = KEYS.filter((k): k is KeyCardConfig & { providerId: AiProviderId } =>
+  Boolean(k.providerId)
+).map((k) => ({ id: k.providerId, label: PROVIDER_SHORT_LABEL[k.providerId] }))
+
 function ProviderSelector(): React.JSX.Element {
   const { settings, update } = useAppSettings()
 
@@ -383,13 +399,16 @@ function ProviderSelector(): React.JSX.Element {
       <p className="mb-3 text-[13px] text-muted">
         Backs any job with no specific model assigned on the{' '}
         <span className="font-medium text-ink">Model Assignment</span> page — coaching feedback,
-        summaries, and live cues, unless you&apos;ve assigned them something else. Switching takes
-        effect immediately — make sure the provider&apos;s key below is configured first.
+        summaries, live cues, and &ldquo;Ask the coach&rdquo; — unless you&apos;ve assigned them something
+        else. Switching takes effect immediately — make sure the provider&apos;s key below is
+        configured first. Set automatically the first time you save a key below; change it here
+        any time.
       </p>
       <SegmentedControl
         options={PROVIDER_OPTIONS}
         value={settings.aiProvider}
         onChange={(id) => void update({ aiProvider: id })}
+        className="flex-wrap"
       />
     </Card>
   )
@@ -405,12 +424,25 @@ function ProviderSelector(): React.JSX.Element {
  *  picking from a 10-model catalog is a bigger UI than fits here. */
 export function ApiKeysSection(): React.JSX.Element {
   const [status, setStatus] = useState<StatusMap | null>(null)
+  // Bumped on every key save/clear so ProviderSelector remounts and re-reads
+  // settings from disk — a save can auto-select a provider on the main-process
+  // side (see ai-keys.ts's maybeAutoSelectProvider), which ProviderSelector's
+  // own useAppSettings() instance has no other way to learn about.
+  const [refreshNonce, setRefreshNonce] = useState(0)
 
+  useEffect(() => {
+    void window.api.aiKeys.getStatus().then(setStatus)
+  }, [])
+
+  // Only ever called from a KeyCard's onChanged (a save/clear the user just
+  // did), never from the mount effect above — bumping refreshNonce
+  // synchronously here is fine; doing it directly inside the mount effect
+  // would trip the set-state-in-effect rule (this drives the state, not
+  // just reacting to a mount-time fetch resolving).
   const refresh = (): void => {
     void window.api.aiKeys.getStatus().then(setStatus)
+    setRefreshNonce((n) => n + 1)
   }
-
-  useEffect(refresh, [])
 
   return (
     <>
@@ -420,7 +452,7 @@ export function ApiKeysSection(): React.JSX.Element {
         pay-as-you-go tier — sign up, copy the key, and paste it below. Assign specific models to
         specific jobs on the <span className="font-medium text-ink">Model Assignment</span> page.
       </p>
-      <ProviderSelector />
+      <ProviderSelector key={refreshNonce} />
       {KEYS.map((k) => (
         <KeyCard key={k.name} config={k} status={status?.[k.name]} onChanged={refresh} />
       ))}

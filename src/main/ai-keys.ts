@@ -12,7 +12,8 @@
 import { app, ipcMain, safeStorage } from 'electron'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
-import { buildProviderForValidation, PROVIDER_REGISTRY, type AIProviderId } from './ai'
+import { buildProviderForValidation, getAIProvider, PROVIDER_REGISTRY, type AIProviderId } from './ai'
+import { loadAppSettings, saveAppSettings } from './app-settings'
 
 // M20 added the six new text-AI provider keys (GROQ_API_KEY through
 // MISTRAL_API_KEY) alongside M16's original ANTHROPIC_API_KEY/OPENAI_API_KEY
@@ -68,6 +69,38 @@ async function loadKey(name: AiKeyName): Promise<string | null> {
 
 async function clearKey(name: AiKeyName): Promise<void> {
   await fs.unlink(keyPath(name)).catch(() => {})
+}
+
+function providerIdForKeyName(name: AiKeyName): AIProviderId | null {
+  for (const id of Object.keys(PROVIDER_REGISTRY) as AIProviderId[]) {
+    if (PROVIDER_REGISTRY[id].keyEnvName === name) return id
+  }
+  return null // DEEPGRAM_API_KEY — not a text-AI provider, nothing to select
+}
+
+/**
+ * BUG found by the founder using the app: "Ask the coach" and a few other
+ * features read the single "Default text AI provider" setting directly
+ * (unlike live coaching cues, which fall back across every configured
+ * provider) — with the picker previously hardcoded to Claude/ChatGPT only,
+ * anyone who configured a different provider saw those features fail with
+ * "add your Claude or ChatGPT key" despite having a perfectly good key.
+ *
+ * This closes the gap for the smooth/default case: if the currently
+ * selected provider has no working key, saving a new text-AI key switches
+ * the default to it automatically, so those features work immediately with
+ * no manual Settings trip. Never overrides an ALREADY-working selection —
+ * adding a second/backup key to an install that already has Claude or
+ * OpenAI configured changes nothing here. Settings' provider picker (now
+ * showing all 8) and the Model Assignment page remain there for anyone who
+ * wants to choose explicitly instead.
+ */
+function maybeAutoSelectProvider(name: AiKeyName): void {
+  const providerId = providerIdForKeyName(name)
+  if (!providerId) return
+  const current = loadAppSettings().aiProvider
+  if (getAIProvider(current)) return
+  saveAppSettings({ aiProvider: providerId })
 }
 
 /** BUG-022 — wipe every stored key (not just the encrypted file: also the
@@ -135,6 +168,7 @@ export function registerAiKeys(): void {
     }
     await saveKey(name as AiKeyName, value.trim())
     process.env[name as AiKeyName] = value.trim()
+    maybeAutoSelectProvider(name as AiKeyName)
     return { ok: true as const }
   })
 
