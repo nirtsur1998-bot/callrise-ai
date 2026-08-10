@@ -31,6 +31,8 @@
 import { app, ipcMain, BrowserWindow, systemPreferences } from 'electron'
 import activeWin from 'active-win'
 import { isKnownCallingApp } from './known-calling-apps'
+import { isAmbientDetectionEnabled, loadAppSettings } from './app-settings'
+import { normalizeAppIdentity } from './detection/appRegistry'
 
 function hasAccessibilityTrust(): boolean {
   // Only macOS gates this; other platforms have no equivalent TCC prompt.
@@ -88,11 +90,37 @@ function broadcastCallDetected(appName: string): void {
   }
 }
 
+/** True unless the master detection switch is off, or this app's own
+ *  per-app override is 'never' — this heuristic is a SEPARATE code path
+ *  from the FSM-based detector (detection-service.ts), so neither gate it
+ *  respects is automatic here (BUG-027). Consulted fresh on every sample
+ *  rather than cached, so a setting change takes effect on the next check. */
+function allowedByDetectionSettings(appName: string): boolean {
+  if (!isAmbientDetectionEnabled()) return false
+  const { appId } = normalizeAppIdentity({ processName: appName })
+  const settings = loadAppSettings().detection.capturePolicy
+  return (settings.appOverrides[appId] ?? settings.autoCapturePolicy) !== 'never'
+}
+
+// Bumped by stopSampling() so a sampleExternalApp() call already in flight
+// when the rep refocuses CallRise can tell it's stale once its awaited
+// getActiveAppName() finally resolves (BUG-026). Without this, a slow
+// lookup that started just before refocus could still fire a "call
+// detected" broadcast — or overwrite lastExternalApp — after sampling had
+// already stopped and the rep was back in the app.
+let samplingGeneration = 0
+
 async function sampleExternalApp(): Promise<void> {
+  const generation = samplingGeneration
   const name = await getActiveAppName()
+  if (generation !== samplingGeneration) return // stopped (or restarted) while this was in flight
   if (!name || isSelf(name)) return
   lastExternalApp = name
-  if (isKnownCallingApp(name) && name !== lastNotifiedApp) {
+  if (
+    isKnownCallingApp(name) &&
+    name !== lastNotifiedApp &&
+    allowedByDetectionSettings(name)
+  ) {
     lastNotifiedApp = name
     broadcastCallDetected(name)
   }
@@ -105,6 +133,7 @@ function startSampling(): void {
 }
 
 function stopSampling(): void {
+  samplingGeneration++
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
