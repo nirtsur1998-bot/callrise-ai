@@ -221,6 +221,7 @@ const api = {
     resendCode: (email: string) => ipcRenderer.invoke('auth:resendCode', { email }),
     updateName: (name: string) => ipcRenderer.invoke('auth:updateName', { name }),
     signOut: () => ipcRenderer.invoke('auth:signOut'),
+    wipeDeviceData: () => ipcRenderer.invoke('auth:wipeDeviceData'),
     onChange: (cb: (user: unknown) => void) => subscribe('auth:changed', cb)
   },
   loopback: {
@@ -368,7 +369,11 @@ const api = {
     getLastExternalApp: () => ipcRenderer.invoke('app:getLastExternalApp'),
     onCallDetected: (cb: (appName: string) => void) => subscribe('app:callDetected', cb),
     isPackaged: () => ipcRenderer.invoke('app:isPackaged'),
-    getVersion: () => ipcRenderer.invoke('app:getVersion')
+    getVersion: () => ipcRenderer.invoke('app:getVersion'),
+    getLogsPath: () => ipcRenderer.invoke('app:getLogsPath'),
+    openLogsFolder: () => ipcRenderer.invoke('app:openLogsFolder'),
+    logRendererError: (scope: string, message: string) =>
+      ipcRenderer.invoke('app:logRendererError', scope, message)
   },
   detection: {
     getState: () => ipcRenderer.invoke('detection:getState') as Promise<DetectorState | undefined>,

@@ -87,7 +87,7 @@ function CustomTrackersCard(): React.JSX.Element {
       if (!res.ok) {
         setError(
           res.error === 'no-key'
-            ? 'Add your Claude or ChatGPT API key in Settings → API keys first.'
+            ? 'Add an AI provider API key in Settings → API keys first.'
             : (res.message ?? 'Could not create that tracker. Please try again.')
         )
         return

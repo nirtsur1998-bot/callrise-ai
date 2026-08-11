@@ -22,10 +22,24 @@ describe('isRepSegment', () => {
     expect(isRepSegment(seg({ speaker: 3, role: 'rep' }), 0)).toBe(true)
   })
 
-  it('treats an unattributed turn as not-the-rep', () => {
-    // 'unknown' must never be counted as the rep — that would silently inflate
-    // talk ratio and let unattributed words verify as rep evidence.
-    expect(isRepSegment(seg({ speaker: 0, role: 'unknown' }), 0)).toBe(false)
+  it('falls back to the number for a merely-unidentified (not unlabelled) turn — BUG-021', () => {
+    // 'unknown' means "not identified live" (e.g. no AI key was configured
+    // during the call), not "confirmed not the rep". assembleReport's whole
+    // reason for computing a post-call modelRepSpeaker guess is to attribute
+    // exactly this case — before this fix, isRepSegment discarded that guess
+    // unconditionally, so a call with no live identification coached to a
+    // silently empty report (0% talk time, no evidence) even with a correct
+    // post-call guess in hand.
+    expect(isRepSegment(seg({ speaker: 0, role: 'unknown' }), 0)).toBe(true)
+    expect(isRepSegment(seg({ speaker: 1, role: 'unknown' }), 0)).toBe(false)
+    expect(isRepSegment(seg({ speaker: 0, role: 'unknown' }), null)).toBe(false)
+  })
+
+  it('never counts an unlabelled turn as the rep, even if its fabricated number matches', () => {
+    // unlabelled's speaker number is a fabricated 0 (Deepgram gave no label at
+    // all), not a real diarization answer — unlike a merely-unidentified turn,
+    // this one can never be resolved by number.
+    expect(isRepSegment(seg({ speaker: 0, role: 'unknown', unlabelled: true }), 0)).toBe(false)
   })
 
   it('falls back to the number for pre-M21 segments with no role', () => {

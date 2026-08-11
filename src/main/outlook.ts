@@ -21,6 +21,9 @@ import {
   classifyPushError,
   linkKey,
   GraphHttpError,
+  toOutlookClientToken,
+  clientTokenProperty,
+  clientTokenFilter,
   type PushResult,
   type DeleteResult
 } from './outlook-sync'
@@ -293,7 +296,8 @@ async function getStatus(): Promise<{ connected: boolean; configured: boolean; m
   return { connected, configured, mode }
 }
 
-async function disconnect(): Promise<{ ok: boolean }> {
+/** Exported as disconnectOutlook for BUG-022's device-wipe flow. */
+export async function disconnect(): Promise<{ ok: boolean }> {
   await clearCache(pcaClient())
   await clearMode()
   await clearOutlookCache()
@@ -583,10 +587,13 @@ async function primaryCalendarId(token: string): Promise<string | null> {
 
 /**
  * Create the event in Outlook. Unlike Google, Graph does NOT accept a
- * client-supplied event id, so a crash between this POST succeeding and the
- * result being recorded locally can (rarely) create a duplicate on retry —
- * an accepted, documented tradeoff rather than the extra Graph round-trip a
- * true idempotency check (matching on a custom extended property) would add.
+ * client-supplied event id, so a retry (a crash, or any 429/5xx/offline
+ * failure the caller retries via reconcile()) could create a duplicate.
+ * Idempotent via a deterministic extended-property token (BUG-025): every
+ * created event is stamped with `clientTokenProperty`, and every insert
+ * first searches for a prior event carrying that same token — if a previous
+ * attempt actually succeeded server-side (the local write just never heard
+ * back), that event is adopted instead of creating a second one.
  */
 export async function pushInsertEvent(ev: CalendarEvent, calId = 'primary'): Promise<PushResult> {
   if (!(await isOutlookSyncEnabled())) return { ok: false, error: 'not-enabled', retryable: false }
@@ -595,17 +602,44 @@ export async function pushInsertEvent(ev: CalendarEvent, calId = 'primary'): Pro
   const concreteId = calId === 'primary' ? await primaryCalendarId(token) : calId
   if (!concreteId) return { ok: false, error: 'offline', retryable: true }
   const provider = `outlook:${concreteId}`
+  const clientToken = toOutlookClientToken(ev.id)
+  try {
+    const existing = await findByClientToken(token, calId, clientToken)
+    if (existing) return { ok: true, externalId: existing.id, provider, remoteUpdatedAt: existing.lastModifiedDateTime }
+  } catch {
+    // A failed idempotency check must never block a genuinely new event from
+    // being created — fall through and attempt the insert as normal.
+  }
   try {
     const res = await graphFetch<{ id?: string; lastModifiedDateTime?: string }>(
       token,
       eventsUrl(calId),
-      { method: 'POST', body: JSON.stringify(toGraphBody(ev)) }
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          ...toGraphBody(ev),
+          singleValueExtendedProperties: [clientTokenProperty(clientToken)]
+        })
+      }
     )
     if (!res.id) return { ok: false, error: 'no-id', retryable: true }
     return { ok: true, externalId: res.id, provider, remoteUpdatedAt: res.lastModifiedDateTime }
   } catch (e) {
     return classifyPushError(e)
   }
+}
+
+/** Find a previously-created event by its idempotency token, if any. */
+async function findByClientToken(
+  token: string,
+  calId: string,
+  clientToken: string
+): Promise<{ id: string; lastModifiedDateTime?: string } | null> {
+  const res = await graphFetch<{ value?: { id: string; lastModifiedDateTime?: string }[] }>(
+    token,
+    `${eventsUrl(calId)}?$filter=${encodeURIComponent(clientTokenFilter(clientToken))}`
+  )
+  return res.value?.[0] ?? null
 }
 
 /** Update the linked Outlook event with PATCH. An event that was never linked

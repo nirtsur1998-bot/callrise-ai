@@ -1033,6 +1033,10 @@ export type AuthErrorCode =
   | 'network'
   | 'server'
   | 'failed'
+  /** This device's local data (calls, tasks, connected calendars, AI keys)
+   *  already belongs to a different account — sign-in was refused and
+   *  reversed. Offer `wipeDeviceData()` before retrying. */
+  | 'device-owned-by-other-account'
 
 type AuthFail = { ok: false; error: AuthErrorCode; message: string }
 
@@ -1049,6 +1053,12 @@ export interface AuthApi {
   resendCode: (email: string) => Promise<SimpleAuthResult>
   updateName: (name: string) => Promise<SimpleAuthResult>
   signOut: () => Promise<SimpleAuthResult>
+  /** Irreversibly wipes every local store (calls/tasks/contacts/deals/
+   *  knowledge/events) plus connected-service secrets (Google/Outlook OAuth,
+   *  AI provider keys), so a different account can use this device after a
+   *  'device-owned-by-other-account' refusal. Never call without an explicit
+   *  user confirmation — there is no undo. */
+  wipeDeviceData: () => Promise<{ ok: true }>
   onChange: (cb: (user: AuthUser | null) => void) => () => void
 }
 
@@ -1556,6 +1566,12 @@ export interface AppControlApi {
   isPackaged: () => Promise<boolean>
   /** The version string from package.json, for the Settings "Software update" section. */
   getVersion: () => Promise<string>
+  /** Full path to the on-disk error log, for display/copy in Settings. */
+  getLogsPath: () => Promise<string>
+  /** Reveals the log file in the OS file explorer (creating it first if nothing has logged yet). */
+  openLogsFolder: () => Promise<void>
+  /** Forwards a renderer-side crash/error into the same persistent log file as the main process. */
+  logRendererError: (scope: string, message: string) => Promise<void>
 }
 
 /**

@@ -13,10 +13,17 @@ import type { CallSegment } from './calls-fs'
  * number is a different person. Using the number alone let a buyer's words be
  * counted as the rep's talk time and quoted back as evidence for coaching them.
  *
- * Falls back to the number for calls saved before roles existed.
+ * 'unknown' is NOT treated as a definitive answer here (BUG-021): it means
+ * "not identified live" — usually because no AI key was configured during
+ * the call — not "confirmed not the rep". Falls back to the number (the
+ * caller may pass a fresh post-call guess) unless the turn is `unlabelled`,
+ * whose number is fabricated and can never be resolved this way. Falls back
+ * to the number outright for calls saved before roles existed.
  */
 export function isRepSegment(s: CallSegment, repSpeaker: number | null): boolean {
-  if (s.role) return s.role === 'rep'
+  if (s.role === 'rep') return true
+  if (s.role === 'other') return false
+  if (s.unlabelled) return false
   return repSpeaker !== null && s.speaker === repSpeaker
 }
 

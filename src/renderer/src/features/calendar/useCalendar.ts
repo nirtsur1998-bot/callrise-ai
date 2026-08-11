@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Task } from '@renderer/features/tasks/types'
 import type { CallSummary } from '@renderer/features/calls/types'
 import type { CalendarEvent } from './types'
+import { useToast } from '@renderer/features/notifications/useToast'
 
 export type EventCreateInput = Parameters<typeof window.api.events.create>[0]
 export type EventUpdateInput = Parameters<typeof window.api.events.update>[1]
@@ -26,8 +27,11 @@ export interface UseCalendar {
   outlookWritable: boolean
   loading: boolean
   createEvent: (input: EventCreateInput) => Promise<void>
-  updateEvent: (id: string, patch: EventUpdateInput) => Promise<void>
-  deleteEvent: (id: string) => Promise<void>
+  /** Returns false (and shows an error toast) when the write actually failed
+   *  on disk, so a caller like the edit dialog can stay open instead of
+   *  closing as if the edit saved (BUG-024). */
+  updateEvent: (id: string, patch: EventUpdateInput) => Promise<boolean>
+  deleteEvent: (id: string) => Promise<boolean>
   /** Edit a Google/Outlook event by adopting it into the local (editable) store. */
   adoptEvent: (event: CalendarEvent, patch: EventUpdateInput) => Promise<void>
   /** Delete a Google/Outlook-originated event from the app and from the provider. */
@@ -52,6 +56,7 @@ export function useCalendar(): UseCalendar {
   const [outlookWritable, setOutlookWritable] = useState(false)
   const [loading, setLoading] = useState(true)
   const mountedRef = useRef(true)
+  const toast = useToast()
 
   useEffect(() => {
     mountedRef.current = true
@@ -161,18 +166,34 @@ export function useCalendar(): UseCalendar {
 
   const updateEvent = useCallback(
     async (id: string, patch: EventUpdateInput) => {
-      await window.api.events.update(id, patch)
+      let ok = true
+      try {
+        const result = await window.api.events.update(id, patch)
+        ok = result !== null
+      } catch {
+        ok = false
+      }
+      if (!ok) toast.error('Could not save that change. Please try again.')
       await refresh()
+      return ok
     },
-    [refresh]
+    [refresh, toast]
   )
 
   const deleteEvent = useCallback(
     async (id: string) => {
-      await window.api.events.delete(id)
+      let ok = true
+      try {
+        const result = await window.api.events.delete(id)
+        ok = result.ok
+      } catch {
+        ok = false
+      }
+      if (!ok) toast.error('Could not delete the event. Please try again.')
       await refresh()
+      return ok
     },
-    [refresh]
+    [refresh, toast]
   )
 
   // Editing a Google event adopts it: create a linked local event carrying the

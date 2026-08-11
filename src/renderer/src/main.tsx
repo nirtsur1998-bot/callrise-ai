@@ -3,6 +3,18 @@ import './index.css'
 import { lazy, StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 
+// Forward otherwise-invisible renderer crashes into the same persistent log
+// file the main process writes to, so a report from the field has one file
+// to attach instead of "it just went blank, no idea why."
+window.addEventListener('error', (event) => {
+  void window.api.app.logRendererError('window.onerror', event.error?.stack ?? event.message)
+})
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason
+  const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
+  void window.api.app.logRendererError('unhandledrejection', detail)
+})
+
 // The ambient-detection overlay (banner/toast/switch-prompt) is a second
 // BrowserWindow loading this SAME bundle with a different URL hash, rather
 // than a whole separate Vite entry point (see main/detection-overlay.ts).

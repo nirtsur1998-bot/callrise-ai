@@ -94,8 +94,9 @@ export function TasksView(): React.JSX.Element {
 
   const visible = filter === 'open' ? open : filter === 'done' ? done : [...open, ...done]
 
-  const toggle = (task: Task): Promise<void> =>
-    update(task.id, { status: task.status === 'done' ? 'open' : 'done' })
+  const toggle = async (task: Task): Promise<void> => {
+    await update(task.id, { status: task.status === 'done' ? 'open' : 'done' })
+  }
 
   const filterOptions = FILTERS.map((f) => ({
     id: f.id,
@@ -193,8 +194,8 @@ export function TasksView(): React.JSX.Element {
           task={editing}
           onClose={() => setEditing(null)}
           onSubmit={async (values: TaskFormValues) => {
-            await update(editing.id, values)
-            setEditing(null)
+            const ok = await update(editing.id, values)
+            if (ok) setEditing(null)
           }}
         />
       )}

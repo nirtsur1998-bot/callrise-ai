@@ -96,6 +96,23 @@ describe('computeMetrics', () => {
     expect(metrics.turns).toBe(0)
     expect(metrics.singleSpeaker).toBe(true) // speakers.size (0) <= 1
   })
+
+  it('BUG-021: still attributes talk time when no rep was identified live (no AI key during the call)', () => {
+    // Every segment carries role:'unknown' — exactly what a call saved with
+    // no AI key configured looks like, since liveCue() never got to run.
+    // repSpeaker here stands in for coach.ts's post-call modelRepSpeaker
+    // fallback (assembleReport's `repSpeakerFromSegments(segments) ??
+    // modelRepSpeaker(raw)`). Before the fix this always came back empty.
+    const segments: CallSegment[] = [
+      { speaker: 0, text: 'Hi there thanks for joining today', role: 'unknown' }, // rep, 6 words
+      { speaker: 1, text: 'Sure no problem', role: 'unknown' }, // buyer, 3 words
+      { speaker: 0, text: 'Great so tell me about your current setup', role: 'unknown' } // rep, 8 words
+    ]
+    const metrics = computeMetrics(segments, 60_000, 0)
+    expect(metrics.repSpeaker).toBe(0)
+    expect(metrics.repWords).toBe(14)
+    expect(metrics.talkRatio).toBeCloseTo(14 / 17, 5)
+  })
 })
 
 describe('makeVerifier — evidence grounding', () => {

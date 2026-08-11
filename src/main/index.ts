@@ -31,6 +31,7 @@ import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { DEFAULT_CONFIG } from './default-config'
 import { clearActiveConsent } from './consent-gate'
+import { registerCrashLogging, registerLog } from './log'
 writeCrashLog('imports resolved', 'all top-level imports completed without throwing')
 
 // Renamed "Sales OS" -> "CallRise AI" (rebrand), but the on-disk data folder
@@ -39,6 +40,8 @@ writeCrashLog('imports resolved', 'all top-level imports completed without throw
 app.setName('CallRise AI')
 const userDataDir = join(app.getPath('appData'), 'sales-os')
 app.setPath('userData', userDataDir)
+
+registerCrashLogging()
 
 // Deep link (M19 Task 3B): callrise://meeting/<eventId> jumps straight to a
 // meeting's prep brief — e.g. tapped from a Telegram/email meeting_starting
@@ -362,6 +365,7 @@ app.whenReady().then(async () => {
   registerAppSettings()
   registerLaunchAtLogin()
   registerActiveApp()
+  registerLog()
   registerAlerts()
   registerPrepBrief()
   registerDetectionService()

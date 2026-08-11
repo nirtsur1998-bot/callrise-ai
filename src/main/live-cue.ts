@@ -136,7 +136,7 @@ export async function askCoach(input: unknown): Promise<AskCoachResult> {
   if (!provider) {
     return {
       ok: false,
-      message: 'Add your Claude or ChatGPT API key in Settings to use the coach.'
+      message: 'Add an AI provider API key in Settings to use the coach.'
     }
   }
   const body = (input ?? {}) as { transcript?: unknown; question?: unknown }
