@@ -7,6 +7,7 @@ import { OnboardingFlow, type OnboardingExit } from '@renderer/features/onboardi
 import { isOnboardingComplete } from '@renderer/features/onboarding/prefs'
 import { ToastProvider } from '@renderer/features/notifications/ToastProvider'
 import type { NavId } from '@renderer/features/navigation/nav-items'
+import { ErrorBoundary } from '@renderer/components/ErrorBoundary'
 import { MainApp } from './MainApp'
 
 /** A brief splash while we check whether someone is already signed in. */
@@ -48,7 +49,9 @@ function App(): React.JSX.Element {
       ) : !onboarded ? (
         <OnboardingFlow onComplete={handleOnboardingComplete} />
       ) : (
-        <MainApp user={user} initialNav={initialNav} />
+        <ErrorBoundary>
+          <MainApp user={user} initialNav={initialNav} />
+        </ErrorBoundary>
       )}
     </ToastProvider>
   )
