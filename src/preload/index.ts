@@ -91,8 +91,11 @@ const api = {
      *  rating (so it accumulates across calls); getFeedbackSummary is read
      *  once at the start of each call to seed that call's adaptive
      *  confidence thresholds. See main/deal-feedback-fs.ts. */
-    recordFeedback: (input: { type: 'risk' | 'opportunity' | 'tactical'; subtype: string; helpful: boolean }) =>
-      ipcRenderer.invoke('dealIntelligence:recordFeedback', input),
+    recordFeedback: (input: {
+      type: 'risk' | 'opportunity' | 'tactical'
+      subtype: string
+      helpful: boolean
+    }) => ipcRenderer.invoke('dealIntelligence:recordFeedback', input),
     getFeedbackSummary: () => ipcRenderer.invoke('dealIntelligence:getFeedbackSummary')
   },
   calls: {
@@ -327,7 +330,11 @@ const api = {
     // V1 chain-editing scope: picks one primary model, main derives the full
     // fallback chain from the bundled default ordering (see catalog-ipc.ts).
     assignPrimaryModel: (purpose: string, catalogId: string) =>
-      ipcRenderer.invoke('settings:assignPrimaryModel', purpose, catalogId)
+      ipcRenderer.invoke('settings:assignPrimaryModel', purpose, catalogId),
+    // Clears a job back to "Automatic" — main picks the best available model
+    // from whatever the user has keys for, same resolution completeWithFallback()
+    // already uses when nothing's explicitly assigned.
+    resetToAutomatic: (purpose: string) => ipcRenderer.invoke('settings:resetToAutomatic', purpose)
   },
   aiFallback: {
     recentEvents: () => ipcRenderer.invoke('aiFallback:recentEvents')

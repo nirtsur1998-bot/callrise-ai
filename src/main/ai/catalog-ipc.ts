@@ -49,4 +49,20 @@ export function registerModelCatalog(): void {
     const chain = [catalogId, ...rest]
     return saveAppSettings({ aiModelAssignments: { [p]: { chain } } })
   })
+
+  // The counterpart to assignPrimaryModel — clears a job back to an empty
+  // chain, which resolveChain() (complete-with-fallback.ts) already treats as
+  // "automatically pick the best available model": today's active provider if
+  // one's configured, else the bundled DEFAULT_CATALOG_CHAIN, skipping
+  // whatever the user has no key for. Exposed as its own explicit action
+  // (not "assign catalogId: null") so a manual pick and a deliberate
+  // "go back to automatic" read as two distinct, equally first-class choices
+  // in the picker, not one hidden behind the other.
+  ipcMain.handle('settings:resetToAutomatic', (_event, purpose: unknown) => {
+    if (typeof purpose !== 'string' || !ASSIGNABLE_PURPOSES.includes(purpose as AIPurpose)) {
+      return loadAppSettings()
+    }
+    const p = purpose as AIPurpose
+    return saveAppSettings({ aiModelAssignments: { [p]: { chain: [] } } })
+  })
 }

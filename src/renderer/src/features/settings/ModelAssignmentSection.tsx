@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronDown, ChevronUp, RefreshCw, Loader2 } from 'lucide-react'
+import { ChevronDown, ChevronUp, RefreshCw, Loader2, Sparkles } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { cn } from '@renderer/lib/cn'
 import { ModelLogo, type ModelBrand } from '@renderer/components/ModelLogo'
@@ -126,16 +126,53 @@ function CatalogRow({
   )
 }
 
+/** The "let the app pick" choice — same row shape/height as CatalogRow so it
+ *  reads as an equally first-class option, not a fallback bolted onto the
+ *  bottom. Placed first because it's the recommended default (see the
+ *  Model Assignment section's own intro copy). */
+function AutomaticRow({
+  selected,
+  onSelect
+}: {
+  selected?: boolean
+  onSelect?: () => void
+}): React.JSX.Element {
+  const Wrapper = onSelect ? 'button' : 'div'
+  return (
+    <Wrapper
+      type={onSelect ? 'button' : undefined}
+      onClick={onSelect}
+      className={cn(
+        'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px]',
+        onSelect && 'transition hover:bg-elevated',
+        selected && 'bg-accent-soft'
+      )}
+    >
+      <div className="grid h-[22px] w-[22px] shrink-0 place-items-center rounded-full bg-accent-soft">
+        <Sparkles className="h-3.5 w-3.5 text-accent" />
+      </div>
+      <span className="min-w-0 flex-1">
+        <span className="block font-medium text-ink">Automatic (recommended)</span>
+        <span className="block text-[11px] text-faint">
+          Picks the best available model from your configured keys — adapts as keys change.
+        </span>
+      </span>
+    </Wrapper>
+  )
+}
+
 function JobCard({
   job,
   catalog,
   primaryId,
-  onAssign
+  onAssign,
+  onReset
 }: {
   job: JobConfig
   catalog: AiResolvedCatalogEntry[]
   primaryId: string | null
   onAssign: (catalogId: string) => Promise<void>
+  onReset: () => Promise<void>
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [assigning, setAssigning] = useState<string | null>(null)
@@ -152,6 +189,17 @@ function JobCard({
     }
   }
 
+  const pickAutomatic = async (): Promise<void> => {
+    if (assigning) return
+    setAssigning('automatic')
+    try {
+      await onReset()
+      setOpen(false)
+    } finally {
+      setAssigning(null)
+    }
+  }
+
   return (
     <Card className="mb-4">
       <div className="mb-1 flex items-center justify-between gap-3">
@@ -161,24 +209,25 @@ function JobCard({
           onClick={() => setOpen((o) => !o)}
           className="flex items-center gap-1 text-[13px] font-medium text-accent hover:underline"
         >
-          {primary ? 'Change' : 'Assign a model'}
+          Change
           {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
         </button>
       </div>
       <p className="mb-2.5 text-[13px] text-muted">{job.blurb}</p>
 
       <div className="rounded-lg border border-line-soft">
-        {primary ? (
-          <CatalogRow entry={primary} />
-        ) : (
-          <p className="px-2.5 py-2.5 text-[13px] text-faint">
-            Using the default text AI provider (API keys page) — no specific model assigned yet.
-          </p>
-        )}
+        {primary ? <CatalogRow entry={primary} /> : <AutomaticRow selected />}
       </div>
 
       {open && (
         <div className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-line-soft p-1">
+          <div className="relative">
+            <AutomaticRow selected={primaryId === null} onSelect={() => void pickAutomatic()} />
+            {assigning === 'automatic' && (
+              <Loader2 className="absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin text-muted" />
+            )}
+          </div>
+          <div className="my-1 border-t border-line-soft" />
           {catalog.map((entry) => (
             <div key={entry.id} className="relative">
               <CatalogRow
@@ -267,6 +316,11 @@ export function ModelAssignmentSection(): React.JSX.Element {
     setAssignments(next.aiModelAssignments)
   }
 
+  const reset = async (purpose: AiPurpose): Promise<void> => {
+    const next = await window.api.aiCatalog.resetToAutomatic(purpose)
+    setAssignments(next.aiModelAssignments)
+  }
+
   if (!catalog) {
     return (
       <div className="flex items-center gap-2 text-[13px] text-muted">
@@ -279,9 +333,11 @@ export function ModelAssignmentSection(): React.JSX.Element {
     <>
       <div className="mb-4 flex items-center justify-between gap-3">
         <p className="text-[13px] text-muted">
-          Each job gets an ordered fallback chain automatically — picking a model here promotes it
-          to the front. Free tiers rate-limit and rosters change; a model with no key configured for
-          its provider is simply skipped at runtime.
+          Each job defaults to <span className="font-medium text-ink">Automatic</span> — the app
+          picks the best available model from your configured keys, and adapts if a key is added or
+          removed. Pick a specific model instead if you want to lock one in; picking one promotes it
+          to the front of that job&rsquo;s fallback chain. Free tiers rate-limit and rosters change;
+          a model with no key configured for its provider is simply skipped at runtime either way.
         </p>
         <button
           type="button"
@@ -303,6 +359,7 @@ export function ModelAssignmentSection(): React.JSX.Element {
           catalog={catalog}
           primaryId={assignments[job.purpose].chain[0] ?? null}
           onAssign={(catalogId) => assign(job.purpose, catalogId)}
+          onReset={() => reset(job.purpose)}
         />
       ))}
     </>

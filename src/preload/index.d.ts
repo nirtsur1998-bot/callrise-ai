@@ -1246,6 +1246,11 @@ export interface AiCatalogApi {
    *  front of the bundled default ordering). Returns the updated AppSettings,
    *  same shape as settings.update(). */
   assignPrimaryModel: (purpose: AiPurpose, catalogId: string) => Promise<AppSettings>
+  /** Clears a job back to Automatic — main then picks the best available
+   *  model itself (today's active provider if configured, else the bundled
+   *  default chain) every time this job runs. Returns the updated
+   *  AppSettings, same shape as settings.update(). */
+  resetToAutomatic: (purpose: AiPurpose) => Promise<AppSettings>
 }
 
 export interface AiFallbackEventView {
