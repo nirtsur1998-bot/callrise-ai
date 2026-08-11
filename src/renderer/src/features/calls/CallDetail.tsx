@@ -489,11 +489,18 @@ export function CallDetail({
     [contacts, createContact, doLink]
   )
 
-  // M23 Workstream D — "Detect who this was" (post-hoc transcript self-intro
-  // scan). Runs on click in 'suggest' mode, or automatically (once per call,
-  // see the effect below) in 'full-auto' mode — but the result only ever
-  // populates a dismissible suggestion banner; it never creates or links a
-  // contact on its own.
+  // M23 Workstream D — "Detect who this was" (post-hoc transcript scan for
+  // the other party's name, either from their own self-introduction or from
+  // the rep addressing/referring to them by name anywhere in the call).
+  // Runs on click in 'suggest' mode, or automatically (once per call, see
+  // the effect below) in 'full-auto' mode. In 'suggest' mode this only ever
+  // populates a dismissible suggestion banner. In 'full-auto' mode the main
+  // process ALSO auto-creates/attaches a contact as part of this same IPC
+  // call (see maybeAutoCreateContact in contact-intelligence-ipc.ts) — the
+  // notifyChanged() below picks up the resulting call.contactId, and the
+  // background hook in calls.ts usually beats the rep to it anyway (full-
+  // auto mode also runs right after the call is saved/coached, independent
+  // of this page ever being opened).
   const detectIdentity = useCallback(async () => {
     if (detecting) return
     setDetecting(true)
@@ -562,11 +569,13 @@ export function CallDetail({
   ])
 
   // M23 Workstream D — full-auto mode: run "Detect who this was" on its own,
-  // once per call, when eligible — but this still only ever populates a
-  // dismissible suggestion banner (see detectIdentity/IdentityContactSuggestion
-  // above); it never creates or links a contact without a click. Calendar
-  // match (a stronger, email-carrying signal) always takes priority and
-  // skips this entirely when it would apply, to avoid a redundant AI call.
+  // once per call, when eligible. This is a fallback/fast-path for when the
+  // rep opens the call before the background hook (calls.ts, right after
+  // save/coaching) has finished — it goes through the exact same IPC call,
+  // so it auto-creates/attaches a contact too, not just the suggestion
+  // banner (see detectIdentity above). Calendar match (a stronger, email-
+  // carrying signal) always takes priority and skips this entirely when it
+  // would apply, to avoid a redundant AI call.
   useEffect(() => {
     if (!call || settingsLoading) return
     if (call.contactId || identityDismissed) return

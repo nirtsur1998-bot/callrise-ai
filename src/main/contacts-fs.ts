@@ -642,3 +642,16 @@ export async function findContactByPhone(dir: string, phoneE164: string): Promis
   const contacts = await listContacts(dir)
   return contacts.find((c) => c.phoneE164 === normalized) ?? null
 }
+
+/** Find a contact by exact name, case/whitespace-insensitive. Used by
+ *  Contact Intelligence's full-auto attach path (contact-intelligence-ipc.ts)
+ *  to avoid creating a duplicate contact when the detected name already
+ *  matches an existing one — a plain exact match, not fuzzy, since a wrong
+ *  auto-attach to the wrong person is worse than occasionally creating a
+ *  near-duplicate the rep can merge later. */
+export async function findContactByName(dir: string, name: string): Promise<Contact | null> {
+  const normalized = name.trim().toLowerCase().replace(/\s+/g, ' ')
+  if (!normalized) return null
+  const contacts = await listContacts(dir)
+  return contacts.find((c) => c.name.trim().toLowerCase().replace(/\s+/g, ' ') === normalized) ?? null
+}

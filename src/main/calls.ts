@@ -43,6 +43,7 @@ import { scheduleBackup, queueAttachmentBlobDeletes } from './backup'
 import { addComment } from './contacts-fs'
 import { generateCrmNote } from './crm-notes'
 import { resolveAndSaveIdentities } from './speaker-identity/resolve-for-call'
+import { runFullAutoContactIntelligence } from './contact-intelligence-ipc'
 import { detectCallType } from './coaching/benchmarks'
 import { computeSkillProgress, type SkillProgress } from './coaching/skill-graph'
 import { selectFocusSkill, type FocusSkillState } from './coaching/focus-skill'
@@ -238,7 +239,9 @@ export function registerCalls(): void {
       // Fire-and-forget, same as objection mining above — never block the save.
       // Fully resolves multichannel calls (channel 0/1 are deterministic);
       // mono calls only get "me" once coaching supplies repSpeaker (see below).
-      void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, summary.id).catch(() => {})
+      void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, summary.id)
+        .then(() => runFullAutoContactIntelligence(summary.id))
+        .catch(() => {})
       return summary
     }
   )
@@ -458,7 +461,9 @@ export function registerCalls(): void {
         // repSpeaker is only known from here on for a mono call — re-run so
         // its "me" key (and therefore single-other-party detection) can
         // resolve for the first time.
-        void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, callId).catch(() => {})
+        void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, callId)
+          .then(() => runFullAutoContactIntelligence(callId))
+          .catch(() => {})
         if (coach2Enabled) {
           void setCallTypeIfUnset(callsDir(), callId, callType).catch(() => {})
           void updateFocusSkillAfterCoaching(callId).catch(() => {})
