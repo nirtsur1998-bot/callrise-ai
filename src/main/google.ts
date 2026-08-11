@@ -215,7 +215,13 @@ function connect(scopes: string[], mode: SyncMode): Promise<ConnectResult> {
           codeVerifier = pkce.codeVerifier
           const authUrl = oauth.generateAuthUrl({
             access_type: 'offline', // ask for a refresh token
-            prompt: 'consent', // ensure a refresh token is returned
+            // 'consent' alone forces the consent screen but NOT the account
+            // chooser — if the system browser already has an active Google
+            // session, Google silently reuses that account and connect()
+            // never gives the rep a chance to pick a different one. Fixed to
+            // match outlook.ts's connect(), which already uses
+            // prompt: 'select_account' for exactly this reason.
+            prompt: 'select_account consent', // force the account picker AND ensure a refresh token
             include_granted_scopes: true, // incremental: new grant also covers prior scopes
             scope: scopes,
             code_challenge_method: CodeChallengeMethod.S256,
@@ -242,7 +248,8 @@ async function getStatus(): Promise<{ connected: boolean; configured: boolean; m
   return { connected, configured, mode }
 }
 
-async function disconnect(): Promise<{ ok: boolean }> {
+/** Exported as disconnectGoogle for BUG-022's device-wipe flow. */
+export async function disconnect(): Promise<{ ok: boolean }> {
   const token = await loadRefreshToken()
   const c = creds()
   if (token && c) {
@@ -510,6 +517,15 @@ async function withoutTombstoned(events: GoogleEvent[]): Promise<GoogleEvent[]> 
   return gone.size ? events.filter((e) => !gone.has(linkKey(e.provider, e.externalId))) : events
 }
 
+/** Main-process accessor for the pulled/cached Google events (with
+ *  attendees) — same data the `google:cachedEvents` IPC handler returns to
+ *  the renderer, but importable directly by other main-process code (M19
+ *  Task 2's calendar-overlap speaker-identity matching) without a redundant
+ *  IPC round-trip. Read-only; never mutates the cache. */
+export async function getCachedGoogleEvents(): Promise<GoogleEvent[]> {
+  return withoutTombstoned(await readCache())
+}
+
 // --- Push local events OUT to Google (M14 two-way sync) --------------------
 
 // The events endpoint for a given calendar. App-created events go to 'primary';
@@ -591,7 +607,8 @@ export async function pushInsertEvent(ev: CalendarEvent, calId = 'primary'): Pro
 }
 
 /** Update the linked Google event with PATCH (only the fields we manage —
- *  Google-only fields like attendees/reminders are left untouched). An event
+ *  Google-only fields like attendees are left untouched; reminders ARE
+ *  managed and sent explicitly every time, see toGoogleBody). An event
  *  that was never linked is created instead (adoption); one that Google no
  *  longer has (404/410) is re-created. */
 export async function pushUpdateEvent(ev: CalendarEvent): Promise<PushResult> {

@@ -50,6 +50,21 @@ export interface CalendarEvent {
    *  the follow-up dashboard's "next scheduled meeting" line. */
   contactId?: string
   dealId?: string
+  /** Minutes-before-start lead times for a REAL reminder pushed to the
+   *  linked Google/Outlook event, so the provider's own app fires its own
+   *  native push notification — this is NOT CallRise's own in-app alert
+   *  system (see alerts.ts's separate 'meeting_starting' trigger, which
+   *  fires locally via Electron Notification/Telegram/email regardless of
+   *  any calendar link). Only takes effect on an event actually pushed to a
+   *  provider in two-way (readwrite) sync — a local-only event just stores
+   *  the preference with nothing to act on it. Sorted ascending, deduped,
+   *  clamped to the UI's offered set (5/10/15/20/30/45/60) — see
+   *  sanitizeReminderMinutes. Empty/undefined = no reminder.
+   *  Outlook can only carry ONE lead time (Microsoft Graph's
+   *  reminderMinutesBeforeStart is a single int, not a list like Google's
+   *  reminders.overrides) — outlook-sync.ts picks the soonest-before-start
+   *  value from this array when pushing. */
+  reminderMinutes?: number[]
   createdAt: string
   updatedAt: string
 }
@@ -67,6 +82,7 @@ export interface EventCreateInput {
   remoteUpdatedAt?: unknown
   contactId?: unknown
   dealId?: unknown
+  reminderMinutes?: unknown
 }
 
 /** Fields the renderer may change (any absent key is left untouched). */
@@ -78,6 +94,7 @@ export interface EventUpdateInput {
   notes?: unknown
   contactId?: unknown
   dealId?: unknown
+  reminderMinutes?: unknown
 }
 
 // Ids build file paths, so they must be tightly constrained (no "../", no
@@ -176,6 +193,7 @@ function sanitizeEventRecord(value: unknown): CalendarEvent | null {
     deleted: v.deleted === true ? true : undefined, // preserve the tombstone flag
     contactId: isSafeId(v.contactId) ? v.contactId : undefined,
     dealId: isSafeId(v.dealId) ? v.dealId : undefined,
+    reminderMinutes: sanitizeReminderMinutes(v.reminderMinutes),
     createdAt,
     updatedAt: toIso(v.updatedAt) ?? createdAt
   }
@@ -183,6 +201,19 @@ function sanitizeEventRecord(value: unknown): CalendarEvent | null {
 
 function sanitizeLinkField(value: unknown): string | undefined {
   return typeof value === 'string' && value ? value.slice(0, 200) : undefined
+}
+
+/** The exact set the New/Edit Event dialog offers — anything else (a hand-
+ *  edited file, a future UI value not yet supported) is dropped rather than
+ *  passed through, since an arbitrary minute count could produce a
+ *  surprising provider payload. */
+const ALLOWED_REMINDER_MINUTES = new Set([5, 10, 15, 20, 30, 45, 60])
+
+export function sanitizeReminderMinutes(value: unknown): number[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const kept = Array.from(new Set(value.filter((n) => ALLOWED_REMINDER_MINUTES.has(n as number))))
+  kept.sort((a, b) => a - b)
+  return kept.length ? kept : undefined
 }
 
 export async function createEvent(dir: string, input: EventCreateInput): Promise<CalendarEvent> {
@@ -204,6 +235,7 @@ export async function createEvent(dir: string, input: EventCreateInput): Promise
     remoteUpdatedAt: toIso(input?.remoteUpdatedAt) ?? undefined,
     contactId: isSafeId(input?.contactId) ? input.contactId : undefined,
     dealId: isSafeId(input?.dealId) ? input.dealId : undefined,
+    reminderMinutes: sanitizeReminderMinutes(input?.reminderMinutes),
     createdAt: now,
     updatedAt: now
   }
@@ -222,21 +254,24 @@ export async function listEvents(
   } catch {
     return []
   }
-  const events: CalendarEvent[] = []
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue
-    try {
-      const raw = await fs.readFile(join(dir, file), 'utf8')
-      const event = sanitizeEventRecord(JSON.parse(raw))
-      // Tombstones never render: sync.state='deleted' is the transient awaiting-
-      // Google state, `deleted` is the permanent backup tombstone. The Google
-      // reconcile pass and the backup read them via includeDeleted.
-      const tombstoned = event?.sync?.state === 'deleted' || event?.deleted === true
-      if (event && (opts?.includeDeleted || !tombstoned)) events.push(event)
-    } catch {
-      /* skip unreadable / corrupt file */
-    }
-  }
+  const results = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map(async (file): Promise<CalendarEvent | null> => {
+        try {
+          const raw = await fs.readFile(join(dir, file), 'utf8')
+          const event = sanitizeEventRecord(JSON.parse(raw))
+          // Tombstones never render: sync.state='deleted' is the transient awaiting-
+          // Google state, `deleted` is the permanent backup tombstone. The Google
+          // reconcile pass and the backup read them via includeDeleted.
+          const tombstoned = event?.sync?.state === 'deleted' || event?.deleted === true
+          return event && (opts?.includeDeleted || !tombstoned) ? event : null
+        } catch {
+          return null // skip unreadable / corrupt file
+        }
+      })
+  )
+  const events = results.filter((e): e is CalendarEvent => e !== null)
   events.sort((a, b) => a.start.localeCompare(b.start)) // earliest first
   return events
 }
@@ -291,6 +326,7 @@ export async function updateEvent(
   if ('contactId' in patch)
     event.contactId = isSafeId(patch.contactId) ? patch.contactId : undefined
   if ('dealId' in patch) event.dealId = isSafeId(patch.dealId) ? patch.dealId : undefined
+  if ('reminderMinutes' in patch) event.reminderMinutes = sanitizeReminderMinutes(patch.reminderMinutes)
   // Start/end are resolved together so the window always stays valid/ordered.
   if ('start' in patch || 'end' in patch) {
     const startRaw = 'start' in patch ? patch.start : event.start

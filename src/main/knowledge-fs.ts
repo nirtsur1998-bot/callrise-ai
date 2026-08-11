@@ -158,18 +158,21 @@ export async function listEntries(
   } catch {
     return []
   }
-  const entries: KnowledgeEntry[] = []
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue
-    try {
-      const raw = await fs.readFile(join(dir, file), 'utf8')
-      const entry = sanitizeEntryRecord(JSON.parse(raw))
-      // Tombstones stay hidden from the app; a future backup reads them via includeDeleted.
-      if (entry && (opts?.includeDeleted || !entry.deleted)) entries.push(entry)
-    } catch {
-      /* skip unreadable / corrupt file */
-    }
-  }
+  const results = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map(async (file): Promise<KnowledgeEntry | null> => {
+        try {
+          const raw = await fs.readFile(join(dir, file), 'utf8')
+          const entry = sanitizeEntryRecord(JSON.parse(raw))
+          // Tombstones stay hidden from the app; a future backup reads them via includeDeleted.
+          return entry && (opts?.includeDeleted || !entry.deleted) ? entry : null
+        } catch {
+          return null // skip unreadable / corrupt file
+        }
+      })
+  )
+  const entries = results.filter((e): e is KnowledgeEntry => e !== null)
   // Newest first as a stable default; the renderer applies its own ordering.
   entries.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   return entries

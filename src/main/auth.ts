@@ -1,6 +1,6 @@
 import { app, ipcMain, BrowserWindow, safeStorage } from 'electron'
 import { join } from 'node:path'
-import { chmodSync, readFileSync, writeFile } from 'node:fs'
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs'
 import {
   createClient,
   AuthError,
@@ -8,6 +8,11 @@ import {
   type User,
   type SupportedStorage
 } from '@supabase/supabase-js'
+import { readOwner } from './device-owner'
+import { wipeDeviceLocalData } from './device-reset'
+import { clearAllAiKeys } from './ai-keys'
+import { disconnect as disconnectGoogle } from './google'
+import { disconnect as disconnectOutlook } from './outlook'
 
 // What the renderer is allowed to see about the signed-in user. Tokens never
 // leave the main process — only this safe shape crosses the IPC bridge.
@@ -35,6 +40,11 @@ export type AuthErrorCode =
   | 'network'
   | 'server'
   | 'failed'
+  // BUG-022: this device's local data (calls, tasks, contacts, connected
+  // calendars, AI keys...) already belongs to a DIFFERENT account. Signing
+  // in as this one is refused until the device's local data is wiped —
+  // never silently shown to whoever's currently trying to sign in.
+  | 'device-owned-by-other-account'
 
 type Fail = { ok: false; error: AuthErrorCode; message: string }
 
@@ -53,9 +63,10 @@ let initialized = false
  * process has no localStorage, so we persist Supabase's auth token to a small
  * file in the app's user-data folder — encrypted via Electron safeStorage
  * (macOS Keychain) and written owner-only (0600), mirroring google.ts's
- * refresh-token storage.
+ * refresh-token storage. Exported for BUG-029's regression test only — not
+ * part of the module's real public surface.
  */
-function makeFileStorage(path: string): SupportedStorage {
+export function makeFileStorage(path: string): SupportedStorage {
   const canEncrypt = safeStorage.isEncryptionAvailable()
   let memory: Record<string, string> = {}
   try {
@@ -78,8 +89,20 @@ function makeFileStorage(path: string): SupportedStorage {
     // Never write tokens we can't encrypt — the session just won't survive
     // a restart, which is safer than a plaintext token on disk.
     if (!canEncrypt) return
-    // 0600: owner-only, defense-in-depth on top of the encryption.
-    writeFile(path, safeStorage.encryptString(JSON.stringify(memory)), { mode: 0o600 }, () => {}) // best-effort async write
+    // Synchronous (BUG-029): Supabase rotates the refresh token roughly
+    // hourly while the app runs, and the previous async fire-and-forget
+    // write left a gap where a quit racing that rotation could leave the
+    // on-disk file holding the now-invalidated OLD token, bouncing the user
+    // to a surprise re-login next launch. before-quit has no hook to await a
+    // pending async write from here; writing synchronously removes the gap
+    // entirely instead. Session files are tiny and this isn't hot-path code
+    // (an occasional auth event, not the audio thread), so the blocking cost
+    // is negligible. 0600: owner-only, defense-in-depth on top of encryption.
+    try {
+      writeFileSync(path, safeStorage.encryptString(JSON.stringify(memory)), { mode: 0o600 })
+    } catch {
+      // best-effort — the session just won't survive a restart this time
+    }
   }
   return {
     getItem: (key) => (key in memory ? memory[key] : null),
@@ -148,6 +171,31 @@ const NOT_CONFIGURED: Fail = {
   error: 'not-configured',
   message:
     'User accounts aren’t set up yet. Add SUPABASE_URL and SUPABASE_ANON_KEY to your .env file and restart the app.'
+}
+
+const DEVICE_OWNED_BY_OTHER: Fail = {
+  ok: false,
+  error: 'device-owned-by-other-account',
+  message:
+    'This computer already has another CallRise AI account’s data on it (calls, tasks, connected calendars, and AI keys). To use this account here, that data needs to be wiped first — it cannot be recovered afterward.'
+}
+
+/**
+ * BUG-022 — a device's local data belongs to exactly one account (see
+ * device-owner.ts). If the account signing in isn't that owner, undo the
+ * sign-in immediately (before returning anything to the renderer, so the
+ * main app never gets a chance to render with the wrong account's data
+ * behind it) and report the conflict instead.
+ */
+async function rejectIfDeviceOwnedByOther(userId: string): Promise<Fail | null> {
+  const owner = await readOwner()
+  if (owner === null || owner === userId) return null
+  try {
+    await getClient()?.auth.signOut()
+  } catch {
+    /* best-effort — the caller must not treat this sign-in as successful either way */
+  }
+  return DEVICE_OWNED_BY_OTHER
 }
 
 /** Turn any Supabase/auth error into a calm, user-facing message. */
@@ -279,7 +327,16 @@ async function getStatus(): Promise<AuthStatus> {
   if (!c) return { configured: false, user: null }
   try {
     const { data } = await c.auth.getSession()
-    return { configured: true, user: toAuthUser(data.session?.user) }
+    const user = toAuthUser(data.session?.user)
+    // BUG-022: a session restored from disk on launch needs the same
+    // ownership check an interactive sign-in gets — otherwise a device
+    // that already has account A's data, but still had account B's old
+    // session file lying around, would silently show B's identity (and
+    // A's local data underneath it) to whoever opens the app.
+    if (user && (await rejectIfDeviceOwnedByOther(user.id))) {
+      return { configured: true, user: null }
+    }
+    return { configured: true, user }
   } catch {
     return { configured: true, user: null }
   }
@@ -311,7 +368,12 @@ async function signUp(p: unknown): Promise<SignUpResult> {
     }
     // If confirmations are off, Supabase returns a session and the user is
     // already logged in — the gate will swap to the app via the broadcast.
-    if (data.session) return { ok: true, status: 'signed-in' }
+    if (data.session) {
+      const uid = data.session.user?.id
+      const blocked = uid ? await rejectIfDeviceOwnedByOther(uid) : null
+      if (blocked) return blocked
+      return { ok: true, status: 'signed-in' }
+    }
     return { ok: true, status: 'confirm' }
   } catch (err) {
     return mapError(err)
@@ -336,6 +398,8 @@ async function verifyOtp(p: unknown): Promise<VerifyResult> {
         message: 'That code didn’t work. Please try again.'
       }
     }
+    const blocked = await rejectIfDeviceOwnedByOther(user.id)
+    if (blocked) return blocked
     return { ok: true, user }
   } catch (err) {
     return mapError(err)
@@ -358,6 +422,8 @@ async function signIn(p: unknown): Promise<SignInResult> {
     if (error) return mapError(error)
     const user = toAuthUser(data.user)
     if (!user) return { ok: false, error: 'failed', message: 'Login failed. Please try again.' }
+    const blocked = await rejectIfDeviceOwnedByOther(user.id)
+    if (blocked) return blocked
     return { ok: true, user }
   } catch (err) {
     return mapError(err)
@@ -396,6 +462,16 @@ async function updateName(p: unknown): Promise<SimpleResult> {
 
 async function signOut(): Promise<SimpleResult> {
   const c = getClient()
+  // BUG-022: sign-out used to clear only the Supabase session — every other
+  // local secret (Google/Outlook OAuth tokens, AI provider keys) survived
+  // untouched and fully usable by whoever signs in next on this device. The
+  // account-scoped CONTENT (calls/tasks/contacts/...) is left alone here —
+  // that's protected by the sign-in ownership guard instead (wiping it on
+  // every sign-out would be needless data loss for the common case of the
+  // same person signing back in).
+  await disconnectGoogle().catch(() => {})
+  await disconnectOutlook().catch(() => {})
+  await clearAllAiKeys().catch(() => {})
   if (!c) return { ok: true }
   try {
     await c.auth.signOut()
@@ -421,8 +497,21 @@ export function registerAuth(): void {
 
   const c = getClient() // create now — app is ready, so userData path is valid
   if (c) {
-    // Keep the renderer in sync on login, logout, and token refresh.
-    c.auth.onAuthStateChange((_event, session) => broadcast(toAuthUser(session?.user)))
+    // Keep the renderer in sync on login, logout, and token refresh. Routed
+    // through the same ownership guard as every direct sign-in call
+    // (BUG-022): signInWithPassword succeeding fires THIS listener before
+    // signIn()'s own compensating signOut() below has a chance to run, so
+    // without this check here too, a mismatched account could flash into
+    // view via this broadcast even though signIn() itself never reports
+    // success for it.
+    c.auth.onAuthStateChange((_event, session) => {
+      const user = toAuthUser(session?.user)
+      if (!user) {
+        broadcast(null)
+        return
+      }
+      void rejectIfDeviceOwnedByOther(user.id).then((blocked) => broadcast(blocked ? null : user))
+    })
   }
 
   ipcMain.handle('auth:getStatus', () => getStatus())
@@ -432,4 +521,10 @@ export function registerAuth(): void {
   ipcMain.handle('auth:resendCode', (_e, p: unknown) => resendCode(p))
   ipcMain.handle('auth:updateName', (_e, p: unknown) => updateName(p))
   ipcMain.handle('auth:signOut', () => signOut())
+  // BUG-022: the explicit "reset this device" escape hatch — wipes every
+  // local store plus connected-service secrets, so a genuinely different
+  // account can use this device after the ownership guard above refuses it.
+  // The renderer only offers this from the specific "device owned by
+  // another account" error state, with its own destructive-action confirm.
+  ipcMain.handle('auth:wipeDeviceData', () => wipeDeviceLocalData().then(() => ({ ok: true as const })))
 }

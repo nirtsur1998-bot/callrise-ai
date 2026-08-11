@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Eye, EyeOff, ExternalLink, Loader2, FlaskConical } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { fieldClass } from '@renderer/components/field'
@@ -14,15 +14,50 @@ type AiKeyName = Parameters<typeof window.api.aiKeys.save>[0]
 type AiKeyStatus = StatusMap[AiKeyName]
 type AiProviderId = Parameters<typeof window.api.aiKeys.validate>[0]
 
-interface KeyCardConfig {
+export type RetentionPosture = 'trains' | 'no-training' | 'unknown'
+
+export interface KeyCardConfig {
   name: AiKeyName
   title: string
   blurb: string
   getKeyUrl: string
   getKeyLabel: string
   placeholder: string
-  /** Set only for the two text-AI providers — Deepgram has no "Test key" flow. */
+  /** Set for every text-AI provider — Deepgram has no "Test key" flow (it's
+   *  transcription, not text completion — a separate, untouched system). */
   providerId?: AiProviderId
+  /** Data-retention posture (M20 hard invariant) — omitted only for
+   *  Deepgram, which isn't one of the model-picker's text-AI providers. */
+  retention?: { posture: RetentionPosture; url: string }
+}
+
+const RETENTION_LABEL: Record<RetentionPosture, string> = {
+  trains: 'Trains on your data',
+  'no-training': 'No training on API data',
+  unknown: 'Unknown — check provider terms'
+}
+
+const RETENTION_CLASS: Record<RetentionPosture, string> = {
+  trains: 'border-danger/40 bg-danger/10 text-danger',
+  'no-training': 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200',
+  unknown: 'border-line bg-elevated text-muted'
+}
+
+function RetentionBadge({ posture, url }: { posture: RetentionPosture; url: string }): React.JSX.Element {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className={cn(
+        'inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[11px] font-medium hover:underline',
+        RETENTION_CLASS[posture]
+      )}
+      title="Opens the provider's own data-usage terms"
+    >
+      {RETENTION_LABEL[posture]}
+    </a>
+  )
 }
 
 const KEYS: KeyCardConfig[] = [
@@ -41,7 +76,8 @@ const KEYS: KeyCardConfig[] = [
     getKeyUrl: 'https://console.anthropic.com/',
     getKeyLabel: 'Get an Anthropic key',
     placeholder: 'Paste your Anthropic API key',
-    providerId: 'anthropic'
+    providerId: 'anthropic',
+    retention: { posture: 'no-training', url: 'https://www.anthropic.com/legal/commercial-terms' }
   },
   {
     name: 'OPENAI_API_KEY',
@@ -50,11 +86,107 @@ const KEYS: KeyCardConfig[] = [
     getKeyUrl: 'https://platform.openai.com/api-keys',
     getKeyLabel: 'Get an OpenAI key',
     placeholder: 'Paste your OpenAI API key',
-    providerId: 'openai'
+    providerId: 'openai',
+    retention: { posture: 'no-training', url: 'https://openai.com/policies/api-data-usage-policies' }
+  },
+  {
+    name: 'GROQ_API_KEY',
+    title: 'Groq',
+    blurb: 'Very fast free-tier Llama, GPT-OSS, and Qwen models — the default for live coaching cues.',
+    getKeyUrl: 'https://console.groq.com/keys',
+    getKeyLabel: 'Get a free Groq key',
+    placeholder: 'Paste your Groq API key',
+    providerId: 'groq',
+    retention: { posture: 'unknown', url: 'https://groq.com/privacy-policy/' }
+  },
+  {
+    name: 'OPENROUTER_API_KEY',
+    title: 'OpenRouter',
+    blurb: 'A router across many free models, including an auto-picker that survives one getting delisted.',
+    getKeyUrl: 'https://openrouter.ai/keys',
+    getKeyLabel: 'Get a free OpenRouter key',
+    placeholder: 'Paste your OpenRouter API key',
+    providerId: 'openrouter',
+    retention: { posture: 'unknown', url: 'https://openrouter.ai/docs/features/privacy-and-logging' }
+  },
+  {
+    name: 'GOOGLE_AI_API_KEY',
+    title: 'Gemini (Google AI Studio)',
+    blurb: 'Strong free-tier quality, good for structured post-call summaries.',
+    getKeyUrl: 'https://aistudio.google.com/apikey',
+    getKeyLabel: 'Get a free Google AI Studio key',
+    placeholder: 'Paste your Google AI Studio API key',
+    providerId: 'google',
+    retention: { posture: 'trains', url: 'https://ai.google.dev/gemini-api/terms' }
+  },
+  {
+    name: 'NVIDIA_API_KEY',
+    title: 'NVIDIA NIM',
+    blurb: 'Free-tier access to DeepSeek V3.2 and GLM-5.2 for analytical, long-form work.',
+    getKeyUrl: 'https://build.nvidia.com/',
+    getKeyLabel: 'Get a free NVIDIA NIM key',
+    placeholder: 'Paste your NVIDIA API key',
+    providerId: 'nvidia',
+    retention: { posture: 'unknown', url: 'https://build.nvidia.com/terms' }
+  },
+  {
+    name: 'CEREBRAS_API_KEY',
+    title: 'Cerebras',
+    blurb: 'Very fast inference — the automatic fallback for GPT-OSS 120B if Groq is unavailable.',
+    getKeyUrl: 'https://cloud.cerebras.ai/',
+    getKeyLabel: 'Get a free Cerebras key',
+    placeholder: 'Paste your Cerebras API key',
+    providerId: 'cerebras',
+    retention: { posture: 'no-training', url: 'https://www.cerebras.ai/terms-of-service' }
+  },
+  {
+    name: 'MISTRAL_API_KEY',
+    title: 'Mistral',
+    blurb: 'Reliable, low-refusal, European-hosted — a good fit for EU-sensitive calls.',
+    getKeyUrl: 'https://console.mistral.ai/api-keys',
+    getKeyLabel: 'Get a free Mistral key',
+    placeholder: 'Paste your Mistral API key',
+    providerId: 'mistral',
+    retention: { posture: 'unknown', url: 'https://legal.mistral.ai/terms' }
   }
 ]
 
-function KeyCard({
+type KeyStatusDot = 'connected' | 'no-key' | 'invalid' | 'rate-limited'
+
+/** Session-local: derived from the last "Test key" result plus whether a
+ *  key is saved at all. There's no persisted "this key is currently
+ *  rejected" state — a saved-but-now-invalid key just shows "Connected"
+ *  until the next Test click or a real AI call fails, same limitation M16
+ *  already had. */
+function deriveStatusDot(
+  status: AiKeyStatus | undefined,
+  testResult: { ok: boolean; message: string } | null
+): KeyStatusDot {
+  if (testResult && !testResult.ok) {
+    return /rate.?limit/i.test(testResult.message) ? 'rate-limited' : 'invalid'
+  }
+  return status?.configured ? 'connected' : 'no-key'
+}
+
+const STATUS_DOT_CLASS: Record<KeyStatusDot, string> = {
+  connected: 'bg-emerald-400',
+  'no-key': 'bg-line',
+  invalid: 'bg-danger',
+  'rate-limited': 'bg-amber-400'
+}
+
+const STATUS_DOT_LABEL: Record<KeyStatusDot, string> = {
+  connected: 'Connected',
+  'no-key': 'No key',
+  invalid: 'Key invalid',
+  'rate-limited': 'Rate limited'
+}
+
+/** Reused by the onboarding flow's ApiKey step (single-card, Deepgram-only)
+ *  so both places share the exact same save/test/clear logic. */
+export const DEEPGRAM_KEY_CONFIG: KeyCardConfig = KEYS[0]
+
+export function KeyCard({
   config,
   status,
   onChanged
@@ -69,6 +201,12 @@ function KeyCard({
   const [savedNotice, setSavedNotice] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
+  // Same auto-clearing "Saved" pattern as CrmSection/PersonalizationSection/
+  // AccountSection, including the cleanup those already have: without it, a
+  // save right before navigating away from Settings fires setSavedNotice on
+  // an unmounted card after the 4s timer outlives it.
+  const savedTimeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(savedTimeout.current), [])
 
   const save = async (): Promise<void> => {
     if (!value.trim() || busy) return
@@ -80,7 +218,8 @@ function KeyCard({
         setSavedNotice(true)
         setTestResult(null)
         onChanged()
-        setTimeout(() => setSavedNotice(false), 4000)
+        clearTimeout(savedTimeout.current)
+        savedTimeout.current = setTimeout(() => setSavedNotice(false), 4000)
       }
     } finally {
       setBusy(false)
@@ -113,16 +252,34 @@ function KeyCard({
     }
   }
 
+  const statusDot = deriveStatusDot(status, testResult)
+
   return (
     <Card className="mb-5">
-      <div className="mb-1 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-medium">{config.title}</h3>
-        {status?.configured && (
-          <span className="flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-200">
-            <CheckCircle2 className="h-3.5 w-3.5" /> Configured
-            {status.hint ? ` · ${status.hint}` : ''}
-          </span>
-        )}
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-medium">{config.title}</h3>
+          {config.providerId && (
+            <span
+              className="flex items-center gap-1.5 text-xs font-medium text-muted"
+              title={STATUS_DOT_LABEL[statusDot]}
+            >
+              <span className={cn('h-2 w-2 rounded-full', STATUS_DOT_CLASS[statusDot])} />
+              {STATUS_DOT_LABEL[statusDot]}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {config.retention && (
+            <RetentionBadge posture={config.retention.posture} url={config.retention.url} />
+          )}
+          {status?.configured && (
+            <span className="flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-200">
+              <CheckCircle2 className="h-3.5 w-3.5" /> Configured
+              {status.hint ? ` · ${status.hint}` : ''}
+            </span>
+          )}
+        </div>
       </div>
       <p className="mb-3 text-[13px] text-muted">{config.blurb}</p>
 
@@ -206,54 +363,96 @@ function KeyCard({
   )
 }
 
-const PROVIDER_OPTIONS = [
-  { id: 'anthropic' as const, label: 'Claude' },
-  { id: 'openai' as const, label: 'ChatGPT' }
-]
+// Short labels for the compact selector — KEYS' own `title` (e.g. "Gemini
+// (Google AI Studio)") is right for the key-entry cards below but too long
+// for a segmented control with 8 options.
+const PROVIDER_SHORT_LABEL: Record<AiProviderId, string> = {
+  anthropic: 'Claude',
+  openai: 'ChatGPT',
+  groq: 'Groq',
+  openrouter: 'OpenRouter',
+  google: 'Gemini',
+  nvidia: 'NVIDIA',
+  cerebras: 'Cerebras',
+  mistral: 'Mistral'
+}
 
-/** Which text-AI provider is active — coaching, summaries, tasks, deal-risk,
- *  and live cues all switch together; Deepgram (transcription) is separate
- *  and unaffected by this choice. */
+/** Bug found by the founder: "Ask the coach" and a few other features
+ *  (custom trackers, objection mining, call titles, CRM notes, deal risk)
+ *  resolve their model through THIS single setting, not the Model
+ *  Assignment page's per-purpose fallback chains — so with the selector
+ *  hardcoded to only Claude/ChatGPT, a user who configured a different
+ *  provider (Groq, Gemini, ...) saw those features fail with "add your
+ *  Claude or ChatGPT key" even though a perfectly good key was already
+ *  saved. All 8 providers are offered here now, matching every key card
+ *  below and PROVIDER_REGISTRY. */
+const PROVIDER_OPTIONS = KEYS.filter((k): k is KeyCardConfig & { providerId: AiProviderId } =>
+  Boolean(k.providerId)
+).map((k) => ({ id: k.providerId, label: PROVIDER_SHORT_LABEL[k.providerId] }))
+
 function ProviderSelector(): React.JSX.Element {
   const { settings, update } = useAppSettings()
 
   return (
     <Card className="mb-5">
-      <h3 className="mb-1 text-sm font-medium">Text AI provider</h3>
+      <h3 className="mb-1 text-sm font-medium">Default text AI provider</h3>
       <p className="mb-3 text-[13px] text-muted">
-        Which AI writes your coaching feedback, summaries, and live cues. Switching takes effect
-        immediately — make sure the provider&apos;s key below is configured first.
+        Backs any job with no specific model assigned on the{' '}
+        <span className="font-medium text-ink">Model Assignment</span> page — coaching feedback,
+        summaries, live cues, and &ldquo;Ask the coach&rdquo; — unless you&apos;ve assigned them something
+        else. Switching takes effect immediately — make sure the provider&apos;s key below is
+        configured first. Set automatically the first time you save a key below; change it here
+        any time.
       </p>
       <SegmentedControl
         options={PROVIDER_OPTIONS}
         value={settings.aiProvider}
         onChange={(id) => void update({ aiProvider: id })}
+        className="flex-wrap"
       />
     </Card>
   )
 }
 
-/** Lets each user bring their own Deepgram + Claude/ChatGPT keys instead of
- *  the app shipping (and billing) one key for every customer. Keys are
+/** Lets each user bring their own Deepgram + text-AI provider keys instead
+ *  of the app shipping (and billing) one key for every customer. Keys are
  *  stored encrypted on this device only — never sent anywhere but the
- *  provider itself, and never shown back in full once saved. */
+ *  provider itself, and never shown back in full once saved. M20 widened
+ *  this from the original Claude/ChatGPT pair to 8 text-AI providers —
+ *  which model each job (live cues, summaries, scorecards, tasks, prep
+ *  briefs) actually uses is on the separate Model Assignment page, since
+ *  picking from a 10-model catalog is a bigger UI than fits here. */
 export function ApiKeysSection(): React.JSX.Element {
   const [status, setStatus] = useState<StatusMap | null>(null)
+  // Bumped on every key save/clear so ProviderSelector remounts and re-reads
+  // settings from disk — a save can auto-select a provider on the main-process
+  // side (see ai-keys.ts's maybeAutoSelectProvider), which ProviderSelector's
+  // own useAppSettings() instance has no other way to learn about.
+  const [refreshNonce, setRefreshNonce] = useState(0)
 
+  useEffect(() => {
+    void window.api.aiKeys.getStatus().then(setStatus)
+  }, [])
+
+  // Only ever called from a KeyCard's onChanged (a save/clear the user just
+  // did), never from the mount effect above — bumping refreshNonce
+  // synchronously here is fine; doing it directly inside the mount effect
+  // would trip the set-state-in-effect rule (this drives the state, not
+  // just reacting to a mount-time fetch resolving).
   const refresh = (): void => {
     void window.api.aiKeys.getStatus().then(setStatus)
+    setRefreshNonce((n) => n + 1)
   }
-
-  useEffect(refresh, [])
 
   return (
     <>
       <p className="mb-4 text-[13px] text-muted">
-        CallRise AI needs a Deepgram key for live transcription, and either a Claude or ChatGPT key
-        for coaching and summaries. Each has its own free or pay-as-you-go tier — sign up, copy the
-        key, and paste it below.
+        CallRise AI needs a Deepgram key for live transcription, plus at least one text-AI
+        provider&apos;s key below for coaching, summaries, and live cues. Each has its own free or
+        pay-as-you-go tier — sign up, copy the key, and paste it below. Assign specific models to
+        specific jobs on the <span className="font-medium text-ink">Model Assignment</span> page.
       </p>
-      <ProviderSelector />
+      <ProviderSelector key={refreshNonce} />
       {KEYS.map((k) => (
         <KeyCard key={k.name} config={k} status={status?.[k.name]} onChanged={refresh} />
       ))}

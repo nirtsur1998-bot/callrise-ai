@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import {
   PhoneCall,
   History,
@@ -6,7 +7,9 @@ import {
   ArrowRight,
   ArrowUpRight,
   Sparkles,
-  Calendar
+  Calendar,
+  KeyRound,
+  X
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
@@ -22,6 +25,58 @@ import { useTasks } from '@renderer/features/tasks/useTasks'
 import { formatDate } from '@renderer/features/calls/format'
 import { computeHomeStats, computeWeekRecap, weekRecapHeadline, formatDuration } from './stats'
 import { overallTier, TONE_TO_BADGE } from '@renderer/features/coaching/meta'
+
+/** Onboarding's Done step already offers to add this key, but a skip there
+ *  left the only reminder buried in a one-time screen — this resurfaces it
+ *  on Home (dismissible per-session) until the key is actually configured. */
+function MissingKeyBanner({ onNavigate }: { onNavigate: (id: NavId) => void }): React.JSX.Element | null {
+  const [missing, setMissing] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    window.api.aiKeys
+      .getStatus()
+      .then((status) => {
+        if (!cancelled) setMissing(!status.DEEPGRAM_API_KEY.configured)
+      })
+      .catch(() => {
+        /* can't check — say nothing rather than a false alarm */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (!missing || dismissed) return null
+
+  return (
+    <div className="mb-5 flex items-start gap-3 rounded-xl border border-warning/30 bg-warning-soft px-4 py-3 text-[13px] text-warning">
+      <KeyRound className="mt-0.5 h-4 w-4 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">Live transcription needs a Deepgram key</p>
+        <p className="mt-0.5 text-[12px] leading-relaxed">
+          Free to get, takes a minute.{' '}
+          <button
+            type="button"
+            onClick={() => onNavigate('settings')}
+            className="font-medium underline underline-offset-2 hover:no-underline"
+          >
+            Add it in Settings
+          </button>
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={() => setDismissed(true)}
+        aria-label="Dismiss"
+        className="shrink-0 rounded-md p-1 text-warning/70 transition hover:bg-warning/10 hover:text-warning"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  )
+}
 
 /** Time-of-day greeting so Home feels personal rather than a static banner. */
 function greeting(): string {
@@ -77,6 +132,7 @@ export function HomeView({
 
   return (
     <div className="mx-auto max-w-3xl">
+      <MissingKeyBanner onNavigate={onNavigate} />
       {/* Personal greeting */}
       <header className="mb-7">
         <h2 className="text-2xl font-semibold tracking-tight">

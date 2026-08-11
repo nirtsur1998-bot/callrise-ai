@@ -16,9 +16,21 @@ export { linkKey } from './google-sync'
  * of UTC.
  */
 export function toGraphBody(ev: CalendarEvent): Record<string, unknown> {
+  // Graph only carries ONE reminder value (unlike Google's array of
+  // overrides) — use the soonest (earliest, most-advance-warning) requested
+  // lead time so the user is never reminded later than they asked for.
+  // "Soonest" here means minutes-BEFORE-start, which is inversely related to
+  // real time: a LARGER minutes value fires EARLIER (BUG-025/reminder fix —
+  // this used to take the minimum, which picks the value that fires closest
+  // to the event, i.e. latest, the opposite of what "soonest" and this
+  // file's own invariant promise).
+  const minutes = ev.reminderMinutes ?? []
+  const reminderMinutesBeforeStart = minutes.length ? Math.max(...minutes) : 0
   const base: Record<string, unknown> = {
     subject: ev.title,
-    body: { contentType: 'text', content: ev.notes ?? '' }
+    body: { contentType: 'text', content: ev.notes ?? '' },
+    isReminderOn: minutes.length > 0,
+    reminderMinutesBeforeStart
   }
   if (ev.allDay) {
     const s = new Date(ev.start)
@@ -41,6 +53,35 @@ export function toGraphBody(ev: CalendarEvent): Record<string, unknown> {
     start: { dateTime: ev.start, timeZone: 'UTC' },
     end: { dateTime: ev.end, timeZone: 'UTC' }
   }
+}
+
+/**
+ * BUG-025 — idempotent create for Outlook, which (unlike Google) doesn't
+ * accept a client-supplied event id. A deterministic token stamped as a
+ * Graph "single value extended property" lets a retry after ANY retryable
+ * push failure (429/5xx/offline — not just a crash, which is what the
+ * original design assumed) detect a prior attempt that actually succeeded
+ * server-side, instead of blindly creating a second event. Mirrors Google's
+ * "POST with a deterministic id, treat 409 as success" pattern the only way
+ * Graph allows: search first, by this token, since Graph won't reject a
+ * second create with a client-side conflict signal the way Google does.
+ */
+const CLIENT_TOKEN_PROPERTY_ID = 'String {66f5a359-4659-4830-9070-00047ec6ac6e} Name CallRiseClientToken'
+
+/** A Graph-safe token derived from the local id — same trick as
+ *  toGoogleEventId (hex-only, no characters that need OData escaping). */
+export function toOutlookClientToken(localId: string): string {
+  return localId.replace(/-/g, '').toLowerCase()
+}
+
+/** The extended-property entry to stamp onto a newly-created event. */
+export function clientTokenProperty(token: string): { id: string; value: string } {
+  return { id: CLIENT_TOKEN_PROPERTY_ID, value: token }
+}
+
+/** The $filter value to find an event previously created with this token. */
+export function clientTokenFilter(token: string): string {
+  return `singleValueExtendedProperties/Any(ep: ep/id eq '${CLIENT_TOKEN_PROPERTY_ID}' and ep/value eq '${token}')`
 }
 
 /** Thrown by outlook.ts's graphFetch on any non-2xx Graph response. */

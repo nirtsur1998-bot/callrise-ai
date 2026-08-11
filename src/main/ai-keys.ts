@@ -12,10 +12,35 @@
 import { app, ipcMain, safeStorage } from 'electron'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
-import { buildProviderForValidation, type AIProviderId } from './ai'
+import { buildProviderForValidation, getAIProvider, PROVIDER_REGISTRY, type AIProviderId } from './ai'
+import { loadAppSettings, saveAppSettings } from './app-settings'
 
-export type AiKeyName = 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY'
-const KEY_NAMES: AiKeyName[] = ['DEEPGRAM_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']
+// M20 added the six new text-AI provider keys (GROQ_API_KEY through
+// MISTRAL_API_KEY) alongside M16's original ANTHROPIC_API_KEY/OPENAI_API_KEY
+// pair. Everything below this point (encryption, save/load/clear, IPC) was
+// already generic over AiKeyName — extending it needed no new mechanism,
+// exactly per docs/ai-providers.md's "Adding a third provider" guide.
+export type AiKeyName =
+  | 'DEEPGRAM_API_KEY'
+  | 'ANTHROPIC_API_KEY'
+  | 'OPENAI_API_KEY'
+  | 'GROQ_API_KEY'
+  | 'OPENROUTER_API_KEY'
+  | 'GOOGLE_AI_API_KEY'
+  | 'NVIDIA_API_KEY'
+  | 'CEREBRAS_API_KEY'
+  | 'MISTRAL_API_KEY'
+const KEY_NAMES: AiKeyName[] = [
+  'DEEPGRAM_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'GROQ_API_KEY',
+  'OPENROUTER_API_KEY',
+  'GOOGLE_AI_API_KEY',
+  'NVIDIA_API_KEY',
+  'CEREBRAS_API_KEY',
+  'MISTRAL_API_KEY'
+]
 
 function keysDir(): string {
   return join(app.getPath('userData'), 'ai-keys')
@@ -44,6 +69,48 @@ async function loadKey(name: AiKeyName): Promise<string | null> {
 
 async function clearKey(name: AiKeyName): Promise<void> {
   await fs.unlink(keyPath(name)).catch(() => {})
+}
+
+function providerIdForKeyName(name: AiKeyName): AIProviderId | null {
+  for (const id of Object.keys(PROVIDER_REGISTRY) as AIProviderId[]) {
+    if (PROVIDER_REGISTRY[id].keyEnvName === name) return id
+  }
+  return null // DEEPGRAM_API_KEY — not a text-AI provider, nothing to select
+}
+
+/**
+ * BUG found by the founder using the app: "Ask the coach" and a few other
+ * features read the single "Default text AI provider" setting directly
+ * (unlike live coaching cues, which fall back across every configured
+ * provider) — with the picker previously hardcoded to Claude/ChatGPT only,
+ * anyone who configured a different provider saw those features fail with
+ * "add your Claude or ChatGPT key" despite having a perfectly good key.
+ *
+ * This closes the gap for the smooth/default case: if the currently
+ * selected provider has no working key, saving a new text-AI key switches
+ * the default to it automatically, so those features work immediately with
+ * no manual Settings trip. Never overrides an ALREADY-working selection —
+ * adding a second/backup key to an install that already has Claude or
+ * OpenAI configured changes nothing here. Settings' provider picker (now
+ * showing all 8) and the Model Assignment page remain there for anyone who
+ * wants to choose explicitly instead.
+ */
+function maybeAutoSelectProvider(name: AiKeyName): void {
+  const providerId = providerIdForKeyName(name)
+  if (!providerId) return
+  const current = loadAppSettings().aiProvider
+  if (getAIProvider(current)) return
+  saveAppSettings({ aiProvider: providerId })
+}
+
+/** BUG-022 — wipe every stored key (not just the encrypted file: also the
+ *  in-memory env var, so a key cleared mid-session stops working immediately
+ *  rather than surviving until restart like a normal Settings edit does). */
+export async function clearAllAiKeys(): Promise<void> {
+  for (const name of KEY_NAMES) {
+    await clearKey(name)
+    delete process.env[name]
+  }
 }
 
 /** Populate process.env from any stored keys — call once at startup, before
@@ -79,7 +146,13 @@ export function registerAiKeys(): void {
     const status: Record<AiKeyName, { configured: boolean; hint: string | null }> = {
       DEEPGRAM_API_KEY: { configured: false, hint: null },
       ANTHROPIC_API_KEY: { configured: false, hint: null },
-      OPENAI_API_KEY: { configured: false, hint: null }
+      OPENAI_API_KEY: { configured: false, hint: null },
+      GROQ_API_KEY: { configured: false, hint: null },
+      OPENROUTER_API_KEY: { configured: false, hint: null },
+      GOOGLE_AI_API_KEY: { configured: false, hint: null },
+      NVIDIA_API_KEY: { configured: false, hint: null },
+      CEREBRAS_API_KEY: { configured: false, hint: null },
+      MISTRAL_API_KEY: { configured: false, hint: null }
     }
     for (const name of KEY_NAMES) {
       status[name].configured = isConfigured(name)
@@ -95,16 +168,19 @@ export function registerAiKeys(): void {
     }
     await saveKey(name as AiKeyName, value.trim())
     process.env[name as AiKeyName] = value.trim()
+    maybeAutoSelectProvider(name as AiKeyName)
     return { ok: true as const }
   })
 
   // "Test key" - the cheapest possible round-trip against a key the user
   // just pasted (not necessarily saved yet), so a bad key is caught before
-  // it's relied on mid-call. Only anthropic/openai are real AI providers;
-  // Deepgram has no equivalent flow here (transcription, not text AI).
+  // it's relied on mid-call. Every text-AI provider in PROVIDER_REGISTRY
+  // (M20: 8, up from the original anthropic/openai pair) has this; Deepgram
+  // has no equivalent flow here (transcription, not text AI).
   ipcMain.handle('aiKeys:validate', async (_event, providerId: unknown, value: unknown) => {
     if (
-      (providerId !== 'anthropic' && providerId !== 'openai') ||
+      typeof providerId !== 'string' ||
+      !(providerId in PROVIDER_REGISTRY) ||
       typeof value !== 'string' ||
       !value.trim()
     ) {

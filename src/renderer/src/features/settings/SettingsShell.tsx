@@ -6,6 +6,7 @@ import type { AuthUser } from '@renderer/features/auth/types'
 import { SETTINGS_GROUPS, ALL_SETTINGS_PAGES, type SettingsPageId } from './settings-nav'
 import { AccountSection } from './AccountSection'
 import { ApiKeysSection } from './ApiKeysSection'
+import { ModelAssignmentSection } from './ModelAssignmentSection'
 import { AINoteTakerSection } from './AINoteTakerSection'
 import { DetectionSection } from './DetectionSection'
 import { RecordingConsentSection } from './RecordingConsentSection'
@@ -16,6 +17,7 @@ import { PersonalizationSection } from './PersonalizationSection'
 import { ObjectionLibrarySection } from './ObjectionLibrarySection'
 import { CalendarSection } from './CalendarSection'
 import { CrmSection } from './CrmSection'
+import { AlertsSection } from '@renderer/features/alerts/AlertsSection'
 import { AppSection } from './AppSection'
 import { AppearanceSection } from './AppearanceSection'
 import { PrivacyDataPage } from './PrivacyDataPage'
@@ -23,6 +25,7 @@ import { PrivacyDataPage } from './PrivacyDataPage'
 const PAGE_CONTENT: Record<SettingsPageId, React.ComponentType> = {
   account: AccountSection,
   'ai-setup': ApiKeysSection,
+  'ai-models': ModelAssignmentSection,
   'ai-note-taker': AINoteTakerSection,
   'call-detection': DetectionSection,
   'recording-consent': RecordingConsentSection,
@@ -33,6 +36,7 @@ const PAGE_CONTENT: Record<SettingsPageId, React.ComponentType> = {
   'objection-library': ObjectionLibrarySection,
   calendar: CalendarSection,
   crm: CrmSection,
+  alerts: AlertsSection,
   app: AppSection,
   appearance: AppearanceSection,
   'privacy-data': PrivacyDataPage

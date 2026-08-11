@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CallSegment } from '@renderer/features/calls/types'
 
 const CONFIRM_MS = 1500 // how long the inline "Clipped" confirmation stays up
@@ -60,6 +60,12 @@ export function useLiveClips(): UseLiveClips {
     },
     []
   )
+
+  useEffect(() => {
+    return () => {
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current)
+    }
+  }, [])
 
   const flush = useCallback((callId: string): void => {
     const pending = clipsRef.current

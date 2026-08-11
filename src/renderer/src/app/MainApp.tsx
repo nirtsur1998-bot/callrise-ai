@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import AppShell from './AppShell'
 import { Sidebar } from '@renderer/features/navigation/Sidebar'
 import { CopilotPanel } from '@renderer/features/copilot/CopilotPanel'
@@ -7,23 +7,53 @@ import { CommandPalette, type PaletteAction } from '@renderer/features/navigatio
 import { ShortcutsOverlay } from '@renderer/features/navigation/ShortcutsOverlay'
 import { PhoneCall, SunMoon } from 'lucide-react'
 import { useTheme } from '@renderer/features/settings/useTheme'
-import { HomeView } from '@renderer/features/home/HomeView'
-import { LiveView } from '@renderer/features/live/LiveView'
-import { PastCallsView } from '@renderer/features/calls/PastCallsView'
-import { TasksView } from '@renderer/features/tasks/TasksView'
-import { CrmView } from './CrmView'
-import { CalendarView } from '@renderer/features/calendar/CalendarView'
-import { CoachingView } from '@renderer/features/coaching/CoachingView'
-import { AnalyticsView } from '@renderer/features/analytics/AnalyticsView'
-import { SettingsShell } from '@renderer/features/settings/SettingsShell'
-import { KnowledgeView } from '@renderer/features/knowledge/KnowledgeView'
-import { TeamView } from '@renderer/features/team/TeamView'
+import { SkeletonRows } from '@renderer/components/Skeleton'
 import { PlaceholderView } from '@renderer/components/PlaceholderView'
 import { NAV_ITEMS, type NavId } from '@renderer/features/navigation/nav-items'
 import type { AuthUser } from '@renderer/features/auth/types'
 import { getAutoOpenMeetingPage } from '@renderer/features/settings/prefs'
 import { useAutoTranscribeCalls } from '@renderer/features/settings/useAutoTranscribeCalls'
 import { CallDetectedBanner } from '@renderer/features/live/components/CallDetectedBanner'
+
+// Exactly one of these renders at a time (see the `active === ...` switch
+// below, itself remounted via `key={active}` on every switch) — so eagerly
+// importing all eleven, as this file used to, put every screen's code in
+// every window's bundle whether or not that window would ever show it. The
+// detection-overlay window is the extreme case: a second BrowserWindow that
+// loads this SAME bundle (see main.tsx) to render one small floating card,
+// yet paid to parse the entire CRM/Calendar/Coaching/Analytics/Settings/
+// Knowledge/Team code along with everything else.
+const HomeView = lazy(() =>
+  import('@renderer/features/home/HomeView').then((m) => ({ default: m.HomeView }))
+)
+const LiveView = lazy(() =>
+  import('@renderer/features/live/LiveView').then((m) => ({ default: m.LiveView }))
+)
+const PastCallsView = lazy(() =>
+  import('@renderer/features/calls/PastCallsView').then((m) => ({ default: m.PastCallsView }))
+)
+const TasksView = lazy(() =>
+  import('@renderer/features/tasks/TasksView').then((m) => ({ default: m.TasksView }))
+)
+const CrmView = lazy(() => import('./CrmView').then((m) => ({ default: m.CrmView })))
+const CalendarView = lazy(() =>
+  import('@renderer/features/calendar/CalendarView').then((m) => ({ default: m.CalendarView }))
+)
+const CoachingView = lazy(() =>
+  import('@renderer/features/coaching/CoachingView').then((m) => ({ default: m.CoachingView }))
+)
+const AnalyticsView = lazy(() =>
+  import('@renderer/features/analytics/AnalyticsView').then((m) => ({ default: m.AnalyticsView }))
+)
+const SettingsShell = lazy(() =>
+  import('@renderer/features/settings/SettingsShell').then((m) => ({ default: m.SettingsShell }))
+)
+const KnowledgeView = lazy(() =>
+  import('@renderer/features/knowledge/KnowledgeView').then((m) => ({ default: m.KnowledgeView }))
+)
+const TeamView = lazy(() =>
+  import('@renderer/features/team/TeamView').then((m) => ({ default: m.TeamView }))
+)
 
 /** The signed-in application shell. Only rendered once a user is logged in.
  *  `initialNav` lets onboarding drop the user straight onto a screen (e.g. Live
@@ -185,6 +215,17 @@ export function MainApp({
     setActive('past-calls')
   }
 
+  // M19 Task 3B — a callrise://meeting/<eventId> deep link (from a
+  // meeting_starting alert) jumps straight to Calendar and opens that
+  // meeting's prep brief. Same one-shot preselect pattern as openCallId.
+  const [deepLinkEventId, setDeepLinkEventId] = useState<string | null>(null)
+  useEffect(() => {
+    return window.api.prepBrief.onOpenRequested((eventId) => {
+      setDeepLinkEventId(eventId)
+      setActive('calendar')
+    })
+  }, [])
+
   // Command palette's "jump to a specific record" search results — same
   // one-shot preselect pattern as openCallId above, just for the CRM tabs.
   const [openContactId, setOpenContactId] = useState<string | null>(null)
@@ -233,7 +274,9 @@ export function MainApp({
   if (active === 'settings') {
     return (
       <>
-        <SettingsShell user={user} onBack={() => setActive(lastNonSettingsRef.current)} />
+        <Suspense fallback={null}>
+          <SettingsShell user={user} onBack={() => setActive(lastNonSettingsRef.current)} />
+        </Suspense>
         {palette}
       </>
     )
@@ -261,51 +304,66 @@ export function MainApp({
     >
       {/* Keyed on the active screen so each view fades/slides in on switch. */}
       <div key={active} className="animate-view">
-        {active === 'home' ? (
-          <HomeView
-            userName={user.name?.trim() || user.email.split('@')[0]}
-            onNavigate={setActive}
-          />
-        ) : active === 'live-calls' ? (
-          <LiveView
-            onSaved={handleCallSaved}
-            autoStartFromDetection={pendingCallAutoStart}
-            onAutoStartFromDetectionConsumed={() => setPendingCallAutoStart(false)}
-            ambientAutoStart={ambientAutoStart}
-            onAmbientAutoStartConsumed={() => setAmbientAutoStart(null)}
-            onAmbientAutoStartResult={handleAmbientAutoStartResult}
-            remoteStopToken={remoteStopToken}
-            remotePauseToken={remotePauseToken}
-          />
-        ) : active === 'past-calls' ? (
-          <PastCallsView
-            initialSelectedId={openCallId}
-            onInitialSelectionConsumed={() => setOpenCallId(null)}
-          />
-        ) : active === 'tasks' ? (
-          <TasksView />
-        ) : active === 'crm' ? (
-          <CrmView
-            initialContactId={openContactId}
-            initialDealId={openDealId}
-            onInitialSelectionConsumed={() => {
-              setOpenContactId(null)
-              setOpenDealId(null)
-            }}
-          />
-        ) : active === 'calendar' ? (
-          <CalendarView />
-        ) : active === 'coaching' ? (
-          <CoachingView />
-        ) : active === 'analytics' ? (
-          <AnalyticsView />
-        ) : active === 'knowledge' ? (
-          <KnowledgeView />
-        ) : active === 'team' ? (
-          <TeamView />
-        ) : (
-          <PlaceholderView title={activeItem.label} icon={activeItem.icon} onNavigate={setActive} />
-        )}
+        <Suspense
+          fallback={
+            <div className="mx-auto max-w-3xl px-2 py-4">
+              <SkeletonRows />
+            </div>
+          }
+        >
+          {active === 'home' ? (
+            <HomeView
+              userName={user.name?.trim() || user.email.split('@')[0]}
+              onNavigate={setActive}
+            />
+          ) : active === 'live-calls' ? (
+            <LiveView
+              onSaved={handleCallSaved}
+              autoStartFromDetection={pendingCallAutoStart}
+              onAutoStartFromDetectionConsumed={() => setPendingCallAutoStart(false)}
+              ambientAutoStart={ambientAutoStart}
+              onAmbientAutoStartConsumed={() => setAmbientAutoStart(null)}
+              onAmbientAutoStartResult={handleAmbientAutoStartResult}
+              remoteStopToken={remoteStopToken}
+              remotePauseToken={remotePauseToken}
+            />
+          ) : active === 'past-calls' ? (
+            <PastCallsView
+              initialSelectedId={openCallId}
+              onInitialSelectionConsumed={() => setOpenCallId(null)}
+            />
+          ) : active === 'tasks' ? (
+            <TasksView />
+          ) : active === 'crm' ? (
+            <CrmView
+              initialContactId={openContactId}
+              initialDealId={openDealId}
+              onInitialSelectionConsumed={() => {
+                setOpenContactId(null)
+                setOpenDealId(null)
+              }}
+            />
+          ) : active === 'calendar' ? (
+            <CalendarView
+              deepLinkEventId={deepLinkEventId}
+              onDeepLinkConsumed={() => setDeepLinkEventId(null)}
+            />
+          ) : active === 'coaching' ? (
+            <CoachingView />
+          ) : active === 'analytics' ? (
+            <AnalyticsView />
+          ) : active === 'knowledge' ? (
+            <KnowledgeView />
+          ) : active === 'team' ? (
+            <TeamView />
+          ) : (
+            <PlaceholderView
+              title={activeItem.label}
+              icon={activeItem.icon}
+              onNavigate={setActive}
+            />
+          )}
+        </Suspense>
       </div>
       {palette}
     </AppShell>

@@ -1,9 +1,38 @@
+// Diagnostic crash log, written with fs.writeFileSync (synchronous — cannot be
+// lost to the async-stdout-flush-on-exit race that swallows console output on
+// Windows when a process exits immediately after writing to it) to a fixed,
+// Electron-readiness-independent path. Registered before every other import so
+// it catches a throw from ANY of them, not just from this file's own code.
+// TEMPORARY: added to chase a real Windows launch failure that produces zero
+// output through every normal channel (console, --enable-logging, Event
+// Viewer, WER) - remove once that's root-caused.
+import { writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join as joinPathForCrashLog } from 'path'
+const crashLogPath = joinPathForCrashLog(tmpdir(), 'callrise-startup-crash.log')
+function writeCrashLog(label: string, err: unknown): void {
+  try {
+    const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
+    writeFileSync(crashLogPath, `[${new Date().toISOString()}] ${label}\n${detail}\n`, {
+      flag: 'a'
+    })
+  } catch {
+    /* if we can't even write the crash log, there's nothing further to do */
+  }
+}
+process.on('uncaughtException', (err) => writeCrashLog('uncaughtException', err))
+process.on('unhandledRejection', (err) => writeCrashLog('unhandledRejection', err))
+writeCrashLog('process started', 'reached top of main/index.ts')
+
 import { config as loadEnv } from 'dotenv'
 import { app, shell, BrowserWindow, session } from 'electron'
 import { join, dirname } from 'path'
 import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { DEFAULT_CONFIG } from './default-config'
+import { clearActiveConsent } from './consent-gate'
+import { registerCrashLogging, registerLog } from './log'
+writeCrashLog('imports resolved', 'all top-level imports completed without throwing')
 
 // Renamed "Sales OS" -> "CallRise AI" (rebrand), but the on-disk data folder
 // keeps its original name so existing calls/tasks/settings/consent/Google
@@ -11,6 +40,59 @@ import { DEFAULT_CONFIG } from './default-config'
 app.setName('CallRise AI')
 const userDataDir = join(app.getPath('appData'), 'sales-os')
 app.setPath('userData', userDataDir)
+
+registerCrashLogging()
+
+// Deep link (M19 Task 3B): callrise://meeting/<eventId> jumps straight to a
+// meeting's prep brief — e.g. tapped from a Telegram/email meeting_starting
+// alert. In dev, the executable is electron.exe with the project path as an
+// argument, so the OS needs to be told to pass this project back as an arg
+// on every launch; a packaged build's own exe needs no such hint.
+if (!app.isPackaged && process.platform === 'win32') {
+  app.setAsDefaultProtocolClient('callrise', process.execPath, [join(__dirname, '..', '..')])
+} else {
+  app.setAsDefaultProtocolClient('callrise')
+}
+
+// Windows/Linux launch a BRAND NEW process for a protocol invocation rather
+// than routing it to one already running — without a single-instance lock,
+// clicking a callrise:// link while the app is open would silently spawn a
+// second, blank window instead of focusing the existing one and showing the
+// brief. A second launch loses this race and hands its argv to the first via
+// 'second-instance' below, then exits.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  // Calling quit() before whenReady() has resolved aborts this instance's
+  // startup entirely (Electron never fires 'ready' for it) — nothing below
+  // needs guarding against a losing instance limping partway through setup.
+  app.quit()
+} else {
+  app.on('second-instance', (_event, argv) => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+    const link = argv.find((arg) => arg.startsWith('callrise://'))
+    if (link) handleDeepLink(link)
+  })
+}
+
+// macOS delivers a protocol launch via this event instead of argv, both for
+// a cold start (queued below until the window exists) and while running.
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  handleDeepLink(url)
+})
+
+// Lets the audio worklet hand PCM to its worker through shared memory (§1.4),
+// so audio never waits on the renderer's main thread. Chromium otherwise gates
+// SharedArrayBuffer behind cross-origin isolation, which exists to keep a
+// *hostile page* from timing the Spectre side channel — a threat that needs
+// third-party content to exploit, and this window only ever loads the app's own
+// bundle from disk. Nothing depends on the switch working: startAudioPump()
+// constructs a SharedArrayBuffer to test for it and falls back to the original
+// postMessage path if it throws.
+app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer')
 
 // Dev reads the project's .env from the working directory. A packaged app has
 // no project folder (and its working directory is arbitrary), so also look
@@ -49,6 +131,7 @@ import { registerObjectionQueue } from './objection-queue'
 import { registerAppSettings } from './app-settings'
 import { registerLaunchAtLogin } from './launch-at-login'
 import { registerActiveApp } from './active-app'
+import { registerAlerts } from './alerts'
 import {
   registerDetectionService,
   disposeDetectionService,
@@ -59,8 +142,39 @@ import { disposeOverlay } from './detection-overlay'
 import { disposeTray } from './detection-tray'
 import { registerCoachPdf } from './coach-pdf'
 import { registerAiKeys, loadStoredAiKeysIntoEnv } from './ai-keys'
+import { registerFallbackLog } from './ai/fallback-log'
+import { registerModelCatalog } from './ai/catalog-ipc'
+import { registerUpdater } from './updater'
+import { buildDiagnoseReport, wantsDiagnose } from './diagnose'
+import { registerPrepBrief } from './prep-brief-ipc'
 
 let mainWindow: BrowserWindow | null = null
+
+// Set by handleDeepLink() when it fires before the window exists yet (a cold
+// start via the protocol) — flushed once ready-to-show fires below. A send()
+// before the renderer has loaded and registered its listener is simply lost,
+// so this can't just fire immediately regardless of mainWindow's state.
+let pendingDeepLinkEventId: string | null = null
+
+function deliverDeepLink(eventId: string): void {
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
+    mainWindow.webContents.send('prepBrief:openRequested', eventId)
+  } else {
+    pendingDeepLinkEventId = eventId
+  }
+}
+
+/** callrise://meeting/<eventId> — the only deep link shape this app defines. */
+function handleDeepLink(url: string): void {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'callrise:' || parsed.hostname !== 'meeting') return
+    const eventId = decodeURIComponent(parsed.pathname.replace(/^\//, ''))
+    if (eventId) deliverDeepLink(eventId)
+  } catch {
+    /* malformed deep link — ignore rather than crash on attacker-controlled input */
+  }
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -84,6 +198,10 @@ function createWindow(): void {
   // Only show the window once the UI is painted (avoids a white flash).
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+    if (pendingDeepLinkEventId) {
+      mainWindow?.webContents.send('prepBrief:openRequested', pendingDeepLinkEventId)
+      pendingDeepLinkEventId = null
+    }
   })
 
   // Open external links in the real browser — but only safe web schemes.
@@ -125,12 +243,31 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  writeCrashLog('whenReady fired', 'app is ready, starting registration sequence')
   electronApp.setAppUserModelId('ai.callrise.app')
+
+  // `--diagnose`: print one block of text a tester can paste back, then exit
+  // without ever opening a window. Runs before anything else registers, so a
+  // machine where the app fails to start for some OTHER reason can still be
+  // asked what it thinks its own state is.
+  if (wantsDiagnose()) {
+    await loadStoredAiKeysIntoEnv().catch(() => {})
+    process.stdout.write(`${buildDiagnoseReport()}\n`)
+    app.exit(0)
+    return
+  }
 
   // Before anything that might use Deepgram/Anthropic — a user's own
   // Settings-entered key (if any) needs to be in process.env first.
   await loadStoredAiKeysIntoEnv()
   registerAiKeys()
+  registerModelCatalog()
+  registerFallbackLog()
+
+  // Any consent record still on disk belongs to a call that is already over —
+  // this process has not started one. A crash mid-call must never leave behind
+  // a grant that authorises the NEXT launch's first call.
+  clearActiveConsent()
 
   // In dev, Electron shows its own default dock icon on macOS unless we set
   // one explicitly (packaged builds pick it up automatically from build/icon.png).
@@ -146,6 +283,61 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionCheckHandler(
     (wc, permission) => permission === 'media' && isOurWindow(wc)
   )
+
+  // Content-Security-Policy as a real response HEADER, not only the <meta> tag
+  // in index.html (§5.3).
+  //
+  // The meta tag is a fallback, not equivalent: several directives are ignored
+  // when delivered that way (frame-ancestors among them), and a meta tag only
+  // applies once the document has parsed far enough to reach it. A header
+  // applies to the response itself.
+  //
+  // This matters here specifically because transcripts are ATTACKER-INFLUENCED
+  // TEXT — the person on the other end of the call chooses the words that get
+  // rendered in this window — and so is every model response derived from
+  // them. Nothing renders that text as HTML today (audited: no innerHTML, no
+  // dangerouslySetInnerHTML anywhere in the renderer), so this is defence in
+  // depth against a future component that does.
+  //
+  // Packaged builds only. In development the renderer is served by Vite, whose
+  // HMR client needs inline scripts and a websocket back to the dev server;
+  // applying the production policy there would break `npm run dev`, which is
+  // how this app is actually developed. The <meta> tag still covers dev.
+  if (app.isPackaged) {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [
+            [
+              "default-src 'self'",
+              "script-src 'self'",
+              // Tailwind injects styles at runtime, so inline styles stay.
+              "style-src 'self' 'unsafe-inline'",
+              "img-src 'self' data:",
+              "font-src 'self' data:",
+              // The renderer talks to main over IPC, never over the network —
+              // every outbound call (Deepgram, the AI providers, Supabase,
+              // Google, Outlook) is made from the main process. So the
+              // renderer needs no network origins at all, and saying so means
+              // injected script has nowhere to send what it steals.
+              "connect-src 'self'",
+              "object-src 'none'",
+              "base-uri 'none'",
+              "frame-ancestors 'none'",
+              "form-action 'none'"
+            ].join('; ')
+          ]
+        }
+      })
+    })
+  }
+
+  // Inert unless UPDATE_FEED_URL names a trusted https host — the publish
+  // block still carries electron-vite's example.com placeholder, and an
+  // updater pointed at a domain you do not control is a supply-chain
+  // compromise waiting for someone to register it.
+  registerUpdater()
 
   registerTranscription()
   registerCalls()
@@ -167,13 +359,23 @@ app.whenReady().then(async () => {
   registerAppSettings()
   registerLaunchAtLogin()
   registerActiveApp()
+  registerLog()
+  registerAlerts()
+  registerPrepBrief()
   registerDetectionService()
+  writeCrashLog('registrations done', 'all registerX() calls completed, about to createWindow()')
+
+  // A cold start via callrise://meeting/<id> on Windows/Linux — the URL
+  // arrives as a regular argv entry, not the 'open-url' event (macOS-only).
+  const argvDeepLink = process.argv.find((arg) => arg.startsWith('callrise://'))
+  if (argvDeepLink) handleDeepLink(argvDeepLink)
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
 
   createWindow()
+  writeCrashLog('createWindow returned', 'BrowserWindow constructed without throwing')
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

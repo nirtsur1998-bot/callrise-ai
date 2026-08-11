@@ -28,6 +28,32 @@ export function countryDial(code: string | undefined): string | undefined {
   return COUNTRIES.find((c) => c.code === code)?.dial
 }
 
+/** Combines a phoneCountry (ISO2) + national number into E.164
+ *  ("+14155551234") — the join key M19 Task 2's phone-based contact
+ *  matching uses. Main can't do this itself (it doesn't have this
+ *  country->dial-code table), so it's computed here, at the one place a
+ *  contact's phone actually gets typed in, and sent already-formatted. */
+export function toE164(phoneCountry: string | undefined, phone: string | undefined): string | undefined {
+  const dial = countryDial(phoneCountry)
+  if (!dial || !phone) return undefined
+  let digits = phone.replace(/\D/g, '')
+  if (!digits) return undefined
+  // Most countries write the national number with a leading trunk '0' that's
+  // dropped when combining with the country code (e.g. UK "07700 900123" ->
+  // "+447700900123", not "+4407700900123"). Two exceptions: NANP (+1) doesn't
+  // follow this convention at all -- area codes never start with 0, so a
+  // leading 0 there is a typo, not a trunk prefix. Italy (+39) is the
+  // well-known opposite exception -- Italian LANDLINE numbers keep their
+  // leading 0 even in E.164 form (mobile numbers never had one to begin
+  // with), so stripping it there produces an invalid number instead of a
+  // valid one.
+  if (dial !== '+1' && dial !== '+39' && digits.startsWith('0')) {
+    digits = digits.slice(1)
+  }
+  const e164 = `${dial}${digits}`
+  return /^\+[1-9]\d{6,14}$/.test(e164) ? e164 : undefined
+}
+
 export const COUNTRIES: Country[] = [
   { code: 'AF', name: 'Afghanistan', dial: '+93' },
   { code: 'AL', name: 'Albania', dial: '+355' },

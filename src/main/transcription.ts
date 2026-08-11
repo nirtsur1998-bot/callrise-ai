@@ -1,30 +1,94 @@
-import { ipcMain, BrowserWindow, systemPreferences, shell } from 'electron'
+import {
+  app,
+  ipcMain,
+  BrowserWindow,
+  MessageChannelMain,
+  powerMonitor,
+  systemPreferences,
+  shell
+} from 'electron'
+import { appendFileSync } from 'fs'
+import { join } from 'path'
 import WebSocket from 'ws'
 import { keyRejectedHint } from './ai-keys'
+import { SessionTimeline, SleepDetector, formatGapMarker } from './session-health/timeline'
+import { LagTracker } from './session-health/lag'
+import { AudioQueue, frameRms, frameSeconds } from './session-health/queue'
+import { channelRms } from './session-health/channel-test'
+import { LivenessWatchdog, silenceFrame } from './session-health/liveness'
+import { DriftMeter } from './session-health/drift'
+import { HEALTH_TUNING, type GapReason, type HealthSnapshot } from './session-health/types'
+import { BuyerSilenceWatcher } from './windows-capture/buyer-silence'
+import { CrossTalkGate } from './session-health/crosstalk-gate'
 
 const DEEPGRAM_LISTEN_URL = 'wss://api.deepgram.com/v1/listen'
+
+/** Where the streaming socket connects. Overridable so a self-hosted Deepgram
+ *  deployment (which lives on a different host) works without a code change —
+ *  and so the regression suite can point the real pipeline at a local mock
+ *  that enforces Deepgram's 1.25x ingest cap. Read per connection, never
+ *  cached, so it can't go stale across a restart. */
+function listenUrlBase(): string {
+  return process.env.DEEPGRAM_LISTEN_URL?.trim() || DEEPGRAM_LISTEN_URL
+}
 const MAX_CHUNK_BYTES = 1 << 16 // 64 KB safety cap on a single audio frame
 const CONNECT_TIMEOUT_MS = 8000 // give up if we never reach 'open'
 const STABLE_AFTER_MS = 4000 // connection considered healthy after this long
 const STOP_FLUSH_MS = 1500 // wait this long for final words on stop
+// Ping Deepgram every 5s so a PAUSED session (no audio being forwarded) isn't
+// closed by the server's idle timeout.
+//
+// This is NOT a silence cutoff, despite being the only 5-second constant in the
+// audio path. M21 Phase D investigated the standing "the app cancels a session
+// after ~5s of silence" report and found NO such code exists anywhere: no VAD
+// gate, no RMS/amplitude threshold, no inactivity timer, nothing that stops
+// capture on quiet. The worklet forwards silence as ordinary PCM, and this
+// KeepAlive can only ever EXTEND a session's life. A long pause in a call does
+// not drop the session.
+//
+// The likeliest cause of the reported symptom is that nothing visibly changes
+// during silence — Deepgram sends no results, so the transcript stops growing
+// and the UI merely looks dead. The one genuine automatic teardown with
+// comparable timing is the reconnect cascade below (see MAX_RECONNECTS): three
+// failures at 500/1000/2000ms backoff inside the STABLE_AFTER_MS window ends a
+// session roughly 4-6s after the first drop, which is easy to misread as a
+// silence timeout. It surfaces as "Lost connection to the transcription
+// service", not as a silent stop.
 const KEEPALIVE_MS = 5000
 const MAX_RECONNECTS = 3
+/** How often the queue is pushed toward the socket. */
+const DRAIN_MS = 25
 
 interface StartOptions {
   sampleRate: number
   /** When true, stream 2 interleaved channels (0=rep, 1=buyer) via Deepgram
    *  multichannel. Defaults to false (mono + diarize) for mic-only calls. */
   multichannel?: boolean
-  /** When set, the start only proceeds if the CURRENT session has this id —
+  /** When set, the start only proceeds if the CURRENT session has this id �
    *  so a stale in-flight restart (from an already-stopped call) can never
    *  tear down a newer call's session. Omitted for a brand-new call. */
   expectedSessionId?: number
+  /** Identifies the CAPTURE PIPELINE (one renderer-side Recorder) that will
+   *  feed this session. Audio from any OTHER producer in the same window is
+   *  refused.
+   *
+   *  The window alone was never sufficient authority. A Recorder that outlives
+   *  its call — an abandoned AudioContext whose worklet is still posting PCM
+   *  into sendAudio — lives in the same window and was therefore just as
+   *  authorised as the live one. Two producers each pushing at 1x realtime,
+   *  against Deepgram's ~1.25x ingest cap, is a ~0.75s-per-second lag ratchet
+   *  that nothing recovers from and only a process restart clears. That is the
+   *  "first call perfect, every call after it unusable" bug.
+   *
+   *  Optional: when absent no producer check applies, so existing callers and
+   *  tests that never mint an id keep working exactly as before. */
+  producerId?: number
 }
 
 // Everything about one live session lives here, so restarts/reconnects can't
 // cross-contaminate (stale timers, stale counters, stale sockets).
 interface Session {
-  /** Monotonically increasing id — lets restarts prove they target the
+  /** Monotonically increasing id � lets restarts prove they target the
    *  session they think they do (see StartOptions.expectedSessionId). */
   id: number
   window: BrowserWindow
@@ -34,17 +98,85 @@ interface Session {
   channels: number
   /** True when streaming 2 channels with per-channel labels (no diarize). */
   multichannel: boolean
+  /** Identifies the SPEAKER-LABEL NAMESPACE these results belong to.
+   *
+   *  Deepgram restarts diarization from scratch on every new connection, so
+   *  "speaker 0" after a reconnect is whoever happens to talk first there — not
+   *  the same person as before. The mono(diarize)↔multichannel(channel) swap
+   *  changes the meaning of the numbers too. Nothing downstream can tell those
+   *  apart from a genuine speaker change, so every result carries the epoch it
+   *  was labelled under and consumers refuse to merge or attribute across one. */
+  speakerEpoch: number
+  /** The one capture pipeline allowed to feed this session (see
+   *  StartOptions.producerId). null = no producer check (legacy callers). */
+  producerId: number | null
+  /** Frames refused because they came from a DIFFERENT producer than
+   *  `producerId` above — see HealthSnapshot.rejectedProducerFrames. */
+  rejectedProducerFrames: number
   ws: WebSocket | null
   keepAlive: ReturnType<typeof setInterval> | null
   connectTimer: ReturnType<typeof setTimeout> | null
   stableTimer: ReturnType<typeof setTimeout> | null
-  audioSecondsSent: number
+  drainTimer: ReturnType<typeof setInterval> | null
+  healthTimer: ReturnType<typeof setInterval> | null
+
+  // --- Session health (M18 §1) ----------------------------------------------
+  timeline: SessionTimeline
+  lag: LagTracker
+  queue: AudioQueue
+  liveness: LivenessWatchdog
+  drift: DriftMeter
+  sleep: SleepDetector
+  /** Zero-native-code mitigation for the Windows endpoint bug (§7, different
+   *  angle) — flags "mic live, buyer bit-silent" while the real per-process
+   *  addon is blocked. Only meaningful when `multichannel` is true. */
+  buyerSilence: BuyerSilenceWatcher
+  /** M19 Task 2 Part A — the loudspeaker/echo problem: real per-channel
+   *  energy history, checked against Deepgram's claimed channel per Results
+   *  message. Only meaningful when `multichannel` is true. */
+  crossTalk: CrossTalkGate
+  /** The session-timeline capture time (session.timeline.elapsedMs() scale)
+   *  that corresponds to Deepgram's start=0 on the CURRENT connection —
+   *  Deepgram's start/duration are relative to ITS OWN per-connection audio
+   *  clock (like lag.ts's ackBaseSec rebasing), so crossTalk (which is fed
+   *  on the session's continuous timeline) needs this offset to translate
+   *  one into the other. NOT simply "when the socket opened": a reconnect
+   *  can replay up to replayCapSec of already-queued backlog first, so
+   *  start=0 actually corresponds to that backlog's own capture time — see
+   *  the assignment site in connect()'s 'open' handler. */
+  connectionOpenedAtMs: number
+  /** Shed audio waiting to be reported as ONE gap marker, rather than one
+   *  marker per 40ms frame. Flushed the moment audio flows again. */
+  pendingShedMs: number
+  pendingShedReason: GapReason
+  /** True once a socket has opened, so we can tell a reconnect from a start. */
+  connectedOnce: boolean
+
   reconnectAttempts: number
   stopping: boolean
+  /** M22 — set once this session has told the renderer to drop buyer
+   *  capture because it kept needing lag corrections faster than they could
+   *  recover (see healthTick's 'reset' branch). Guards against re-emitting
+   *  the fallback event on every subsequent tick while the renderer's own
+   *  `transcription:start({multichannel:false})` restart is still in flight. */
+  multichannelFallbackSignaled: boolean
 }
 
 let session: Session | null = null
 let nextSessionId = 1
+// Monotonic across the whole app run, so an epoch value is never reused and a
+// late/stale result can't be mistaken for the current namespace.
+let nextSpeakerEpoch = 1
+
+/**
+ * Which route the last audio frame actually took (§1.4).
+ *
+ * Recorded rather than assumed. The fast path degrades silently by design —
+ * no shared memory, no port, no worker and the recorder quietly uses the old
+ * route — which is right for the user and useless for debugging unless the
+ * machine can be asked afterwards which one it ended up on.
+ */
+let audioPath: 'none' | 'renderer' | 'direct' = 'none'
 
 function emit(s: Session, channel: string, payload: unknown): void {
   if (!s.window.isDestroyed()) {
@@ -69,7 +201,15 @@ function buildUrl(s: Session): string {
   // fall back to diarization to guess speakers within the single channel.
   if (s.multichannel) params.set('multichannel', 'true')
   else params.set('diarize', 'true')
-  return `${DEEPGRAM_LISTEN_URL}?${params.toString()}`
+  return `${listenUrlBase()}?${params.toString()}`
+}
+
+/** Bytes we let the socket hold before we stop feeding it — one second of
+ *  audio. Beyond this the socket is not keeping up, and every further byte
+ *  handed over would land in ws's own UNBOUNDED internal queue, which is
+ *  exactly the buffer that turns a stalled uplink into permanent lag. */
+function highWaterBytes(s: Session): number {
+  return s.sampleRate * s.channels * 2
 }
 
 function clearTimers(s: Session): void {
@@ -84,6 +224,14 @@ function clearTimers(s: Session): void {
   if (s.stableTimer) {
     clearTimeout(s.stableTimer)
     s.stableTimer = null
+  }
+  if (s.drainTimer) {
+    clearInterval(s.drainTimer)
+    s.drainTimer = null
+  }
+  if (s.healthTimer) {
+    clearInterval(s.healthTimer)
+    s.healthTimer = null
   }
 }
 
@@ -102,10 +250,256 @@ function teardown(s: Session): void {
 
 function failSession(s: Session, message: string): void {
   if (session !== s) return
+  logSessionSummary(s)
   teardown(s)
   emit(s, 'transcription:error', { message })
   emit(s, 'transcription:state', { state: 'error' })
   session = null
+}
+
+// --- Gaps -------------------------------------------------------------------
+
+/** Record audio that will never be transcribed, and tell the renderer so it
+ *  can show `[gap: Ns]` instead of silently splicing two distant moments. */
+function markGap(s: Session, durationMs: number, reason: GapReason): void {
+  const gap = s.timeline.markGap(durationMs, reason)
+  if (!gap) return
+  emit(s, 'transcription:gap', {
+    durationMs: gap.durationMs,
+    reason: gap.reason,
+    marker: formatGapMarker(gap.durationMs)
+  })
+}
+
+function queueShed(s: Session, seconds: number, reason: GapReason): void {
+  if (seconds <= 0) return
+  s.pendingShedMs += seconds * 1000
+  s.pendingShedReason = reason
+}
+
+function flushPendingShed(s: Session): void {
+  if (s.pendingShedMs <= 0) return
+  const ms = s.pendingShedMs
+  const reason = s.pendingShedReason
+  s.pendingShedMs = 0
+  markGap(s, ms, reason)
+}
+
+// --- The send path ----------------------------------------------------------
+
+/**
+ * Move queued audio into the socket while the socket can take it.
+ *
+ * The `bufferedAmount` check is the whole point. Previously every frame went
+ * straight to `ws.send()`, which never blocks and never refuses — it just
+ * queues internally, without bound. On a half-open TCP socket (a Wi-Fi drop
+ * with no FIN, where `readyState` stays OPEN for the entire retransmit window)
+ * minutes of audio would pile up invisibly and then flood Deepgram on
+ * recovery, where a 1.25x ingest cap turns it into lag that never recovers.
+ */
+function drain(s: Session): void {
+  const ws = s.ws
+  if (!ws || ws.readyState !== WebSocket.OPEN) return
+  const limit = highWaterBytes(s)
+  let sentAny = false
+  while (s.queue.length > 0 && ws.bufferedAmount < limit) {
+    const frame = s.queue.peek()
+    if (!frame) break
+    try {
+      ws.send(frame.bytes)
+    } catch {
+      break // leave it queued; the close/health path decides what happens next
+    }
+    s.queue.shift()
+    s.lag.onAudioSubmitted(frame.seconds)
+    sentAny = true
+  }
+  if (sentAny) {
+    s.liveness.onSubmitted(s.timeline.elapsedMs())
+    // Audio is flowing again, so this is the right moment in the transcript to
+    // report whatever was dropped to get here.
+    flushPendingShed(s)
+  }
+}
+
+/**
+ * Deliberately discard the backlog and resume at the live edge, then rebuild
+ * the socket. This is the escape hatch for a pipeline that is behind and
+ * cannot catch up: at a 1.25x ingest cap a realtime producer claws back only
+ * 0.25x per second, so 90 seconds of backlog needs six flawless minutes to
+ * clear. Throwing it away costs the words we already missed and nothing else.
+ */
+function resetToLiveEdge(s: Session, reason: GapReason): void {
+  const dropped = s.queue.clear()
+  queueShed(s, dropped.droppedSec, reason)
+  flushPendingShed(s)
+  s.lag.resumeAtLiveEdge()
+  s.drift.resync()
+
+  if (s.ws) {
+    try {
+      s.ws.removeAllListeners()
+      s.ws.terminate()
+    } catch {
+      /* ignore */
+    }
+    s.ws = null
+  }
+  // Socket-scoped timers only: the drain and health ticks belong to the
+  // SESSION and must keep running across the rebuild.
+  if (s.keepAlive) {
+    clearInterval(s.keepAlive)
+    s.keepAlive = null
+  }
+  if (s.connectTimer) {
+    clearTimeout(s.connectTimer)
+    s.connectTimer = null
+  }
+  if (s.stableTimer) {
+    clearTimeout(s.stableTimer)
+    s.stableTimer = null
+  }
+  emit(s, 'transcription:state', { state: 'reconnecting', attempt: s.reconnectAttempts })
+  connect(s)
+}
+
+/**
+ * A one-line, human-readable summary appended on every call end, to a plain
+ * text file in the app's own data folder (`session-health.log`, next to
+ * `app-settings.json`). Not a general logging system — one line per session,
+ * cheap and synchronous.
+ *
+ * WHY THIS EXISTS: diagnosing a live-call performance report normally means
+ * "open DevTools and read the console", which does not work on a machine
+ * that has never had it enabled (a real support case, 2026-08-06) and is not
+ * something to ask a non-technical tester to do reliably anyway. This file
+ * is something anyone can open in Notepad and paste into a message, with the
+ * exact numbers ANY diagnosis of "still slow" needs first: was a rejected-
+ * producer ever non-zero (an orphaned-recorder ghost, see StartOptions.
+ * producerId), and did drift/lag ever leave the healthy range. Never throws —
+ * a logging failure must never affect a live call.
+ */
+function logSessionSummary(s: Session): void {
+  try {
+    const snap = snapshot(s)
+    const line =
+      `${new Date().toISOString()} session=${s.id} producerId=${s.producerId ?? 'none'} ` +
+      `multichannel=${s.multichannel} submittedSec=${snap.submittedSec} ` +
+      `acknowledgedSec=${snap.acknowledgedSec} maxLagSec=${snap.lagSec} ` +
+      `medianLagSec=${snap.medianLagSec} resets=${snap.resets} driftPpm=${snap.driftPpm} ` +
+      `rejectedProducerFrames=${snap.rejectedProducerFrames}\n`
+    appendFileSync(join(app.getPath('userData'), 'session-health.log'), line, 'utf8')
+  } catch {
+    /* logging must never break a real call */
+  }
+}
+
+function snapshot(s: Session): HealthSnapshot {
+  const at = s.timeline.elapsedMs()
+  const verdict = s.lag.evaluate(at)
+  return {
+    submittedSec: Math.round(s.lag.submittedSeconds * 100) / 100,
+    acknowledgedSec: Math.round(s.lag.acknowledgedSeconds * 100) / 100,
+    lagSec: Math.round(s.lag.instantLagSec * 100) / 100,
+    medianLagSec: Math.round(verdict.medianLagSec * 100) / 100,
+    tier: verdict.action,
+    queuedSec: Math.round(s.queue.queuedSeconds * 100) / 100,
+    shedSec: Math.round(s.queue.shedSeconds * 100) / 100,
+    resets: s.lag.resetCount,
+    gaps: s.timeline.gapMarkers(),
+    driftPpm: s.drift.read().ppm,
+    rejectedProducerFrames: s.rejectedProducerFrames
+  }
+}
+
+/** One second of health: sleep, lag, liveness — in that order of authority. */
+function healthTick(s: Session): void {
+  if (session !== s) return
+  const at = s.timeline.elapsedMs()
+
+  // A suspend invalidates every other reading, so it is judged first. Twenty
+  // minutes asleep is twenty minutes of buffer; at a 1.25x ingest cap that
+  // would be eighty minutes of lag if it were ever replayed.
+  const sleptMs = s.sleep.tick()
+  if (sleptMs > 0) {
+    const dropped = s.queue.clear()
+    queueShed(s, dropped.droppedSec + sleptMs / 1000, 'sleep')
+    s.liveness.start(at)
+    resetToLiveEdge(s, 'sleep')
+    return
+  }
+
+  s.lag.sample(at)
+  const verdict = s.lag.evaluate(at)
+  if (verdict.action === 'reset') {
+    // M22 — a reset-worthy tick on a multichannel session that has ALREADY
+    // needed `maxResetsPerWindow` resets in the trailing `resetWindowMs` is
+    // not a one-off blip; it's the shape of a SUSTAINED deficit (Deepgram's
+    // own multichannel processing cost is the leading suspect, confirmed as
+    // real in M22's investigation). Reconnecting again just buys another few
+    // seconds before the same tick fires again. Tell the renderer to drop
+    // buyer capture and continue mic-only instead — it owns the loopback
+    // teardown, this session doesn't. Signaled once per session so the
+    // renderer's own restart (which replaces this session outright) isn't
+    // raced by repeat signals on the next 1s tick.
+    if (s.multichannel && !s.multichannelFallbackSignaled && s.lag.resetsInWindow(at) >= HEALTH_TUNING.maxResetsPerWindow) {
+      s.multichannelFallbackSignaled = true
+      emit(s, 'transcription:multichannelFallback', {})
+    }
+    s.lag.noteReset(at)
+    console.warn(
+      `[transcription] lag reset: median=${verdict.medianLagSec.toFixed(1)}s rising=${verdict.rising}`
+    )
+    resetToLiveEdge(s, 'reconnect')
+    return
+  }
+  if (verdict.action === 'shed') {
+    // Ongoing high lag with no disconnect — trim the LOCAL queue back toward
+    // the live edge the same way the queue always sheds on overflow: silence
+    // first. `trimToReplayCap()` is deliberately NOT used here — it exists
+    // for the post-disconnect backlog case (its own doc comment says so) and
+    // chops blindly from the head regardless of whether the frame is silence
+    // or real speech. Reusing it for ordinary ongoing lag discarded real,
+    // never-yet-sent words on every tick lag stayed elevated, which is what
+    // was producing garbled, discontinuous transcripts under exactly the
+    // network conditions this tier exists to recover gracefully from.
+    const dropped = s.queue.shedToward(HEALTH_TUNING.replayCapSec)
+    queueShed(s, dropped.droppedSec, 'shed')
+  }
+
+  const live = s.liveness.evaluate(at)
+  if (live.state === 'socket-dead') {
+    // readyState says OPEN, but nothing has come back for ten seconds while we
+    // were actively streaming. The socket is gone; TCP just hasn't noticed.
+    console.warn(
+      `[transcription] server silent for ${Math.round(live.forMs)}ms — rebuilding socket`
+    )
+    resetToLiveEdge(s, 'reconnect')
+    return
+  }
+  if (live.state === 'capture-dead') {
+    emit(s, 'transcription:captureLost', { forMs: Math.round(live.forMs) })
+  }
+
+  // Deepgram closes with 1011/NET-0001 if no audio arrives within ~10s of a
+  // socket opening, and KeepAlive does not satisfy that deadline — only audio
+  // does. A muted or paused call must therefore keep sending real silence.
+  if (s.ws?.readyState === WebSocket.OPEN && s.liveness.needsSilenceFill(at)) {
+    const frameMs = HEALTH_TUNING.silenceFillFrameMs
+    try {
+      s.ws.send(silenceFrame(frameMs, s.channels, s.sampleRate))
+      s.liveness.noteSilenceFill(at)
+      // Recorded so it can be subtracted back out of the server's audio clock.
+      // It is not real audio: counting it as submitted would manufacture lag
+      // from a muted mic, and ignoring it entirely would hand the pipeline
+      // free acknowledgement credit that hides real lag after a long pause.
+      s.lag.onSilenceSubmitted(frameMs / 1000)
+    } catch {
+      /* the health path will notice a genuinely broken socket */
+    }
+  }
+
+  emit(s, 'transcription:health', { ...snapshot(s), liveness: live.state })
 }
 
 function connect(s: Session): void {
@@ -133,9 +527,39 @@ function connect(s: Session): void {
       clearTimeout(s.connectTimer)
       s.connectTimer = null
     }
-    // Deepgram restarts its audio clock per connection — align our counter so
-    // the latency math stays correct across reconnects.
-    s.audioSecondsSent = 0
+    // Deepgram restarts DIARIZATION per connection, so the speaker labels
+    // that follow belong to a brand-new namespace. Bumping the epoch here
+    // (not only on transcription:start) is what makes a mid-call reconnect
+    // safe: without it, post-reconnect "speaker 0" merges straight into a
+    // pre-reconnect run for a different person.
+    s.speakerEpoch = nextSpeakerEpoch++
+
+    const at = s.timeline.elapsedMs()
+
+    // Anything buffered while we were disconnected is judged HERE, in one
+    // place, before a single byte goes out. Deepgram's own guidance is to
+    // buffer during an outage; followed without a cap that guidance is what
+    // manufactures the ratchet, so we keep a short tail and drop the rest.
+    if (s.connectedOnce) {
+      const dropped = s.queue.trimToReplayCap()
+      queueShed(s, dropped.droppedSec, 'reconnect')
+    }
+    s.connectedOnce = true
+
+    // Deepgram restarts its audio clock per connection; the tracker rebases
+    // onto the cumulative scale so lag stays continuous across the reconnect.
+    s.lag.onConnectionOpen()
+    s.liveness.onConnectionOpen(at)
+    // Same rebasing crossTalk needs — see the field's own doc comment. NOT
+    // just "now": trimToReplayCap() above can leave up to replayCapSec of
+    // already-captured backlog still queued, and THAT is what Deepgram will
+    // process as start=0 on this connection, not whatever's captured next.
+    // Using "now" here would misdate every crossTalk window on this
+    // connection by exactly the replayed backlog's duration. The oldest
+    // surviving frame's own capture time is the correct anchor; only fall
+    // back to "now" when the queue is genuinely empty (nothing to replay).
+    s.connectionOpenedAtMs = s.queue.peek()?.atMs ?? at
+
     emit(s, 'transcription:state', { state: 'listening' })
     // Only forgive the retry budget once the connection has proven stable.
     s.stableTimer = setTimeout(() => {
@@ -146,10 +570,12 @@ function connect(s: Session): void {
         ws.send(JSON.stringify({ type: 'KeepAlive' }))
       }
     }, KEEPALIVE_MS)
+    drain(s)
   })
 
   ws.on('message', (raw: WebSocket.RawData) => {
     if (session !== s) return
+    s.liveness.onServerMessage(s.timeline.elapsedMs())
     let msg: Record<string, unknown>
     try {
       msg = JSON.parse(raw.toString()) as Record<string, unknown>
@@ -162,7 +588,12 @@ function connect(s: Session): void {
           | {
               alternatives?: Array<{
                 transcript?: string
-                words?: Array<{ speaker?: number; word?: string; punctuated_word?: string }>
+                words?: Array<{
+                  speaker?: number
+                  word?: string
+                  punctuated_word?: string
+                  confidence?: number
+                }>
               }>
             }
           | undefined
@@ -175,25 +606,76 @@ function connect(s: Session): void {
         : null
       const channel =
         channelIndex && typeof channelIndex[0] === 'number' ? (channelIndex[0] as number) : null
-      const words = (alt?.words ?? []).map((w) => ({
-        speaker:
-          s.multichannel && (channel === 0 || channel === 1)
-            ? channel
-            : typeof w.speaker === 'number'
-              ? w.speaker
-              : 0,
-        text: w.punctuated_word ?? w.word ?? ''
-      }))
+      const rawWords = alt?.words ?? []
+      const deterministic = s.multichannel && (channel === 0 || channel === 1)
+      // In multichannel the speaker IS the channel, so attribution is
+      // deterministic and always certain. Under diarization it's a guess, and
+      // Deepgram sometimes omits `speaker` entirely — that used to fall through
+      // to 0, making "no idea who said this" indistinguishable from "definitely
+      // the rep". Track it instead of hiding it.
+      let speakerCertain = true
+      // The channel is ALSO stamped alongside the speaker (independent of the
+      // certainty tracking above): `speaker` alone is ambiguous — in mono it
+      // is a diarized guess, in multichannel it is the channel index. Without
+      // it, "speaker 0" means two different people either side of a mid-call
+      // switch to buyer capture, and the saved transcript cannot say which.
+      // Identity is the (channel, speaker) PAIR.
+      const words = rawWords.map((w) => {
+        if (!deterministic && typeof w.speaker !== 'number') speakerCertain = false
+        return {
+          speaker: deterministic ? channel : typeof w.speaker === 'number' ? w.speaker : 0,
+          ...(deterministic ? { channel } : {}),
+          text: w.punctuated_word ?? w.word ?? ''
+        }
+      })
+      // Lowest per-word confidence in this result — a single badly-heard word is
+      // enough to make the whole turn's attribution suspect.
+      const confidences = rawWords
+        .map((w) => w.confidence)
+        .filter((c): c is number => typeof c === 'number' && Number.isFinite(c))
+      const minConfidence = confidences.length ? Math.min(...confidences) : null
       const start = typeof msg.start === 'number' ? msg.start : 0
       const duration = typeof msg.duration === 'number' ? msg.duration : 0
-      // Real-time lag = how far behind live audio this transcript is.
-      const lagMs = Math.max(0, (s.audioSecondsSent - (start + duration)) * 1000)
+      // The acknowledgement cursor: how much of what we sent Deepgram has now
+      // accounted for. Connection-relative, rebased onto the session scale.
+      s.lag.onAcknowledged(start + duration)
+
+      // M19 Task 2 Part A — the loudspeaker/echo problem. Deepgram's start/
+      // duration are relative to THIS connection's own audio clock; rebase
+      // onto the session's continuous timeline (the same scale crossTalk was
+      // fed on) using the offset captured at connection-open, same principle
+      // as lag.ts's ackBaseSec rebasing just above. Synthetic silence-fill
+      // frames (healthTick's needsSilenceFill) advance Deepgram's clock
+      // without ever reaching crossTalk.observe() (they bypass ingestAudio
+      // entirely), so — exactly like lag.ts's own acknowledgedSeconds getter
+      // — that injected duration must be subtracted back out here too, or
+      // every crosstalk window drifts further ahead of real capture time
+      // with each fill on this connection.
+      const syntheticSec = s.lag.connectionSyntheticSeconds
+      if (s.multichannel && (channel === 0 || channel === 1) && (msg.is_final === true)) {
+        const windowStartMs = s.connectionOpenedAtMs + (start - syntheticSec) * 1000
+        const windowEndMs = s.connectionOpenedAtMs + (start + duration - syntheticSec) * 1000
+        if (s.crossTalk.disagreesWithClaim(channel, windowStartMs, windowEndMs)) {
+          emit(s, 'transcription:crossTalkWarning', {})
+        }
+      }
+
       emit(s, 'transcription:transcript', {
         transcript,
         words,
         isFinal: msg.is_final === true,
         speechFinal: msg.speech_final === true,
-        lagMs
+        // The real (session-health) lag figure — a two-cursor measurement
+        // proven against Deepgram's 1.25x ingest cap, not the simple
+        // "seconds sent minus seconds acknowledged" estimate this superseded.
+        lagMs: Math.round(s.lag.instantLagSec * 1000),
+        speakerEpoch: s.speakerEpoch,
+        speakerCertain,
+        minConfidence,
+        // Multichannel labels are the CHANNEL, so speaker 0 is the rep by
+        // construction; diarization labels are a guess with no fixed meaning.
+        // Consumers need to tell those apart to know what a label is worth.
+        multichannel: s.multichannel
       })
     } else if (msg.type === 'UtteranceEnd') {
       emit(s, 'transcription:utteranceEnd', {})
@@ -230,11 +712,14 @@ function connect(s: Session): void {
     }
     if (s.stopping) {
       // Graceful stop finished flushing — the final words have been sent.
+      clearTimers(s)
       session = null
       emit(s, 'transcription:closed', {})
       return
     }
-    // Unexpected drop — reconnect with exponential backoff.
+    // Unexpected drop — reconnect with exponential backoff. Audio keeps
+    // arriving meanwhile and accumulates in the bounded queue, which sheds
+    // rather than growing; the reconnect then keeps only a short tail.
     if (s.reconnectAttempts < MAX_RECONNECTS) {
       s.reconnectAttempts += 1
       emit(s, 'transcription:state', { state: 'reconnecting', attempt: s.reconnectAttempts })
@@ -251,6 +736,105 @@ function connect(s: Session): void {
   })
 }
 
+/**
+ * IPC hands us either an ArrayBuffer or a Node Buffer. Node Buffers from IPC
+ * can be views into a shared pool, and because frames are now QUEUED rather
+ * than sent immediately, holding such a view would let later traffic overwrite
+ * audio we haven't sent yet. So this always produces an independent copy.
+ */
+/**
+ * One audio frame into the session, wherever it came from.
+ *
+ * Shared by the classic IPC path and the direct worker port (§1.4) so the two
+ * can never drift apart — the health accounting below is the thing that
+ * detects the lag ratchet, and a second copy of it that quietly skipped the
+ * drift resync would leave one of the two paths unmonitored.
+ */
+function ingestAudio(s: Session, chunk: unknown): void {
+  const bytes = toBytes(chunk)
+  if (!bytes || bytes.byteLength <= 0 || bytes.byteLength > MAX_CHUNK_BYTES) return
+
+  const at = s.timeline.elapsedMs()
+  const rms = frameRms(bytes)
+  s.liveness.onAudio(at, rms)
+
+  if (s.multichannel) {
+    // Computed once and shared — buyerSilence and crossTalk both need
+    // per-channel RMS for this exact frame, and each recomputing it from the
+    // raw bytes independently is pure redundant CPU on the main process's
+    // single thread, on every multichannel frame for the whole call.
+    const [micRms = 0, buyerRms = 0] = channelRms(bytes, 2)
+    const verdict = s.buyerSilence.observeRms(at, micRms, buyerRms)
+    if (verdict.shouldWarn) emit(s, 'transcription:buyerSilent', { reason: verdict.reason })
+    s.crossTalk.observeRms(at, micRms, buyerRms)
+  }
+
+  // A discontinuity is a device event or a suspend, not accumulated drift.
+  // Resync rather than letting it be absorbed into the clock estimate.
+  if (s.drift.onFrame(at, bytes.byteLength)) s.drift.resync()
+
+  const shed = s.queue.push({
+    bytes,
+    seconds: frameSeconds(bytes.byteLength, s.channels, s.sampleRate),
+    rms,
+    atMs: at
+  })
+  queueShed(s, shed.droppedSec, 'shed')
+  drain(s)
+}
+
+/**
+ * Hands each window a private MessagePort straight to this process, so the
+ * audio worker can stream without ever touching the renderer's main thread.
+ *
+ * The port is the security boundary as well as the fast path: it is created
+ * here, for one webContents, and audio arriving on it is only accepted while
+ * that same window owns the live session. A port from a window that has since
+ * been replaced carries no authority at all.
+ */
+function registerAudioPort(): void {
+  const ports = new Map<number, Electron.MessagePortMain>()
+
+  ipcMain.on('audio-port:request', (event) => {
+    const wcId = event.sender.id
+    // Re-requesting replaces the old port rather than stacking a second one;
+    // a call that restarts must not leave a live pipe from the previous take.
+    ports.get(wcId)?.close()
+    ports.delete(wcId)
+
+    const { port1, port2 } = new MessageChannelMain()
+    ports.set(wcId, port1)
+
+    port1.on('message', (msg) => {
+      const s = session
+      if (!s) return
+      if (s.window.isDestroyed()) return
+      if (s.window.webContents.id !== wcId) return
+      audioPath = 'direct'
+      ingestAudio(s, msg.data)
+    })
+    port1.on('close', () => {
+      if (ports.get(wcId) === port1) ports.delete(wcId)
+    })
+    port1.start()
+
+    event.sender.once('destroyed', () => {
+      ports.get(wcId)?.close()
+      ports.delete(wcId)
+    })
+    event.sender.postMessage('audio-port:granted', null, [port2])
+  })
+}
+
+function toBytes(chunk: unknown): ArrayBuffer | null {
+  if (chunk instanceof ArrayBuffer) return chunk
+  if (ArrayBuffer.isView(chunk)) {
+    const view = chunk as ArrayBufferView
+    return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength) as ArrayBuffer
+  }
+  return null
+}
+
 export function disposeTranscription(): void {
   if (session) {
     teardown(session)
@@ -258,11 +842,34 @@ export function disposeTranscription(): void {
   }
 }
 
+/** Current session health, for the `--diagnose` report. Null when idle. */
+export function transcriptionHealth(): HealthSnapshot | null {
+  if (!session) return null
+  return snapshot(session)
+}
+
+/** Which route audio last took. See `audioPath`. */
+export function transcriptionAudioPath(): 'none' | 'renderer' | 'direct' {
+  return audioPath
+}
+
 let registered = false
 
 export function registerTranscription(): void {
   if (registered) return
   registered = true
+
+  // `powerMonitor` is documented to fire 'resume' twice on macOS and, on some
+  // Linux desktop environments, not at all — so it can never be the sleep
+  // DETECTOR (SleepDetector's clock-divergence check owns that, and is what
+  // actually decides whether a suspend happened). What it is good for is
+  // speed: without this, a resume is only noticed on the next 1s health tick.
+  // Forcing an immediate tick here shrinks that to the width of the event
+  // itself, and firing twice costs nothing — the second call sees `sleptMs`
+  // already back near zero and no-ops.
+  powerMonitor.on('resume', () => {
+    if (session) healthTick(session)
+  })
 
   ipcMain.handle('transcription:start', (event, options: StartOptions) => {
     const key = process.env.DEEPGRAM_API_KEY?.trim() ?? ''
@@ -274,7 +881,7 @@ export function registerTranscription(): void {
       return { ok: false }
     }
 
-    // A restart that names an expected session must match the CURRENT one —
+    // A restart that names an expected session must match the CURRENT one �
     // otherwise it's a stale request from an older call and must not clobber
     // the newer session. Return without disposing anything.
     const expected = options?.expectedSessionId
@@ -285,49 +892,100 @@ export function registerTranscription(): void {
     // Replace any previous session entirely.
     disposeTranscription()
     const multichannel = options?.multichannel === true
+    const sampleRate = Number(options?.sampleRate) > 0 ? Number(options.sampleRate) : 16000
+    const channels = multichannel ? 2 : 1
+    const timeline = new SessionTimeline()
     const s: Session = {
       id: nextSessionId++,
       window,
       apiKey: key,
-      sampleRate: Number(options?.sampleRate) > 0 ? Number(options.sampleRate) : 16000,
-      channels: multichannel ? 2 : 1,
+      sampleRate,
+      channels,
       multichannel,
+      // Provisional — 'open' assigns the real one. A mono↔multichannel restart
+      // lands here, and channel-index labels mean something different from
+      // diarization labels, so it must never inherit the old epoch.
+      speakerEpoch: nextSpeakerEpoch++,
+      producerId: typeof options?.producerId === 'number' ? options.producerId : null,
+      rejectedProducerFrames: 0,
       ws: null,
       keepAlive: null,
       connectTimer: null,
       stableTimer: null,
-      audioSecondsSent: 0,
+      drainTimer: null,
+      healthTimer: null,
+      timeline,
+      lag: new LagTracker(),
+      queue: new AudioQueue(),
+      liveness: new LivenessWatchdog(),
+      drift: new DriftMeter(sampleRate, channels),
+      sleep: new SleepDetector(),
+      buyerSilence: new BuyerSilenceWatcher(),
+      crossTalk: new CrossTalkGate(),
+      connectionOpenedAtMs: 0,
+      pendingShedMs: 0,
+      pendingShedReason: 'shed',
+      connectedOnce: false,
       reconnectAttempts: 0,
-      stopping: false
+      stopping: false,
+      multichannelFallbackSignaled: false
     }
     session = s
+    s.liveness.start(timeline.elapsedMs())
+    s.drainTimer = setInterval(() => {
+      if (session === s) drain(s)
+    }, DRAIN_MS)
+    s.healthTimer = setInterval(() => healthTick(s), HEALTH_TUNING.lagSampleMs)
     emit(s, 'transcription:state', { state: 'connecting' })
     connect(s)
     return { ok: true as const, sessionId: s.id }
   })
 
-  ipcMain.on('transcription:audio', (event, chunk: ArrayBuffer) => {
+  ipcMain.on('transcription:audio', (event, chunk: ArrayBuffer, producerId?: unknown) => {
     const s = session
-    if (!s || !s.ws || s.ws.readyState !== WebSocket.OPEN) return
+    if (!s) return
     // Only the window that owns the session may stream audio.
     if (BrowserWindow.fromWebContents(event.sender) !== s.window) return
-    const byteLength =
-      chunk instanceof ArrayBuffer
-        ? chunk.byteLength
-        : ArrayBuffer.isView(chunk)
-          ? (chunk as ArrayBufferView).byteLength
-          : -1
-    if (byteLength <= 0 || byteLength > MAX_CHUNK_BYTES) return
-    s.ws.send(chunk)
-    // 16-bit PCM => 2 bytes per sample, times the channel count (stereo when
-    // multichannel) — so the real-time latency math stays correct.
-    s.audioSecondsSent += byteLength / 2 / s.channels / s.sampleRate
+    // ...and within that window, only the capture pipeline this session was
+    // started for. Same authority model as expectedSessionId on start: the
+    // window is not enough, because a stopped call's Recorder lives in the
+    // same window and — if the renderer ever fails to stop it — keeps posting
+    // PCM forever. Two producers at 1x realtime against a ~1.25x ingest cap
+    // ratchets lag ~0.75s per second, permanently. Drop the impostor's audio.
+    if (s.producerId !== null && producerId !== s.producerId) {
+      s.rejectedProducerFrames++
+      return
+    }
+    audioPath = 'renderer'
+    ingestAudio(s, chunk)
   })
+
+  // The ring dropped audio because the worker fell behind. Same user-visible
+  // meaning as a shed queue — a stretch that will never be transcribed — so it
+  // gets the same marker rather than a new vocabulary word.
+  ipcMain.on('transcription:audioDropped', (event, frames: unknown, producerId?: unknown) => {
+    const s = session
+    if (!s) return
+    if (BrowserWindow.fromWebContents(event.sender) !== s.window) return
+    // Same producer check as the audio path above — an orphaned recorder's
+    // drop reports would otherwise punch bogus gap markers into a call it has
+    // nothing to do with.
+    if (s.producerId !== null && producerId !== s.producerId) {
+      s.rejectedProducerFrames++
+      return
+    }
+    if (typeof frames !== 'number' || !Number.isFinite(frames) || frames <= 0) return
+    queueShed(s, frames / s.sampleRate, 'shed')
+  })
+
+  registerAudioPort()
 
   ipcMain.handle('transcription:stop', () => {
     const s = session
     if (!s) return { ok: true as const }
+    logSessionSummary(s)
     s.stopping = true
+    s.liveness.setSending(false)
     if (s.keepAlive) {
       clearInterval(s.keepAlive)
       s.keepAlive = null
@@ -340,8 +998,19 @@ export function registerTranscription(): void {
       clearTimeout(s.stableTimer)
       s.stableTimer = null
     }
+    if (s.healthTimer) {
+      clearInterval(s.healthTimer)
+      s.healthTimer = null
+    }
     const ws = s.ws
     if (ws && ws.readyState === WebSocket.OPEN) {
+      // Push whatever is still queued before finalizing, so a stop doesn't
+      // silently discard the last second of the call.
+      drain(s)
+      if (s.drainTimer) {
+        clearInterval(s.drainTimer)
+        s.drainTimer = null
+      }
       try {
         // Finalize flushes pending words; CloseStream closes after the server
         // sends the final Results. We keep the socket open briefly so those

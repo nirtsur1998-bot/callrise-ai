@@ -30,3 +30,16 @@ export function isOnboardingComplete(): boolean {
 export function markOnboardingComplete(): void {
   write(KEY_COMPLETED_AT, new Date().toISOString())
 }
+
+/** Settings' "Replay setup" action — clears the completed flag so App's
+ *  onboarding gate shows OnboardingFlow again on the next mount. Saved
+ *  personalization/consent/cue values still pre-fill each step (see
+ *  useOnboarding's prefill effect), so this is a guided review, not a
+ *  destructive reset. */
+export function clearOnboardingComplete(): void {
+  try {
+    localStorage.removeItem(KEY_COMPLETED_AT)
+  } catch {
+    /* localStorage unavailable — nothing to clear */
+  }
+}

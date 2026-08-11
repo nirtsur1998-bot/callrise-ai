@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   format,
   startOfWeek,
@@ -20,6 +20,7 @@ import { OutlookConnect } from '@renderer/features/outlook/OutlookConnect'
 import { MonthGrid } from './MonthGrid'
 import { WeekGrid } from './WeekGrid'
 import { EventDialog } from './EventDialog'
+import { PrepBriefModal, type PrepBriefMeeting } from '@renderer/features/prep-brief/PrepBriefModal'
 import {
   buildItems,
   draftToInput,
@@ -29,6 +30,17 @@ import {
   KIND_LABEL
 } from './items'
 import type { CalendarEvent, CalendarItemKind, EventDraft } from './types'
+
+function meetingFromEvent(event: CalendarEvent): PrepBriefMeeting {
+  return {
+    eventId: event.id,
+    title: event.title,
+    startIso: event.start,
+    attendees: event.attendees ?? [],
+    contactId: event.contactId,
+    dealId: event.dealId
+  }
+}
 
 type View = 'month' | 'week'
 
@@ -49,7 +61,19 @@ function rangeTitle(cursor: Date, view: View): string {
     : `${format(start, 'MMM d')} – ${format(end, 'MMM d, yyyy')}`
 }
 
-export function CalendarView(): React.JSX.Element {
+interface CalendarViewProps {
+  /** A callrise://meeting/<eventId> deep link's target — one-shot, same
+   *  preselect pattern as PastCallsView's initialSelectedId. Cleared via
+   *  onDeepLinkConsumed once handled (found or not) so a later manual visit
+   *  to Calendar doesn't keep reopening a stale link. */
+  deepLinkEventId?: string | null
+  onDeepLinkConsumed?: () => void
+}
+
+export function CalendarView({
+  deepLinkEventId,
+  onDeepLinkConsumed
+}: CalendarViewProps = {}): React.JSX.Element {
   const {
     events,
     tasks,
@@ -74,6 +98,19 @@ export function CalendarView(): React.JSX.Element {
   const [view, setView] = useState<View>('month')
   const [cursor, setCursor] = useState<Date>(() => new Date())
   const [dialog, setDialog] = useState<DialogState | null>(null)
+  const [prepBriefMeeting, setPrepBriefMeeting] = useState<PrepBriefMeeting | null>(null)
+
+  // Resolve a deep-linked eventId against whichever of the three sources
+  // actually has it — the merged useCalendar() collections are already the
+  // one place that knows how to reconcile local/Google/Outlook ids.
+  useEffect(() => {
+    if (!deepLinkEventId) return
+    const match = [...events, ...googleEvents, ...outlookEvents].find((e) => e.id === deepLinkEventId)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- responding to a deep link arriving, not deriving from render
+    if (match) setPrepBriefMeeting(meetingFromEvent(match))
+    onDeepLinkConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the id should retrigger this, not every events-array identity change
+  }, [deepLinkEventId])
 
   const items = useMemo(
     () =>
@@ -106,18 +143,28 @@ export function CalendarView(): React.JSX.Element {
     const input = draftToInput(draft)
     // A Google/Outlook-origin event is adopted (a linked local copy) so the
     // edit PATCHes the same remote event; local events edit/create normally.
-    if (dialog.event?.source === 'google' || dialog.event?.source === 'outlook')
+    if (dialog.event?.source === 'google' || dialog.event?.source === 'outlook') {
       await adoptEvent(dialog.event, input)
-    else if (dialog.mode === 'edit' && dialog.eventId) await updateEvent(dialog.eventId, input)
-    else await createEvent(input)
-    setDialog(null)
+      setDialog(null)
+    } else if (dialog.mode === 'edit' && dialog.eventId) {
+      // Only close on a confirmed write — a failed save (e.g. a locked file)
+      // must not look identical to a successful one (BUG-024).
+      if (await updateEvent(dialog.eventId, input)) setDialog(null)
+    } else {
+      await createEvent(input)
+      setDialog(null)
+    }
   }
 
   const deleteDialog = async (): Promise<void> => {
-    if (dialog?.event?.source === 'google' || dialog?.event?.source === 'outlook')
+    if (dialog?.event?.source === 'google' || dialog?.event?.source === 'outlook') {
       await deleteExternalEvent(dialog.event)
-    else if (dialog?.eventId) await deleteEvent(dialog.eventId)
-    setDialog(null)
+      setDialog(null)
+    } else if (dialog?.eventId) {
+      if (await deleteEvent(dialog.eventId)) setDialog(null)
+    } else {
+      setDialog(null)
+    }
   }
 
   return (
@@ -232,7 +279,15 @@ export function CalendarView(): React.JSX.Element {
           onClose={() => setDialog(null)}
           onSubmit={submitDialog}
           onDelete={dialog.mode === 'edit' ? deleteDialog : undefined}
+          onOpenPrepBrief={
+            dialog.event ? () => setPrepBriefMeeting(meetingFromEvent(dialog.event!)) : undefined
+          }
+          syncEnabled={googleWritable || outlookWritable}
         />
+      )}
+
+      {prepBriefMeeting && (
+        <PrepBriefModal meeting={prepBriefMeeting} onClose={() => setPrepBriefMeeting(null)} />
       )}
     </div>
   )

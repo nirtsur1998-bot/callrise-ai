@@ -7,8 +7,38 @@ import { ContactEditor } from './ContactEditor'
 import { emptyDraft, type ContactDraft } from './draft'
 import type { Contact } from './types'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
+import { toE164 } from '@renderer/lib/countries'
 
-export interface ContactFormValues {
+/** The M19 KYC/deal/personal/briefing fields — factored out so
+ *  ContactFormValues, draftFromContact, and submit() can't drift as fields
+ *  get added (they did drift once already: the M19 Task 3A form fields were
+ *  built here without ever being wired into this submit payload). */
+interface ContactKycValues {
+  industry: string | null
+  companySize: string | null
+  website: string | null
+  registrationNumber: string | null
+  verificationStatus: string | null
+  title: string | null
+  decisionAuthority: string | null
+  otherStakeholders: string | null
+  dealValue: number | null
+  pipelineStage: string | null
+  leadSource: string | null
+  budgetIndication: string | null
+  timeline: string | null
+  competitors: string | null
+  knownObjections: string | null
+  currentTooling: string | null
+  lastContactDate: string | null
+  preferredLanguage: string | null
+  communicationStyle: string | null
+  timezone: string | null
+  personalNotes: string | null
+  briefingNotes: string | null
+}
+
+export interface ContactFormValues extends ContactKycValues {
   name: string
   company: string | null
   cid: string | null
@@ -17,6 +47,7 @@ export interface ContactFormValues {
   email: string | null
   phoneCountry: string | null
   phone: string | null
+  phoneE164: string | null
   notes: string | null
 }
 
@@ -37,7 +68,29 @@ function draftFromContact(contact: Contact): ContactDraft {
     email: contact.email ?? '',
     phoneCountry: contact.phoneCountry,
     phone: contact.phone ?? '',
-    notes: contact.notes ?? ''
+    notes: contact.notes ?? '',
+    industry: contact.industry ?? '',
+    companySize: contact.companySize ?? '',
+    website: contact.website ?? '',
+    registrationNumber: contact.registrationNumber ?? '',
+    verificationStatus: contact.verificationStatus ?? '',
+    title: contact.title ?? '',
+    decisionAuthority: contact.decisionAuthority ?? '',
+    otherStakeholders: contact.otherStakeholders ?? '',
+    dealValue: contact.dealValue,
+    pipelineStage: contact.pipelineStage ?? '',
+    leadSource: contact.leadSource ?? '',
+    budgetIndication: contact.budgetIndication ?? '',
+    timeline: contact.timeline ?? '',
+    competitors: contact.competitors ?? '',
+    knownObjections: contact.knownObjections ?? '',
+    currentTooling: contact.currentTooling ?? '',
+    lastContactDate: contact.lastContactDate ?? '',
+    preferredLanguage: contact.preferredLanguage ?? '',
+    communicationStyle: contact.communicationStyle ?? '',
+    timezone: contact.timezone ?? '',
+    personalNotes: contact.personalNotes ?? '',
+    briefingNotes: contact.briefingNotes ?? ''
   }
 }
 
@@ -87,7 +140,31 @@ export function ContactFormDialog({
         email: draft.email.trim() || null,
         phoneCountry: draft.phoneCountry ?? null,
         phone: draft.phone.trim() || null,
-        notes: draft.notes.trim() || null
+        phoneE164: toE164(draft.phoneCountry, draft.phone) ?? null,
+        notes: draft.notes.trim() || null,
+        industry: draft.industry?.trim() || null,
+        companySize: draft.companySize?.trim() || null,
+        website: draft.website?.trim() || null,
+        registrationNumber: draft.registrationNumber?.trim() || null,
+        verificationStatus: draft.verificationStatus?.trim() || null,
+        title: draft.title?.trim() || null,
+        decisionAuthority: draft.decisionAuthority?.trim() || null,
+        otherStakeholders: draft.otherStakeholders?.trim() || null,
+        dealValue:
+          draft.dealValue !== undefined && draft.dealValue !== '' ? Number(draft.dealValue) : null,
+        pipelineStage: draft.pipelineStage?.trim() || null,
+        leadSource: draft.leadSource?.trim() || null,
+        budgetIndication: draft.budgetIndication?.trim() || null,
+        timeline: draft.timeline?.trim() || null,
+        competitors: draft.competitors?.trim() || null,
+        knownObjections: draft.knownObjections?.trim() || null,
+        currentTooling: draft.currentTooling?.trim() || null,
+        lastContactDate: draft.lastContactDate || null,
+        preferredLanguage: draft.preferredLanguage?.trim() || null,
+        communicationStyle: draft.communicationStyle?.trim() || null,
+        timezone: draft.timezone?.trim() || null,
+        personalNotes: draft.personalNotes?.trim() || null,
+        briefingNotes: draft.briefingNotes?.trim() || null
       })
       // Parent closes the dialog on success.
     } catch (err) {

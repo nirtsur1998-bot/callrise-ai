@@ -1,0 +1,122 @@
+// The durable consent gate (§5.3, acceptance criterion 11).
+//
+// Buyer capture was already triple-gated — a renderer check, a one-shot arm in
+// main, and the Settings master switch — but all three were PROCESS STATE. The
+// consent record itself lived in renderer memory for the length of the call
+// and only reached disk when the call was saved.
+//
+// That distinction is the whole point of the criterion. "Capture cannot start
+// without consent" has to be provable from something that outlives the process
+// that claims it, because the failure being guarded against is a banner
+// reading "recording in progress" while audio is already being written — and a
+// flag in memory cannot tell that story afterwards, to anyone, ever.
+//
+// So consent is now written to disk BEFORE capture is armed, and the arm and
+// the grant both read it back from disk. If the file is not there, or does not
+// permit capture, the display-media request is refused. The renderer cannot
+// talk main into it, because main never asks the renderer.
+//
+// The file is deliberately small, single-purpose and short-lived: one active
+// call at a time, cleared when the call ends and on every app start (so a
+// record left behind by a crash can never authorise the NEXT call).
+
+import { app } from 'electron'
+import { join } from 'node:path'
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs'
+import { sanitizeConsent, type ConsentRecord } from './calls-fs'
+
+export interface ActiveConsent {
+  /** The transcription session this consent belongs to. */
+  sessionId: number
+  consent: ConsentRecord
+  /** When it was written. Metadata for the audit trail, never a gate. */
+  persistedAt: string
+}
+
+/** Overridable so the gate can be tested without an Electron app object. */
+let baseDir: string | null = null
+
+export function setConsentGateDirForTests(dir: string | null): void {
+  baseDir = dir
+}
+
+function gatePath(): string {
+  const dir = baseDir ?? app.getPath('userData')
+  return join(dir, 'active-consent.json')
+}
+
+/**
+ * Write the consent for the call about to start capturing. Synchronous on
+ * purpose: the renderer calls this inside the click that opens
+ * getDisplayMedia, and an async round-trip there would spend the user
+ * activation the browser requires, so the capture prompt would never appear.
+ * It is one small JSON file, once per call.
+ *
+ * Returns false when the record does not actually permit capture — the
+ * sanitizer's invariant is applied here too, so a renderer that sent a
+ * hand-built "consented" object without the flag gets nothing written.
+ */
+export function persistActiveConsent(sessionId: number, raw: unknown): boolean {
+  const consent = sanitizeConsent(raw)
+  if (consent.recordOtherParty !== true) {
+    // Not an error — turning consent off legitimately lands here. Clear any
+    // previous grant rather than leaving a stale one authorising capture.
+    clearActiveConsent()
+    return false
+  }
+  const payload: ActiveConsent = {
+    sessionId,
+    consent,
+    persistedAt: new Date().toISOString()
+  }
+  try {
+    const dir = baseDir ?? app.getPath('userData')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(gatePath(), JSON.stringify(payload, null, 2), 'utf8')
+    return true
+  } catch {
+    // A gate that cannot be written is a gate that must not open.
+    return false
+  }
+}
+
+export function readActiveConsent(): ActiveConsent | null {
+  try {
+    const parsed = JSON.parse(readFileSync(gatePath(), 'utf8')) as Partial<ActiveConsent>
+    const consent = sanitizeConsent(parsed?.consent)
+    // Re-sanitized on READ as well as write, exactly like a saved call: a
+    // hand-edited file claiming consent it never had collapses here.
+    if (consent.recordOtherParty !== true) return null
+    if (typeof parsed?.sessionId !== 'number') return null
+    return {
+      sessionId: parsed.sessionId,
+      consent,
+      persistedAt: typeof parsed.persistedAt === 'string' ? parsed.persistedAt : ''
+    }
+  } catch {
+    return null
+  }
+}
+
+export function clearActiveConsent(): void {
+  try {
+    unlinkSync(gatePath())
+  } catch {
+    /* already gone, which is the state we wanted */
+  }
+}
+
+/**
+ * The gate itself. True only when a record on disk genuinely permits capturing
+ * the other party.
+ *
+ * When `sessionId` is supplied it must match, so consent recorded for one call
+ * can never authorise the next — the case that matters is a rep who consented
+ * on call A, hung up, and started call B without being asked again.
+ */
+export function consentPermitsCapture(sessionId?: number): boolean {
+  const active = readActiveConsent()
+  if (!active) return false
+  if (typeof sessionId === 'number' && active.sessionId !== sessionId) return false
+  return true
+}

@@ -76,7 +76,17 @@ export function DealEditor({
             min="0"
             step="1"
             value={value.value}
-            onChange={(e) => set({ value: e.target.value })}
+            onChange={(e) => {
+              // The backend's own sanitizer (deals-fs.ts's sanitizeValue)
+              // already treats a negative number as invalid and silently
+              // drops it to "no value set" on save — correct as a last-resort
+              // guard, but with no field-level feedback it read as the
+              // rep's typed value vanishing for no visible reason. Reject it
+              // here instead, at the point the rep can actually see why.
+              const next = e.target.value
+              if (Number(next) < 0) return
+              set({ value: next })
+            }}
             placeholder="0"
             className={fieldClass}
           />

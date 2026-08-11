@@ -80,18 +80,62 @@ function NotConfigured(): React.JSX.Element {
         {packaged ? (
           <>
             a <code className="rounded bg-canvas px-1 py-0.5 text-warning">.env</code> file at{' '}
-            <code className="rounded bg-canvas px-1 py-0.5 text-warning">{envLocation}</code>,
-            then quit and reopen the app.
+            <code className="rounded bg-canvas px-1 py-0.5 text-warning">{envLocation}</code>, then
+            quit and reopen the app.
           </>
         ) : (
           <>
-            your <code className="rounded bg-canvas px-1 py-0.5 text-warning">.env</code> file,
-            then fully restart the app (stop{' '}
+            your <code className="rounded bg-canvas px-1 py-0.5 text-warning">.env</code> file, then
+            fully restart the app (stop{' '}
             <code className="rounded bg-canvas px-1 py-0.5 text-warning">npm run dev</code> and
             start it again).
           </>
         )}
       </p>
+    </div>
+  )
+}
+
+/** BUG-022 — shown instead of the normal form when sign-in/signup/confirm is
+ *  refused because this device's local data belongs to a different account.
+ *  Wiping is the only way past this screen; there is no "show it anyway". */
+function DeviceOwnershipConflict({
+  message,
+  wiping,
+  onWipe,
+  onCancel
+}: {
+  message: string
+  wiping: boolean
+  onWipe: () => void
+  onCancel: () => void
+}): React.JSX.Element {
+  return (
+    <div className="animate-view rounded-2xl border border-danger/30 bg-surface p-7">
+      <div className="mb-4 flex items-start gap-2 text-danger">
+        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+        <h2 className="text-sm font-semibold">This device belongs to another account</h2>
+      </div>
+      <p className="text-[13px] text-muted">{message}</p>
+      <div className="mt-5 space-y-2">
+        <button
+          type="button"
+          onClick={onWipe}
+          disabled={wiping}
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-danger px-3.5 py-2.5 text-sm font-medium text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {wiping && <Loader2 className="h-4 w-4 animate-spin" />}
+          {wiping ? 'Wiping this device…' : 'Wipe this device’s data & continue'}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={wiping}
+          className="w-full rounded-lg px-3.5 py-2 text-sm text-muted transition hover:text-ink disabled:opacity-50"
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   )
 }
@@ -106,10 +150,20 @@ export function AuthScreen({ configured }: { configured: boolean }): React.JSX.E
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
   const [showPw, setShowPw] = useState(false)
+  // BUG-022 — set instead of `error` when sign-in/signup/confirm is refused
+  // because this device's local data already belongs to a different
+  // account. `retry` re-runs the exact same action once the user confirms
+  // wiping this device's data.
+  const [ownershipConflict, setOwnershipConflict] = useState<{
+    message: string
+    retry: () => void
+  } | null>(null)
+  const [wiping, setWiping] = useState(false)
 
   const clearMessages = (): void => {
     setError(null)
     setInfo(null)
+    setOwnershipConflict(null)
   }
 
   const go = (next: Mode): void => {
@@ -117,13 +171,33 @@ export function AuthScreen({ configured }: { configured: boolean }): React.JSX.E
     setMode(next)
   }
 
-  const submitLogin = async (e: FormEvent): Promise<void> => {
-    e.preventDefault()
+  const confirmWipeAndRetry = async (): Promise<void> => {
+    if (!ownershipConflict) return
+    setWiping(true)
+    try {
+      await window.api.auth.wipeDeviceData()
+      const retry = ownershipConflict.retry
+      setOwnershipConflict(null)
+      retry()
+    } catch {
+      setOwnershipConflict(null)
+      setError('Could not wipe this device’s data. Please try again.')
+    } finally {
+      setWiping(false)
+    }
+  }
+
+  const doLogin = async (): Promise<void> => {
     setBusy(true)
     clearMessages()
     try {
       const res = await window.api.auth.signIn(email.trim(), password)
       if (res.ok) return // success — the gate swaps to the app via the broadcast
+      if (res.error === 'device-owned-by-other-account') {
+        setBusy(false)
+        setOwnershipConflict({ message: res.message, retry: () => void doLogin() })
+        return
+      }
       if (res.error === 'email-not-confirmed') {
         setMode('confirm')
         setInfo('Enter the code we emailed you to finish setting up your account.')
@@ -138,8 +212,12 @@ export function AuthScreen({ configured }: { configured: boolean }): React.JSX.E
     }
   }
 
-  const submitSignup = async (e: FormEvent): Promise<void> => {
+  const submitLogin = (e: FormEvent): void => {
     e.preventDefault()
+    void doLogin()
+  }
+
+  const doSignup = async (): Promise<void> => {
     setBusy(true)
     clearMessages()
     try {
@@ -155,6 +233,10 @@ export function AuthScreen({ configured }: { configured: boolean }): React.JSX.E
         return
       }
       setBusy(false)
+      if (res.error === 'device-owned-by-other-account') {
+        setOwnershipConflict({ message: res.message, retry: () => void doSignup() })
+        return
+      }
       setError(res.message)
     } catch {
       setBusy(false)
@@ -162,19 +244,33 @@ export function AuthScreen({ configured }: { configured: boolean }): React.JSX.E
     }
   }
 
-  const submitConfirm = async (e: FormEvent): Promise<void> => {
+  const submitSignup = (e: FormEvent): void => {
     e.preventDefault()
+    void doSignup()
+  }
+
+  const doConfirm = async (): Promise<void> => {
     setBusy(true)
     clearMessages()
     try {
       const res = await window.api.auth.verifyOtp(email.trim(), code.trim())
       if (res.ok) return // success — the gate swaps to the app
+      if (res.error === 'device-owned-by-other-account') {
+        setBusy(false)
+        setOwnershipConflict({ message: res.message, retry: () => void doConfirm() })
+        return
+      }
       setError(res.message)
       setBusy(false)
     } catch {
       setError('Something went wrong. Please try again.')
       setBusy(false)
     }
+  }
+
+  const submitConfirm = (e: FormEvent): void => {
+    e.preventDefault()
+    void doConfirm()
   }
 
   const resend = async (): Promise<void> => {
@@ -198,6 +294,13 @@ export function AuthScreen({ configured }: { configured: boolean }): React.JSX.E
 
         {!configured ? (
           <NotConfigured />
+        ) : ownershipConflict ? (
+          <DeviceOwnershipConflict
+            message={ownershipConflict.message}
+            wiping={wiping}
+            onWipe={() => void confirmWipeAndRetry()}
+            onCancel={() => setOwnershipConflict(null)}
+          />
         ) : (
           <div className="animate-view rounded-2xl border border-line-soft bg-surface p-7">
             {mode === 'confirm' ? (

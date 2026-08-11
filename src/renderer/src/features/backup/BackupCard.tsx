@@ -20,6 +20,19 @@ import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import { useBackupStatus } from './useBackupStatus'
 
+/** Plain-language size + direction of the device-vs-server clock difference,
+ *  e.g. "2 days ahead of" / "35 minutes behind". */
+function describeSkew(skewMs: number | undefined): string {
+  if (typeof skewMs !== 'number' || !Number.isFinite(skewMs)) return 'out of step with'
+  const direction = skewMs > 0 ? 'ahead of' : 'behind'
+  const mins = Math.round(Math.abs(skewMs) / 60_000)
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ${direction}`
+  const hours = Math.round(mins / 60)
+  if (hours < 48) return `${hours} hour${hours === 1 ? '' : 's'} ${direction}`
+  const days = Math.round(hours / 24)
+  return `${days} day${days === 1 ? '' : 's'} ${direction}`
+}
+
 function agoLabel(iso: string): string {
   const parsed = Date.parse(iso)
   if (Number.isNaN(parsed)) return 'a while ago' // corrupted/hand-edited timestamp — never crash the UI
@@ -207,6 +220,17 @@ export function BackupCard(): React.JSX.Element {
           Knowledge Base sync includes objection scripts you approved from calls — approving a mined
           suggestion means its quotes sync with the rest of your library.
         </p>
+      )}
+
+      {status?.clockSkewWarning && (
+        <div className="mt-4 rounded-lg border border-warning/20 bg-warning-soft px-3 py-2">
+          <p className="text-[12px] text-warning">
+            This device&apos;s clock is about {describeSkew(status.clockSkewMs)} the real time. Your
+            backups are still ordered correctly — that&apos;s handled on the server — but times
+            shown in the app will look wrong until you fix the clock in your system date &amp; time
+            settings.
+          </p>
+        </div>
       )}
 
       {(status?.conflictCount ?? 0) > 0 && (

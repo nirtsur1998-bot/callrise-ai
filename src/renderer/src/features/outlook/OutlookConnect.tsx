@@ -157,85 +157,94 @@ export function OutlookConnect({
   }
 
   return (
-    <div className="mb-3 rounded-xl border border-line-soft bg-surface px-3.5 py-2.5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-[13px]">
-          {connected ? (
-            <>
-              <CalendarCheck2 className="h-4 w-4 text-track-outlook" />
-              <span className="font-medium text-track-outlook">Connected to Outlook Calendar</span>
-              <span className="text-faint">
-                · {mode === 'readwrite' ? 'two-way sync on' : 'read-only'}
-              </span>
-              {syncing ? (
-                <span className="text-faint">· syncing…</span>
-              ) : lastSynced ? (
-                <span className="text-faint">· updated {agoLabel(lastSynced)}</span>
-              ) : null}
-            </>
-          ) : (
-            <>
-              <CalendarCheck2 className="h-4 w-4 text-faint" />
-              <span className="text-muted">Outlook Calendar — not connected</span>
-            </>
+    <div className="mb-3 rounded-xl border border-line-soft bg-surface px-4 py-3.5">
+      {/* Icon chip + status text stacked, so the row never has to fight
+          action buttons for horizontal space — the old layout put status and
+          buttons on ONE row with justify-between, which looked fine at full
+          width but wrapped mid-sentence the moment the card narrowed (e.g.
+          the two-up Google+Outlook layout in CalendarView, ~300px each). */}
+      <div className="flex items-start gap-3">
+        <span
+          className={cn(
+            'flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
+            connected ? 'bg-track-outlook/15' : 'bg-elevated'
           )}
-        </div>
-
-        <div className="flex items-center gap-2">
-          {connected ? (
-            <>
-              {mode === 'readonly' && (
-                <Button
-                  size="sm"
-                  onClick={() => void enableTwoWaySync()}
-                  disabled={enablingSync}
-                  title="Let CallRise AI add and update events in your Outlook Calendar"
-                >
-                  {enablingSync ? (
-                    <>
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Waiting for Microsoft…
-                    </>
-                  ) : (
-                    <>
-                      <ArrowLeftRight className="h-3.5 w-3.5" /> Enable two-way sync
-                    </>
-                  )}
-                </Button>
-              )}
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={syncing}
-                onClick={() => {
-                  void loadCalendars()
-                  onChange?.() // re-pull events too
-                }}
-                title="Re-read your calendars and events"
-              >
-                <RefreshCw className={cn('h-3.5 w-3.5', syncing && 'animate-spin')} /> Refresh
-              </Button>
-              <Button variant="secondary" size="sm" onClick={() => void disconnect()}>
-                Disconnect
-              </Button>
-            </>
-          ) : (
-            <Button size="sm" onClick={() => void connect()} disabled={connecting}>
-              {connecting ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Waiting for Microsoft…
-                </>
-              ) : (
-                <>
-                  <Plug className="h-3.5 w-3.5" /> Connect Outlook Calendar
-                </>
-              )}
-            </Button>
-          )}
+        >
+          <CalendarCheck2
+            className={cn('h-4.5 w-4.5', connected ? 'text-track-outlook' : 'text-faint')}
+          />
+        </span>
+        <div className="min-w-0 flex-1 pt-0.5">
+          <p className={cn('text-sm font-medium', connected ? 'text-track-outlook' : 'text-ink')}>
+            {connected ? 'Connected to Outlook Calendar' : 'Outlook Calendar'}
+          </p>
+          <p className="mt-0.5 text-[12px] text-faint">
+            {connected ? (
+              <>
+                {mode === 'readwrite' ? 'Two-way sync on' : 'Read-only'}
+                {syncing ? ' · Syncing…' : lastSynced ? ` · Updated ${agoLabel(lastSynced)}` : ''}
+              </>
+            ) : (
+              'Not connected'
+            )}
+          </p>
         </div>
       </div>
 
+      <div className="mt-3 flex flex-wrap gap-2">
+        {connected ? (
+          <>
+            {mode === 'readonly' && (
+              <Button
+                size="sm"
+                onClick={() => void enableTwoWaySync()}
+                disabled={enablingSync}
+                title="Let CallRise AI add and update events in your Outlook Calendar"
+              >
+                {enablingSync ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Waiting for Microsoft…
+                  </>
+                ) : (
+                  <>
+                    <ArrowLeftRight className="h-3.5 w-3.5" /> Enable two-way sync
+                  </>
+                )}
+              </Button>
+            )}
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={syncing}
+              onClick={() => {
+                void loadCalendars()
+                onChange?.() // re-pull events too
+              }}
+              title="Re-read your calendars and events"
+            >
+              <RefreshCw className={cn('h-3.5 w-3.5', syncing && 'animate-spin')} /> Refresh
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => void disconnect()}>
+              Disconnect
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" onClick={() => void connect()} disabled={connecting}>
+            {connecting ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Waiting for Microsoft…
+              </>
+            ) : (
+              <>
+                <Plug className="h-3.5 w-3.5" /> Connect Outlook Calendar
+              </>
+            )}
+          </Button>
+        )}
+      </div>
+
       {(connecting || enablingSync) && (
-        <p className="mt-2 text-[11px] text-faint">
+        <p className="mt-2.5 text-[11px] text-faint">
           A Microsoft sign-in opened in your browser. Approve it there
           {enablingSync && ' and allow the "read and write calendar events" permission'}, then come
           back — this updates automatically.
@@ -243,7 +252,7 @@ export function OutlookConnect({
       )}
 
       {connected && calendars.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
           {calendars.map((c) => (
             <span
               key={c.id}
@@ -258,7 +267,7 @@ export function OutlookConnect({
       )}
 
       {error && (
-        <p className="mt-2 flex items-center gap-1.5 text-[11px] text-danger">
+        <p className="mt-2.5 flex items-center gap-1.5 text-[11px] text-danger">
           <AlertTriangle className="h-3 w-3 shrink-0" /> {error}
         </p>
       )}

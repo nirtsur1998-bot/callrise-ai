@@ -20,17 +20,27 @@ interface PracticeModeProps {
  */
 export function PracticeMode({ call, onExit }: PracticeModeProps): React.JSX.Element {
   const repSpeaker = call.coaching?.metrics.repSpeaker ?? null
-  const speakerCount = useMemo(
-    () => new Set(call.segments.map((s) => s.speaker)).size,
+  // A gap marker belongs to nobody and isn't a line to rehearse — surfacing
+  // one here would show "[gap: 30s]" as if it were something either party
+  // said. Matches SpeakerTranscript's own gap exclusion.
+  const speechSegments = useMemo(
+    () => call.segments.filter((s) => s.kind !== 'gap'),
     [call.segments]
   )
-  const turns = call.segments
+  const speakerCount = useMemo(
+    () => new Set(speechSegments.map((s) => s.speaker)).size,
+    [speechSegments]
+  )
+  const turns = speechSegments
   const total = turns.length
   const [index, setIndex] = useState(0)
   const [revealed, setRevealed] = useState(false)
 
   const turn = total > 0 ? turns[Math.min(index, total - 1)] : null
-  const isRep = turn !== null && turn.speaker === repSpeaker
+  // Prefer the turn's own recorded attribution over the whole-call number,
+  // matching SpeakerTranscript. A raw number only means something inside one
+  // speaker-label epoch.
+  const isRep = turn !== null && (turn.role ? turn.role === 'rep' : turn.speaker === repSpeaker)
 
   const goTo = (next: number): void => {
     setIndex(Math.max(0, Math.min(total - 1, next)))
@@ -64,7 +74,14 @@ export function PracticeMode({ call, onExit }: PracticeModeProps): React.JSX.Ele
                 isRep ? 'text-accent' : 'text-muted'
               )}
             >
-              {speakerLabel(turn.speaker, repSpeaker, speakerCount)}
+              {speakerLabel(
+                turn.speaker,
+                repSpeaker,
+                speakerCount,
+                turn.role,
+                call.speakerIdentities,
+                turn.channel
+              )}
             </span>
             {isRep && !revealed ? (
               <>

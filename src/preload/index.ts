@@ -18,25 +18,60 @@ const api = {
   transcription: {
     ensureMicAccess: () => ipcRenderer.invoke('mic:ensureAccess'),
     openMicSettings: () => ipcRenderer.invoke('mic:openSettings'),
-    start: (options: { sampleRate: number; multichannel?: boolean; expectedSessionId?: number }) =>
-      ipcRenderer.invoke('transcription:start', options),
-    sendAudio: (chunk: ArrayBuffer) => ipcRenderer.send('transcription:audio', chunk),
+    start: (options: {
+      sampleRate: number
+      multichannel?: boolean
+      expectedSessionId?: number
+      producerId?: number
+    }) => ipcRenderer.invoke('transcription:start', options),
+    /** `producerId` names the capture pipeline this chunk came from — main
+     *  refuses audio from any producer other than the one the session was
+     *  started for, so a recorder that outlived its call can't feed the next
+     *  one (see StartOptions.producerId in main/transcription.ts). */
+    sendAudio: (chunk: ArrayBuffer, producerId?: number) =>
+      ipcRenderer.send('transcription:audio', chunk, producerId),
+    /** Ask main for a direct port for the audio worker (§1.4). The port itself
+     *  arrives as a window message, not through this bridge — see below. */
+    requestAudioPort: () => ipcRenderer.send('audio-port:request'),
+    /** Ring overrun — audio the worker could not drain in time. Reported so it
+     *  shows up as a gap marker instead of words that silently never existed. */
+    reportAudioDropped: (frames: number, producerId?: number) =>
+      ipcRenderer.send('transcription:audioDropped', frames, producerId),
     stop: () => ipcRenderer.invoke('transcription:stop'),
     onState: (cb: (payload: unknown) => void) => subscribe('transcription:state', cb),
     onTranscript: (cb: (payload: unknown) => void) => subscribe('transcription:transcript', cb),
     onError: (cb: (payload: unknown) => void) => subscribe('transcription:error', cb),
     onUtteranceEnd: (cb: (payload: unknown) => void) => subscribe('transcription:utteranceEnd', cb),
     onClosed: (cb: (payload: unknown) => void) => subscribe('transcription:closed', cb),
+    onGap: (cb: (payload: unknown) => void) => subscribe('transcription:gap', cb),
+    onHealth: (cb: (payload: unknown) => void) => subscribe('transcription:health', cb),
+    onCaptureLost: (cb: (payload: unknown) => void) => subscribe('transcription:captureLost', cb),
+    onBuyerSilent: (cb: (payload: unknown) => void) => subscribe('transcription:buyerSilent', cb),
+    onCrossTalkWarning: (cb: (payload: unknown) => void) =>
+      subscribe('transcription:crossTalkWarning', cb),
+    /** M22 — buyer-side capture kept needing lag corrections faster than they
+     *  could recover (a sustained deficit, not a one-off blip), so main
+     *  dropped it and the call continues mic-only. Fired once per call. */
+    onMultichannelFallback: (cb: (payload: unknown) => void) =>
+      subscribe('transcription:multichannelFallback', cb),
     suggestQuestion: (text: string) => ipcRenderer.invoke('live:suggestQuestion', text),
     askCoach: (transcript: string, question: string) =>
       ipcRenderer.invoke('live:askCoach', { transcript, question }),
     liveCue: (transcript: string, repSpeaker: number | null) =>
       ipcRenderer.invoke('live:cue', { transcript, repSpeaker })
   },
+  trackers: {
+    /** Turn a rep's plain-English request into a candidate tracker (§4.8).
+     *  Raw, unsanitized AI output — the caller must run it through
+     *  sanitizeGeneratedTrigger before trusting or persisting it. */
+    generate: (prompt: string) => ipcRenderer.invoke('trackers:generate', prompt),
+    list: () => ipcRenderer.invoke('trackers:list'),
+    save: (trackers: unknown) => ipcRenderer.invoke('trackers:save', trackers)
+  },
   calls: {
     list: () => ipcRenderer.invoke('calls:list'),
     get: (id: string) => ipcRenderer.invoke('calls:get', id),
-    save: (input: unknown) => ipcRenderer.invoke('calls:save', input),
+    save: (input: unknown, selfIntro?: unknown) => ipcRenderer.invoke('calls:save', input, selfIntro),
     delete: (id: string) => ipcRenderer.invoke('calls:delete', id),
     addAttachment: (callId: string, file: { name: string; ext: string; data: ArrayBuffer }) =>
       ipcRenderer.invoke('calls:addAttachment', callId, file),
@@ -46,19 +81,27 @@ const api = {
     summarizeAttachment: (callId: string, attachmentId: string) =>
       ipcRenderer.invoke('summary:attachment', callId, attachmentId),
     coachCall: (callId: string) => ipcRenderer.invoke('coach:call', callId),
+    extractCommitments: (callId: string) => ipcRenderer.invoke('commitments:extract', callId),
     mineObjectionsTest: (callId: string) => ipcRenderer.invoke('objections:mineTest', callId),
     enqueueObjections: (callId: string, candidates: unknown) =>
       ipcRenderer.invoke('objections:enqueue', callId, candidates),
     objectionScanEstimate: () => ipcRenderer.invoke('objections:scanEstimate'),
     scanPastCallsForObjections: () => ipcRenderer.invoke('objections:scanPastCalls'),
     generateTitle: (callId: string) => ipcRenderer.invoke('calls:generateTitle', callId),
+    postCallBrief: (callId: string) => ipcRenderer.invoke('calls:postCallBrief', callId),
     setContact: (callId: string, contactId: string | null) =>
       ipcRenderer.invoke('calls:setContact', callId, contactId),
     addBookmark: (callId: string, atMs: number, text: string) =>
       ipcRenderer.invoke('calls:addBookmark', callId, atMs, text),
     removeBookmark: (callId: string, bookmarkId: string) =>
       ipcRenderer.invoke('calls:removeBookmark', callId, bookmarkId),
-    exportCoachingPdf: (callId: string) => ipcRenderer.invoke('coach:exportPdf', callId)
+    exportCoachingPdf: (callId: string) => ipcRenderer.invoke('coach:exportPdf', callId),
+    setSpeakerName: (
+      callId: string,
+      key: string,
+      name: string | null,
+      opts?: { rememberAsContactId?: string }
+    ) => ipcRenderer.invoke('calls:setSpeakerName', callId, key, name, opts)
   },
   tasks: {
     list: () => ipcRenderer.invoke('tasks:list'),
@@ -75,6 +118,39 @@ const api = {
     addComment: (id: string, text: string) => ipcRenderer.invoke('contacts:addComment', id, text),
     removeComment: (id: string, commentId: string) =>
       ipcRenderer.invoke('contacts:removeComment', id, commentId)
+  },
+  alerts: {
+    channels: {
+      list: () => ipcRenderer.invoke('alerts:channels:list'),
+      startTelegramVerify: (label?: string) =>
+        ipcRenderer.invoke('alerts:channels:startTelegramVerify', label),
+      startEmailVerify: (address: string) =>
+        ipcRenderer.invoke('alerts:channels:startEmailVerify', address),
+      confirmEmailCode: (channelId: string, code: string) =>
+        ipcRenderer.invoke('alerts:channels:confirmEmailCode', channelId, code),
+      delete: (channelId: string) => ipcRenderer.invoke('alerts:channels:delete', channelId),
+      whatsappStatus: () => ipcRenderer.invoke('alerts:channels:whatsappStatus'),
+      testSend: (channelId: string) => ipcRenderer.invoke('alerts:channels:testSend', channelId)
+    },
+    rules: {
+      list: () => ipcRenderer.invoke('alerts:rules:list'),
+      create: (input: unknown) => ipcRenderer.invoke('alerts:rules:create', input),
+      update: (ruleId: string, patch: unknown) => ipcRenderer.invoke('alerts:rules:update', ruleId, patch),
+      delete: (ruleId: string) => ipcRenderer.invoke('alerts:rules:delete', ruleId)
+    },
+    settings: {
+      get: () => ipcRenderer.invoke('alerts:settings:get'),
+      update: (patch: unknown) => ipcRenderer.invoke('alerts:settings:update', patch)
+    },
+    deliveries: {
+      recent: (limit?: number) => ipcRenderer.invoke('alerts:deliveries:recent', limit)
+    }
+  },
+  prepBrief: {
+    getForEvent: (input: unknown) => ipcRenderer.invoke('prepBrief:getForEvent', input),
+    regenerate: (input: unknown) => ipcRenderer.invoke('prepBrief:regenerate', input),
+    onOpenRequested: (cb: (eventId: string) => void) =>
+      subscribe<string>('prepBrief:openRequested', cb)
   },
   deals: {
     list: () => ipcRenderer.invoke('deals:list'),
@@ -112,6 +188,7 @@ const api = {
     resendCode: (email: string) => ipcRenderer.invoke('auth:resendCode', { email }),
     updateName: (name: string) => ipcRenderer.invoke('auth:updateName', { name }),
     signOut: () => ipcRenderer.invoke('auth:signOut'),
+    wipeDeviceData: () => ipcRenderer.invoke('auth:wipeDeviceData'),
     onChange: (cb: (user: unknown) => void) => subscribe('auth:changed', cb)
   },
   loopback: {
@@ -122,7 +199,17 @@ const api = {
     disarm: (): void => {
       ipcRenderer.sendSync('loopback:disarm')
     },
-    openScreenSettings: () => ipcRenderer.invoke('loopback:openScreenSettings')
+    openScreenSettings: () => ipcRenderer.invoke('loopback:openScreenSettings'),
+    openWindowsSoundSettings: () => ipcRenderer.invoke('loopback:openWindowsSoundSettings')
+  },
+  consent: {
+    // Synchronous, like arm/disarm: this runs inside the click that opens
+    // getDisplayMedia, and an async hop would spend the user activation.
+    persist: (sessionId: number, consent: unknown): boolean =>
+      ipcRenderer.sendSync('consent:persist', { sessionId, consent }) === true,
+    clear: (): void => {
+      ipcRenderer.sendSync('consent:clear')
+    }
   },
   backup: {
     // Force a backup now (the "Back up now" button uses this).
@@ -156,12 +243,61 @@ const api = {
   },
   aiKeys: {
     getStatus: () => ipcRenderer.invoke('aiKeys:getStatus'),
-    save: (name: 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY', value: string) =>
-      ipcRenderer.invoke('aiKeys:save', name, value),
-    clear: (name: 'DEEPGRAM_API_KEY' | 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY') =>
-      ipcRenderer.invoke('aiKeys:clear', name),
-    validate: (providerId: 'anthropic' | 'openai', value: string) =>
-      ipcRenderer.invoke('aiKeys:validate', providerId, value)
+    // Kept as inline literal unions (not imported from index.d.ts, which is
+    // ambient-only and declares window.api's shape, not this module's) —
+    // must stay in lockstep with AiKeyName/AiProviderId there and with
+    // AIProviderId/AiKeyName in src/main/ai/types.ts + ai-keys.ts (M20 widened
+    // both from the original anthropic/openai-only pair).
+    save: (
+      name:
+        | 'DEEPGRAM_API_KEY'
+        | 'ANTHROPIC_API_KEY'
+        | 'OPENAI_API_KEY'
+        | 'GROQ_API_KEY'
+        | 'OPENROUTER_API_KEY'
+        | 'GOOGLE_AI_API_KEY'
+        | 'NVIDIA_API_KEY'
+        | 'CEREBRAS_API_KEY'
+        | 'MISTRAL_API_KEY',
+      value: string
+    ) => ipcRenderer.invoke('aiKeys:save', name, value),
+    clear: (
+      name:
+        | 'DEEPGRAM_API_KEY'
+        | 'ANTHROPIC_API_KEY'
+        | 'OPENAI_API_KEY'
+        | 'GROQ_API_KEY'
+        | 'OPENROUTER_API_KEY'
+        | 'GOOGLE_AI_API_KEY'
+        | 'NVIDIA_API_KEY'
+        | 'CEREBRAS_API_KEY'
+        | 'MISTRAL_API_KEY'
+    ) => ipcRenderer.invoke('aiKeys:clear', name),
+    validate: (
+      providerId:
+        | 'anthropic'
+        | 'openai'
+        | 'groq'
+        | 'openrouter'
+        | 'google'
+        | 'nvidia'
+        | 'cerebras'
+        | 'mistral',
+      value: string
+    ) => ipcRenderer.invoke('aiKeys:validate', providerId, value)
+  },
+  aiCatalog: {
+    // Bundled catalog - instant, no network, used for the picker's first paint.
+    list: () => ipcRenderer.invoke('aiCatalog:list'),
+    // Cross-checked against each configured provider's live /models endpoint.
+    resolve: (forceRefresh?: boolean) => ipcRenderer.invoke('aiCatalog:resolve', forceRefresh === true),
+    // V1 chain-editing scope: picks one primary model, main derives the full
+    // fallback chain from the bundled default ordering (see catalog-ipc.ts).
+    assignPrimaryModel: (purpose: string, catalogId: string) =>
+      ipcRenderer.invoke('settings:assignPrimaryModel', purpose, catalogId)
+  },
+  aiFallback: {
+    recentEvents: () => ipcRenderer.invoke('aiFallback:recentEvents')
   },
   virtualmic: {
     // App-managed noise cancellation: detect + start/stop the denoiser helper.
@@ -198,7 +334,12 @@ const api = {
     getActiveApp: () => ipcRenderer.invoke('app:getActiveApp'),
     getLastExternalApp: () => ipcRenderer.invoke('app:getLastExternalApp'),
     onCallDetected: (cb: (appName: string) => void) => subscribe('app:callDetected', cb),
-    isPackaged: () => ipcRenderer.invoke('app:isPackaged')
+    isPackaged: () => ipcRenderer.invoke('app:isPackaged'),
+    getVersion: () => ipcRenderer.invoke('app:getVersion'),
+    getLogsPath: () => ipcRenderer.invoke('app:getLogsPath'),
+    openLogsFolder: () => ipcRenderer.invoke('app:openLogsFolder'),
+    logRendererError: (scope: string, message: string) =>
+      ipcRenderer.invoke('app:logRendererError', scope, message)
   },
   detection: {
     getState: () => ipcRenderer.invoke('detection:getState') as Promise<DetectorState | undefined>,
@@ -231,8 +372,38 @@ const api = {
     requestTogglePause: () => ipcRenderer.invoke('detection:requestTogglePause'),
     onRequestStopCapture: (cb: () => void) => subscribe('detection:requestStopCapture', cb),
     onRequestTogglePause: (cb: () => void) => subscribe('detection:requestTogglePause', cb)
+  },
+  updater: {
+    status: () => ipcRenderer.invoke('updater:status'),
+    check: () => ipcRenderer.invoke('updater:check'),
+    download: () => ipcRenderer.invoke('updater:download'),
+    /** Quits and installs — only succeeds from a 'downloaded' state; main
+     *  re-verifies this itself rather than trusting the renderer's call. */
+    install: () => ipcRenderer.invoke('updater:install')
   }
 }
+
+// A MessagePort cannot cross contextBridge — it is a transferable, not a
+// clonable value — so the audio port (§1.4) is handed to the page the way
+// Electron documents: re-post it into the main world with window.postMessage.
+// The page then transfers it on to the audio worker, which streams PCM straight
+// to the main process without ever waking the renderer's main thread.
+//
+// Targeted at the page's own origin rather than '*': window.postMessage
+// delivers to any listener within the SAME document regardless of
+// targetOrigin (that part of the exposure is inherent to re-posting a port
+// into the main world at all, and is accepted because this window only ever
+// loads the app's own bundle) — but a non-'*' target origin at least means
+// the port is never handed to a different origin's content were one ever
+// embedded here (an iframe, a future webview), which '*' would not prevent.
+// The port carries no authority by itself either way — main accepts audio on
+// it only while the window that requested it owns the live session.
+export const AUDIO_PORT_MESSAGE = 'callrise:audio-port'
+ipcRenderer.on('audio-port:granted', (event: IpcRendererEvent) => {
+  const port = event.ports[0]
+  if (!port) return
+  window.postMessage({ type: AUDIO_PORT_MESSAGE }, window.location.origin, [port])
+})
 
 if (process.contextIsolated) {
   try {

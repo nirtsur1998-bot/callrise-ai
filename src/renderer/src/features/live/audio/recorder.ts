@@ -1,7 +1,8 @@
 // `?url` makes Vite emit the worklet as a standalone asset (not bundled),
 // which is required for audioWorklet.addModule().
 import pcmProcessorUrl from './pcm-processor.js?url'
-import { getMicConstraints } from '@renderer/features/audio/devices'
+import { getMicConstraints, TRANSCRIPTION_SAMPLE_RATE } from '@renderer/features/audio/devices'
+import { startAudioPump, type AudioPump } from './pump'
 
 export interface Recorder {
   /** Analyser node for drawing the live waveform (mic only). */
@@ -29,6 +30,13 @@ export interface Recorder {
   setStereo: (stereo: boolean) => void
   /** Whether a loopback source is currently attached. */
   isLoopbackAttached: () => boolean
+  /**
+   * True when audio is bypassing the renderer's main thread entirely (§1.4).
+   * False means the original postMessage path — still correct, just coupled to
+   * UI responsiveness. Surfaced so `--diagnose` can say which path a machine
+   * is actually on rather than which one it was supposed to be on.
+   */
+  usingDirectPath: () => boolean
 }
 
 /**
@@ -43,13 +51,28 @@ export interface Recorder {
  */
 export async function startRecorder(
   onChunk: (chunk: ArrayBuffer) => void,
-  onDeviceLost: () => void
+  onDeviceLost: () => void,
+  onAudioDropped?: (frames: number) => void
 ): Promise<Recorder> {
   // Honor the mic chosen in the Home "Audio sources" section (falls back to
   // the system default when none is set or the chosen device is gone).
   const stream = await navigator.mediaDevices.getUserMedia({ audio: getMicConstraints() })
 
-  const context = new AudioContext()
+  // Constrained to Deepgram's own recommended ASR rate rather than left to
+  // inherit whatever the OS negotiates for the default device (commonly
+  // 44.1/48kHz on Windows) — see TRANSCRIPTION_SAMPLE_RATE's own doc comment
+  // for why an unconstrained rate specifically bites once buyer capture
+  // doubles the channel count on top of it. `sampleRate` is a best-effort
+  // hint per spec, not guaranteed on every engine/OS combination, so this
+  // falls back to the unconstrained default rather than failing capture
+  // outright on whatever exotic setup doesn't honor it — a slower call is
+  // recoverable, no microphone at all is not.
+  let context: AudioContext
+  try {
+    context = new AudioContext({ sampleRate: TRANSCRIPTION_SAMPLE_RATE })
+  } catch {
+    context = new AudioContext()
+  }
   await context.resume()
   await context.audioWorklet.addModule(pcmProcessorUrl)
 
@@ -70,6 +93,36 @@ export async function startRecorder(
     if (!paused) onChunk(event.data)
   }
 
+  // The fast path (§1.4). Brought up AFTER the graph is running and switched on
+  // only once the worker confirms it is draining, so there is never a moment
+  // where the worklet writes into a ring nobody reads. If anything at all is
+  // missing — no shared memory, no port, no worker — `pump` stays null and the
+  // postMessage path above carries the call exactly as it always has.
+  let pump: AudioPump | null = null
+  let stereoMode = false
+  // If the worker dies mid-call after the handshake succeeded, revert the
+  // worklet to the postMessage fallback it never stopped supporting — the
+  // ring attach only made it stop USING that path, it didn't remove it. Kept
+  // as a named function (not inline) so it reads the same whether it fires
+  // during setup or minutes into a live call.
+  const fallBackToPostMessage = (): void => {
+    worklet.port.postMessage({ type: 'ring-detach' })
+    pump = null
+  }
+  try {
+    pump = await startAudioPump(
+      context.sampleRate,
+      stereoMode,
+      (frames) => onAudioDropped?.(frames),
+      fallBackToPostMessage
+    )
+  } catch {
+    pump = null
+  }
+  if (pump) {
+    worklet.port.postMessage(pump.ringMessage)
+  }
+
   micSource.connect(merger, 0, 0)
   micSource.connect(analyser) // waveform reflects the rep (mic) only
   merger.connect(worklet)
@@ -87,7 +140,12 @@ export async function startRecorder(
   let loopEndedHandler: (() => void) | null = null
 
   const setStereo = (stereo: boolean): void => {
+    stereoMode = stereo
     worklet.port.postMessage({ type: 'mode', stereo })
+    // Told to both sides. They can disagree for a few frames while the messages
+    // land; they cannot disagree about how to READ a byte, because the ring's
+    // frame layout is fixed at 2 channels for the whole call.
+    pump?.setStereo(stereo)
   }
 
   const detachLoopback = (): void => {
@@ -124,17 +182,34 @@ export async function startRecorder(
     sampleRate: context.sampleRate,
     setPaused: (value: boolean): void => {
       paused = value
+      pump?.setPaused(value)
     },
     attachLoopback,
     detachLoopback,
     setStereo,
     isLoopbackAttached: (): boolean => loopSource !== null,
+    usingDirectPath: (): boolean => pump !== null,
     stop: (): void => {
       if (stopped) return
       stopped = true
+      // Cut the chunk path FIRST, before anything that can throw. This used to
+      // sit after detachLoopback(), which stops loopback tracks outside a
+      // try — a throw there aborted stop() with `stopped` already true and
+      // `onmessage` still wired, leaving a recorder that no longer looks
+      // live but keeps posting PCM into sendAudio forever, with no reference
+      // left to stop it. Nulling a handler cannot throw, so it goes first.
+      worklet.port.onmessage = null
+      if (pump) {
+        // Explicit rather than relying on merger.disconnect() to starve the
+        // worklet's input into silence: without this the worklet's `ring`
+        // reference outlives the buffer it points at for however long the
+        // disconnect takes to actually stop delivering render quanta.
+        worklet.port.postMessage({ type: 'ring-detach' })
+        pump.stop()
+        pump = null
+      }
       detachLoopback()
       micTrack?.removeEventListener('ended', handleEnded)
-      worklet.port.onmessage = null
       try {
         micSource.disconnect()
         merger.disconnect()

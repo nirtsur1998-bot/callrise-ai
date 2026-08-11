@@ -25,7 +25,9 @@ const MODEL_BY_PURPOSE: Record<AIPurpose, string> = {
   summary: 'gpt-5.4',
   scorecard: 'gpt-5.4',
   tasks: 'gpt-5.4',
-  other: 'gpt-5.4'
+  other: 'gpt-5.4',
+  // No consumer yet (M19 Task 3B not built) - same tier as 'other'.
+  'prep-brief': 'gpt-5.4'
 }
 
 // Rough per-million-token pricing for usage/cost display. Update here only.
@@ -134,7 +136,10 @@ export class OpenAIProvider implements AIProvider {
 
   async complete(req: AICompletionRequest): Promise<AICompletionResult> {
     const policy = LATENCY_POLICY[req.purpose]
-    const model = MODEL_BY_PURPOSE[req.purpose]
+    // M20: completeWithFallback() sets req.model explicitly when a catalog
+    // entry is driving this call. Unset (every M16-era call site) falls back
+    // to exactly today's per-purpose default - zero behavior change.
+    const model = req.model ?? MODEL_BY_PURPOSE[req.purpose]
     try {
       const response = await this.client.chat.completions.create(
         {
@@ -164,7 +169,7 @@ export class OpenAIProvider implements AIProvider {
 
   stream(req: AICompletionRequest): AIStreamResult {
     const policy = LATENCY_POLICY[req.purpose]
-    const model = MODEL_BY_PURPOSE[req.purpose]
+    const model = req.model ?? MODEL_BY_PURPOSE[req.purpose]
     const client = this.client
 
     let resolveUsage: (u: AIUsage) => void
