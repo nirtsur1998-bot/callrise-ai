@@ -171,6 +171,40 @@ export interface Commitment {
   dueDate?: string
 }
 
+// --- Deal Intelligence (M24 §8 — the post-call "Radar Report") --------------
+// Everything the Live Deal Intelligence engine surfaced during the call,
+// captured once at save time (see setCallDealIntelligence below) so the
+// CallDetail screen can show a timeline/health-curve/hit-miss review after
+// the fact — the engine itself is call-scoped, in-memory only, and gone the
+// moment the live screen unmounts otherwise.
+
+export type DealNudgeType = 'risk' | 'opportunity' | 'tactical'
+
+export interface DealNudgeRecord {
+  id: string
+  type: DealNudgeType
+  subtype: string
+  confidence: number
+  evidenceQuote: string
+  evidenceRole: 'rep' | 'other'
+  suggestedCue: string
+  /** Elapsed ms since the call started — same clock the live engine used. */
+  atMs: number
+  /** Set once the rep rates it; absent means never rated, not "rated neutral". */
+  feedback?: 'helpful' | 'not-helpful'
+}
+
+export interface DealHealthScorePoint {
+  score: number
+  trajectory: 'up' | 'flat' | 'down'
+  atMs: number
+}
+
+export interface DealIntelligenceRecord {
+  nudges: DealNudgeRecord[]
+  healthScoreHistory: DealHealthScorePoint[]
+}
+
 // --- Recording consent (stored on the call, like a summary) -----------------
 
 export type ConsentStatus = 'not-asked' | 'disclosed' | 'consented' | 'declined'
@@ -306,6 +340,12 @@ export interface Call extends CallBase {
    *  scores/advice, this hasn't been reviewed for what counts as safe to leave
    *  the device, so it stays local-only until that's deliberately decided. */
   commitments?: Commitment[]
+  /** M24 §8 — the post-call "Radar Report" source data (nudge timeline +
+   *  health-score curve). Same local-only treatment as commitments above and
+   *  for the same reason: buyer-derived AI output not yet reviewed for what's
+   *  safe to leave the device (see callBackupPayload — deliberately absent
+   *  from that allowlist). */
+  dealIntelligence?: DealIntelligenceRecord
   /** Recording-consent record. Always present on calls saved from M11 on. */
   consent?: ConsentRecord
   /** When this call was last read for Objection Library mining, if ever. */
@@ -1615,6 +1655,88 @@ export async function setCallCommitments(
     // whatever reaches disk was validated at the point of writing it, not just
     // trusted because it came from the extraction call moments earlier.
     call.commitments = sanitizeCommitments(commitments)
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+const DEAL_NUDGE_TYPES = new Set<DealNudgeType>(['risk', 'opportunity', 'tactical'])
+const DEAL_TRAJECTORIES = new Set<DealHealthScorePoint['trajectory']>(['up', 'flat', 'down'])
+/** Defensive cap on how many entries a single call's Radar Report can carry —
+ *  the Nudge Engine's own cooldown/cap already keeps nudges rare in practice
+ *  (see nudgeEngine.ts), so a call anywhere near this is a sign something
+ *  upstream misbehaved, not a real, honestly-long call. */
+const MAX_RADAR_REPORT_ENTRIES = 200
+
+function sanitizeDealNudgeRecord(value: unknown): DealNudgeRecord | null {
+  if (!value || typeof value !== 'object') return null
+  const v = value as Record<string, unknown>
+  const id = typeof v.id === 'string' && v.id ? v.id : null
+  const type =
+    typeof v.type === 'string' && DEAL_NUDGE_TYPES.has(v.type as DealNudgeType)
+      ? (v.type as DealNudgeType)
+      : null
+  const subtype = typeof v.subtype === 'string' ? v.subtype.trim().slice(0, 60) : ''
+  const confidence =
+    typeof v.confidence === 'number' && Number.isFinite(v.confidence)
+      ? Math.max(0, Math.min(1, v.confidence))
+      : 0
+  const evidenceQuote = typeof v.evidenceQuote === 'string' ? v.evidenceQuote.trim().slice(0, 400) : ''
+  const evidenceRole = v.evidenceRole === 'rep' || v.evidenceRole === 'other' ? v.evidenceRole : null
+  const suggestedCue = typeof v.suggestedCue === 'string' ? v.suggestedCue.trim().slice(0, 150) : ''
+  const atMs = typeof v.atMs === 'number' && Number.isFinite(v.atMs) ? Math.max(0, Math.round(v.atMs)) : 0
+  const feedback = v.feedback === 'helpful' || v.feedback === 'not-helpful' ? v.feedback : undefined
+  if (!id || !type || !subtype || !evidenceQuote || !evidenceRole || !suggestedCue) return null
+  return { id, type, subtype, confidence, evidenceQuote, evidenceRole, suggestedCue, atMs, feedback }
+}
+
+function sanitizeHealthScorePoint(value: unknown): DealHealthScorePoint | null {
+  if (!value || typeof value !== 'object') return null
+  const v = value as Record<string, unknown>
+  const score =
+    typeof v.score === 'number' && Number.isFinite(v.score)
+      ? Math.max(0, Math.min(100, Math.round(v.score)))
+      : null
+  const trajectory =
+    typeof v.trajectory === 'string' && DEAL_TRAJECTORIES.has(v.trajectory as DealHealthScorePoint['trajectory'])
+      ? (v.trajectory as DealHealthScorePoint['trajectory'])
+      : null
+  const atMs = typeof v.atMs === 'number' && Number.isFinite(v.atMs) ? Math.max(0, Math.round(v.atMs)) : 0
+  if (score === null || !trajectory) return null
+  return { score, trajectory, atMs }
+}
+
+/** Same defense-in-depth every other AI-derived field on a call gets —
+ *  whatever reaches disk is validated here, not just trusted because it came
+ *  from the live engine moments earlier (that engine already sanitized its
+ *  own inputs, but this is the boundary that actually matters: disk). */
+export function sanitizeDealIntelligenceRecord(value: unknown): DealIntelligenceRecord {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  const nudges = Array.isArray(v.nudges)
+    ? v.nudges
+        .map(sanitizeDealNudgeRecord)
+        .filter((n): n is DealNudgeRecord => n !== null)
+        .slice(0, MAX_RADAR_REPORT_ENTRIES)
+    : []
+  const healthScoreHistory = Array.isArray(v.healthScoreHistory)
+    ? v.healthScoreHistory
+        .map(sanitizeHealthScorePoint)
+        .filter((h): h is DealHealthScorePoint => h !== null)
+        .slice(0, MAX_RADAR_REPORT_ENTRIES)
+    : []
+  return { nudges, healthScoreHistory }
+}
+
+export async function setCallDealIntelligence(
+  dir: string,
+  callId: string,
+  record: unknown
+): Promise<Call | null> {
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    call.dealIntelligence = sanitizeDealIntelligenceRecord(record)
     call.updatedAt = new Date().toISOString()
     await writeCall(dir, call)
     return call

@@ -1,4 +1,5 @@
 import type { CoachingReport } from '@renderer/features/coaching/types'
+import type { DealIntelligenceRecord } from '../../../../preload/index.d'
 
 export interface CallSegment {
   speaker: number
@@ -146,6 +147,10 @@ export interface Call extends CallBase {
   consent?: ConsentRecord
   bookmarks?: Bookmark[]
   speakerIdentities?: Record<string, SpeakerIdentity>
+  /** M24 §8 — the post-call Radar Report source data (nudge history + health
+   *  score curve). Absent on any call recorded before this shipped, and on
+   *  every call where Live Deal Intelligence was off. */
+  dealIntelligence?: DealIntelligenceRecord
 }
 
 export type SummaryResult =

@@ -197,6 +197,74 @@ export interface TrackersApi {
   save: (trackers: unknown) => Promise<StoredTracker[]>
 }
 
+/** M24 §3 — Tier 1 fast micro-analysis. See main/deal-tier1.ts for the full
+ *  contract; the renderer builds transcriptDelta/compactState (never sends
+ *  the full transcript — token discipline per the milestone spec) and
+ *  applies its own confidence-threshold/priority gating (nudgeEngine.ts) to
+ *  whatever signals come back. */
+export type DealSignalType = 'risk' | 'opportunity' | 'tactical'
+
+export interface DealSignal {
+  type: DealSignalType
+  subtype: string
+  confidence: number
+  evidenceQuote: string
+  evidenceRole: 'rep' | 'other'
+  suggestedCue: string
+}
+
+export type DealTier1Result =
+  { ok: true; signals: DealSignal[] } | { ok: false; pausedReason?: 'all-models-unavailable' }
+
+/** M24 §4 — Tier 2 strategic analysis output. Trajectory is NOT part of this
+ *  shape — see deal-intelligence/healthScore.ts's computeTrajectory(), which
+ *  the renderer computes itself by comparing successive scores. */
+export interface DealHealthFactors {
+  engagement: number
+  sentiment: number
+  objectionStatus: number
+  momentum: number
+  agendaCoverage: number
+}
+
+export interface DealHealthResult {
+  score: number
+  factors: DealHealthFactors
+  topRecommendation: string
+}
+
+export type DealTier2Result =
+  { ok: true; result: DealHealthResult } | { ok: false; pausedReason?: 'all-models-unavailable' }
+
+export interface DealIntelligenceApi {
+  analyzeTier1: (input: {
+    transcriptDelta: string
+    compactState: string
+    dealContext?: string
+    triggerReason?: string
+  }) => Promise<DealTier1Result>
+  analyzeTier2: (input: {
+    transcriptDelta: string
+    compactState: string
+    dealContext?: string
+    triggerReason?: string
+  }) => Promise<DealTier2Result>
+  /** M24 §8 — the feedback loop. */
+  recordFeedback: (input: {
+    type: DealSignalType
+    subtype: string
+    helpful: boolean
+  }) => Promise<{ ok: boolean }>
+  getFeedbackSummary: () => Promise<DealFeedbackSummaryEntry[]>
+}
+
+export interface DealFeedbackSummaryEntry {
+  type: DealSignalType
+  subtype: string
+  totalRatings: number
+  rejectionRate: number
+}
+
 export type StoredTrackerCategory = 'objection' | 'competitor' | 'pricing' | 'process'
 
 export interface StoredTracker {
@@ -318,6 +386,31 @@ export type CommitmentResult =
   | { ok: true; commitments: Commitment[] }
   | { ok: false; error: 'no-key' | 'failed' | 'empty-call'; message?: string }
 
+// M24 §8 — the post-call "Radar Report" source data. Mirrors main/calls-fs.ts's
+// same-named types verbatim (that file is the sanitizing authority).
+export interface DealNudgeRecord {
+  id: string
+  type: DealSignalType
+  subtype: string
+  confidence: number
+  evidenceQuote: string
+  evidenceRole: 'rep' | 'other'
+  suggestedCue: string
+  atMs: number
+  feedback?: 'helpful' | 'not-helpful'
+}
+
+export interface DealHealthScorePoint {
+  score: number
+  trajectory: 'up' | 'flat' | 'down'
+  atMs: number
+}
+
+export interface DealIntelligenceRecord {
+  nudges: DealNudgeRecord[]
+  healthScoreHistory: DealHealthScorePoint[]
+}
+
 export type ConsentStatus = 'not-asked' | 'disclosed' | 'consented' | 'declined'
 export type ConsentJurisdiction = 'one-party' | 'two-party'
 export type ConsentMethod = 'verbal-on-call' | 'pre-agreed' | 'written'
@@ -390,6 +483,10 @@ export interface Call extends CallBase {
   summary?: Summary
   attachments?: Attachment[]
   coaching?: CoachingReport
+  /** M24 §8 — the post-call "Radar Report" source data, if this call ran
+   *  with Live Deal Intelligence on. Absent on every call before this
+   *  milestone, and on any call it stayed off for — never a required field. */
+  dealIntelligence?: DealIntelligenceRecord
   consent?: ConsentRecord
   objectionsMinedAt?: string
   speakerIdentities?: Record<string, SpeakerIdentity>
@@ -536,10 +633,7 @@ export interface CallsApi {
    *  applied with source 'self-intro' BEFORE the auto-resolution cascade
    *  runs, so a higher-confidence calendar/contact match can still override
    *  it (unlike a 'manual' rename, which the cascade never touches). */
-  save: (
-    input: CallSaveInput,
-    selfIntro?: { key: string; name: string }
-  ) => Promise<CallSummary>
+  save: (input: CallSaveInput, selfIntro?: { key: string; name: string }) => Promise<CallSummary>
   delete: (id: string) => Promise<{ ok: boolean }>
   addAttachment: (
     callId: string,
@@ -551,6 +645,9 @@ export interface CallsApi {
   coachCall: (callId: string) => Promise<CoachResult>
   /** Who promised what on this call, split rep vs. prospect (§4.7). */
   extractCommitments: (callId: string) => Promise<CommitmentResult>
+  /** M24 §8 — persist the Radar Report source data onto an already-saved
+   *  call. No AI call; the renderer already has the full history. */
+  saveDealIntelligence: (callId: string, record: DealIntelligenceRecord) => Promise<{ ok: boolean }>
   /** Objection Library: mine a single call for raw candidates, for the rep to
    *  judge quality — gated on the settings toggle. */
   mineObjectionsTest: (callId: string) => Promise<ObjectionMiningResult>
@@ -1101,14 +1198,7 @@ export interface AiKeyStatus {
  *  in the main process; this type must stay in lockstep with
  *  src/main/ai/types.ts's AIProviderId. */
 export type AiProviderId =
-  | 'anthropic'
-  | 'openai'
-  | 'groq'
-  | 'openrouter'
-  | 'google'
-  | 'nvidia'
-  | 'cerebras'
-  | 'mistral'
+  'anthropic' | 'openai' | 'groq' | 'openrouter' | 'google' | 'nvidia' | 'cerebras' | 'mistral'
 
 export type AiKeyValidateResult = { ok: true; models: string[] } | { ok: false; reason: string }
 
@@ -1340,7 +1430,15 @@ export interface DetectionSettings {
  *  Settings → Model Assignment page exposes 5 of these 6
  *  ('other' has no UI — its 4 call sites keep using the plain `aiProvider`
  *  choice forever, an intentional non-goal for this milestone). */
-export type AiPurpose = 'coaching-cue' | 'summary' | 'scorecard' | 'tasks' | 'other' | 'prep-brief'
+export type AiPurpose =
+  | 'coaching-cue'
+  | 'summary'
+  | 'scorecard'
+  | 'tasks'
+  | 'other'
+  | 'prep-brief'
+  | 'deal-tier1'
+  | 'deal-tier2'
 
 export interface ModelAssignment {
   /** Ordered model-catalog entry IDs — see main/ai/model-catalog.ts. Empty
@@ -1563,12 +1661,22 @@ export interface UserAlertSettings {
 }
 
 export type TelegramVerifyResult =
-  | { ok: true; channelId: string; deepLink: string | null; qrData: string | null; expiresAt: string }
+  | {
+      ok: true
+      channelId: string
+      deepLink: string | null
+      qrData: string | null
+      expiresAt: string
+    }
   | { ok: false; error: 'not-signed-in' | 'not-configured' | 'create-failed' }
 
 export type EmailVerifyResult =
   | { ok: true; channelId: string; expiresAt: string }
-  | { ok: false; error: 'not-signed-in' | 'invalid-email' | 'create-failed' | 'send-failed'; channelId?: string }
+  | {
+      ok: false
+      error: 'not-signed-in' | 'invalid-email' | 'create-failed' | 'send-failed'
+      channelId?: string
+    }
 
 export type ConfirmEmailCodeResult =
   | { ok: true }
@@ -1576,7 +1684,11 @@ export type ConfirmEmailCodeResult =
 
 export type TestSendResult =
   | { ok: true }
-  | { ok: false; error: 'invalid-input' | 'not-found' | 'unverified' | 'send-failed' | 'not-configured'; message?: string }
+  | {
+      ok: false
+      error: 'invalid-input' | 'not-found' | 'unverified' | 'send-failed' | 'not-configured'
+      message?: string
+    }
 
 export interface AlertsApi {
   channels: {
@@ -1671,6 +1783,7 @@ declare global {
     api: {
       transcription: TranscriptionApi
       trackers: TrackersApi
+      dealIntelligence: DealIntelligenceApi
       calls: CallsApi
       tasks: TasksApi
       contacts: ContactsApi

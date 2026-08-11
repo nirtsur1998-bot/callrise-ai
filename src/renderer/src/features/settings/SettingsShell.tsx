@@ -12,6 +12,7 @@ import { DetectionSection } from './DetectionSection'
 import { RecordingConsentSection } from './RecordingConsentSection'
 import { AudioSection } from './AudioSection'
 import { CoachingSection } from './CoachingSection'
+import { LiveDealIntelligenceSection } from './LiveDealIntelligenceSection'
 import { SummaryLanguageSection } from './SummaryLanguageSection'
 import { PersonalizationSection } from './PersonalizationSection'
 import { ObjectionLibrarySection } from './ObjectionLibrarySection'
@@ -31,6 +32,7 @@ const PAGE_CONTENT: Record<SettingsPageId, React.ComponentType> = {
   'recording-consent': RecordingConsentSection,
   audio: AudioSection,
   coaching: CoachingSection,
+  'live-deal-intelligence': LiveDealIntelligenceSection,
   'summary-language': SummaryLanguageSection,
   personalization: PersonalizationSection,
   'objection-library': ObjectionLibrarySection,

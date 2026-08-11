@@ -18,7 +18,8 @@ import {
   ChevronUp,
   ChevronDown,
   Bookmark as BookmarkIcon,
-  ClipboardList
+  ClipboardList,
+  Radar
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { SpeakerTranscript } from '@renderer/components/SpeakerTranscript'
@@ -52,6 +53,7 @@ import type { CalendarEvent } from '@renderer/features/calendar/types'
 import { recordRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import { formatDate, formatDuration, formatBytes } from './format'
 import { PracticeMode } from './PracticeMode'
+import { RadarReport } from '@renderer/features/deal-intelligence/ui/RadarReport'
 import type { Attachment, Call, Commitment } from './types'
 
 /** mm:ss relative to call start — bookmarks store `atMs` as milliseconds. */
@@ -833,6 +835,21 @@ export function CallDetail({
           )}
         </Card>
 
+        {/* Radar Report (M24 §8) — what Live Deal Intelligence caught live,
+            reviewable after the fact. Only ever present when the Beta was on
+            for this call; there's no post-hoc "run it now" the way
+            Commitments/Coaching have, since Tiers 1/2 only ever see the
+            transcript as it happened live. */}
+        {call.dealIntelligence && (
+          <Card>
+            <div className="mb-4 flex items-center gap-2">
+              <Radar className="h-4 w-4 text-accent" />
+              <h3 className="text-sm font-semibold">Radar Report</h3>
+            </div>
+            <RadarReport record={call.dealIntelligence} />
+          </Card>
+        )}
+
         <MineTestPanel callId={callId} enabled={settings.objectionMining.enabled} />
 
         {/* Tasks */}
@@ -986,8 +1003,8 @@ function NoKeyBanner(): React.JSX.Element {
       <p className="font-medium">Add your Anthropic API key</p>
       <p className="mt-1 text-warning/80">
         AI summaries need an Anthropic key. Get one at console.anthropic.com, paste it into{' '}
-        <span className="text-warning">Settings → API keys</span>, then try again — it takes
-        effect immediately, no restart needed.
+        <span className="text-warning">Settings → API keys</span>, then try again — it takes effect
+        immediately, no restart needed.
       </p>
     </div>
   )

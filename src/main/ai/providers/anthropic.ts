@@ -21,7 +21,11 @@ const MODEL_BY_PURPOSE: Record<AIPurpose, string> = {
   tasks: 'claude-sonnet-4-6',
   other: 'claude-sonnet-4-6',
   // No consumer yet (M19 Task 3B not built) - same tier as 'other'.
-  'prep-brief': 'claude-sonnet-4-6'
+  'prep-brief': 'claude-sonnet-4-6',
+  // M24 - same fast/cheap tier as coaching-cue; same latency-critical shape.
+  'deal-tier1': 'claude-haiku-4-5',
+  // M24 - can afford to think longer; same tier as summary/scorecard.
+  'deal-tier2': 'claude-sonnet-4-6'
 }
 
 // Rough per-million-token pricing for usage/cost display (Settings -> AI).

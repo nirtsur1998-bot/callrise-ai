@@ -15,14 +15,7 @@
  *  by providers/openai-compatible.ts, parameterised by base URL) plus
  *  'google' (Gemini, its own REST adapter — not OpenAI-compatible). */
 export type AIProviderId =
-  | 'anthropic'
-  | 'openai'
-  | 'groq'
-  | 'openrouter'
-  | 'google'
-  | 'nvidia'
-  | 'cerebras'
-  | 'mistral'
+  'anthropic' | 'openai' | 'groq' | 'openrouter' | 'google' | 'nvidia' | 'cerebras' | 'mistral'
 
 export interface AIMessage {
   role: 'user' | 'assistant'
@@ -34,8 +27,22 @@ export interface AIMessage {
  *  each provider's own internal model default. M20 adds 'prep-brief' for the
  *  M19 pre-meeting prep brief - no consumer exists yet (M19 Task 3B isn't
  *  built), but the model-assignment UI needs a purpose to assign a chain to
- *  ahead of that consumer landing. */
-export type AIPurpose = 'coaching-cue' | 'summary' | 'scorecard' | 'tasks' | 'other' | 'prep-brief'
+ *  ahead of that consumer landing. M24 adds 'deal-tier1' — the Live Deal
+ *  Intelligence engine's fast micro-analysis pass (risk/opportunity/tactical
+ *  signal detection), triggered mid-call every ~20s or off a Tier 0 event.
+ *  Same latency-critical shape as 'coaching-cue' (see CHAIN_BUDGET below).
+ *  M24 also adds 'deal-tier2' — the same engine's slower strategic pass
+ *  (Deal Health Score, every 2-3 minutes or on a call-stage change), which
+ *  can afford to think longer, same tier as 'summary'/'scorecard'. */
+export type AIPurpose =
+  | 'coaching-cue'
+  | 'summary'
+  | 'scorecard'
+  | 'tasks'
+  | 'other'
+  | 'prep-brief'
+  | 'deal-tier1'
+  | 'deal-tier2'
 
 /** A single tool the model is FORCED to call — every real call site today
  *  needs structured JSON back, never free text. `inputSchema` is a plain
@@ -109,13 +116,7 @@ export interface AIProvider {
  *  'model-not-found' and 'timeout' are M20 additions — completeWithFallback()
  *  advances the chain on either of these, same as 'rate-limit'/'network'. */
 export type AIProviderErrorCode =
-  | 'no-key'
-  | 'auth'
-  | 'rate-limit'
-  | 'network'
-  | 'failed'
-  | 'model-not-found'
-  | 'timeout'
+  'no-key' | 'auth' | 'rate-limit' | 'network' | 'failed' | 'model-not-found' | 'timeout'
 
 export class AIProviderError extends Error {
   constructor(
@@ -145,7 +146,16 @@ export const LATENCY_POLICY: Record<AIPurpose, LatencyPolicyEntry> = {
   other: { maxRetries: 1, timeoutMs: 30_000 },
   // No consumer yet (M19 Task 3B not built) - same shape as 'other' until a
   // real call site exists to tell us its actual latency needs.
-  'prep-brief': { maxRetries: 1, timeoutMs: 30_000 }
+  'prep-brief': { maxRetries: 1, timeoutMs: 30_000 },
+  // M24's own acceptance criterion is "trigger to visible cue in <=4s" for
+  // the WHOLE round trip (Tier 0 detection + this call + Nudge Engine
+  // gating, all effectively instant except this). 0 retries for the same
+  // reason as coaching-cue - a late deal-risk nudge is worse than a missed
+  // one, since the moment it was actually relevant has usually passed.
+  'deal-tier1': { maxRetries: 0, timeoutMs: 4_000 },
+  // Runs every 2-3 minutes, not per-turn - not latency-critical the same way
+  // deal-tier1 is, so it gets the same tier as summary/scorecard.
+  'deal-tier2': { maxRetries: 2, timeoutMs: 60_000 }
 }
 
 /** Total wall-clock budget for a whole completeWithFallback() chain on this
@@ -166,5 +176,6 @@ export interface ChainBudget {
 }
 
 export const CHAIN_BUDGET: Partial<Record<AIPurpose, ChainBudget>> = {
-  'coaching-cue': { totalBudgetMs: LATENCY_POLICY['coaching-cue'].timeoutMs, maxChainLength: 2 }
+  'coaching-cue': { totalBudgetMs: LATENCY_POLICY['coaching-cue'].timeoutMs, maxChainLength: 2 },
+  'deal-tier1': { totalBudgetMs: LATENCY_POLICY['deal-tier1'].timeoutMs, maxChainLength: 2 }
 }

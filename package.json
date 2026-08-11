@@ -16,6 +16,7 @@
     "native:build:mac": "node scripts/build-native.js native/mac-audio-activity",
     "native:build:win": "node scripts/build-native.js native/win-audio-sessions",
     "detect:debug": "node scripts/debug-detect.js",
+    "simulate:call": "tsx scripts/run-call-simulator.ts",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",

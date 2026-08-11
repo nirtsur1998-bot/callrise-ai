@@ -68,10 +68,38 @@ const api = {
     list: () => ipcRenderer.invoke('trackers:list'),
     save: (trackers: unknown) => ipcRenderer.invoke('trackers:save', trackers)
   },
+  dealIntelligence: {
+    /** M24 §3 — Tier 1 fast micro-analysis: transcript delta + compact call
+     *  state (+ optional deal context, §5) in, risk/opportunity/tactical
+     *  signals out. See main/deal-tier1.ts. */
+    analyzeTier1: (input: {
+      transcriptDelta: string
+      compactState: string
+      dealContext?: string
+      triggerReason?: string
+    }) => ipcRenderer.invoke('dealIntelligence:analyzeTier1', input),
+    /** M24 §4 — Tier 2 strategic analysis: a wider transcript delta +
+     *  compact call state + deal context in, a Deal Health Score out. See
+     *  main/deal-tier2.ts. */
+    analyzeTier2: (input: {
+      transcriptDelta: string
+      compactState: string
+      dealContext?: string
+      triggerReason?: string
+    }) => ipcRenderer.invoke('dealIntelligence:analyzeTier2', input),
+    /** M24 §8 — the feedback loop. recordFeedback fires immediately per
+     *  rating (so it accumulates across calls); getFeedbackSummary is read
+     *  once at the start of each call to seed that call's adaptive
+     *  confidence thresholds. See main/deal-feedback-fs.ts. */
+    recordFeedback: (input: { type: 'risk' | 'opportunity' | 'tactical'; subtype: string; helpful: boolean }) =>
+      ipcRenderer.invoke('dealIntelligence:recordFeedback', input),
+    getFeedbackSummary: () => ipcRenderer.invoke('dealIntelligence:getFeedbackSummary')
+  },
   calls: {
     list: () => ipcRenderer.invoke('calls:list'),
     get: (id: string) => ipcRenderer.invoke('calls:get', id),
-    save: (input: unknown, selfIntro?: unknown) => ipcRenderer.invoke('calls:save', input, selfIntro),
+    save: (input: unknown, selfIntro?: unknown) =>
+      ipcRenderer.invoke('calls:save', input, selfIntro),
     delete: (id: string) => ipcRenderer.invoke('calls:delete', id),
     addAttachment: (callId: string, file: { name: string; ext: string; data: ArrayBuffer }) =>
       ipcRenderer.invoke('calls:addAttachment', callId, file),
@@ -82,6 +110,10 @@ const api = {
       ipcRenderer.invoke('summary:attachment', callId, attachmentId),
     coachCall: (callId: string) => ipcRenderer.invoke('coach:call', callId),
     extractCommitments: (callId: string) => ipcRenderer.invoke('commitments:extract', callId),
+    /** M24 §8 — persist the Radar Report source data onto an already-saved
+     *  call. No AI call; the renderer already has the full history. */
+    saveDealIntelligence: (callId: string, record: unknown) =>
+      ipcRenderer.invoke('dealIntelligence:saveRecord', callId, record),
     mineObjectionsTest: (callId: string) => ipcRenderer.invoke('objections:mineTest', callId),
     enqueueObjections: (callId: string, candidates: unknown) =>
       ipcRenderer.invoke('objections:enqueue', callId, candidates),
@@ -135,7 +167,8 @@ const api = {
     rules: {
       list: () => ipcRenderer.invoke('alerts:rules:list'),
       create: (input: unknown) => ipcRenderer.invoke('alerts:rules:create', input),
-      update: (ruleId: string, patch: unknown) => ipcRenderer.invoke('alerts:rules:update', ruleId, patch),
+      update: (ruleId: string, patch: unknown) =>
+        ipcRenderer.invoke('alerts:rules:update', ruleId, patch),
       delete: (ruleId: string) => ipcRenderer.invoke('alerts:rules:delete', ruleId)
     },
     settings: {
@@ -289,7 +322,8 @@ const api = {
     // Bundled catalog - instant, no network, used for the picker's first paint.
     list: () => ipcRenderer.invoke('aiCatalog:list'),
     // Cross-checked against each configured provider's live /models endpoint.
-    resolve: (forceRefresh?: boolean) => ipcRenderer.invoke('aiCatalog:resolve', forceRefresh === true),
+    resolve: (forceRefresh?: boolean) =>
+      ipcRenderer.invoke('aiCatalog:resolve', forceRefresh === true),
     // V1 chain-editing scope: picks one primary model, main derives the full
     // fallback chain from the bundled default ordering (see catalog-ipc.ts).
     assignPrimaryModel: (purpose: string, catalogId: string) =>

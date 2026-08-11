@@ -12,7 +12,9 @@ const ASSIGNABLE_PURPOSES: AIPurpose[] = [
   'summary',
   'scorecard',
   'tasks',
-  'prep-brief'
+  'prep-brief',
+  'deal-tier1',
+  'deal-tier2'
 ]
 
 export function registerModelCatalog(): void {

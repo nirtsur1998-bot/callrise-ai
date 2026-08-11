@@ -35,12 +35,28 @@ const JOBS: JobConfig[] = [
     title: 'Coaching scorecard',
     blurb: 'Structured feedback on how the call went.'
   },
-  { purpose: 'tasks', title: 'Task extraction', blurb: 'Pulls action items out of the transcript.' },
+  {
+    purpose: 'tasks',
+    title: 'Task extraction',
+    blurb: 'Pulls action items out of the transcript.'
+  },
   {
     purpose: 'prep-brief',
     title: 'Pre-meeting prep brief',
     blurb:
       'Benefits from long context — feed it a whole call history. (M19’s prep brief feature itself isn’t built yet; assigning a model here just gets it ready.)'
+  },
+  {
+    purpose: 'deal-tier1',
+    title: 'Live Deal Intelligence — fast analysis',
+    blurb:
+      'Latency-critical, same as live coaching cues — capped to a 2-model fallback chain so a missed nudge never means a stale one.'
+  },
+  {
+    purpose: 'deal-tier2',
+    title: 'Live Deal Intelligence — health score',
+    blurb:
+      'Runs every 2-3 minutes, not per-turn — benefits from a stronger model the same way summaries and scorecards do.'
   }
 ]
 
@@ -165,7 +181,11 @@ function JobCard({
         <div className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-line-soft p-1">
           {catalog.map((entry) => (
             <div key={entry.id} className="relative">
-              <CatalogRow entry={entry} selected={entry.id === primaryId} onSelect={() => void pick(entry.id)} />
+              <CatalogRow
+                entry={entry}
+                selected={entry.id === primaryId}
+                onSelect={() => void pick(entry.id)}
+              />
               {assigning === entry.id && (
                 <Loader2 className="absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin text-muted" />
               )}
@@ -260,8 +280,8 @@ export function ModelAssignmentSection(): React.JSX.Element {
       <div className="mb-4 flex items-center justify-between gap-3">
         <p className="text-[13px] text-muted">
           Each job gets an ordered fallback chain automatically — picking a model here promotes it
-          to the front. Free tiers rate-limit and rosters change; a model with no key configured
-          for its provider is simply skipped at runtime.
+          to the front. Free tiers rate-limit and rosters change; a model with no key configured for
+          its provider is simply skipped at runtime.
         </p>
         <button
           type="button"

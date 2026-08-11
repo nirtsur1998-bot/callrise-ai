@@ -116,6 +116,9 @@ import { registerContacts } from './contacts'
 import { registerDeals } from './deals'
 import { registerDealStages } from './deal-stages'
 import { registerAuth } from './auth'
+import { registerDealTier1 } from './deal-tier1'
+import { registerDealTier2 } from './deal-tier2'
+import { registerDealFeedback } from './deal-feedback-fs'
 import { registerEvents } from './events'
 import { registerLiveCue } from './live-cue'
 import { registerLoopbackCapture } from './loopback'
@@ -344,6 +347,9 @@ app.whenReady().then(async () => {
   registerDeals()
   registerDealStages()
   registerAuth()
+  registerDealTier1()
+  registerDealTier2()
+  registerDealFeedback()
   registerEvents()
   registerLiveCue()
   registerLoopbackCapture()

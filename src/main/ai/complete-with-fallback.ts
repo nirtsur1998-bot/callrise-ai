@@ -28,7 +28,9 @@ export class AllModelsExhaustedError extends Error {
     readonly purpose: AIPurpose,
     readonly attempts: { catalogId: string; reason: string }[]
   ) {
-    super(`Every configured model for "${purpose}" failed: ${attempts.map((a) => a.reason).join('; ')}`)
+    super(
+      `Every configured model for "${purpose}" failed: ${attempts.map((a) => a.reason).join('; ')}`
+    )
     this.name = 'AllModelsExhaustedError'
   }
 }
@@ -61,6 +63,7 @@ const QUALITY_CHAIN = [
 ]
 
 const coachingCap = CHAIN_BUDGET['coaching-cue']?.maxChainLength ?? 2
+const dealTier1Cap = CHAIN_BUDGET['deal-tier1']?.maxChainLength ?? 2
 
 /** Bundled fallback ordering, only reached when a purpose has neither an
  *  explicit chain configured nor a legacy `aiProvider`+key. Not lane-
@@ -74,7 +77,14 @@ export const DEFAULT_CATALOG_CHAIN: Record<AIPurpose, string[]> = {
   // call-title, crm-notes, deal-risk) - it stays on getActiveAIProvider()
   // forever via the legacy-path branch below, never reaching this array.
   other: [],
-  'prep-brief': QUALITY_CHAIN
+  'prep-brief': QUALITY_CHAIN,
+  // M24 - same speed-lane precedent as coaching-cue (see CHAIN_BUDGET's doc
+  // comment in types.ts): a live, latency-critical path gets the fast chain,
+  // capped the same way.
+  'deal-tier1': SPEED_CHAIN.slice(0, dealTier1Cap),
+  // M24 - quality-lane precedent, same as summary/scorecard/prep-brief; no
+  // cap, since deal-tier2 has no CHAIN_BUDGET entry.
+  'deal-tier2': QUALITY_CHAIN
 }
 
 interface ResolvedStep {

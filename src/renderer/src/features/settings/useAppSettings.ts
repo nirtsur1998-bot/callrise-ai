@@ -44,7 +44,9 @@ const DEFAULT_SETTINGS: AppSettings = {
     scorecard: { chain: [] },
     tasks: { chain: [] },
     other: { chain: [] },
-    'prep-brief': { chain: [] }
+    'prep-brief': { chain: [] },
+    'deal-tier1': { chain: [] },
+    'deal-tier2': { chain: [] }
   },
   autoUpdateEnabled: false
 }

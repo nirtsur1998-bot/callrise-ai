@@ -9,14 +9,25 @@ import { join } from 'node:path'
 // `LATENCY_POLICY[req.purpose]`), so asserting the constant covers both by
 // construction - they cannot diverge without one of them hardcoding its own
 // value, which the source-scan test below also guards against.
-describe('coaching-cue latency policy', () => {
-  it('never retries and stays fail-fast', () => {
-    expect(LATENCY_POLICY['coaching-cue'].maxRetries).toBe(0)
-    expect(LATENCY_POLICY['coaching-cue'].timeoutMs).toBeLessThanOrEqual(10_000)
+// M24 added 'deal-tier1' as a second live, latency-critical purpose (the
+// Live Deal Intelligence engine's fast micro-analysis pass) - same fail-fast
+// shape as coaching-cue, for the same reason: a late nudge about a moment
+// that's already passed is worse than no nudge at all.
+describe('coaching-cue / deal-tier1 latency policy', () => {
+  it.each(['coaching-cue', 'deal-tier1'] as const)('%s never retries and stays fail-fast', (purpose) => {
+    expect(LATENCY_POLICY[purpose].maxRetries).toBe(0)
+    expect(LATENCY_POLICY[purpose].timeoutMs).toBeLessThanOrEqual(10_000)
   })
 
   it('every other purpose is still allowed to retry (this test would also catch someone accidentally zeroing all of them out)', () => {
-    for (const purpose of ['summary', 'scorecard', 'tasks', 'other', 'prep-brief'] as const) {
+    for (const purpose of [
+      'summary',
+      'scorecard',
+      'tasks',
+      'other',
+      'prep-brief',
+      'deal-tier2'
+    ] as const) {
       expect(LATENCY_POLICY[purpose].maxRetries).toBeGreaterThan(0)
     }
   })

@@ -15,6 +15,7 @@ import {
   setAttachmentSummary,
   setCallCoaching,
   setCallCommitments,
+  setCallDealIntelligence,
   setCallTitle,
   setCallContact,
   setCallObjectionsMined,
@@ -430,6 +431,20 @@ export function registerCalls(): void {
           message: 'The commitments could not be saved. Please try again.'
         }
       }
+    }
+  )
+
+  // --- M24 §8 — save the Radar Report source data onto the just-saved call --
+  // No AI call here (unlike commitments:extract above) — the renderer already
+  // has the full nudge/health-score history from its own in-memory engine by
+  // the time the call is saved; this just persists it, sanitized, same
+  // "never trust a renderer-supplied blob" posture setCallCommitments takes.
+  ipcMain.handle(
+    'dealIntelligence:saveRecord',
+    async (_event, callId: unknown, record: unknown): Promise<{ ok: boolean }> => {
+      if (typeof callId !== 'string') return { ok: false }
+      const saved = await setCallDealIntelligence(callsDir(), callId, record)
+      return { ok: saved !== null }
     }
   )
 

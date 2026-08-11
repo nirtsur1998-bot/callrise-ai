@@ -15,6 +15,7 @@ import { isMac, isWindows } from '@renderer/lib/platform'
 import { IconButton } from '@renderer/components/IconButton'
 import { Button } from '@renderer/components/Button'
 import type { ConsentMethod } from '@renderer/features/calls/types'
+import type { DealIntelligenceRecord } from '../../../../preload/index.d'
 import { useTranscription } from './useTranscription'
 import { useLiveCues } from './useLiveCues'
 import { useLiveClips } from './useLiveClips'
@@ -42,6 +43,9 @@ import { CueControls } from './components/CueControls'
 import { AskCoach } from './components/AskCoach'
 import { EngagementGauge } from './components/EngagementGauge'
 import { MonologueMeter } from './components/MonologueMeter'
+import { useDealIntelligence } from '@renderer/features/deal-intelligence/useDealIntelligence'
+import { useDealIntelligenceSettings } from '@renderer/features/deal-intelligence/useDealIntelligenceSettings'
+import { DealIntelligencePanel } from '@renderer/features/deal-intelligence/ui/DealIntelligencePanel'
 import {
   IdleHero,
   CenteredState,
@@ -114,12 +118,28 @@ export function LiveView({
   // live-in-progress call). Flushed to real bookmarks once the call is saved.
   const clips = useLiveClips()
 
+  // M24 §8 — same cross-hook-ordering problem M19's buyerIdentityRef below
+  // already solves, one level removed: useDealIntelligence (which must run
+  // AFTER useTranscription, since it reads useTranscription's own return
+  // values) can't be called yet at the point handleSaved is defined, so its
+  // getDealIntelligenceReport function is bridged in via a ref instead —
+  // synced once useDealIntelligence exists (see the effect near that call),
+  // read here only at actual save time, well after that sync has happened.
+  const dealIntelligenceReportGetterRef = useRef<() => DealIntelligenceRecord>(() => ({
+    nudges: [],
+    healthScoreHistory: []
+  }))
+
   // Wrap the parent's onSaved so every clip captured this call is flushed to
   // window.api.calls.addBookmark against the now-real callId, fire-and-forget,
   // before handing off to whatever the parent wants to do with the saved id.
   const handleSaved = useCallback(
     (callId: string) => {
       clips.flush(callId)
+      const report = dealIntelligenceReportGetterRef.current()
+      if (report.nudges.length > 0 || report.healthScoreHistory.length > 0) {
+        void window.api.calls.saveDealIntelligence(callId, report).catch(() => {})
+      }
       onSaved?.(callId)
     },
     [clips, onSaved]
@@ -251,17 +271,61 @@ export function LiveView({
     identifyRep
   )
 
+  // M24 — Live Deal Intelligence (Beta). A sibling to useLiveCues above, same
+  // shape: reads useTranscription's own `segments`/`status` rather than
+  // re-subscribing to the raw transcript event, so it never re-derives the
+  // role attribution useTranscription already solved.
+  const {
+    enabled: dealIntelligenceEnabled,
+    sensitivity: dealIntelligenceSensitivity,
+    enabledTypes: dealIntelligenceEnabledTypes,
+    frequency: dealIntelligenceFrequency
+  } = useDealIntelligenceSettings()
+  const {
+    status: dealIntelligenceStatus,
+    nudges: dealIntelligenceNudges,
+    dismissNudge: dismissDealIntelligenceNudge,
+    healthScore: dealIntelligenceHealthScore,
+    rateNudge: rateDealIntelligenceNudge,
+    getDealIntelligenceReport
+  } = useDealIntelligence(
+    segments,
+    status === 'listening',
+    dealIntelligenceEnabled,
+    dealIntelligenceSensitivity,
+    [],
+    // M24 §5 context fusion — the same "which meeting is this call" match
+    // the M19 prep-brief banner below already computes; reused rather than
+    // a second independent lookup.
+    currentMeeting,
+    dealIntelligenceEnabledTypes,
+    dealIntelligenceFrequency
+  )
+  // Completes the ref bridge declared above handleSaved — kept in sync on
+  // every render rather than a mount-only effect, since getDealIntelligenceReport's
+  // own identity can change (e.g. across the per-call reset this hook does internally).
+  useEffect(() => {
+    dealIntelligenceReportGetterRef.current = getDealIntelligenceReport
+  }, [getDealIntelligenceReport])
+
   // Keep the save-time ref in sync with the live-resolved buyer name, and
   // build the identities map SpeakerTranscript needs to show it DURING the
   // call (not just after saving) — the M19 brief's "propagates to the live
   // transcript" requirement.
   useEffect(() => {
-    buyerIdentityRef.current = buyerName && buyerIdentityKey ? { key: buyerIdentityKey, name: buyerName } : null
+    buyerIdentityRef.current =
+      buyerName && buyerIdentityKey ? { key: buyerIdentityKey, name: buyerName } : null
   }, [buyerName, buyerIdentityKey, buyerIdentityRef])
   const liveIdentities = useMemo(
     () =>
       buyerName && buyerIdentityKey
-        ? { [buyerIdentityKey]: { name: buyerName, source: 'self-intro' as const, confidence: 'medium' as const } }
+        ? {
+            [buyerIdentityKey]: {
+              name: buyerName,
+              source: 'self-intro' as const,
+              confidence: 'medium' as const
+            }
+          }
         : undefined,
     [buyerName, buyerIdentityKey]
   )
@@ -979,6 +1043,24 @@ export function LiveView({
           <div className="pointer-events-none absolute top-3 right-4 bottom-4 z-40 flex w-64 flex-col items-end justify-end gap-2">
             <SuggestionRail suggestions={suggestions} onDismiss={dismissSuggestion} />
             {cue && <CueCard key={cue.id} cue={cue} onDismiss={dismiss} />}
+          </div>
+        )}
+        {/* M24 — mounted in the OPPOSITE corner from the coaching-cue column
+            above so the two floating stacks can never collide, per
+            deal-intelligence/ui/DESIGN.md's mounting guidance. Self-gates on
+            `enabled` internally too; gating the wrapper here as well avoids
+            an empty pointer-events-none node in the DOM when the beta
+            feature is off, matching the cue column's own conditional above. */}
+        {dealIntelligenceEnabled && (
+          <div className="pointer-events-none absolute top-3 left-4 z-40 flex w-80 flex-col items-start">
+            <DealIntelligencePanel
+              enabled={dealIntelligenceEnabled}
+              status={dealIntelligenceStatus}
+              nudges={dealIntelligenceNudges}
+              onDismiss={dismissDealIntelligenceNudge}
+              healthScore={dealIntelligenceHealthScore}
+              onFeedback={rateDealIntelligenceNudge}
+            />
           </div>
         )}
         {(status === 'listening' || status === 'paused') && hasTranscript && (

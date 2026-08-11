@@ -16,6 +16,7 @@ import {
   Radar,
   BellRing,
   Layers,
+  Activity,
   type LucideIcon
 } from 'lucide-react'
 
@@ -28,6 +29,7 @@ export type SettingsPageId =
   | 'recording-consent'
   | 'audio'
   | 'coaching'
+  | 'live-deal-intelligence'
   | 'summary-language'
   | 'personalization'
   | 'objection-library'
@@ -124,6 +126,13 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         label: 'Coaching',
         icon: Sparkles,
         description: 'Default sensitivity for live coaching cues.'
+      },
+      {
+        id: 'live-deal-intelligence',
+        label: 'Live Deal Intelligence',
+        icon: Activity,
+        description:
+          "Beta: real-time deal-risk radar and next-level coaching cues, watching the live call against this deal's context."
       },
       {
         id: 'summary-language',
