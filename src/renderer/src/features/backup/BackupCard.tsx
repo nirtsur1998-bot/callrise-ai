@@ -52,8 +52,6 @@ function friendlyError(code: string, direction: 'backup' | 'restore'): string {
       return 'Cloud backup needs your account set up first.'
     case 'not-signed-in':
       return "You're not signed in, so nothing could sync."
-    case 'ownership-mismatch':
-      return 'This device is already backing up a different account. Sign in with that account to sync here.'
     default:
       return direction === 'backup'
         ? "The last backup didn't finish. It will retry automatically, or click Sync now."

@@ -44,7 +44,6 @@ import {
   toDeviceIso,
   type CloudRow
 } from './backup-core'
-import { readOwner, claimOwnershipIfUnset } from './device-owner'
 
 function tasksDir(): string {
   return join(app.getPath('userData'), 'tasks')
@@ -238,13 +237,6 @@ const ATTACHMENT_MIME: Record<string, string> = {
   md: 'text/markdown',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 }
-
-// This device's local data belongs to exactly ONE account (the app is
-// single-user per machine) — readOwner/claimOwnershipIfUnset live in
-// device-owner.ts (shared with auth.ts's sign-in guard, BUG-022). Refuse to
-// back up when a different account is signed in — otherwise a shared
-// machine could upload account A's leftover local files into account B's
-// cloud (RLS can't catch it: the rows would be legitimately stamped as B).
 
 export interface BackupState {
   lastPushAt?: string
@@ -455,22 +447,6 @@ export async function pushAll(): Promise<BackupResult> {
   if (!userId) {
     await writeState({ lastPushError: 'not-signed-in', lastPushErrorAt: new Date().toISOString() })
     return { ok: false, error: 'not-signed-in' }
-  }
-  // Ownership guard: never upload this device's local data under a DIFFERENT
-  // account than the one it belongs to (shared-machine cross-account leak).
-  // If unowned, atomically claim it, then RE-READ so a lost claim race also
-  // fails closed — we proceed only when we're the confirmed owner.
-  let owner = await readOwner()
-  if (!owner) {
-    await claimOwnershipIfUnset(userId)
-    owner = await readOwner()
-  }
-  if (owner !== userId) {
-    await writeState({
-      lastPushError: 'ownership-mismatch',
-      lastPushErrorAt: new Date().toISOString()
-    })
-    return { ok: false, error: 'ownership-mismatch' }
   }
   try {
     // Clock offset for this push — every uploaded updated_at is normalised onto
@@ -703,20 +679,6 @@ export async function pullAll(): Promise<RestoreResult> {
   if (!userId) {
     await writeState({ lastPullError: 'not-signed-in', lastPullErrorAt: new Date().toISOString() })
     return { ok: false, error: 'not-signed-in' }
-  }
-  // Same ownership guard as the push: on a FRESH machine this claims the device
-  // (that's the restore-on-new-machine path); on a mismatched machine it refuses.
-  let owner = await readOwner()
-  if (!owner) {
-    await claimOwnershipIfUnset(userId)
-    owner = await readOwner()
-  }
-  if (owner !== userId) {
-    await writeState({
-      lastPullError: 'ownership-mismatch',
-      lastPullErrorAt: new Date().toISOString()
-    })
-    return { ok: false, error: 'ownership-mismatch' }
   }
   try {
     const { lastSyncAt } = await readState()
@@ -1001,10 +963,6 @@ export function registerBackup(): void {
 
   getSupabaseClient()?.auth.onAuthStateChange((event, session) => {
     const uid = session?.user?.id
-    // Pin this device's owner the moment an account appears (sign-in or a
-    // restored session), even before any push — so a later different sign-in
-    // on a shared machine is refused by the ownership guard.
-    if (uid) void claimOwnershipIfUnset(uid)
     // A fresh SIGN-IN is the restore moment (first run on a new machine pulls
     // everything back). Session restores are covered by the launch sync below.
     if (event === 'SIGNED_IN' && uid) void enqueue(syncNow)
