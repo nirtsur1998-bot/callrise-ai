@@ -68,9 +68,24 @@ if (!gotSingleInstanceLock) {
   app.quit()
 } else {
   app.on('second-instance', (_event, argv) => {
-    if (mainWindow) {
+    // Recovery path for a real, reproduced failure: if the FIRST instance's
+    // own startup hung somewhere between whenReady and createWindow() (a
+    // registerX() call stuck on a slow network/registry/OS call), it still
+    // holds the single-instance lock forever, mainWindow is still null, and
+    // — before this fix — every later double-click landed here, matched
+    // neither branch below, and did LITERALLY NOTHING: no window, no error,
+    // no feedback, launch after launch, until the user found the stuck
+    // process in Task Manager and killed it. Only createWindow() (not just
+    // app.whenReady().then(createWindow)) needs guarding against a call
+    // before 'ready' — Electron throws if a BrowserWindow is constructed too
+    // early, and if THAT'S the state we're in, the original startup path
+    // will still call createWindow() itself the moment 'ready' actually
+    // fires, so there is nothing unsafe to do here except skip this branch.
+    if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
+    } else if (app.isReady()) {
+      createWindow()
     }
     const link = argv.find((arg) => arg.startsWith('callrise://'))
     if (link) handleDeepLink(link)
