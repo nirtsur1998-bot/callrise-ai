@@ -99,10 +99,16 @@ function createOverlayWindow(): BrowserWindow {
     backgroundColor: '#00000000',
     // Native translucent material so the glass-capsule content (backdrop-blur
     // in CSS) reads as a genuinely native surface rather than a flat image of
-    // one — falls back to the CSS blur alone on platforms/GPUs where this is
-    // unsupported (Electron silently no-ops rather than erroring).
+    // one. macOS only: Windows' equivalent (backgroundMaterial: 'acrylic')
+    // was tried and reverted — on a transparent, frameless BrowserWindow it
+    // paints its own square backdrop at the OS compositor level, which has no
+    // idea about DetectionOverlay.tsx's rounded-corner CSS clip, so it shows
+    // through as an ugly square behind the actual rounded card (confirmed on
+    // real Windows hardware, not a theoretical incompatibility). The CSS-only
+    // backdrop-blur in .glass-hud already renders correctly on Windows
+    // without it — this is the same fallback the removed comment described,
+    // just now the ONLY path on win32 instead of an assumed-safe upgrade.
     vibrancy: process.platform === 'darwin' ? 'under-window' : undefined,
-    backgroundMaterial: process.platform === 'win32' ? 'acrylic' : undefined,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false

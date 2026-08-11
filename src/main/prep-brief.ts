@@ -11,7 +11,8 @@
 // padded with generic sales-call filler, same principle as the empty-call
 // refusal in generatePostCallBrief.
 
-import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
+import { AIProviderError, type AITool } from './ai'
+import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
 
 export interface PrepBrief {
   /** Who the rep is about to talk to: name, role/title, company — and the
@@ -135,9 +136,6 @@ export async function generatePrepBrief(
     return { ok: false, error: 'no-context' }
   }
 
-  const provider = getActiveAIProvider()
-  if (!provider) return { ok: false, error: 'no-key' }
-
   const parts = [
     `Meeting: "${context.meetingTitle}" at ${context.meetingStartIso}`,
     context.attendees ? `Attendees: ${context.attendees}` : '',
@@ -149,7 +147,7 @@ export async function generatePrepBrief(
   const prompt = [PROMPT, context.personalization].filter(Boolean).join(' ')
 
   try {
-    const result = await provider.complete({
+    const result = await completeWithFallback({
       purpose: 'summary',
       maxTokens: 2048,
       tool: BRIEF_TOOL,
@@ -174,13 +172,18 @@ export async function generatePrepBrief(
 
     return { ok: true, brief }
   } catch (err) {
+    if (err instanceof AIProviderError && err.code === 'no-key') {
+      return { ok: false, error: 'no-key' }
+    }
     return {
       ok: false,
       error: 'failed',
       message:
-        err instanceof AIProviderError
-          ? err.message
-          : 'Something went wrong while writing the prep brief. Please try again.'
+        err instanceof AllModelsExhaustedError
+          ? 'Every configured AI model failed to write the prep brief. Check your keys and free-tier limits in Settings, or try again shortly.'
+          : err instanceof AIProviderError
+            ? err.message
+            : 'Something went wrong while writing the prep brief. Please try again.'
     }
   }
 }

@@ -3,7 +3,8 @@
 // (a later step). This file only produces SUGGESTIONS — nothing here saves
 // anything or reaches live coaching. Every caller MUST check
 // isObjectionMiningEnabled() first (the settings toggle is the one gate).
-import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
+import { AIProviderError, type AITool } from './ai'
+import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
 import type { CallSegment } from './calls-fs'
 import { sameTurn } from './coach-attribution'
 
@@ -208,6 +209,9 @@ function assembleCandidates(
 }
 
 function friendlyError(err: unknown): string {
+  if (err instanceof AllModelsExhaustedError) {
+    return 'Every configured AI model failed to mine this call for objections. Check your keys and free-tier limits in Settings, or try again shortly.'
+  }
   if (err instanceof AIProviderError) return err.message
   return 'Something went wrong while mining this call for objections. Please try again.'
 }
@@ -217,14 +221,6 @@ function friendlyError(err: unknown): string {
  *  so it stays a pure "given a transcript, propose candidates" building
  *  block for both the new-call hook and the manual scan (later steps). */
 export async function mineObjections(segments: CallSegment[]): Promise<ObjectionMiningResult> {
-  const provider = getActiveAIProvider()
-  if (!provider) {
-    // Without a message, the renderer's fallback ("Could not mine this call
-    // for objections") reads identically to a real transient failure — a
-    // user with no key configured at all gets no hint that adding one is
-    // the actual fix.
-    return { ok: false, error: 'no-key', message: 'Add an AI provider API key in Settings first.' }
-  }
   if (!segments.length) {
     return { ok: false, error: 'failed', message: 'This call has no transcript to mine.' }
   }
@@ -235,7 +231,7 @@ export async function mineObjections(segments: CallSegment[]): Promise<Objection
     .slice(0, MAX_TEXT_CHARS)
 
   try {
-    const result = await provider.complete({
+    const result = await completeWithFallback({
       purpose: 'other',
       maxTokens: 4096,
       tool: MINE_TOOL,
@@ -245,6 +241,17 @@ export async function mineObjections(segments: CallSegment[]): Promise<Objection
     const candidates = assembleCandidates(result.toolInput ?? {}, segments)
     return { ok: true, candidates }
   } catch (err) {
+    if (err instanceof AIProviderError && err.code === 'no-key') {
+      // Without a message, the renderer's fallback ("Could not mine this call
+      // for objections") reads identically to a real transient failure — a
+      // user with no key configured at all gets no hint that adding one is
+      // the actual fix.
+      return {
+        ok: false,
+        error: 'no-key',
+        message: 'Add an AI provider API key in Settings first.'
+      }
+    }
     return { ok: false, error: 'failed', message: friendlyError(err) }
   }
 }

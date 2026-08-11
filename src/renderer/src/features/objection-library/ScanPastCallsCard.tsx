@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ScanSearch } from 'lucide-react'
 import { Button } from '@renderer/components/Button'
 
-// Rough, honest per-call estimate — same AI model as coaching. Not a
-// guarantee, just enough for the user to judge before confirming a batch run.
+// Rough, honest per-call estimate. Not a guarantee, just enough for the user
+// to judge before confirming a batch run.
 const SECONDS_PER_CALL = 10
 const LOW_COST_PER_CALL_USD = 0.01
 const HIGH_COST_PER_CALL_USD = 0.05
@@ -121,7 +121,7 @@ export function ScanPastCallsCard({
       <p className="text-sm text-muted">
         <span className="font-medium text-ink tabular-nums">{eligibleCount}</span> past call
         {eligibleCount === 1 ? '' : 's'} with a transcript {eligibleCount === 1 ? 'has' : 'have'}{' '}
-        not been mined yet. Scanning calls Claude once per call — expect{' '}
+        not been mined yet. Scanning one call at a time — expect{' '}
         <span className="tabular-nums">{formatMinutes(eligibleCount * SECONDS_PER_CALL)}</span> and{' '}
         <span className="tabular-nums">{formatCost(eligibleCount)}</span> in AI cost (a rough
         estimate, not a guarantee).

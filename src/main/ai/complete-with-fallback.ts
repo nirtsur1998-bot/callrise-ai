@@ -73,10 +73,16 @@ export const DEFAULT_CATALOG_CHAIN: Record<AIPurpose, string[]> = {
   summary: QUALITY_CHAIN,
   scorecard: QUALITY_CHAIN,
   tasks: QUALITY_CHAIN,
-  // No Settings UI ever populates 'other' (4 call sites: objection-mining,
-  // call-title, crm-notes, deal-risk) - it stays on getActiveAIProvider()
-  // forever via the legacy-path branch below, never reaching this array.
-  other: [],
+  // BUG-039 follow-up: 'other' (askCoach, custom trackers, objection-mining,
+  // call-title, crm-notes, deal-risk) used to call getActiveAIProvider()
+  // directly instead of completeWithFallback() - a single pinned "Default
+  // text AI provider" setting, not a real fallback chain, so a user with
+  // e.g. only a Groq key (and the default still pointed at Claude) saw these
+  // features fail outright even though live coaching cues worked fine on the
+  // exact same key. No Settings UI lets a user assign a specific model to
+  // 'other' (same as before), but it now gets the same bundled QUALITY_CHAIN
+  // resilience every other non-configured purpose already has.
+  other: QUALITY_CHAIN,
   'prep-brief': QUALITY_CHAIN,
   // M24 - same speed-lane precedent as coaching-cue (see CHAIN_BUDGET's doc
   // comment in types.ts): a live, latency-critical path gets the fast chain,

@@ -1,6 +1,6 @@
 import { app, ipcMain } from 'electron'
 import { join } from 'node:path'
-import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
+import { AIProviderError, type AITool } from './ai'
 import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
 import { listEntries } from './knowledge-fs'
 import { assembleKnowledgeContext } from './knowledge-context'
@@ -132,20 +132,13 @@ function friendlyError(err: unknown): string {
 }
 
 export async function askCoach(input: unknown): Promise<AskCoachResult> {
-  const provider = getActiveAIProvider()
-  if (!provider) {
-    return {
-      ok: false,
-      message: 'Add an AI provider API key in Settings to use the coach.'
-    }
-  }
   const body = (input ?? {}) as { transcript?: unknown; question?: unknown }
   const transcript = (typeof body.transcript === 'string' ? body.transcript : '').slice(-100_000)
   const question = (typeof body.question === 'string' ? body.question : '').trim().slice(0, 1000)
   if (!question) return { ok: false, message: 'Type what you need help with first.' }
 
   try {
-    const result = await provider.complete({
+    const result = await completeWithFallback({
       purpose: 'other',
       maxTokens: 400,
       tool: REPLY_TOOL,
@@ -167,6 +160,9 @@ export async function askCoach(input: unknown): Promise<AskCoachResult> {
       return { ok: false, message: 'No suggestion came back. Try again.' }
     return { ok: true, headline, tips }
   } catch (err) {
+    if (err instanceof AIProviderError && err.code === 'no-key') {
+      return { ok: false, message: 'Add an AI provider API key in Settings to use the coach.' }
+    }
     return { ok: false, message: friendlyError(err) }
   }
 }
@@ -226,10 +222,8 @@ const TRACKER_PROMPT = [
 export async function generateTracker(prompt: unknown): Promise<TrackerGenerateResult> {
   const text = (typeof prompt === 'string' ? prompt : '').trim().slice(0, 300)
   if (!text) return { ok: false, error: 'failed', message: 'Describe what to watch for first.' }
-  const provider = getActiveAIProvider()
-  if (!provider) return { ok: false, error: 'no-key' }
   try {
-    const result = await provider.complete({
+    const result = await completeWithFallback({
       purpose: 'other',
       maxTokens: 400,
       tool: TRACKER_TOOL,
@@ -237,6 +231,9 @@ export async function generateTracker(prompt: unknown): Promise<TrackerGenerateR
     })
     return { ok: true, raw: result.toolInput }
   } catch (err) {
+    if (err instanceof AIProviderError && err.code === 'no-key') {
+      return { ok: false, error: 'no-key' }
+    }
     return { ok: false, error: 'failed', message: friendlyError(err) }
   }
 }
@@ -306,7 +303,8 @@ function liveTool(includeBuyerName: boolean): AITool {
               },
               buyerSpeaker: {
                 type: ['integer', 'null'],
-                description: 'The 0-based speaker number buyerName applies to. null if buyerName is null.'
+                description:
+                  'The 0-based speaker number buyerName applies to. null if buyerName is null.'
               }
             }
           : {})
@@ -334,7 +332,11 @@ If the client's objection matches one of MY OBJECTION SCRIPTS below, cue the rep
 ${knowledge}`
 }
 
-function livePrompt(repSpeaker: number | null, knowledge: string, includeBuyerName: boolean): string {
+function livePrompt(
+  repSpeaker: number | null,
+  knowledge: string,
+  includeBuyerName: boolean
+): string {
   const who =
     repSpeaker === null
       ? 'First identify which speaker is the SALESPERSON (the rep): look for a self-introduction or their name early in the call (e.g. "Hi, I\'m Alex from…") and for selling language. Return that 0-based number as repSpeaker.'
@@ -451,7 +453,8 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
       }
     }
 
-    if (cue === 'none' || !text) return { ok: true, repSpeaker, cue: 'none', text: '', buyerName, buyerSpeaker }
+    if (cue === 'none' || !text)
+      return { ok: true, repSpeaker, cue: 'none', text: '', buyerName, buyerSpeaker }
     return { ok: true, repSpeaker, cue, text, buyerName, buyerSpeaker }
   } catch (err) {
     if (err instanceof AllModelsExhaustedError) {
@@ -461,7 +464,9 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
       // untouched), plus tell the renderer so it can show a small
       // non-blocking indicator instead of silently doing nothing. Never a
       // modal, never interrupts the call — see LiveView.tsx.
-      console.log(`[live-cue] all models exhausted: ${err.attempts.map((a) => a.reason).join(', ')}`)
+      console.log(
+        `[live-cue] all models exhausted: ${err.attempts.map((a) => a.reason).join(', ')}`
+      )
       return { ok: false, pausedReason: 'all-models-unavailable' }
     }
     const providerErr = err instanceof AIProviderError ? err : null

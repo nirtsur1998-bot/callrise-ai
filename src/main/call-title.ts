@@ -2,7 +2,8 @@
 // tier as live-cue.ts's classification-style tasks) that reads the
 // transcript and proposes a short, specific title. Provider-neutral (see
 // src/main/ai/) — works with whichever of Claude/ChatGPT the user has active.
-import { getActiveAIProvider, type AITool } from './ai'
+import type { AITool } from './ai'
+import { completeWithFallback } from './ai/complete-with-fallback'
 import type { CallSegment } from './calls-fs'
 
 const MAX_INPUT = 12000
@@ -29,8 +30,6 @@ const PROMPT = `Read this sales call transcript and give it a short, specific ti
 export type GenerateTitleResult = { ok: true; title: string } | { ok: false }
 
 export async function generateCallTitle(segments: CallSegment[]): Promise<GenerateTitleResult> {
-  const provider = getActiveAIProvider()
-  if (!provider) return { ok: false }
   if (!segments.length) return { ok: false }
 
   const transcript = segments
@@ -39,7 +38,7 @@ export async function generateCallTitle(segments: CallSegment[]): Promise<Genera
     .slice(0, MAX_INPUT)
 
   try {
-    const result = await provider.complete({
+    const result = await completeWithFallback({
       purpose: 'other',
       maxTokens: 60,
       tool: TITLE_TOOL,

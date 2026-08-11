@@ -3,7 +3,8 @@
 // which linked call (if any) a reason is based on, not a transcript quote —
 // the model never sees raw transcripts, only already-computed summaries and
 // coaching notes (the same privacy tier already used elsewhere in the app).
-import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
+import { AIProviderError, type AITool } from './ai'
+import { completeWithFallback } from './ai/complete-with-fallback'
 
 export type DealRiskLevel = 'low' | 'medium' | 'high'
 
@@ -177,11 +178,8 @@ function assembleAssessment(
 }
 
 export async function assessDealRisk(input: DealRiskInput): Promise<DealRiskResult> {
-  const provider = getActiveAIProvider()
-  if (!provider) return { ok: false, error: 'no-key' }
-
   try {
-    const result = await provider.complete({
+    const result = await completeWithFallback({
       purpose: 'other',
       maxTokens: 2048,
       tool: RISK_TOOL,
@@ -198,6 +196,9 @@ export async function assessDealRisk(input: DealRiskInput): Promise<DealRiskResu
     }
     return { ok: true, assessment }
   } catch (err) {
+    if (err instanceof AIProviderError && err.code === 'no-key') {
+      return { ok: false, error: 'no-key' }
+    }
     return { ok: false, error: 'failed', message: friendlyError(err) }
   }
 }

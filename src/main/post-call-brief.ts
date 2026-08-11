@@ -22,7 +22,8 @@ import type { CallSegment } from './calls-fs'
 import { loadAppSettings } from './app-settings'
 import { assemblePersonalizationContext } from './personalization-context'
 import { summaryLanguageInstruction } from './summary-language'
-import { getActiveAIProvider, AIProviderError, type AITool } from './ai'
+import { AIProviderError, type AITool } from './ai'
+import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
 
 const MAX_TEXT_CHARS = 200_000
 
@@ -140,9 +141,6 @@ export async function generatePostCallBrief(
     return { ok: false, error: 'empty-call' }
   }
 
-  const provider = getActiveAIProvider()
-  if (!provider) return { ok: false, error: 'no-key' }
-
   const personalization = safeSetting(
     () => assemblePersonalizationContext(loadAppSettings().personalization),
     ''
@@ -163,7 +161,7 @@ export async function generatePostCallBrief(
     .join(' ')
 
   try {
-    const result = await provider.complete({
+    const result = await completeWithFallback({
       purpose: 'summary',
       maxTokens: 4096,
       tool: BRIEF_TOOL,
@@ -204,13 +202,18 @@ export async function generatePostCallBrief(
     }
     return { ok: true, brief, copied }
   } catch (err) {
+    if (err instanceof AIProviderError && err.code === 'no-key') {
+      return { ok: false, error: 'no-key' }
+    }
     return {
       ok: false,
       error: 'failed',
       message:
-        err instanceof AIProviderError
-          ? err.message
-          : 'Something went wrong while writing the follow-up. Please try again.'
+        err instanceof AllModelsExhaustedError
+          ? 'Every configured AI model failed to write the follow-up. Check your keys and free-tier limits in Settings, or try again shortly.'
+          : err instanceof AIProviderError
+            ? err.message
+            : 'Something went wrong while writing the follow-up. Please try again.'
     }
   }
 }
