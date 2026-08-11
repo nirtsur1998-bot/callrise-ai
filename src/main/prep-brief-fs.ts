@@ -100,8 +100,10 @@ async function writeRecord(record: PrepBriefRecord): Promise<void> {
 /** The saved contact's fields the model is allowed to see, as plain text —
  *  everything from Task 3A's KYC/deal-context/personal fields, ending with
  *  the free-text briefing field (the highest-value input, since it's
- *  whatever the rep chose to write down themselves). */
-function formatContactContext(c: Contact): string {
+ *  whatever the rep chose to write down themselves). Exported for M23
+ *  Workstream B's coaching chat, which needs the exact same KYC formatting
+ *  for its context assembly — one formatter, not two drifting copies. */
+export function formatContactContext(c: Contact): string {
   const lines: string[] = [`Name: ${c.name}`]
   if (c.title) lines.push(`Title: ${c.title}`)
   if (c.company) lines.push(`Company: ${c.company}`)

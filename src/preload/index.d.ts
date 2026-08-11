@@ -351,12 +351,42 @@ export interface CoachMetrics {
   questionCount: number
   wordsPerMinute: number | null
   turns: number
+  questionSpread?: number | null
+  buyerQuestionCount?: number
+  buyerLongestMonologueWords?: number
+  pricingMentions?: number
+  pricingMentionsLatePct?: number | null
+  nextStepsLocked?: boolean
 }
 
 export interface CoachDealContext {
   type: 'transactional' | 'complex' | 'unknown'
   summary: string
   lens: string
+}
+
+// --- M23 Coach 2.0 ------------------------------------------------------
+export type CallType = 'cold-call' | 'discovery' | 'demo' | 'closing' | 'other'
+
+export type SalesMethodology = 'spin' | 'meddic' | 'meddpicc' | 'challenger' | 'sandler' | 'blended'
+
+export type SkillKey =
+  | 'discovery'
+  | 'listening'
+  | 'objectionHandling'
+  | 'valueArticulation'
+  | 'pricing'
+  | 'momentum'
+  | 'rapport'
+  | 'methodology'
+
+export type SkillScoreSet = Record<SkillKey, number>
+
+export interface MethodologyAssessment {
+  methodology: SalesMethodology
+  score: number
+  comment: string
+  evidence?: CoachEvidence
 }
 
 export interface CoachingReport {
@@ -369,6 +399,114 @@ export interface CoachingReport {
   metrics: CoachMetrics
   model: string
   createdAt: string
+  callType?: CallType
+  skills?: SkillScoreSet
+  methodologyAdherence?: MethodologyAssessment
+  focusSkillAtCoaching?: FocusSkillAtCoaching
+}
+
+// --- M23 Workstream B: coaching chat --------------------------------------
+
+export type CoachChatRole = 'user' | 'assistant'
+export type CoachChatMode = 'advisor' | 'practice'
+
+export interface CoachChatMessage {
+  id: string
+  role: CoachChatRole
+  text: string
+  createdAt: string
+  mode?: CoachChatMode
+}
+
+export interface CoachChatContextSuggestion {
+  id: string
+  type: 'kyc' | 'next-steps' | 'call-notes'
+  field?: string
+  text: string
+  confidence: 'high' | 'medium'
+}
+
+export interface CoachChatSendResult {
+  ok: boolean
+  reply?: string
+  suggestions?: CoachChatContextSuggestion[]
+  error?: string
+  message?: string
+}
+
+export interface CoachChatTaskProposal {
+  title: string
+  type: 'follow-up' | 'email' | 'meeting' | 'research' | 'general'
+  priority: 'low' | 'medium' | 'high'
+}
+
+export interface CoachChatDelta {
+  callId: string
+  delta: string
+}
+
+export interface CoachChatStreamError {
+  callId: string
+  message: string
+}
+
+/** M23 Workstream B — advisor Q&A + practice/roleplay chat for one call.
+ *  `send`'s own Promise resolves with the FINAL message once the whole
+ *  reply has streamed in; subscribe to `onDelta` before calling `send` to
+ *  render it incrementally — same shape as transcription's live push
+ *  events, since Electron IPC has no native bidirectional streaming. */
+export interface CoachChatApi {
+  /** `startFreshPractice`: true when the rep just switched INTO practice
+   *  mode for a new rehearsal attempt — tells the main process to ignore any
+   *  trailing practice turns left over from a session that was never
+   *  formally ended with "End practice". */
+  send: (
+    callId: string,
+    message: string,
+    mode: CoachChatMode,
+    startFreshPractice?: boolean
+  ) => Promise<CoachChatSendResult>
+  applySuggestion: (
+    callId: string,
+    suggestion: CoachChatContextSuggestion
+  ) => Promise<{ ok: boolean }>
+  draftFollowUpEmail: (callId: string) => Promise<CoachChatSendResult>
+  proposeTask: (
+    callId: string
+  ) => Promise<{ ok: true; proposal: CoachChatTaskProposal } | { ok: false; message: string }>
+  confirmTask: (callId: string, proposal: CoachChatTaskProposal) => Promise<{ ok: boolean }>
+  regenerateCrmNote: (
+    callId: string
+  ) => Promise<{ ok: true; note: string } | { ok: false; message: string }>
+  saveCrmNote: (callId: string, note: string) => Promise<{ ok: boolean }>
+  onDelta: (cb: (payload: CoachChatDelta) => void) => () => void
+  onError: (cb: (payload: CoachChatStreamError) => void) => () => void
+}
+
+export interface SkillHistoryPoint {
+  callId: string
+  createdAt: string
+  score: number
+}
+
+export interface SkillProgress {
+  key: SkillKey
+  history: SkillHistoryPoint[]
+  current: number | null
+  trend: 'up' | 'down' | 'flat' | null
+  streakAboveTarget: number
+}
+
+export interface FocusSkillState {
+  skill: SkillKey
+  microBehavior: string
+  since: string
+  sourceCallId?: string
+}
+
+export interface FocusSkillAtCoaching {
+  skill: SkillKey
+  microBehavior: string
 }
 
 export type CoachResult =
@@ -448,6 +586,8 @@ interface CallBase {
   /** The contact this call is linked to (manual, or confirmed from a calendar
    *  match) — the CRM foundation's call-history link. */
   contactId?: string
+  /** M23 — sticky call-type classification, auto-detected then overridable. */
+  callType?: CallType
 }
 
 export interface CallSummary extends CallBase {
@@ -455,6 +595,7 @@ export interface CallSummary extends CallBase {
   attachmentCount: number
   hasCoaching: boolean
   coachScore?: number
+  skills?: SkillScoreSet
   /** True once this call has been read for Objection Library mining. */
   objectionsMined: boolean
 }
@@ -490,6 +631,12 @@ export interface Call extends CallBase {
   consent?: ConsentRecord
   objectionsMinedAt?: string
   speakerIdentities?: Record<string, SpeakerIdentity>
+  /** M23 Workstream B — the coaching-chat thread for this call, complete
+   *  turns only. Absent until the first message is sent. */
+  coachChat?: CoachChatMessage[]
+  /** M23 Workstream B — free-text notes saved from the coaching chat's
+   *  "Save to call notes" chip. Local-only, never synced to cloud. */
+  notes?: string
 }
 
 export interface CallSaveInput {
@@ -678,6 +825,8 @@ export interface CallsApi {
   postCallBrief: (callId: string) => Promise<PostCallBriefEvent>
   /** Link (contactId) or clear (null) the contact this call belongs to. */
   setContact: (callId: string, contactId: string | null) => Promise<Call | null>
+  /** M23 — override (or clear, with `null`) this call's auto-detected type. */
+  setCallType: (callId: string, callType: CallType | null) => Promise<Call | null>
   /** Bookmark a moment mid-call ("clip this") — atMs from call start, plus the
    *  transcript text at that point. */
   addBookmark: (callId: string, atMs: number, text: string) => Promise<Call | null>
@@ -698,6 +847,14 @@ export interface CallsApi {
     name: string | null,
     opts?: { rememberAsContactId?: string }
   ) => Promise<Call | null>
+}
+
+/** M23 Workstream A — Skill Graph progress + the current Focus Skill. Both
+ *  read-only from the renderer's side; the underlying state is written by
+ *  the main process right after a Coach 2.0 scorecard is saved. */
+export interface Coach2Api {
+  getProgress: () => Promise<SkillProgress[]>
+  getFocusSkill: () => Promise<FocusSkillState | null>
 }
 
 export interface TasksApi {
@@ -837,6 +994,49 @@ export interface ContactsApi {
   delete: (id: string) => Promise<{ ok: boolean; reason?: 'has-deals' }>
   addComment: (id: string, text: string) => Promise<Contact | null>
   removeComment: (id: string, commentId: string) => Promise<Contact | null>
+}
+
+/** M23 Workstream C. */
+export type CrmNoteLength = 'short' | 'medium' | 'detailed'
+
+/** A single KYC fact harvested from a contact's most recent call, proposed
+ *  for the rep to accept or reject — never applied until then. */
+export interface KycFact {
+  id: string
+  field: string
+  text: string
+  confidence: 'high' | 'medium'
+}
+
+export interface CrmNoteGeneratorResult {
+  ok: boolean
+  note?: string
+  facts?: KycFact[]
+  message?: string
+}
+
+/** M23 Workstream C — the standalone "Generate CRM note" card on the
+ *  Contact page. Contact-scoped, not call-scoped: `generate` finds that
+ *  contact's own most recent linked call itself. */
+export interface CrmNoteGeneratorApi {
+  generate: (contactId: string, length: CrmNoteLength) => Promise<CrmNoteGeneratorResult>
+  save: (contactId: string, note: string) => Promise<{ ok: boolean }>
+  applyFact: (contactId: string, field: string, text: string) => Promise<{ ok: boolean }>
+}
+
+export interface DetectNameResult {
+  ok: boolean
+  /** Present when detection ran and found a name (now saved). Absent (but
+   *  ok:true) when detection ran cleanly and found nothing. */
+  name?: string
+  message?: string
+}
+
+/** M23 Workstream D — the post-hoc "Detect who this was" action on the Call
+ *  Detail page. Scoped to one call, no callId->contactId mapping needed
+ *  since it only writes a speakerIdentities entry, not a contact. */
+export interface ContactIntelligenceApi {
+  detectName: (callId: string) => Promise<DetectNameResult>
 }
 
 export type DealStageKind = 'open' | 'won' | 'lost'
@@ -1414,6 +1614,9 @@ export interface CrmSettings {
   /** Opt-in: when a call gets linked to a contact (and has a transcript),
    *  send it to Claude for a short CRM note appended to that contact. */
   autoGenerateNotes: boolean
+  /** M23 Workstream C — master switch for the standalone "Generate CRM
+   *  note" card on the Contact page. Off (default) hides that card. */
+  noteGeneratorEnabled: boolean
 }
 
 export type CapturePolicyValue = 'full' | 'mic-only' | 'ask'
@@ -1431,6 +1634,16 @@ export interface DetectionSettings {
   capturePolicy: CapturePolicySettings
 }
 
+/** M19 Task 2 — see main/app-settings.ts's SpeakerIdSettings for the exact
+ *  behavior of each field. `allowSelfIntroExtraction` has no dedicated
+ *  Settings UI of its own — Settings → CRM → "Contact Intelligence" is what
+ *  keeps it in sync today (see CrmSection.tsx). */
+export interface SpeakerIdSettings {
+  enabled: boolean
+  allowSelfIntroExtraction: boolean
+  voiceProfileMatching: boolean
+}
+
 /** M20 — must stay in lockstep with src/main/ai/types.ts's AIPurpose. The
  *  Settings → Model Assignment page exposes 5 of these 6
  *  ('other' has no UI — its 4 call sites keep using the plain `aiProvider`
@@ -1444,6 +1657,7 @@ export type AiPurpose =
   | 'prep-brief'
   | 'deal-tier1'
   | 'deal-tier2'
+  | 'coaching-chat'
 
 export interface ModelAssignment {
   /** Ordered model-catalog entry IDs — see main/ai/model-catalog.ts. Empty
@@ -1482,6 +1696,8 @@ export interface AppSettings {
   objectionMining: ObjectionMiningSettings
   /** Ambient call detection (M15). Defaults OFF. */
   detection: DetectionSettings
+  /** M19 Task 2 — auto-name-resolution cascade + privacy-sensitive opt-ins. */
+  speakerId: SpeakerIdSettings
   /** Which text-AI provider coaching/summaries/tasks/etc. use when a purpose
    *  has no aiModelAssignments chain configured. Defaults to 'anthropic'.
    *  The API key itself is separate, encrypted (see AiKeysApi). */
@@ -1494,6 +1710,24 @@ export interface AppSettings {
    *  its own (no clicks) instead of requiring manual Download/Restart
    *  clicks. Off by default. */
   autoUpdateEnabled: boolean
+  /** M23 Workstream A — Coach 2.0 master switch + methodology picker. */
+  coach2: Coach2Settings
+  /** M23 Workstream D — Contact Intelligence mode. Off by default. */
+  contactIntelligence: ContactIntelligenceSettings
+}
+
+/** M23 — see main/app-settings.ts's Coach2Settings for the exact behavior. */
+export interface Coach2Settings {
+  enabled: boolean
+  methodology: SalesMethodology
+}
+
+/** M23 Workstream D — see main/app-settings.ts's ContactIntelligenceSettings
+ *  for the exact behavior of each mode. */
+export type ContactIntelligenceMode = 'off' | 'suggest' | 'full-auto'
+
+export interface ContactIntelligenceSettings {
+  mode: ContactIntelligenceMode
 }
 
 export interface AppSettingsPatch {
@@ -1522,12 +1756,18 @@ export interface AppSettingsPatch {
       appOverrides?: Record<string, AppOverride | 'default' | null>
     }
   }
+  /** Partial — only the keys present are changed; others are left as-is. */
+  speakerId?: Partial<SpeakerIdSettings>
   aiProvider?: AiProviderId
   /** M20 — partial per-purpose; only the purposes present are replaced
    *  (whole-chain replace per purpose, not key-by-key — a chain is authored
    *  as one unit in the Model Assignment UI). */
   aiModelAssignments?: Partial<Record<AiPurpose, ModelAssignment>>
   autoUpdateEnabled?: boolean
+  /** Partial — only the keys present are changed; others are left as-is. */
+  coach2?: Partial<Coach2Settings>
+  /** Partial — only the keys present are changed; others are left as-is. */
+  contactIntelligence?: Partial<ContactIntelligenceSettings>
 }
 
 export interface AppSettingsApi {
@@ -1775,7 +2015,7 @@ export interface PrepBriefRecord {
 }
 
 export type PrepBriefResult =
-  | { ok: true; record: PrepBriefRecord; fromCache: boolean }
+  | { ok: true; record: PrepBriefRecord; fromCache: boolean; focusSkillReminder?: FocusSkillAtCoaching }
   | { ok: false; error: 'no-key' | 'failed' | 'no-context'; message?: string }
 
 export interface PrepBriefApi {
@@ -1796,6 +2036,10 @@ declare global {
       trackers: TrackersApi
       dealIntelligence: DealIntelligenceApi
       calls: CallsApi
+      coach2: Coach2Api
+      coachChat: CoachChatApi
+      crmNoteGenerator: CrmNoteGeneratorApi
+      contactIntelligence: ContactIntelligenceApi
       tasks: TasksApi
       contacts: ContactsApi
       deals: DealsApi

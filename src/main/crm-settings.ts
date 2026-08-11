@@ -30,6 +30,13 @@ export interface CrmSettings {
    *  same "sends data to Claude automatically" cost/privacy tradeoff as
    *  auto-summarize, so default OFF. */
   autoGenerateNotes: boolean
+  /** M23 Workstream C — master switch for the standalone "Generate CRM
+   *  note" card on the Contact page (on-demand note draft + KYC-fact
+   *  harvest with accept/reject chips). Off (default) means that card
+   *  doesn't render at all — the Contact page looks exactly as it did
+   *  before this workstream. Independent of autoGenerateNotes above (that
+   *  one is the automatic, no-click background path). */
+  noteGeneratorEnabled: boolean
 }
 
 export const EMPTY_CRM_SETTINGS: CrmSettings = {
@@ -42,7 +49,8 @@ export const EMPTY_CRM_SETTINGS: CrmSettings = {
   cidNextNumber: 1,
   staleFollowUpEnabled: true,
   staleAfterDays: 14,
-  autoGenerateNotes: false
+  autoGenerateNotes: false,
+  noteGeneratorEnabled: false
 }
 
 const SENSITIVITIES = new Set<MatchSensitivity>(['tight', 'normal', 'loose'])
@@ -90,7 +98,8 @@ export function sanitizeCrmSettings(value: unknown): CrmSettings {
     cidNextNumber: sanitizeNextNumber(v.cidNextNumber),
     staleFollowUpEnabled: v.staleFollowUpEnabled !== false, // default true
     staleAfterDays: sanitizeStaleDays(v.staleAfterDays),
-    autoGenerateNotes: v.autoGenerateNotes === true // default false
+    autoGenerateNotes: v.autoGenerateNotes === true, // default false
+    noteGeneratorEnabled: v.noteGeneratorEnabled === true // default false
   }
 }
 
@@ -116,7 +125,9 @@ export function mergeCrmSettings(current: CrmSettings, patch: unknown): CrmSetti
     staleAfterDays:
       'staleAfterDays' in p ? sanitizeStaleDays(p.staleAfterDays) : current.staleAfterDays,
     autoGenerateNotes:
-      'autoGenerateNotes' in p ? p.autoGenerateNotes === true : current.autoGenerateNotes
+      'autoGenerateNotes' in p ? p.autoGenerateNotes === true : current.autoGenerateNotes,
+    noteGeneratorEnabled:
+      'noteGeneratorEnabled' in p ? p.noteGeneratorEnabled === true : current.noteGeneratorEnabled
   }
 }
 

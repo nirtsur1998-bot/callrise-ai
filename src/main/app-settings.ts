@@ -35,6 +35,92 @@ import {
   mergeModelAssignments,
   type ModelAssignments
 } from './ai/model-assignments'
+import { SALES_METHODOLOGIES, type SalesMethodology } from './calls-fs'
+
+/**
+ * M23 Workstream A — Coach 2.0 (benchmark engine, skill graph, methodology
+ * picker, Focus Skill loop). HARD RULE: `enabled` is the ONLY gate for every
+ * bit of new behavior this milestone adds to coach.ts — off (default) means
+ * the post-call scorecard behaves EXACTLY as it did before M23 (six
+ * dimensions, no skills/benchmarks/methodology field on the saved report).
+ * `methodology: 'blended'` (default) keeps today's existing behavior too —
+ * coach.ts already lets the AI pick whichever lens best fits a given call;
+ * a specific methodology only forces that ONE lens once explicitly chosen.
+ */
+export interface Coach2Settings {
+  enabled: boolean
+  methodology: SalesMethodology
+}
+
+const EMPTY_COACH2: Coach2Settings = { enabled: false, methodology: 'blended' }
+
+function sanitizeMethodology(value: unknown): SalesMethodology {
+  return SALES_METHODOLOGIES.includes(value as SalesMethodology)
+    ? (value as SalesMethodology)
+    : 'blended'
+}
+
+function sanitizeCoach2(value: unknown): Coach2Settings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return { enabled: v.enabled === true, methodology: sanitizeMethodology(v.methodology) }
+}
+
+function mergeCoach2(current: Coach2Settings, patch: unknown): Coach2Settings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return {
+    enabled: 'enabled' in p ? p.enabled === true : current.enabled,
+    methodology: 'methodology' in p ? sanitizeMethodology(p.methodology) : current.methodology
+  }
+}
+
+/**
+ * M23 Workstream D — Contact Intelligence. One dial controlling how
+ * proactively the app surfaces/creates contacts from a call using whatever
+ * identity signal is available (calendar match, resolved speaker identity,
+ * or a post-hoc self-intro scan of the transcript):
+ *   'off'       (default) — none of Workstream D's new behavior runs. The
+ *                pre-existing calendar-match banner/auto-link (CrmSettings,
+ *                unaffected by this flag) keeps working exactly as before.
+ *   'suggest'   — the rep can click "Detect who this was" to run the
+ *                post-hoc scan, and gets a dismissible "Create contact for
+ *                X?" banner when a name is known — never automatic.
+ *   'full-auto' — the detection scan runs proactively (once per call) with
+ *                no click needed, but contact CREATION still always
+ *                requires a click. This intentionally never crosses the
+ *                "never auto-creates a contact" line that CrmSettings'
+ *                autoLinkUnambiguous already draws (crm-settings.ts) —
+ *                full-auto here means auto-DETECT, not auto-CREATE.
+ */
+export type ContactIntelligenceMode = 'off' | 'suggest' | 'full-auto'
+
+export interface ContactIntelligenceSettings {
+  mode: ContactIntelligenceMode
+}
+
+const EMPTY_CONTACT_INTELLIGENCE: ContactIntelligenceSettings = { mode: 'off' }
+
+const CONTACT_INTELLIGENCE_MODES: ContactIntelligenceMode[] = ['off', 'suggest', 'full-auto']
+
+function sanitizeContactIntelligenceMode(value: unknown): ContactIntelligenceMode {
+  return CONTACT_INTELLIGENCE_MODES.includes(value as ContactIntelligenceMode)
+    ? (value as ContactIntelligenceMode)
+    : 'off'
+}
+
+function sanitizeContactIntelligence(value: unknown): ContactIntelligenceSettings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return { mode: sanitizeContactIntelligenceMode(v.mode) }
+}
+
+function mergeContactIntelligence(
+  current: ContactIntelligenceSettings,
+  patch: unknown
+): ContactIntelligenceSettings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return { mode: 'mode' in p ? sanitizeContactIntelligenceMode(p.mode) : current.mode }
+}
 
 /**
  * Objection Library mining — reads call transcripts to suggest reusable
@@ -324,6 +410,12 @@ export interface AppSettings {
    *  the user asking at least once, and this IS that one ask. Manual
    *  Check/Download/Install buttons keep working regardless of this. */
   autoUpdateEnabled: boolean
+  /** M23 Workstream A — Coach 2.0 master switch + methodology picker. Off by
+   *  default; see Coach2Settings for the exact behavior change. */
+  coach2: Coach2Settings
+  /** M23 Workstream D — Contact Intelligence mode. Off by default; see
+   *  ContactIntelligenceSettings for the exact behavior per mode. */
+  contactIntelligence: ContactIntelligenceSettings
 }
 
 // AIProviderId is re-exported here (not re-declared) so existing importers
@@ -364,7 +456,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   speakerId: EMPTY_SPEAKER_ID,
   aiProvider: 'anthropic',
   aiModelAssignments: DEFAULT_MODEL_ASSIGNMENTS,
-  autoUpdateEnabled: false
+  autoUpdateEnabled: false,
+  coach2: EMPTY_COACH2,
+  contactIntelligence: EMPTY_CONTACT_INTELLIGENCE
 }
 
 function settingsPath(): string {
@@ -432,7 +526,9 @@ export function loadAppSettings(): AppSettings {
       speakerId: sanitizeSpeakerId(parsed.speakerId),
       aiProvider: sanitizeAIProvider(parsed.aiProvider),
       aiModelAssignments: sanitizeModelAssignments(parsed.aiModelAssignments),
-      autoUpdateEnabled: parsed.autoUpdateEnabled === true
+      autoUpdateEnabled: parsed.autoUpdateEnabled === true,
+      coach2: sanitizeCoach2(parsed.coach2),
+      contactIntelligence: sanitizeContactIntelligence(parsed.contactIntelligence)
     }
   } catch {
     return {
@@ -442,7 +538,9 @@ export function loadAppSettings(): AppSettings {
       objectionMining: { ...EMPTY_OBJECTION_MINING },
       detection: { ...EMPTY_DETECTION_SETTINGS },
       speakerId: { ...EMPTY_SPEAKER_ID },
-      aiModelAssignments: { ...DEFAULT_MODEL_ASSIGNMENTS }
+      aiModelAssignments: { ...DEFAULT_MODEL_ASSIGNMENTS },
+      coach2: { ...EMPTY_COACH2 },
+      contactIntelligence: { ...EMPTY_CONTACT_INTELLIGENCE }
     }
   }
 }
@@ -478,7 +576,9 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
     aiProvider: 'aiProvider' in p ? sanitizeAIProvider(p.aiProvider) : current.aiProvider,
     aiModelAssignments: mergeModelAssignments(current.aiModelAssignments, p.aiModelAssignments),
     autoUpdateEnabled:
-      'autoUpdateEnabled' in p ? p.autoUpdateEnabled === true : current.autoUpdateEnabled
+      'autoUpdateEnabled' in p ? p.autoUpdateEnabled === true : current.autoUpdateEnabled,
+    coach2: mergeCoach2(current.coach2, p.coach2),
+    contactIntelligence: mergeContactIntelligence(current.contactIntelligence, p.contactIntelligence)
   }
 }
 
@@ -631,6 +731,27 @@ export function isAutoUpdateEnabled(): boolean {
 export function isSelfIntroExtractionAllowed(): boolean {
   const s = loadAppSettings().speakerId
   return s.enabled && s.allowSelfIntroExtraction
+}
+
+/** The single gate coach.ts must check before computing/storing anything
+ *  from Workstream A (skills, benchmarks, methodology adherence). Off means
+ *  the post-call scorecard is byte-for-byte the pre-M23 shape. */
+export function isCoach2Enabled(): boolean {
+  return loadAppSettings().coach2.enabled
+}
+
+/** M23 Workstream C — the gate crm-note-generator-ipc.ts checks before
+ *  drafting a note or harvesting KYC facts. Off means the standalone
+ *  generator is fully inert, not just hidden in the renderer. */
+export function isNoteGeneratorEnabled(): boolean {
+  return loadAppSettings().crm.noteGeneratorEnabled
+}
+
+/** M23 Workstream D — the gate contact-intelligence-ipc.ts checks before
+ *  running the post-hoc self-intro scan. 'off' means it's fully inert, not
+ *  just hidden in the renderer. */
+export function getContactIntelligenceMode(): ContactIntelligenceMode {
+  return loadAppSettings().contactIntelligence.mode
 }
 
 let registered = false

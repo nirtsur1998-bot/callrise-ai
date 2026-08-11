@@ -9,12 +9,16 @@ import {
 } from 'lucide-react'
 import { Button } from '@renderer/components/Button'
 import { Skeleton } from '@renderer/components/Skeleton'
-import type { PrepBriefRecord } from '../../../../preload/index.d'
+import { SKILL_LABEL } from '@renderer/features/coaching/types'
+import type { FocusSkillAtCoaching, PrepBriefRecord } from '../../../../preload/index.d'
 
 interface PrepBriefCardProps {
   loading: boolean
   record: PrepBriefRecord | null
   error: string | null
+  /** M23 A4 — "the M19 pre-call brief displays the current Focus Skill
+   *  reminder at the top." Null when Coach 2.0 is off or no focus is set yet. */
+  focusSkillReminder: FocusSkillAtCoaching | null
   onRegenerate: () => void
 }
 
@@ -46,6 +50,7 @@ export function PrepBriefCard({
   loading,
   record,
   error,
+  focusSkillReminder,
   onRegenerate
 }: PrepBriefCardProps): React.JSX.Element {
   if (loading && !record) {
@@ -71,6 +76,14 @@ export function PrepBriefCard({
 
   return (
     <div className="space-y-4">
+      {focusSkillReminder && (
+        <div className="rounded-xl border border-accent/30 bg-accent-soft px-3.5 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-accent">
+            Focus this call: {SKILL_LABEL[focusSkillReminder.skill]}
+          </p>
+          <p className="mt-1 text-[13px] text-ink">{focusSkillReminder.microBehavior}</p>
+        </div>
+      )}
       <Section icon={Users} label="Who you're meeting">
         {brief.whoYoureMeeting || <span className="text-faint">Nothing on record.</span>}
       </Section>

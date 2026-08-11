@@ -19,7 +19,9 @@ import {
   ChevronDown,
   Bookmark as BookmarkIcon,
   ClipboardList,
-  Radar
+  Radar,
+  UserSearch,
+  Loader2
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { SpeakerTranscript } from '@renderer/components/SpeakerTranscript'
@@ -34,6 +36,7 @@ import { overallTier, TONE_TO_BADGE, speakerLabel } from '@renderer/features/coa
 import { Badge } from '@renderer/components/Badge'
 import { GenerateTasksDialog } from '@renderer/features/tasks/GenerateTasksDialog'
 import { CoachReportView, CoachLoading } from '@renderer/features/coaching/CoachReportView'
+import { CoachChatCard } from '@renderer/features/coaching/CoachChatPanel'
 import { MineTestPanel } from '@renderer/features/objection-library/MineTestPanel'
 import { useContacts } from '@renderer/features/contacts/useContacts'
 import { ContactPicker } from '@renderer/features/contacts/ContactPicker'
@@ -41,6 +44,8 @@ import {
   CalendarMatchSuggestion,
   AutoLinkedNotice
 } from '@renderer/features/contacts/CalendarMatchSuggestion'
+import { IdentityContactSuggestion } from './IdentityContactSuggestion'
+import { isIdentitySuggestionDismissed, dismissIdentitySuggestion } from './identitySuggestionDismiss'
 import {
   findCalendarMatches,
   isMatchDismissed,
@@ -123,8 +128,17 @@ export function CallDetail({
   const transcriptWrapperRef = useRef<HTMLDivElement>(null)
   const { contacts, create: createContact } = useContacts()
   const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([])
+  // M23 Workstream D — Outlook events used to never reach the calendar-match
+  // banner/auto-link at all (only googleEvents was ever fetched here), so an
+  // Outlook-sourced meeting could never produce a suggestion even though the
+  // matching algorithm and Outlook's own attendee data both already support
+  // it (see speaker-identity/resolve-for-call.ts, which already merges both
+  // for its own separate purpose). Fetched the same read-only-cache way as
+  // googleEvents below.
+  const [outlookEvents, setOutlookEvents] = useState<CalendarEvent[]>([])
   const [matchDismissed, setMatchDismissed] = useState(() => isMatchDismissed(callId))
   const { settings, loading: settingsLoading } = useAppSettings()
+  const contactIntelligenceMode = settings.contactIntelligence?.mode ?? 'off'
   const [autoLinkNotice, setAutoLinkNotice] = useState<{
     contactId: string
     contactName: string
@@ -134,6 +148,18 @@ export function CallDetail({
   // resolves must not re-trigger it). State, not a ref, since the render body
   // below also needs to read it (to skip the manual banner while pending).
   const [autoLinkAttemptedFor, setAutoLinkAttemptedFor] = useState<string | null>(null)
+  // M23 Workstream D — post-hoc "Detect who this was" (transcript self-intro
+  // scan). Mirrors autoLinkAttemptedFor's shape: which call id full-auto mode
+  // has already tried detection for, so it fires at most once per call.
+  const [detecting, setDetecting] = useState(false)
+  const [detectError, setDetectError] = useState<string | null>(null)
+  const [detectedNothing, setDetectedNothing] = useState(false)
+  const [autoDetectAttemptedFor, setAutoDetectAttemptedFor] = useState<string | null>(null)
+  // A SEPARATE dismissal from matchDismissed (calendar-match banner) — the
+  // two used to share one flag, so dismissing either suggestion silently
+  // suppressed the other, unrelated one for that call. See
+  // identitySuggestionDismiss.ts's own header comment.
+  const [identityDismissed, setIdentityDismissed] = useState(() => isIdentitySuggestionDismissed(callId))
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mountedRef = useRef(true)
@@ -156,6 +182,11 @@ export function CallDetail({
     setMatchDismissed(isMatchDismissed(callId))
     setAutoLinkNotice(null)
     setAutoLinkAttemptedFor(null)
+    setIdentityDismissed(isIdentitySuggestionDismissed(callId))
+    setDetecting(false)
+    setDetectError(null)
+    setDetectedNothing(false)
+    setAutoDetectAttemptedFor(null)
     void window.api.calls.get(callId).then((c) => {
       if (!active) return
       if (c) setCall(c)
@@ -172,6 +203,9 @@ export function CallDetail({
     let active = true
     void window.api.google.cachedEvents().then((events) => {
       if (active) setGoogleEvents(events)
+    })
+    void window.api.outlook.cachedEvents().then((events) => {
+      if (active) setOutlookEvents(events)
     })
     return () => {
       active = false
@@ -421,6 +455,69 @@ export function CallDetail({
     setMatchDismissed(true)
   }, [callId])
 
+  const dismissIdentity = useCallback(() => {
+    dismissIdentitySuggestion(callId)
+    setIdentityDismissed(true)
+  }, [callId])
+
+  // M23 Workstream D — create/link a contact from a detected identity (as
+  // opposed to createAndLinkAttendee above, which is calendar-match-sourced
+  // and always has an email; a detected identity is name-only). Checks for
+  // an existing EXACT-name-match contact first and links that instead of
+  // creating a duplicate — a self-intro-only signal has no email to dedupe
+  // by, so the same real buyer detected on two separate calls (neither with
+  // a calendar invite) would otherwise silently mint two contact records
+  // with no way to merge them later.
+  const createAndLinkIdentity = useCallback(
+    async (name: string) => {
+      if (linkBusyRef.current) return
+      linkBusyRef.current = true
+      try {
+        const existing = contacts.find((c) => c.name.trim().toLowerCase() === name.trim().toLowerCase())
+        if (existing) {
+          await doLink(existing.id)
+          return
+        }
+        const contact = await createContact({ name })
+        if (contact) await doLink(contact.id)
+      } catch {
+        /* the banner stays available for a retry */
+      } finally {
+        linkBusyRef.current = false
+      }
+    },
+    [contacts, createContact, doLink]
+  )
+
+  // M23 Workstream D — "Detect who this was" (post-hoc transcript self-intro
+  // scan). Runs on click in 'suggest' mode, or automatically (once per call,
+  // see the effect below) in 'full-auto' mode — but the result only ever
+  // populates a dismissible suggestion banner; it never creates or links a
+  // contact on its own.
+  const detectIdentity = useCallback(async () => {
+    if (detecting) return
+    setDetecting(true)
+    setDetectError(null)
+    setDetectedNothing(false)
+    try {
+      const res = await window.api.contactIntelligence.detectName(callId)
+      if (!mountedRef.current) return
+      if (res.ok) {
+        if (res.name) {
+          await notifyChanged() // refresh so the new identity shows up
+        } else {
+          setDetectedNothing(true) // ran cleanly, nothing found — not an error
+        }
+      } else {
+        setDetectError(res.message ?? 'Could not detect who this was.')
+      }
+    } catch {
+      if (mountedRef.current) setDetectError('Could not detect who this was.')
+    } finally {
+      if (mountedRef.current) setDetecting(false)
+    }
+  }, [callId, detecting, notifyChanged])
+
   // Auto-link (Settings → CRM, opt-in, default off): when there's exactly one
   // calendar match AND it points to a contact that already exists, link it
   // without asking — but never silently: a visible, undoable notice replaces
@@ -433,7 +530,7 @@ export function CallDetail({
 
     const matches = findCalendarMatches(
       call,
-      googleEvents,
+      [...googleEvents, ...outlookEvents],
       matchSensitivityMs(settings.crm.matchSensitivity)
     )
     if (matches.length !== 1) return // ambiguous (or no) match — leave it to the manual banner
@@ -459,8 +556,51 @@ export function CallDetail({
     settings.crm.autoLinkUnambiguous,
     settings.crm.matchSensitivity,
     googleEvents,
+    outlookEvents,
     contacts,
     doLink
+  ])
+
+  // M23 Workstream D — full-auto mode: run "Detect who this was" on its own,
+  // once per call, when eligible — but this still only ever populates a
+  // dismissible suggestion banner (see detectIdentity/IdentityContactSuggestion
+  // above); it never creates or links a contact without a click. Calendar
+  // match (a stronger, email-carrying signal) always takes priority and
+  // skips this entirely when it would apply, to avoid a redundant AI call.
+  useEffect(() => {
+    if (!call || settingsLoading) return
+    if (call.contactId || identityDismissed) return
+    if (contactIntelligenceMode !== 'full-auto') return
+    if (call.consent?.recordOtherParty !== true) return // same hard requirement the IPC handler enforces
+    if (autoDetectAttemptedFor === callId) return
+    const hasOtherPartyIdentity = call.speakerIdentities
+      ? Object.values(call.speakerIdentities).some((id) => id.source !== 'user-profile')
+      : false
+    if (hasOtherPartyIdentity) return // already known, nothing to detect
+    const calendarHit =
+      settings.crm.calendarMatchEnabled &&
+      findCalendarMatches(
+        call,
+        [...googleEvents, ...outlookEvents],
+        matchSensitivityMs(settings.crm.matchSensitivity)
+      ).length > 0
+    if (calendarHit) return
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mark this call as attempted BEFORE the async detect starts, so a fast re-render can't fire it twice
+    setAutoDetectAttemptedFor(callId)
+    void detectIdentity()
+  }, [
+    call,
+    callId,
+    identityDismissed,
+    contactIntelligenceMode,
+    autoDetectAttemptedFor,
+    settingsLoading,
+    settings.crm.calendarMatchEnabled,
+    settings.crm.matchSensitivity,
+    googleEvents,
+    outlookEvents,
+    detectIdentity
   ])
 
   // "Undo" on the auto-link notice — same as declining the suggestion: unlink
@@ -501,7 +641,11 @@ export function CallDetail({
   // settings load, which flashed the banner for users who turned it off.
   const calendarMatches =
     !call.contactId && !matchDismissed && !settingsLoading && settings.crm.calendarMatchEnabled
-      ? findCalendarMatches(call, googleEvents, matchSensitivityMs(settings.crm.matchSensitivity))
+      ? findCalendarMatches(
+          call,
+          [...googleEvents, ...outlookEvents],
+          matchSensitivityMs(settings.crm.matchSensitivity)
+        )
       : []
   // While the auto-link effect is about to fire for this exact case, skip the
   // manual banner entirely instead of flashing it just before it's replaced.
@@ -510,6 +654,31 @@ export function CallDetail({
     autoLinkAttemptedFor !== callId &&
     calendarMatches.length === 1 &&
     contacts.some((c) => c.email?.toLowerCase() === calendarMatches[0].attendee.email)
+
+  // M23 Workstream D — a resolved identity for "the other party" (never
+  // 'user-profile', which is always the rep's own key). Only meaningful for
+  // a genuine one-on-one call, same as the calendar-match banner/cascade.
+  const otherPartyIdentity = call.speakerIdentities
+    ? Object.values(call.speakerIdentities).find((id) => id.source !== 'user-profile')
+    : undefined
+  const otherPartyContact = otherPartyIdentity?.contactId
+    ? contacts.find((c) => c.id === otherPartyIdentity.contactId)
+    : undefined
+  // Calendar-match (above) always takes priority — it carries an email, a
+  // stronger signal than a bare detected name, so never show both banners.
+  const showIdentitySuggestion =
+    contactIntelligenceMode !== 'off' &&
+    !call.contactId &&
+    !identityDismissed &&
+    calendarMatches.length === 0 &&
+    !!otherPartyIdentity
+  const showDetectButton =
+    contactIntelligenceMode !== 'off' &&
+    !call.contactId &&
+    !identityDismissed &&
+    calendarMatches.length === 0 &&
+    !otherPartyIdentity &&
+    call.consent?.recordOtherParty === true
 
   const tier = call.coaching ? overallTier(call.coaching.overallScore) : null
 
@@ -609,6 +778,37 @@ export function CallDetail({
                 />
               </div>
             )
+          )}
+          {/* M23 Workstream D — a resolved identity's own suggestion, only
+              when the calendar-match banner above isn't already showing. */}
+          {!autoLinkNotice && showIdentitySuggestion && otherPartyIdentity && (
+            <div className="mb-3">
+              <IdentityContactSuggestion
+                name={otherPartyIdentity.name}
+                existingContactName={otherPartyContact?.name}
+                onLink={() => otherPartyContact && void linkContact(otherPartyContact.id)}
+                onCreate={() => void createAndLinkIdentity(otherPartyIdentity.name)}
+                onDismiss={dismissIdentity}
+              />
+            </div>
+          )}
+          {!autoLinkNotice && showDetectButton && (
+            <div className="mb-3 flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={detecting ? Loader2 : UserSearch}
+                onClick={() => void detectIdentity()}
+                disabled={detecting}
+                className={detecting ? '[&_svg]:animate-spin' : ''}
+              >
+                {detecting ? 'Detecting…' : 'Detect who this was'}
+              </Button>
+              {detectError && <span className="text-[12px] text-danger">{detectError}</span>}
+              {!detectError && detectedNothing && (
+                <span className="text-[12px] text-faint">No self-introduction found.</span>
+              )}
+            </div>
           )}
           <ContactPicker
             value={call.contactId}
@@ -792,6 +992,9 @@ export function CallDetail({
             </div>
           )}
         </Card>
+
+        {/* M23 Workstream B — coaching chat (advisor + practice mode) */}
+        <CoachChatCard callId={callId} initialMessages={call.coachChat ?? []} hasContact={!!call.contactId} />
 
         {/* Commitments (§4.7) — who promised what */}
         <Card>

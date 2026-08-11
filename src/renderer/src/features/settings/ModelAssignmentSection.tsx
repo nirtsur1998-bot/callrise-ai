@@ -57,6 +57,11 @@ const JOBS: JobConfig[] = [
     title: 'Live Deal Intelligence — health score',
     blurb:
       'Runs every 2-3 minutes, not per-turn — benefits from a stronger model the same way summaries and scorecards do.'
+  },
+  {
+    purpose: 'coaching-chat',
+    title: 'Coaching chat',
+    blurb: 'Talking to your coach and practice-mode roleplay — a real conversation, streamed live.'
   }
 ]
 

@@ -44,7 +44,7 @@ export function PrepBriefModal({ meeting, onClose }: PrepBriefModalProps): React
       meeting.dealId
     ]
   )
-  const { loading, record, error, regenerate } = usePrepBrief(input)
+  const { loading, record, error, focusSkillReminder, regenerate } = usePrepBrief(input)
 
   return (
     <Modal onClose={onClose} title="Prep brief" size="lg" className="flex max-h-[85vh] flex-col">
@@ -59,7 +59,13 @@ export function PrepBriefModal({ meeting, onClose }: PrepBriefModalProps): React
         <IconButton icon={X} label="Close" onClick={onClose} />
       </div>
       <div className="flex-1 overflow-y-auto px-6 py-5">
-        <PrepBriefCard loading={loading} record={record} error={error} onRegenerate={regenerate} />
+        <PrepBriefCard
+          loading={loading}
+          record={record}
+          error={error}
+          focusSkillReminder={focusSkillReminder}
+          onRegenerate={regenerate}
+        />
       </div>
     </Modal>
   )

@@ -165,6 +165,9 @@ import { registerModelCatalog } from './ai/catalog-ipc'
 import { registerUpdater } from './updater'
 import { buildDiagnoseReport, wantsDiagnose } from './diagnose'
 import { registerPrepBrief } from './prep-brief-ipc'
+import { registerCoachingChat } from './coaching-chat-ipc'
+import { registerCrmNoteGenerator } from './crm-note-generator-ipc'
+import { registerContactIntelligence } from './contact-intelligence-ipc'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -383,6 +386,9 @@ app.whenReady().then(async () => {
   registerLog()
   registerAlerts()
   registerPrepBrief()
+  registerCoachingChat()
+  registerCrmNoteGenerator()
+  registerContactIntelligence()
   registerDetectionService()
   writeCrashLog('registrations done', 'all registerX() calls completed, about to createWindow()')
 

@@ -28,7 +28,8 @@ export const DEFAULT_MODEL_ASSIGNMENTS: ModelAssignments = {
   other: EMPTY_ASSIGNMENT,
   'prep-brief': EMPTY_ASSIGNMENT,
   'deal-tier1': EMPTY_ASSIGNMENT,
-  'deal-tier2': EMPTY_ASSIGNMENT
+  'deal-tier2': EMPTY_ASSIGNMENT,
+  'coaching-chat': EMPTY_ASSIGNMENT
 }
 
 /** Deduplicated, and capped to CHAIN_BUDGET[purpose].maxChainLength when one
@@ -58,7 +59,8 @@ export function sanitizeModelAssignments(value: unknown): ModelAssignments {
     other: sanitizeAssignment(v.other, 'other'),
     'prep-brief': sanitizeAssignment(v['prep-brief'], 'prep-brief'),
     'deal-tier1': sanitizeAssignment(v['deal-tier1'], 'deal-tier1'),
-    'deal-tier2': sanitizeAssignment(v['deal-tier2'], 'deal-tier2')
+    'deal-tier2': sanitizeAssignment(v['deal-tier2'], 'deal-tier2'),
+    'coaching-chat': sanitizeAssignment(v['coaching-chat'], 'coaching-chat')
   }
 }
 

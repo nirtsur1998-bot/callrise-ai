@@ -1,4 +1,9 @@
-import type { CoachingReport } from '@renderer/features/coaching/types'
+import type {
+  CallType,
+  CoachChatMessage,
+  CoachingReport,
+  SkillScoreSet
+} from '@renderer/features/coaching/types'
 import type { DealIntelligenceRecord } from '../../../../preload/index.d'
 
 export interface CallSegment {
@@ -107,6 +112,8 @@ interface CallBase {
   preview: string
   /** The contact this call is linked to, if any. */
   contactId?: string
+  /** M23 — sticky call-type classification, auto-detected then overridable. */
+  callType?: CallType
 }
 
 export interface CallSummary extends CallBase {
@@ -114,6 +121,7 @@ export interface CallSummary extends CallBase {
   attachmentCount: number
   hasCoaching: boolean
   coachScore?: number
+  skills?: SkillScoreSet
 }
 
 // --- M19 Task 2: resolved speaker identities --------------------------------
@@ -151,6 +159,10 @@ export interface Call extends CallBase {
    *  score curve). Absent on any call recorded before this shipped, and on
    *  every call where Live Deal Intelligence was off. */
   dealIntelligence?: DealIntelligenceRecord
+  /** M23 Workstream B — the coaching-chat thread for this call. */
+  coachChat?: CoachChatMessage[]
+  /** M23 Workstream B — free-text notes saved from the chat's "Save to call notes" chip. */
+  notes?: string
 }
 
 export type SummaryResult =

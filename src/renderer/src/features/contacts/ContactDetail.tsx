@@ -33,6 +33,7 @@ import { recordRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import { useContactCallHistory } from './useContactCallHistory'
 import { CallHistoryList } from './CallHistoryList'
 import { ContactTimeline } from './ContactTimeline'
+import { CrmNoteGeneratorCard } from './CrmNoteGeneratorCard'
 import { formatRelative } from './contactStats'
 import type { Contact, ContactComment } from './types'
 import { formatDateOnly } from '@renderer/lib/dateOnly'
@@ -42,6 +43,12 @@ interface ContactDetailProps {
   hasOpenDeal: boolean
   staleFollowUpEnabled: boolean
   staleAfterDays: number
+  /** M23 Workstream C — Settings → CRM → "CRM Note Generator". Off (default)
+   *  renders this page exactly as it was before that workstream. */
+  noteGeneratorEnabled: boolean
+  /** Re-fetches the contacts list — passed through to CrmNoteGeneratorCard
+   *  so a saved note / applied KYC update shows up immediately. */
+  onContactUpdated: () => void
   onBack: () => void
   onEdit: () => void
 }
@@ -53,6 +60,8 @@ export function ContactDetail({
   hasOpenDeal,
   staleFollowUpEnabled,
   staleAfterDays,
+  noteGeneratorEnabled,
+  onContactUpdated,
   onBack,
   onEdit
 }: ContactDetailProps): React.JSX.Element {
@@ -242,6 +251,12 @@ export function ContactDetail({
             )}
           </div>
         </div>
+      )}
+
+      {/* M23 Workstream C — standalone note generator (Settings → CRM →
+          "CRM Note Generator"). Hidden entirely when off. */}
+      {noteGeneratorEnabled && (
+        <CrmNoteGeneratorCard contactId={contact.id} onContactUpdated={onContactUpdated} />
       )}
 
       {/* Comments — the rep's own notes, plus any AI-drafted ones (opt-in,

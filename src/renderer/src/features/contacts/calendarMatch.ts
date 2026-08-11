@@ -35,22 +35,23 @@ export function matchSensitivityMs(sensitivity: 'tight' | 'normal' | 'loose'): n
 }
 
 /**
- * Find Google Calendar events that happened around the same time as this
- * call, and return one candidate per unique attendee (closest event first).
- * Matching is purely TIME-BASED — start/end overlap, with a small buffer —
- * never a guess from the transcript. Only Google events carry attendee data
- * today, so manually-created local events never produce a suggestion.
+ * Find calendar events that happened around the same time as this call, and
+ * return one candidate per unique attendee (closest event first). Matching
+ * is purely TIME-BASED — start/end overlap, with a small buffer — never a
+ * guess from the transcript. Both Google and Outlook events carry attendee
+ * data (M23 Workstream D — see CallDetail.tsx, which merges both before
+ * calling this); manually-created local events never produce a suggestion.
  */
 export function findCalendarMatches(
   call: { createdAt: string; durationMs: number },
-  googleEvents: CalendarEvent[],
+  events: CalendarEvent[],
   bufferMs: number = DEFAULT_BUFFER_MS
 ): CalendarMatch[] {
   const callStart = new Date(call.createdAt).getTime()
   const callEnd = callStart + Math.max(call.durationMs, 0)
   if (Number.isNaN(callStart)) return []
 
-  const candidates = googleEvents
+  const candidates = events
     .filter((e) => !e.allDay && e.attendees && e.attendees.length > 0)
     .filter((e) => {
       const eStart = new Date(e.start).getTime()

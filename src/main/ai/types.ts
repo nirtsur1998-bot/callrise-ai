@@ -33,7 +33,12 @@ export interface AIMessage {
  *  Same latency-critical shape as 'coaching-cue' (see CHAIN_BUDGET below).
  *  M24 also adds 'deal-tier2' — the same engine's slower strategic pass
  *  (Deal Health Score, every 2-3 minutes or on a call-stage change), which
- *  can afford to think longer, same tier as 'summary'/'scorecard'. */
+ *  can afford to think longer, same tier as 'summary'/'scorecard'.
+ *  M23 Workstream B adds 'coaching-chat' — the interactive coaching-chat
+ *  panel (advisor Q&A + practice/roleplay mode). Quality tier like summary/
+ *  scorecard (a real conversation deserves a good model), but the FIRST
+ *  real consumer of streamWithFallback() (complete-with-fallback.ts) since
+ *  the user is actively watching tokens arrive. */
 export type AIPurpose =
   | 'coaching-cue'
   | 'summary'
@@ -43,6 +48,7 @@ export type AIPurpose =
   | 'prep-brief'
   | 'deal-tier1'
   | 'deal-tier2'
+  | 'coaching-chat'
 
 /** A single tool the model is FORCED to call — every real call site today
  *  needs structured JSON back, never free text. `inputSchema` is a plain
@@ -155,7 +161,14 @@ export const LATENCY_POLICY: Record<AIPurpose, LatencyPolicyEntry> = {
   'deal-tier1': { maxRetries: 0, timeoutMs: 4_000 },
   // Runs every 2-3 minutes, not per-turn - not latency-critical the same way
   // deal-tier1 is, so it gets the same tier as summary/scorecard.
-  'deal-tier2': { maxRetries: 2, timeoutMs: 60_000 }
+  'deal-tier2': { maxRetries: 2, timeoutMs: 60_000 },
+  // Interactive but not real-time the way coaching-cue is — the rep is
+  // watching a stream fill in, not waiting on one blocking round-trip, so a
+  // slightly shorter timeout than summary/scorecard (still generous) plus
+  // one retry is the right shape. streamWithFallback() only ever retries
+  // BEFORE any token has reached the renderer (see its own doc comment) —
+  // maxRetries here governs the SDK's own retry-before-first-byte behavior.
+  'coaching-chat': { maxRetries: 1, timeoutMs: 45_000 }
 }
 
 /** Total wall-clock budget for a whole completeWithFallback() chain on this

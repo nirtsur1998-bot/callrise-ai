@@ -8,8 +8,29 @@ import { ipcMain } from 'electron'
 import {
   ensurePrepBriefForEvent,
   type PrepBriefEventInput,
-  type PrepBriefAttendee
+  type PrepBriefAttendee,
+  type PrepBriefResult
 } from './prep-brief-fs'
+import { isCoach2Enabled } from './app-settings'
+import { loadFocusSkill } from './coaching/focus-skill-fs'
+import type { FocusSkillAtCoaching } from './calls-fs'
+
+/** M23 A4 — "the M19 pre-call brief displays the current Focus Skill
+ *  reminder at the top." Attached OUTSIDE the cached PrepBriefRecord
+ *  (never written to disk with it) so it always reflects whatever is
+ *  CURRENTLY focused, even for a brief served straight from cache — a
+ *  stale-but-cheap focus reminder would defeat the point of the reminder. */
+async function withFocusSkillReminder(
+  result: PrepBriefResult
+): Promise<PrepBriefResult & { focusSkillReminder?: FocusSkillAtCoaching }> {
+  if (!result.ok || !isCoach2Enabled()) return result
+  const current = await loadFocusSkill()
+  if (!current) return result
+  return {
+    ...result,
+    focusSkillReminder: { skill: current.skill, microBehavior: current.microBehavior }
+  }
+}
 
 const MAX_TITLE = 300
 const MAX_ATTENDEES = 20
@@ -56,12 +77,12 @@ export function registerPrepBrief(): void {
   ipcMain.handle('prepBrief:getForEvent', async (_event, raw: unknown) => {
     const input = sanitizeInput(raw)
     if (!input) return { ok: false as const, error: 'failed' as const, message: 'Invalid event.' }
-    return ensurePrepBriefForEvent(input)
+    return withFocusSkillReminder(await ensurePrepBriefForEvent(input))
   })
 
   ipcMain.handle('prepBrief:regenerate', async (_event, raw: unknown) => {
     const input = sanitizeInput(raw)
     if (!input) return { ok: false as const, error: 'failed' as const, message: 'Invalid event.' }
-    return ensurePrepBriefForEvent(input, { force: true })
+    return withFocusSkillReminder(await ensurePrepBriefForEvent(input, { force: true }))
   })
 }

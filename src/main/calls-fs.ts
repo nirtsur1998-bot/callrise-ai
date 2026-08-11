@@ -139,12 +139,89 @@ export interface CoachMetrics {
   questionCount: number
   wordsPerMinute: number | null
   turns: number
+  /** M23 — benchmark-engine inputs (src/main/coaching/benchmarks.ts). All
+   *  optional: absent on calls scored before M23 or with Coach 2.0 off, and
+   *  computed from segment ORDER, not wall-clock time — saved transcripts
+   *  carry no per-segment timestamp, so "early/late in the call" is a
+   *  transcript-position proxy, never a literal minute mark. */
+  questionSpread?: number | null // 0–1, how evenly the rep's questions land across the call's thirds
+  buyerQuestionCount?: number
+  buyerLongestMonologueWords?: number
+  pricingMentions?: number // buyer-side pricing-keyword hits
+  pricingMentionsLatePct?: number | null // share of those hits in the back half of the transcript
+  nextStepsLocked?: boolean // a concrete next step + date was agreed
 }
 
 export interface CoachDealContext {
   type: 'transactional' | 'complex' | 'unknown'
   summary: string
   lens: string
+}
+
+// --- M23 Coach 2.0: call type, methodology, skill graph ---------------------
+// Everything in this section is OPTIONAL on CoachingReport/CallBase and
+// additive-only. A call coached before M23 (or with Settings → Coach 2.0
+// off) simply has these fields absent — sanitizeCoaching() below never makes
+// their presence a requirement, unlike the six-dimension rubric's exact-count
+// gate, so no historical scorecard is ever invalidated by this feature.
+
+export type CallType = 'cold-call' | 'discovery' | 'demo' | 'closing' | 'other'
+
+export type SalesMethodology = 'spin' | 'meddic' | 'meddpicc' | 'challenger' | 'sandler' | 'blended'
+
+export const SALES_METHODOLOGIES: SalesMethodology[] = [
+  'blended',
+  'spin',
+  'meddic',
+  'meddpicc',
+  'challenger',
+  'sandler'
+]
+
+export type SkillKey =
+  | 'discovery'
+  | 'listening'
+  | 'objectionHandling'
+  | 'valueArticulation'
+  | 'pricing'
+  | 'momentum'
+  | 'rapport'
+  | 'methodology'
+
+export const SKILL_KEYS: SkillKey[] = [
+  'discovery',
+  'listening',
+  'objectionHandling',
+  'valueArticulation',
+  'pricing',
+  'momentum',
+  'rapport',
+  'methodology'
+]
+
+/** 0–100 per skill, same call-to-call scale as overallScore. */
+export type SkillScoreSet = Record<SkillKey, number>
+
+/** How well the call adhered to the rep's chosen sales methodology — scored
+ *  1–5 like the six core dimensions, but kept OUTSIDE the `dimensions` array
+ *  (and outside DIMENSION_KEYS) so it can never affect the exact-count
+ *  validation gate that treats a wrong dimension count as a corrupt report. */
+export interface MethodologyAssessment {
+  methodology: SalesMethodology
+  score: number // 1–5
+  comment: string
+  evidence?: CoachEvidence
+}
+
+/** What the Focus Skill loop was asking the rep to practice going INTO this
+ *  call — captured by calls.ts right before coaching runs (reading the
+ *  Focus Skill state left over from the PREVIOUS call), so the report can
+ *  lead with "how did you do on the thing you were asked to practice",
+ *  exactly A4's requirement. Deliberately NOT the same as the focus that
+ *  gets selected AFTER this call (which is for the call after this one). */
+export interface FocusSkillAtCoaching {
+  skill: SkillKey
+  microBehavior: string
 }
 
 export interface CoachingReport {
@@ -157,6 +234,46 @@ export interface CoachingReport {
   metrics: CoachMetrics
   model: string
   createdAt: string
+  /** M23 — present only when Settings → Coach 2.0 was on at coaching time. */
+  callType?: CallType
+  skills?: SkillScoreSet
+  methodologyAdherence?: MethodologyAssessment
+  focusSkillAtCoaching?: FocusSkillAtCoaching
+}
+
+// --- M23 Workstream B: coaching chat (advisor + practice mode) --------------
+
+export type CoachChatRole = 'user' | 'assistant'
+export type CoachChatMode = 'advisor' | 'practice'
+
+/** One turn in the coaching-chat thread for this call. Persisted only once a
+ *  turn is COMPLETE (user message + the assistant's full final reply) — the
+ *  in-progress stream lives in renderer state until then, so an interrupted
+ *  stream never leaves a half-written turn on disk. */
+export interface CoachChatMessage {
+  id: string
+  role: CoachChatRole
+  text: string
+  createdAt: string
+  /** Which mode this turn happened in — lets the UI render practice-mode
+   *  turns distinctly (and excludes them from becoming "evidence" the way
+   *  the end-of-practice feedback pass reads them). Advisor when absent
+   *  (pre-practice-mode messages, or default). */
+  mode?: CoachChatMode
+}
+
+/** A context fact the chat detected in the user's last message and proposed
+ *  saving — never applied until the rep taps the chip (see coaching-chat.ts).
+ *  Not persisted on the message itself; suggestions are a live-only signal
+ *  attached to the IPC response for the turn that produced them. */
+export interface CoachChatContextSuggestion {
+  id: string
+  type: 'kyc' | 'next-steps' | 'call-notes'
+  /** Contact field name, only when type === 'kyc' (see KYC_UPDATABLE_FIELDS
+   *  in coaching-chat.ts for the allowed set). */
+  field?: string
+  text: string
+  confidence: 'high' | 'medium'
 }
 
 // --- Commitments (§4.7 — who promised what) ---------------------------------
@@ -315,6 +432,11 @@ interface CallBase {
   /** The contact this call is linked to (manual, or confirmed from a calendar
    *  match) — the CRM foundation's call-history link. */
   contactId?: string
+  /** M23 — cold-call/discovery/demo/closing, for call-type-aware benchmarks.
+   *  Auto-detected from the title the first time the call is coached, then
+   *  sticky: re-coaching never overwrites a value already set here, so a
+   *  rep's manual override (calls:setCallType) always wins going forward. */
+  callType?: CallType
 }
 
 /** Lightweight item for the Past Calls list. */
@@ -323,6 +445,11 @@ export interface CallSummary extends CallBase {
   attachmentCount: number
   hasCoaching: boolean
   coachScore?: number // 0–100 overall, when coached
+  /** M23 — the 8 Skill Graph scores, when coached with Coach 2.0 on. Carried
+   *  on the lightweight summary (like coachScore) so the Progress dashboard
+   *  can roll up trend lines from listCalls() alone, without re-reading
+   *  every full call record from disk. */
+  skills?: SkillScoreSet
   /** True once this call has been read for Objection Library mining (auto on
    *  save, or via the manual "scan past calls" trigger) — lets both skip
    *  calls they've already processed. */
@@ -363,6 +490,15 @@ export interface Call extends CallBase {
    *  Speaker N logic. Never required, never migrated — old calls simply have
    *  no entries here and behave exactly as before this field existed. */
   speakerIdentities?: Record<string, SpeakerIdentityRecord>
+  /** M23 Workstream B — the coaching-chat thread for this call (advisor Q&A
+   *  + practice-mode turns interleaved, distinguished by each message's
+   *  `mode`). Complete turns only — see CoachChatMessage's doc comment. */
+  coachChat?: CoachChatMessage[]
+  /** M23 Workstream B — free-text notes saved from the coaching chat's
+   *  "Save to call notes" chip. Appended to, never silently overwritten;
+   *  local-only for now (not in callBackupPayload's allowlist), same
+   *  treatment as commitments/dealIntelligence above. */
+  notes?: string
 }
 
 export interface CallSaveInput {
@@ -509,11 +645,13 @@ function toSummary(call: Call): CallSummary {
     speakerCount: call.speakerCount,
     preview: call.preview,
     contactId: isSafeId(call.contactId) ? call.contactId : undefined,
+    callType: call.callType,
     hasSummary: Boolean(call.summary),
     attachmentCount: Array.isArray(call.attachments) ? call.attachments.length : 0,
     hasCoaching: Boolean(call.coaching),
     coachScore:
       typeof call.coaching?.overallScore === 'number' ? call.coaching.overallScore : undefined,
+    skills: call.coaching?.skills,
     objectionsMined: typeof call.objectionsMinedAt === 'string'
   }
 }
@@ -1128,6 +1266,22 @@ export async function importCall(
         : {}),
       ...(!deleted && bookmarks.length ? { bookmarks } : {}),
       ...(speakerIdentities && Object.keys(speakerIdentities).length ? { speakerIdentities } : {}),
+      // Bugfix (found while wiring M23's own local-only fields below): these
+      // were missing from this reconstruction entirely, so a cloud restore
+      // merging onto an existing local record silently wiped them even
+      // though they're local-only and the cloud row never carries them —
+      // same "preserved only across a same-device restore-merge" rule as
+      // crmNoteGeneratedAt above, just never actually applied to these four.
+      ...(!deleted && current?.callType ? { callType: current.callType } : {}),
+      // Presence (`!== undefined`), not a `.length` truthy check — an empty
+      // array means "the AI extraction ran and found zero," which is a
+      // real, distinct state from "never ran" (undefined). A `.length`
+      // check collapses both to falsy and silently loses an honest
+      // zero-commitments result on every restore-merge.
+      ...(!deleted && current?.commitments !== undefined ? { commitments: current.commitments } : {}),
+      ...(!deleted && current?.dealIntelligence ? { dealIntelligence: current.dealIntelligence } : {}),
+      ...(!deleted && current?.coachChat !== undefined ? { coachChat: current.coachChat } : {}),
+      ...(!deleted && current?.notes ? { notes: current.notes } : {}),
       ...(deleted ? { deleted: true } : {})
     }
     // Mirror every other persister (saveCall/getCall/listCalls): strip buyer
@@ -1251,6 +1405,51 @@ export async function setCallContact(
   })
 }
 
+const CALL_TYPES = new Set<CallType>(['cold-call', 'discovery', 'demo', 'closing', 'other'])
+
+/** M23 — the rep's manual call-type override (Workstream A1). Same shape as
+ *  setCallContact: null clears back to auto-detection, an unrecognized value
+ *  is a no-op. A manual write here is what makes a call-type "sticky" —
+ *  coach.ts only ever auto-fills this field when it's still unset. */
+export async function setCallCallType(
+  dir: string,
+  callId: string,
+  callType: unknown
+): Promise<Call | null> {
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    if (callType === null) {
+      delete call.callType
+    } else if (typeof callType === 'string' && CALL_TYPES.has(callType as CallType)) {
+      call.callType = callType as CallType
+    } else {
+      return call
+    }
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+/** Auto-fill a call's type from detection ONLY if nothing is set yet — never
+ *  overwrites a value the rep (or a prior auto-fill) already put there. Used
+ *  right after coaching so the detected type "sticks" for benchmark reuse
+ *  without a second write path that could race a manual override. */
+export async function setCallTypeIfUnset(
+  dir: string,
+  callId: string,
+  callType: CallType
+): Promise<void> {
+  await withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call || call.callType) return
+    call.callType = callType
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+  })
+}
+
 const MAX_SPEAKER_NAME = 200
 const SPEAKER_KEY_RE = /^(mono|ch[01])\/spk\d+$/
 const SOURCES: SpeakerIdentitySource[] = [
@@ -1291,6 +1490,17 @@ export async function setSpeakerIdentity(
      *  that took a snapshot and checked `existing?.source === 'manual'`
      *  itself was the exact TOCTOU this parameter exists to close. */
     skipIfManual?: boolean
+    /** Stronger, superset guard for a LOW-priority resolution source (e.g.
+     *  M23 Workstream D's post-hoc self-intro scan): skip if ANY name is
+     *  already resolved for this key, regardless of source — never
+     *  downgrade an existing 'contact'/'calendar' (higher-confidence) entry
+     *  to a 'self-intro' one. Checked atomically here for the same TOCTOU
+     *  reason as skipIfManual above: a caller that read "nothing resolved
+     *  yet" before starting a slow AI call can no longer trust that
+     *  snapshot by the time the AI call returns — the background naming
+     *  cascade (resolve-for-call.ts) runs independently and may have
+     *  resolved a higher-confidence entry in the meantime. */
+    skipIfAlreadyResolved?: boolean
   }
 ): Promise<Call | null> {
   if (typeof key !== 'string' || !SPEAKER_KEY_RE.test(key)) return null
@@ -1301,6 +1511,9 @@ export async function setSpeakerIdentity(
     // Re-checked against the CURRENT on-disk state, inside the same lock
     // section as the write below — not a value the caller read earlier.
     if (opts?.skipIfManual && call.speakerIdentities?.[key]?.source === 'manual') {
+      return call
+    }
+    if (opts?.skipIfAlreadyResolved && call.speakerIdentities?.[key]?.name) {
       return call
     }
 
@@ -1545,6 +1758,55 @@ function sanitizeEvidence(
   }
 }
 
+function sanitizeReportCallType(value: unknown): CallType | undefined {
+  return typeof value === 'string' && CALL_TYPES.has(value as CallType)
+    ? (value as CallType)
+    : undefined
+}
+
+/** Only accepted whole — a set missing any of the 8 keys is treated as
+ *  absent rather than rendered as a partial/misleading skill graph. */
+function sanitizeSkillScores(value: unknown): SkillScoreSet | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const v = value as Record<string, unknown>
+  const out: Partial<SkillScoreSet> = {}
+  for (const key of SKILL_KEYS) {
+    const n = v[key]
+    if (typeof n !== 'number' || !Number.isFinite(n)) return undefined
+    out[key] = Math.max(0, Math.min(100, Math.round(n)))
+  }
+  return out as SkillScoreSet
+}
+
+function sanitizeFocusSkillAtCoaching(value: unknown): FocusSkillAtCoaching | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const v = value as Record<string, unknown>
+  if (typeof v.skill !== 'string' || !(SKILL_KEYS as string[]).includes(v.skill)) return undefined
+  if (typeof v.microBehavior !== 'string' || !v.microBehavior.trim()) return undefined
+  return { skill: v.skill as SkillKey, microBehavior: v.microBehavior.slice(0, 500) }
+}
+
+function sanitizeMethodologyAssessment(
+  value: unknown,
+  turns: VerifyTurn[],
+  repSpeaker: number | null
+): MethodologyAssessment | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const v = value as Record<string, unknown>
+  if (
+    typeof v.methodology !== 'string' ||
+    !SALES_METHODOLOGIES.includes(v.methodology as SalesMethodology)
+  ) {
+    return undefined
+  }
+  return {
+    methodology: v.methodology as SalesMethodology,
+    score: clampInt(v.score, 1, 5, 3),
+    comment: str(v.comment, 1000),
+    evidence: sanitizeEvidence(v.evidence, turns, repSpeaker)
+  }
+}
+
 /** Coerce an untrusted object (an AI-built report) into a clean CoachingReport.
  *  `segments` is the call's transcript, used to recompute every evidence
  *  quote's `verified` flag rather than trusting the input. */
@@ -1624,13 +1886,35 @@ export function sanitizeCoaching(value: unknown, segments: CallSegment[]): Coach
       longestMonologueMinutes: numOrNull(m.longestMonologueMinutes),
       questionCount: clampInt(m.questionCount, 0, 1_000_000, 0),
       wordsPerMinute: numOrNull(m.wordsPerMinute),
-      turns: clampInt(m.turns, 0, 1_000_000, 0)
+      turns: clampInt(m.turns, 0, 1_000_000, 0),
+      // M23 — genuinely OPTIONAL, unlike the ten fields above: only include a
+      // key when the source actually had it, so a pre-M23 (or Coach-2.0-off)
+      // report's metrics object round-trips with exactly its original 10
+      // keys instead of growing 6 fabricated defaults on every save.
+      ...('questionSpread' in m ? { questionSpread: numOrNull(m.questionSpread) } : {}),
+      ...('buyerQuestionCount' in m
+        ? { buyerQuestionCount: clampInt(m.buyerQuestionCount, 0, 1_000_000, 0) }
+        : {}),
+      ...('buyerLongestMonologueWords' in m
+        ? { buyerLongestMonologueWords: clampInt(m.buyerLongestMonologueWords, 0, 10_000_000, 0) }
+        : {}),
+      ...('pricingMentions' in m
+        ? { pricingMentions: clampInt(m.pricingMentions, 0, 1_000_000, 0) }
+        : {}),
+      ...('pricingMentionsLatePct' in m
+        ? { pricingMentionsLatePct: numOrNull(m.pricingMentionsLatePct) }
+        : {}),
+      ...('nextStepsLocked' in m ? { nextStepsLocked: m.nextStepsLocked === true } : {})
     },
     model: str(v.model, 64) || 'claude',
     createdAt:
       typeof v.createdAt === 'string' && !Number.isNaN(Date.parse(v.createdAt))
         ? v.createdAt
-        : new Date().toISOString()
+        : new Date().toISOString(),
+    callType: sanitizeReportCallType(v.callType),
+    skills: sanitizeSkillScores(v.skills),
+    methodologyAdherence: sanitizeMethodologyAssessment(v.methodologyAdherence, turns, repSpeaker),
+    focusSkillAtCoaching: sanitizeFocusSkillAtCoaching(v.focusSkillAtCoaching)
   }
 }
 
@@ -1664,6 +1948,93 @@ export async function setCallCommitments(
     // whatever reaches disk was validated at the point of writing it, not just
     // trusted because it came from the extraction call moments earlier.
     call.commitments = sanitizeCommitments(commitments)
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+/** Appends ONE commitment to whatever is on disk right now, read-modify-write
+ *  inside the same call's lock — unlike setCallCommitments() (which overwrites
+ *  wholesale and is meant for the bulk AI-extraction path), this is safe to
+ *  call from concurrent single-item flows like coaching chat's "add next
+ *  step" suggestion chips without a lost-update race between them. */
+export async function appendCommitment(
+  dir: string,
+  callId: string,
+  commitment: Commitment
+): Promise<Call | null> {
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    call.commitments = sanitizeCommitments([...(call.commitments ?? []), commitment])
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+// --- M23 Workstream B: coaching chat -----------------------------------------
+
+const MAX_CHAT_MESSAGES = 300
+// Headroom above the model's own maxTokens:2048 reply budget (roughly ~8-10k
+// chars worst case) so a long assistant reply is never silently truncated at
+// a boundary that doesn't match what the model was actually asked to produce.
+const MAX_CHAT_TEXT = 16_000
+
+/** Appends ONE complete turn (user message + the assistant's full final
+ *  reply) to this call's chat thread — never a partial/mid-stream message,
+ *  see CoachChatMessage's doc comment. Oldest messages drop past
+ *  MAX_CHAT_MESSAGES rather than growing the file unbounded. */
+export async function appendCoachChatTurn(
+  dir: string,
+  callId: string,
+  userMessage: { text: string; mode?: CoachChatMode },
+  assistantMessage: { text: string; mode?: CoachChatMode }
+): Promise<Call | null> {
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    const now = new Date().toISOString()
+    const turn: CoachChatMessage[] = [
+      {
+        id: randomUUID(),
+        role: 'user',
+        text: userMessage.text.trim().slice(0, MAX_CHAT_TEXT),
+        createdAt: now,
+        mode: userMessage.mode
+      },
+      {
+        id: randomUUID(),
+        role: 'assistant',
+        text: assistantMessage.text.trim().slice(0, MAX_CHAT_TEXT),
+        createdAt: now,
+        mode: assistantMessage.mode
+      }
+    ]
+    call.coachChat = [...(call.coachChat ?? []), ...turn].slice(-MAX_CHAT_MESSAGES)
+    call.updatedAt = now
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+const MAX_NOTES_CHARS = 20_000
+
+/** Appends to this call's free-text notes (from the chat's "Save to call
+ *  notes" chip) — never overwrites what's already there. */
+export async function appendCallNotes(
+  dir: string,
+  callId: string,
+  text: string
+): Promise<Call | null> {
+  const clean = typeof text === 'string' ? text.trim() : ''
+  if (!clean) return getCall(dir, callId)
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    const existing = call.notes ?? ''
+    call.notes = (existing ? `${existing}\n\n${clean}` : clean).slice(-MAX_NOTES_CHARS)
     call.updatedAt = new Date().toISOString()
     await writeCall(dir, call)
     return call

@@ -5,6 +5,9 @@ export type AppSettingsPatch = Parameters<typeof window.api.settings.update>[0]
 export type SummaryLanguage = AppSettings['summaryLanguage']
 export type CrmSettings = AppSettings['crm']
 export type AiModelAssignments = AppSettings['aiModelAssignments']
+export type Coach2Settings = AppSettings['coach2']
+export type ContactIntelligenceSettings = AppSettings['contactIntelligence']
+export type SpeakerIdSettings = AppSettings['speakerId']
 
 // The safe default (matches main's own fallback) shown until the real value
 // loads — never more permissive than what loadAppSettings() would return.
@@ -33,10 +36,12 @@ const DEFAULT_SETTINGS: AppSettings = {
     cidNextNumber: 1,
     staleFollowUpEnabled: true,
     staleAfterDays: 14,
-    autoGenerateNotes: false
+    autoGenerateNotes: false,
+    noteGeneratorEnabled: false
   },
   objectionMining: { enabled: false },
   detection: { enabled: false, capturePolicy: { autoCapturePolicy: 'mic-only', appOverrides: {} } },
+  speakerId: { enabled: true, allowSelfIntroExtraction: false, voiceProfileMatching: false },
   aiProvider: 'anthropic',
   aiModelAssignments: {
     'coaching-cue': { chain: [] },
@@ -46,9 +51,12 @@ const DEFAULT_SETTINGS: AppSettings = {
     other: { chain: [] },
     'prep-brief': { chain: [] },
     'deal-tier1': { chain: [] },
-    'deal-tier2': { chain: [] }
+    'deal-tier2': { chain: [] },
+    'coaching-chat': { chain: [] }
   },
-  autoUpdateEnabled: false
+  autoUpdateEnabled: false,
+  coach2: { enabled: false, methodology: 'blended' },
+  contactIntelligence: { mode: 'off' }
 }
 
 export interface UseAppSettings {

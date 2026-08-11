@@ -18,8 +18,18 @@ import { ScoreGauge } from '@renderer/components/ScoreGauge'
 import { Skeleton } from '@renderer/components/Skeleton'
 import { Badge } from '@renderer/components/Badge'
 import { Button } from '@renderer/components/Button'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { useToast } from '@renderer/features/notifications/useToast'
 import type { CoachingReport, CoachDimension, CoachEvidence } from './types'
+import {
+  SKILL_LABEL,
+  SKILL_KEYS,
+  CALL_TYPES,
+  CALL_TYPE_LABEL,
+  METHODOLOGY_LABEL,
+  type CallType
+} from './types'
+import { useSkillProgress } from './useSkillProgress'
 import {
   DIMENSION_ORDER,
   DIMENSION_LABEL,
@@ -33,6 +43,101 @@ import {
   TONE_TO_BADGE,
   type SpeakerIdentities
 } from './meta'
+
+/** A4 — "the next call's coaching report LEADS with focus-skill
+ *  performance." Reads the skill history the main process already rolled
+ *  up (useSkillProgress) to compare THIS call's score on the focus skill
+ *  against the call immediately before it — located by callId within the
+ *  history, not just "the global second-to-last call" (which would be
+ *  wrong for any report other than the single most recent one) — and
+ *  celebrates an improvement. */
+function FocusSkillLead({
+  report,
+  callId
+}: {
+  report: CoachingReport
+  callId: string
+}): React.JSX.Element | null {
+  const focus = report.focusSkillAtCoaching
+  // Skip the IPC round-trip entirely when there's nothing to show — this
+  // component mounts for EVERY coached call, including pre-M23 ones and
+  // every call when Coach 2.0 is off, and must not do main-process work then.
+  const { progress } = useSkillProgress(!!focus)
+  if (!focus) return null
+  const score = report.skills?.[focus.skill]
+  const history = progress.find((p) => p.key === focus.skill)?.history
+  const idx = history?.findIndex((h) => h.callId === callId) ?? -1
+  const previous = idx > 0 ? history![idx - 1].score : undefined
+  const improved = score !== undefined && previous !== undefined && score > previous
+
+  return (
+    <div className="rounded-2xl border border-accent/30 bg-accent-soft p-4">
+      <div className="flex items-center gap-2 text-accent">
+        <Target className="h-4 w-4" />
+        <h4 className="text-xs font-semibold uppercase tracking-wide">
+          Your focus: {SKILL_LABEL[focus.skill]}
+        </h4>
+        {improved && (
+          <Badge tone="positive" icon={TrendingUp}>
+            Improved
+          </Badge>
+        )}
+      </div>
+      <p className="mt-2 text-[13px] text-muted">{focus.microBehavior}</p>
+      {score !== undefined && (
+        <p className="mt-2 text-sm text-ink">
+          This call: <span className="font-semibold tabular-nums">{score}</span>
+          {previous !== undefined && (
+            <span className="text-muted"> (was {previous} last time)</span>
+          )}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** A1's "manual override" for call-type detection. Changing it here re-tags
+ *  the call for next time (calls:setCallType) — it does NOT retroactively
+ *  recompute THIS report's already-scored benchmarks, since that would mean
+ *  either a second AI call or silently diverging from what was actually
+ *  scored; the toast says so. */
+function CallTypePicker({
+  callId,
+  callType
+}: {
+  callId: string
+  callType: CallType
+}): React.JSX.Element {
+  const toast = useToast()
+  const [value, setValue] = useState(callType)
+  const [saving, setSaving] = useState(false)
+
+  const onChange = async (next: CallType): Promise<void> => {
+    setValue(next)
+    setSaving(true)
+    try {
+      await window.api.calls.setCallType(callId, next)
+      toast.success('Saved — used next time this call is re-coached.')
+    } catch {
+      toast.error('Could not save the call type. Please try again.')
+      setValue(callType)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-2 flex items-center gap-2">
+      <span className="text-[11px] text-faint">Call type:</span>
+      <SegmentedControl
+        options={CALL_TYPES.map((t) => ({ id: t, label: CALL_TYPE_LABEL[t] }))}
+        value={value}
+        disabled={saving}
+        onChange={(next) => void onChange(next)}
+      />
+    </div>
+  )
+}
 
 interface CoachReportViewProps {
   report: CoachingReport
@@ -122,6 +227,9 @@ export function CoachReportView({
 
   return (
     <div className="space-y-4">
+      {/* M23 A4 — leads the report when this call had an active Focus Skill */}
+      <FocusSkillLead report={report} callId={callId} />
+
       {/* Toolbar */}
       <div className="flex justify-end">
         <Button variant="secondary" size="sm" onClick={() => void exportPdf()} disabled={exporting}>
@@ -165,6 +273,7 @@ export function CoachReportView({
           {report.dealContext.lens && (
             <p className="mt-1 text-[11px] text-faint">Lens: {report.dealContext.lens}</p>
           )}
+          {report.callType && <CallTypePicker callId={callId} callType={report.callType} />}
         </div>
       </div>
 
@@ -234,6 +343,53 @@ export function CoachReportView({
           ))}
         </div>
       </div>
+
+      {/* M23 A2 — Skill Graph, per-call. Only present when Coach 2.0 was on. */}
+      {report.skills && (
+        <div className="rounded-2xl border border-line-soft bg-canvas p-5">
+          <h4 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Skills</h4>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {SKILL_KEYS.map((key) => {
+              const score = report.skills![key]
+              return (
+                <div key={key}>
+                  <div className="flex items-center justify-between gap-3 text-[13px]">
+                    <span className="font-medium">{SKILL_LABEL[key]}</span>
+                    <span className="tabular-nums text-muted">{score}</span>
+                  </div>
+                  <div className="mt-1 h-1.5 rounded-full bg-line">
+                    <div
+                      className="h-1.5 rounded-full bg-accent"
+                      style={{ width: `${Math.max(0, Math.min(100, score))}%` }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          {report.methodologyAdherence && (
+            <div className="mt-4 border-t border-line-soft pt-4">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium">
+                  {METHODOLOGY_LABEL[report.methodologyAdherence.methodology]} adherence
+                </span>
+                <ScoreBar score={report.methodologyAdherence.score} />
+              </div>
+              {report.methodologyAdherence.comment && (
+                <p className="mt-1 text-[13px] text-muted">{report.methodologyAdherence.comment}</p>
+              )}
+              {report.methodologyAdherence.evidence && (
+                <Evidence
+                  ev={report.methodologyAdherence.evidence}
+                  repSpeaker={repSpeaker}
+                  identities={identities}
+                  multichannel={multichannel}
+                />
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Next-call action */}
       {report.nextAction && (

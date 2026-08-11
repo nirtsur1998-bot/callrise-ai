@@ -126,6 +126,8 @@ const api = {
     postCallBrief: (callId: string) => ipcRenderer.invoke('calls:postCallBrief', callId),
     setContact: (callId: string, contactId: string | null) =>
       ipcRenderer.invoke('calls:setContact', callId, contactId),
+    setCallType: (callId: string, callType: string | null) =>
+      ipcRenderer.invoke('calls:setCallType', callId, callType),
     addBookmark: (callId: string, atMs: number, text: string) =>
       ipcRenderer.invoke('calls:addBookmark', callId, atMs, text),
     removeBookmark: (callId: string, bookmarkId: string) =>
@@ -137,6 +139,34 @@ const api = {
       name: string | null,
       opts?: { rememberAsContactId?: string }
     ) => ipcRenderer.invoke('calls:setSpeakerName', callId, key, name, opts)
+  },
+  coach2: {
+    getProgress: () => ipcRenderer.invoke('coach2:getProgress'),
+    getFocusSkill: () => ipcRenderer.invoke('coach2:getFocusSkill')
+  },
+  coachChat: {
+    send: (callId: string, message: string, mode: string, startFreshPractice?: boolean) =>
+      ipcRenderer.invoke('coachChat:send', callId, message, mode, startFreshPractice),
+    applySuggestion: (callId: string, suggestion: unknown) =>
+      ipcRenderer.invoke('coachChat:applySuggestion', callId, suggestion),
+    draftFollowUpEmail: (callId: string) => ipcRenderer.invoke('coachChat:draftFollowUpEmail', callId),
+    proposeTask: (callId: string) => ipcRenderer.invoke('coachChat:proposeTask', callId),
+    confirmTask: (callId: string, proposal: unknown) =>
+      ipcRenderer.invoke('coachChat:confirmTask', callId, proposal),
+    regenerateCrmNote: (callId: string) => ipcRenderer.invoke('coachChat:regenerateCrmNote', callId),
+    saveCrmNote: (callId: string, note: string) => ipcRenderer.invoke('coachChat:saveCrmNote', callId, note),
+    onDelta: (cb: (payload: unknown) => void) => subscribe('coachChat:delta', cb),
+    onError: (cb: (payload: unknown) => void) => subscribe('coachChat:error', cb)
+  },
+  crmNoteGenerator: {
+    generate: (contactId: string, length: string) =>
+      ipcRenderer.invoke('crmNoteGenerator:generate', contactId, length),
+    save: (contactId: string, note: string) => ipcRenderer.invoke('crmNoteGenerator:save', contactId, note),
+    applyFact: (contactId: string, field: string, text: string) =>
+      ipcRenderer.invoke('crmNoteGenerator:applyFact', contactId, field, text)
+  },
+  contactIntelligence: {
+    detectName: (callId: string) => ipcRenderer.invoke('contactIntelligence:detectName', callId)
   },
   tasks: {
     list: () => ipcRenderer.invoke('tasks:list'),

@@ -1,19 +1,28 @@
 import { useEffect, useRef, useState } from 'react'
-import { GraduationCap, ArrowLeft, Clock } from 'lucide-react'
+import { GraduationCap, ArrowLeft, Clock, LineChart } from 'lucide-react'
 import { EmptyState } from '@renderer/components/EmptyState'
 import { PageHeader } from '@renderer/components/PageHeader'
 import { ScoreGauge } from '@renderer/components/ScoreGauge'
 import { SkeletonRows, Skeleton } from '@renderer/components/Skeleton'
 import { Badge } from '@renderer/components/Badge'
+import { Button } from '@renderer/components/Button'
 import { useCalls } from '@renderer/features/calls/useCalls'
+import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import { formatDate, formatDuration } from '@renderer/features/calls/format'
 import type { Call } from '@renderer/features/calls/types'
 import { CoachReportView } from './CoachReportView'
+import { ProgressDashboard } from './ProgressDashboard'
 import { overallTier, TONE_TO_BADGE, TONE_TO_GAUGE } from './meta'
 
 export function CoachingView(): React.JSX.Element {
   const { calls, loading } = useCalls()
+  const { settings } = useAppSettings()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [showProgress, setShowProgress] = useState(false)
+
+  if (showProgress) {
+    return <ProgressDashboard onBack={() => setShowProgress(false)} />
+  }
 
   if (selectedId) {
     return <CoachingDetail callId={selectedId} onBack={() => setSelectedId(null)} />
@@ -47,6 +56,13 @@ export function CoachingView(): React.JSX.Element {
       <PageHeader
         title="Coaching"
         count={`${coached.length} coached call${coached.length === 1 ? '' : 's'}`}
+        actions={
+          settings.coach2.enabled && (
+            <Button variant="secondary" size="sm" onClick={() => setShowProgress(true)}>
+              <LineChart className="h-3.5 w-3.5" /> Progress
+            </Button>
+          )
+        }
       />
       <ul className="space-y-2.5">
         {coached.map((c, index) => {

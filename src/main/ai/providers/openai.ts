@@ -31,7 +31,9 @@ const MODEL_BY_PURPOSE: Record<AIPurpose, string> = {
   // M24 - same fast/cheap tier as coaching-cue; same latency-critical shape.
   'deal-tier1': 'gpt-5.4-mini',
   // M24 - can afford to think longer; same tier as summary/scorecard.
-  'deal-tier2': 'gpt-5.4'
+  'deal-tier2': 'gpt-5.4',
+  // M23 Workstream B - quality tier; a real coaching conversation.
+  'coaching-chat': 'gpt-5.4'
 }
 
 // Rough per-million-token pricing for usage/cost display. Update here only.

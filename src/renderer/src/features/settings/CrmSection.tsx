@@ -11,6 +11,7 @@ import { useAppSettings, type CrmSettings } from './useAppSettings'
 import { SettingRow } from './SettingRow'
 
 type MatchSensitivity = CrmSettings['matchSensitivity']
+type ContactIntelligenceMode = 'off' | 'suggest' | 'full-auto'
 
 const SENSITIVITIES: { id: MatchSensitivity; label: string }[] = [
   { id: 'tight', label: 'Tight (5 min)' },
@@ -18,9 +19,24 @@ const SENSITIVITIES: { id: MatchSensitivity; label: string }[] = [
   { id: 'loose', label: 'Loose (30 min)' }
 ]
 
+const CONTACT_INTELLIGENCE_OPTIONS: { id: ContactIntelligenceMode; label: string }[] = [
+  { id: 'off', label: 'Off' },
+  { id: 'suggest', label: 'Suggest' },
+  { id: 'full-auto', label: 'Full-auto' }
+]
+
+const CONTACT_INTELLIGENCE_DESCRIPTION: Record<ContactIntelligenceMode, string> = {
+  off: 'Off — no automatic name detection beyond the calendar-match banner above.',
+  suggest:
+    "Suggest — on a one-on-one call with no linked contact, a 'Detect who this was' button sends the transcript to Claude to look for a self-introduced name (only if they explicitly said it). Finding a contact still always needs your click.",
+  'full-auto':
+    'Full-auto — the same AI detection runs on its own (once per call) instead of waiting for a click. Creating a contact is still never automatic — you always confirm.'
+}
+
 export function CrmSection(): React.JSX.Element {
   const { settings, loading, update } = useAppSettings()
   const crm = settings.crm
+  const contactIntelligenceMode = settings.contactIntelligence.mode
   const [cleared, setCleared] = useState(false)
 
   const setCrm = (patch: Partial<CrmSettings>): void => {
@@ -244,6 +260,44 @@ export function CrmSection(): React.JSX.Element {
             />
           }
         />
+      </Card>
+
+      <Card className="mb-5">
+        <SettingRow
+          title="CRM Note Generator"
+          description="Adds a 'Generate CRM note' card to each contact's page — draft a note (Short/Medium/Detailed) from their most recent call on demand, plus proposed KYC updates you can accept or reject one at a time. On-demand only, never automatic."
+          control={
+            <ToggleSwitch
+              checked={crm.noteGeneratorEnabled}
+              disabled={loading}
+              onChange={(v) => setCrm({ noteGeneratorEnabled: v })}
+              label="CRM Note Generator"
+            />
+          }
+        />
+      </Card>
+
+      <Card className="mb-5">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <p className="text-[13px] font-medium text-ink">Contact Intelligence</p>
+          <SegmentedControl
+            options={CONTACT_INTELLIGENCE_OPTIONS}
+            value={contactIntelligenceMode}
+            disabled={loading}
+            onChange={(mode) =>
+              // This toggle is the only reachable UI for the older, more
+              // specific speakerId.allowSelfIntroExtraction opt-in (buyer
+              // speech reaching a third-party LLM for self-intro detection)
+              // — keep the two in lockstep so this one control genuinely
+              // represents the rep's full consent state, on and off.
+              void update({
+                contactIntelligence: { mode },
+                speakerId: { allowSelfIntroExtraction: mode !== 'off' }
+              })
+            }
+          />
+        </div>
+        <p className="text-[12px] text-faint">{CONTACT_INTELLIGENCE_DESCRIPTION[contactIntelligenceMode]}</p>
       </Card>
     </>
   )

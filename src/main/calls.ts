@@ -18,6 +18,8 @@ import {
   setCallDealIntelligence,
   setCallTitle,
   setCallContact,
+  setCallCallType,
+  setCallTypeIfUnset,
   setCallObjectionsMined,
   setCallCrmNoteGenerated,
   addBookmark,
@@ -41,6 +43,10 @@ import { scheduleBackup, queueAttachmentBlobDeletes } from './backup'
 import { addComment } from './contacts-fs'
 import { generateCrmNote } from './crm-notes'
 import { resolveAndSaveIdentities } from './speaker-identity/resolve-for-call'
+import { detectCallType } from './coaching/benchmarks'
+import { computeSkillProgress, type SkillProgress } from './coaching/skill-graph'
+import { selectFocusSkill, type FocusSkillState } from './coaching/focus-skill'
+import { loadFocusSkill, saveFocusSkill } from './coaching/focus-skill-fs'
 
 function objectionQueueDir(): string {
   return join(app.getPath('userData'), 'objection-queue')
@@ -116,6 +122,29 @@ async function maybeGenerateCrmNote(callId: string): Promise<void> {
   } finally {
     crmNoteInFlight.delete(callId)
   }
+}
+
+/** M23 Workstream A4 — after a Coach 2.0 scorecard is saved, re-derive skill
+ *  progress from this rep's whole call history and update the Focus Skill
+ *  (rotating only on sustained improvement — see focus-skill.ts). Best
+ *  effort: a failure here never fails the coaching call itself, since the
+ *  scorecard the rep is looking at is already saved by the time this runs. */
+async function updateFocusSkillAfterCoaching(callId: string): Promise<void> {
+  const call = await getCall(callsDir(), callId)
+  if (!call?.coaching?.skills) return
+  const summaries = await listCalls(callsDir())
+  const progress: SkillProgress[] = computeSkillProgress(
+    summaries.map((s) => ({ id: s.id, createdAt: s.createdAt, skills: s.skills }))
+  )
+  const current = await loadFocusSkill()
+  const next: FocusSkillState = selectFocusSkill(
+    progress,
+    current,
+    call.coaching,
+    callId,
+    new Date().toISOString()
+  )
+  await saveFocusSkill(next)
 }
 
 /** A call is "eligible" for mining once it has a transcript and hasn't been
@@ -255,6 +284,24 @@ export function registerCalls(): void {
     return call
   })
 
+  // --- M23 Workstream A: call-type override, Skill Graph, Focus Skill -------
+  ipcMain.handle('calls:setCallType', async (_event, callId: string, callType: string | null) => {
+    const call = await setCallCallType(callsDir(), callId, callType)
+    scheduleBackup() // plain metadata, same treatment as setContact
+    return call
+  })
+
+  ipcMain.handle('coach2:getProgress', async (): Promise<SkillProgress[]> => {
+    const summaries = await listCalls(callsDir())
+    return computeSkillProgress(
+      summaries.map((s) => ({ id: s.id, createdAt: s.createdAt, skills: s.skills }))
+    )
+  })
+
+  ipcMain.handle('coach2:getFocusSkill', async (): Promise<FocusSkillState | null> => {
+    return loadFocusSkill()
+  })
+
   // --- Speaker identification (M19 Task 2) -----------------------------------
   // The one write path for both an inline rename and the "remember this
   // person" checkbox — always source: 'manual', which the auto-resolution
@@ -379,8 +426,26 @@ export function registerCalls(): void {
       if (!call.segments?.length) {
         return { ok: false, error: 'failed', message: 'This call has no transcript to coach.' }
       }
-      const result = await coachCall(speechSegments(call.segments), call.durationMs)
+      // M23 — sticky per call: a prior manual override always wins over
+      // re-detecting from the title (setCallTypeIfUnset below only writes
+      // this back when it was still unset).
+      const callType = call.callType ?? detectCallType(call.title)
+      const coach2Enabled = loadAppSettings().coach2.enabled
+      // Read BEFORE coaching runs — this is what the rep was asked to
+      // practice going INTO this call (set after the PREVIOUS call), not
+      // what gets selected after this one. See FocusSkillAtCoaching's doc.
+      const priorFocus = coach2Enabled ? await loadFocusSkill() : null
+      const result = await coachCall(speechSegments(call.segments), call.durationMs, {
+        callType,
+        commitments: call.commitments
+      })
       if (result.ok) {
+        if (priorFocus) {
+          result.report.focusSkillAtCoaching = {
+            skill: priorFocus.skill,
+            microBehavior: priorFocus.microBehavior
+          }
+        }
         const saved = await setCallCoaching(callsDir(), callId, result.report)
         if (!saved) {
           return {
@@ -394,6 +459,10 @@ export function registerCalls(): void {
         // its "me" key (and therefore single-other-party detection) can
         // resolve for the first time.
         void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, callId).catch(() => {})
+        if (coach2Enabled) {
+          void setCallTypeIfUnset(callsDir(), callId, callType).catch(() => {})
+          void updateFocusSkillAfterCoaching(callId).catch(() => {})
+        }
       }
       return result
     } catch {

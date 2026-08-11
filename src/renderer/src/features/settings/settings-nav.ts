@@ -17,6 +17,7 @@ import {
   BellRing,
   Layers,
   Activity,
+  GraduationCap,
   type LucideIcon
 } from 'lucide-react'
 
@@ -33,6 +34,7 @@ export type SettingsPageId =
   | 'summary-language'
   | 'personalization'
   | 'objection-library'
+  | 'coach2'
   | 'calendar'
   | 'crm'
   | 'alerts'
@@ -152,6 +154,13 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         icon: MessageSquareQuote,
         description:
           'Let AI read your call transcripts to suggest reusable objection-handling scripts. Off by default; you approve every suggestion before it becomes a real script.'
+      },
+      {
+        id: 'coach2',
+        label: 'Coach 2.0',
+        icon: GraduationCap,
+        description:
+          'Benchmarks, an 8-skill progress graph, a methodology picker, and the Focus Skill loop. Off by default.'
       }
     ]
   },

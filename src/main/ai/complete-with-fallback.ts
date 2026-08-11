@@ -90,7 +90,9 @@ export const DEFAULT_CATALOG_CHAIN: Record<AIPurpose, string[]> = {
   'deal-tier1': SPEED_CHAIN.slice(0, dealTier1Cap),
   // M24 - quality-lane precedent, same as summary/scorecard/prep-brief; no
   // cap, since deal-tier2 has no CHAIN_BUDGET entry.
-  'deal-tier2': QUALITY_CHAIN
+  'deal-tier2': QUALITY_CHAIN,
+  // M23 Workstream B - quality-lane precedent, same as summary/scorecard.
+  'coaching-chat': QUALITY_CHAIN
 }
 
 interface ResolvedStep {
@@ -247,6 +249,112 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   }
 
   throw new AllModelsExhaustedError(purpose, attempts)
+}
+
+export interface StreamWithFallbackResult extends AsyncIterable<{ delta: string }> {
+  /** Resolves once the stream ends successfully (final text + a best-effort
+   *  model label + usage). Rejects only when every chain entry failed
+   *  BEFORE any delta was ever yielded — once a delta has reached the
+   *  caller, a mid-stream failure rejects too (there's no clean way to
+   *  restart with a different model without confusing whoever's reading
+   *  the partial text), but the caller already has that partial text from
+   *  the deltas it already saw. */
+  final: Promise<{ text: string; model: string; usage: AICompletionResult['usage'] }>
+}
+
+/**
+ * M23 Workstream B — the first real caller of AIProvider.stream(). Same
+ * chain-resolution/purpose/settings semantics as completeWithFallback()
+ * (reuses resolveChain() directly), but yields text deltas as they arrive
+ * instead of waiting for one full response.
+ *
+ * Fallback only ever happens BEFORE the first delta of a given attempt —
+ * once tokens have started flowing to the caller, switching models
+ * mid-stream would silently splice two different voices together, so a
+ * failure past that point ends the stream with an error instead.
+ */
+export function streamWithFallback(req: AICompletionRequest): StreamWithFallbackResult {
+  const purpose = req.purpose
+  const chain = resolveChain(purpose)
+
+  let resolveFinal!: (v: { text: string; model: string; usage: AICompletionResult['usage'] }) => void
+  let rejectFinal!: (e: unknown) => void
+  const final = new Promise<{ text: string; model: string; usage: AICompletionResult['usage'] }>(
+    (resolve, reject) => {
+      resolveFinal = resolve
+      rejectFinal = reject
+    }
+  )
+
+  async function* generator(): AsyncGenerator<{ delta: string }> {
+    if (chain.length === 0) {
+      const err = new AIProviderError('no-key', 'No AI provider is configured for this yet.')
+      rejectFinal(err)
+      throw err
+    }
+
+    let fullText = ''
+    let startedStreaming = false
+    let lastErr: unknown = null
+    const attempts: { catalogId: string; reason: string }[] = []
+
+    for (let i = 0; i < chain.length; i++) {
+      const step = chain[i]
+      const key = process.env[PROVIDER_REGISTRY[step.providerId].keyEnvName]?.trim()
+      if (!key) continue
+      const provider = PROVIDER_REGISTRY[step.providerId].build(key)
+
+      try {
+        const streamResult = provider.stream({
+          ...req,
+          model: step.modelId || undefined
+        })
+        for await (const chunk of streamResult) {
+          startedStreaming = true
+          fullText += chunk.delta
+          yield chunk
+        }
+        const usage = await streamResult.usage
+        resolveFinal({ text: fullText, model: step.modelId || `${step.providerId} (default)`, usage })
+        return
+      } catch (err) {
+        lastErr = err
+        const reason = classifyReason(err)
+        const detail = detailFrom(err)
+        attempts.push({ catalogId: step.catalogId, reason: detail ? `${reason}: ${detail}` : reason })
+        const nextStep = chain[i + 1] ?? null
+        void logFallbackEvent({
+          ts: new Date().toISOString(),
+          purpose,
+          fromCatalogId: step.catalogId,
+          toCatalogId: startedStreaming ? null : (nextStep?.catalogId ?? null),
+          reason,
+          detail
+        })
+        if (startedStreaming) {
+          const streamErr =
+            err instanceof AIProviderError
+              ? err
+              : new AIProviderError('failed', 'The response was interrupted. Please try again.')
+          rejectFinal(streamErr)
+          throw streamErr
+        }
+        // Nothing shown yet — safe to fall through and try the next entry.
+      }
+    }
+
+    // Unconditional, matching completeWithFallback()'s own exhaustion
+    // behavior above — every entry failing before any delta shipped means
+    // the chain is exhausted, the same outcome regardless of what kind of
+    // error the last entry happened to throw (lastErr is already captured
+    // per-attempt in `attempts` for diagnostics).
+    void lastErr
+    const finalErr = new AllModelsExhaustedError(purpose, attempts)
+    rejectFinal(finalErr)
+    throw finalErr
+  }
+
+  return Object.assign(generator(), { final })
 }
 
 // Re-exported so call sites and Settings only need one import site for the

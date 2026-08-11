@@ -52,11 +52,11 @@ export function ContactsView({
   initialViewId = null,
   onInitialViewConsumed
 }: ContactsViewProps = {}): React.JSX.Element {
-  const { contacts, loading, create, update, remove } = useContacts()
+  const { contacts, loading, create, update, remove, refresh } = useContacts()
   const { deals } = useDeals()
   const { stages } = useDealStages()
   const { settings } = useAppSettings()
-  const { staleFollowUpEnabled, staleAfterDays } = settings.crm
+  const { staleFollowUpEnabled, staleAfterDays, noteGeneratorEnabled } = settings.crm
   const [calls, setCalls] = useState<CallSummary[]>([])
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortMode>('recent')
@@ -121,6 +121,8 @@ export function ContactsView({
           hasOpenDeal={openDealContactIds.has(viewing.id)}
           staleFollowUpEnabled={staleFollowUpEnabled}
           staleAfterDays={staleAfterDays}
+          noteGeneratorEnabled={noteGeneratorEnabled}
+          onContactUpdated={() => void refresh()}
           onBack={() => setViewingId(null)}
           onEdit={() => setEditing(viewing)}
         />

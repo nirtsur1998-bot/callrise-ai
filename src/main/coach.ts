@@ -4,18 +4,34 @@ import { AIProviderError, type AITool } from './ai'
 import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
 import type {
   CallSegment,
+  CallType,
+  Commitment,
   CoachingReport,
   CoachDimension,
   CoachDimensionKey,
   CoachEvidence,
   CoachImprovement,
-  CoachMetrics
+  CoachMetrics,
+  MethodologyAssessment,
+  SalesMethodology
 } from './calls-fs'
 import { isRepSegment, sameTurn, repSpeakerFromSegments } from './coach-attribution'
 import { listEntries } from './knowledge-fs'
 import { assembleKnowledgeContext } from './knowledge-context'
 import { loadAppSettings } from './app-settings'
 import { assemblePersonalizationContext } from './personalization-context'
+import { computeBenchmarkSnapshot } from './coaching/benchmarks'
+import { computeSkillScores } from './coaching/skill-graph'
+
+const METHODOLOGY_LABEL: Record<SalesMethodology, string> = {
+  blended: 'Blended (whichever framework best fits this call)',
+  spin: 'SPIN (Situation, Problem, Implication, Need-payoff)',
+  meddic: 'MEDDIC (Metrics, Economic buyer, Decision criteria, Decision process, Identify pain, Champion)',
+  meddpicc:
+    'MEDDPICC (MEDDIC plus Paper process and Competition)',
+  challenger: 'Challenger (teach, tailor, take control — reframe the buyer’s status quo)',
+  sandler: 'Sandler (buyer qualifies themselves; pain funnel; up-front contracts)'
+}
 
 const MAX_TEXT_CHARS = 200_000
 const MIN_QUOTE_CHARS = 8 // too-short quotes can't be meaningfully verified
@@ -64,6 +80,18 @@ function personalizationSection(personalization: string): string {
 Use this to tailor tone/phrasing (e.g. the preferred pronoun when referring to the rep) — it is background about the rep, never evidence from the call.`
 }
 
+/** M23 — only added when Settings → Coach 2.0 is on. In 'blended' mode this
+ *  just asks the model to score whichever lens it already picked for
+ *  dealContext.lens (so the methodology skill has real signal even without
+ *  a specific framework chosen); with an explicit methodology it scores
+ *  adherence to THAT one specifically. */
+function methodologySection(methodology: SalesMethodology): string {
+  if (methodology === 'blended') {
+    return `\n\nAlso fill in methodologyAdherence: score (1-5) how well the call followed the SAME methodology lens you chose for dealContext.lens above, with one verbatim supporting quote.`
+  }
+  return `\n\nThe rep's chosen sales methodology is ${METHODOLOGY_LABEL[methodology]}. Use it as dealContext.lens, and also fill in methodologyAdherence: score (1-5) how well THIS call surfaced/followed that specific framework's key elements, with one verbatim supporting quote. Let this framework shape your coaching too: if one of the two improvements you give is about a gap this framework specifically cares about (e.g. an unconfirmed economic buyer or decision process for MEDDIC/MEDDPICC, an unexplored implication question for SPIN, an unchallenged status quo for Challenger, an unconfirmed up-front contract for Sandler), say so explicitly in that improvement's detail.`
+}
+
 const DIMENSION_KEYS = new Set<CoachDimensionKey>([
   'discovery',
   'engagement',
@@ -78,7 +106,13 @@ export type CoachResult =
 
 // --- The structured tool ----------------------------------------------------
 
-const COACH_TOOL: AITool = {
+/** M23 — `methodologyAdherence` is only added to the schema when Coach 2.0
+ *  is on. Kept out entirely (not just unused) when it's off, so the exact
+ *  request payload sent to the AI provider for the pre-existing six-
+ *  dimension scorecard is byte-for-byte what it was before this milestone —
+ *  not just "the model happens to leave the optional field blank." */
+function buildCoachTool(includeMethodology: boolean): AITool {
+  return {
   name: 'record_coaching',
   description: 'Record a structured, evidence-grounded coaching assessment of the sales call.',
   inputSchema: {
@@ -144,6 +178,30 @@ const COACH_TOOL: AITool = {
           additionalProperties: false
         }
       },
+      ...(includeMethodology
+        ? {
+            methodologyAdherence: {
+              type: 'object',
+              description:
+                'Score adherence to the methodology named below, with one supporting quote.',
+              properties: {
+                score: { type: 'integer', minimum: 1, maximum: 5 },
+                comment: {
+                  type: 'string',
+                  description: 'One or two sentences on how well the call followed that methodology.'
+                },
+                evidenceQuote: {
+                  type: 'string',
+                  description:
+                    'A VERBATIM span from the transcript (spoken words only) supporting the score.'
+                },
+                evidenceSpeaker: { type: 'integer' }
+              },
+              required: ['score', 'comment', 'evidenceQuote', 'evidenceSpeaker'],
+              additionalProperties: false
+            }
+          }
+        : {}),
       improvements: {
         type: 'array',
         description:
@@ -185,6 +243,7 @@ const COACH_TOOL: AITool = {
       'nextAction'
     ],
     additionalProperties: false
+  }
   }
 }
 
@@ -370,11 +429,37 @@ function modelRepSpeaker(raw: Record<string, unknown>): number | null {
     : null
 }
 
+/** Same leniency as a rubric dimension (assembleReport's dimensions loop
+ *  below): the score/comment stand on their own, evidence is shown only
+ *  when verified. Matches calls-fs.ts's sanitizeCoaching so a report reads
+ *  identically fresh from the AI vs. round-tripped through disk/cloud. */
+function modelMethodologyAssessment(
+  raw: Record<string, unknown>,
+  verify: ReturnType<typeof makeVerifier>,
+  methodology: SalesMethodology
+): MethodologyAssessment | undefined {
+  const ma = raw.methodologyAdherence
+  if (!ma || typeof ma !== 'object') return undefined
+  const m = ma as Record<string, unknown>
+  const ev = verify(m.evidenceQuote, m.evidenceSpeaker)
+  const score =
+    typeof m.score === 'number' && Number.isFinite(m.score)
+      ? Math.max(1, Math.min(5, Math.round(m.score)))
+      : 3
+  return {
+    methodology,
+    score,
+    comment: str(m.comment, 1000),
+    evidence: ev && ev.verified ? ev : undefined
+  }
+}
+
 function assembleReport(
   raw: Record<string, unknown>,
   segments: CallSegment[],
   durationMs: number,
-  model: string
+  model: string,
+  coach2: { enabled: boolean; methodology: SalesMethodology; callType: CallType; commitments?: Commitment[] }
 ): CoachingReport | null {
   // Prefer the attribution the LIVE call already established over asking the
   // model again. The two used to be entirely independent decisions over the
@@ -437,6 +522,38 @@ function assembleReport(
   }
 
   const dc = (raw.dealContext ?? {}) as Record<string, unknown>
+  const nextAction = scrub(str(raw.nextAction, 500))
+  const baseMetrics = computeMetrics(segments, durationMs, repSpeaker)
+
+  // M23 Workstream A — everything below is additive and only runs when the
+  // Settings → Coach 2.0 flag is on. Off (default), a coached call is
+  // byte-for-byte the pre-M23 report shape.
+  let metrics = baseMetrics
+  let callType: CallType | undefined
+  let skills: CoachingReport['skills']
+  let methodologyAdherence: MethodologyAssessment | undefined
+  if (coach2.enabled) {
+    callType = coach2.callType
+    methodologyAdherence = modelMethodologyAssessment(raw, verify, coach2.methodology)
+    const benchmark = computeBenchmarkSnapshot(
+      segments,
+      durationMs,
+      repSpeaker,
+      callType,
+      nextAction,
+      coach2.commitments
+    )
+    metrics = {
+      ...baseMetrics,
+      questionSpread: benchmark.questionSpread.evenness,
+      buyerQuestionCount: benchmark.buyerEngagement.questionCount,
+      buyerLongestMonologueWords: benchmark.buyerEngagement.longestMonologueWords,
+      pricingMentions: benchmark.pricing.buyerMentions,
+      pricingMentionsLatePct: benchmark.pricing.latePct,
+      nextStepsLocked: benchmark.nextStepsLocked
+    }
+    skills = computeSkillScores(dimensions, metrics, benchmark, methodologyAdherence)
+  }
 
   return {
     overallScore,
@@ -448,10 +565,13 @@ function assembleReport(
     strength,
     dimensions,
     improvements,
-    nextAction: scrub(str(raw.nextAction, 500)),
-    metrics: computeMetrics(segments, durationMs, repSpeaker),
+    nextAction,
+    metrics,
     model,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    callType,
+    skills,
+    methodologyAdherence
   }
 }
 
@@ -478,7 +598,14 @@ function errorCodeFrom(err: unknown): 'no-key' | 'failed' {
 
 // --- Public entry point -----------------------------------------------------
 
-export async function coachCall(segments: CallSegment[], durationMs: number): Promise<CoachResult> {
+export async function coachCall(
+  segments: CallSegment[],
+  durationMs: number,
+  /** M23 — the caller (calls.ts) resolves callType from the call's own
+   *  title/manual override before this runs, since coach.ts has no access
+   *  to the Call record's title. Ignored entirely when Coach 2.0 is off. */
+  context?: { callType?: CallType; commitments?: Commitment[] }
+): Promise<CoachResult> {
   if (!segments.length) {
     return { ok: false, error: 'failed', message: 'This call has no transcript to coach.' }
   }
@@ -490,21 +617,28 @@ export async function coachCall(segments: CallSegment[], durationMs: number): Pr
 
   const knowledge = await loadCoachKnowledgeContext()
   const personalization = loadCoachPersonalization()
+  const coach2Settings = loadAppSettings().coach2
+  const methodology = coach2Settings.methodology
 
   try {
     const result = await completeWithFallback({
       purpose: 'scorecard',
       maxTokens: 8192,
-      tool: COACH_TOOL,
+      tool: buildCoachTool(coach2Settings.enabled),
       messages: [
         {
           role: 'user',
-          content: `${PROMPT}${knowledgeSection(knowledge)}${personalizationSection(personalization)}\n\n--- TRANSCRIPT ---\n${transcript}`
+          content: `${PROMPT}${knowledgeSection(knowledge)}${personalizationSection(personalization)}${coach2Settings.enabled ? methodologySection(methodology) : ''}\n\n--- TRANSCRIPT ---\n${transcript}`
         }
       ]
     })
 
-    const report = assembleReport(result.toolInput ?? {}, segments, durationMs, result.model)
+    const report = assembleReport(result.toolInput ?? {}, segments, durationMs, result.model, {
+      enabled: coach2Settings.enabled,
+      methodology,
+      callType: context?.callType ?? 'discovery',
+      commitments: context?.commitments
+    })
     if (!report) {
       return {
         ok: false,

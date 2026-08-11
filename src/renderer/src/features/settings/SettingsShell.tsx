@@ -16,6 +16,7 @@ import { LiveDealIntelligenceSection } from './LiveDealIntelligenceSection'
 import { SummaryLanguageSection } from './SummaryLanguageSection'
 import { PersonalizationSection } from './PersonalizationSection'
 import { ObjectionLibrarySection } from './ObjectionLibrarySection'
+import { Coach2Section } from './Coach2Section'
 import { CalendarSection } from './CalendarSection'
 import { CrmSection } from './CrmSection'
 import { AlertsSection } from '@renderer/features/alerts/AlertsSection'
@@ -36,6 +37,7 @@ const PAGE_CONTENT: Record<SettingsPageId, React.ComponentType> = {
   'summary-language': SummaryLanguageSection,
   personalization: PersonalizationSection,
   'objection-library': ObjectionLibrarySection,
+  coach2: Coach2Section,
   calendar: CalendarSection,
   crm: CrmSection,
   alerts: AlertsSection,
