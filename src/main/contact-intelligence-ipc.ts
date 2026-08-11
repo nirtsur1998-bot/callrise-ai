@@ -1,34 +1,94 @@
-// M23 Workstream D — IPC surface for the post-hoc "Detect who this was"
-// action on the Call Detail page. Gated on: the new contactIntelligence mode
-// (the user-facing, discoverable opt-in for this specific capability), the
-// EXISTING isSelfIntroExtractionAllowed() gate (the purpose-built,
-// already-established opt-in for "buyer speech reaching a third-party LLM
-// for self-intro extraction" — this is the SAME category of action the live
-// self-intro path already gates on, so it must be respected here too, not
-// bypassed just because it has no renderer UI of its own today; the
-// Contact Intelligence toggle's own settings handler keeps it in sync, see
-// CrmSection.tsx), and the call's own per-call consent, same as the
-// existing live self-intro persistence path in calls.ts.
-import { app, ipcMain } from 'electron'
+// M23 Workstream D (+ follow-up) — IPC surface AND background trigger for
+// Contact Intelligence: detecting the other party's name from a call
+// transcript, and — in 'full-auto' mode — automatically creating/attaching
+// a contact for it, with a visible native notification. Two entry points:
+//
+//   1. `contactIntelligence:detectName` IPC handler — the manual "Detect who
+//      this was" button (Suggest mode) and the page-view-triggered effect
+//      (Full-auto mode, CallDetail.tsx) both call this.
+//   2. `runFullAutoContactIntelligence(callId)` — called fire-and-forget
+//      from calls.ts, right after the SAME two points resolveAndSaveIdentities
+//      already runs from, so full-auto mode completes end-to-end shortly
+//      after a call is saved/coached WITHOUT the rep ever needing to open
+//      the call's page.
+//
+// Both paths funnel through the same detectAndSaveIdentity() +
+// maybeAutoCreateContact() pair, so behavior is identical regardless of
+// which one ran. maybeAutoCreateContact() re-derives the call's current
+// identity state rather than trusting a name/key passed in — this is
+// deliberate: it also picks up an other-party identity resolved by the
+// EXISTING M19 calendar/contact cascade (resolveAndSaveIdentities), which
+// only ever writes speakerIdentities, never call.contactId, so full-auto
+// mode auto-attaches for THAT signal too, not just this workstream's own
+// self-intro/addressed-by-name detection.
+//
+// Gated throughout on: the contactIntelligence mode (the user-facing,
+// discoverable opt-in), the EXISTING isSelfIntroExtractionAllowed() gate
+// (the purpose-built opt-in for "buyer speech reaching a third-party LLM"),
+// and the call's own per-call consent (call.consent.recordOtherParty),
+// re-checked fresh from disk every time — never trusted from a stale
+// snapshot, matching the M11 consent-retention invariant elsewhere in this
+// codebase.
+import { app, ipcMain, Notification, BrowserWindow } from 'electron'
 import { join } from 'node:path'
-import { getCall, setSpeakerIdentity, speechSegments } from './calls-fs'
+import { getCall, setCallContact, setSpeakerIdentity, speechSegments } from './calls-fs'
 import { getContactIntelligenceMode, isSelfIntroExtractionAllowed } from './app-settings'
 import { otherPartyKey, detectOtherPartyName } from './contact-intelligence'
+import { createContact, findContactByName, getContact } from './contacts-fs'
 
 function callsDir(): string {
   return join(app.getPath('userData'), 'calls')
+}
+
+function contactsDir(): string {
+  return join(app.getPath('userData'), 'contacts')
+}
+
+// --- Serialize maybeAutoCreateContact's find-or-create step -------------
+// A SEPARATE lock domain from calls-fs.ts's own internal per-call write
+// lock (not reentrant into it — maybeAutoCreateContact calls
+// setCallContact, which acquires that other lock itself; nesting the SAME
+// lock here would deadlock).
+//
+// Keyed by the NORMALIZED CONTACT NAME, not callId — a per-call lock alone
+// only stops two triggers for the SAME call (background hook + renderer
+// page-view effect, both full-auto's real trigger paths) from racing each
+// other. It does NOT stop two DIFFERENT calls that resolve to the same
+// buyer name (e.g. two short calls with the same buyer, processed back to
+// back) from each independently missing the other's not-yet-written
+// contact and creating a duplicate — findContactByName has no lock of its
+// own, so two concurrent lookups can both return "not found" before either
+// write lands. Locking by name closes both races with one mechanism: two
+// triggers for the same call always resolve to the same name (same lock
+// key), and two different calls for the same buyer now serialize against
+// each other too.
+const autoCreateLocks = new Map<string, Promise<unknown>>()
+
+function normalizeNameForLock(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+async function withAutoCreateLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
+  const prev = autoCreateLocks.get(lockKey) ?? Promise.resolve()
+  const next = prev.catch(() => {}).then(fn)
+  const settled = next.catch(() => {})
+  autoCreateLocks.set(lockKey, settled)
+  settled.then(() => {
+    if (autoCreateLocks.get(lockKey) === settled) autoCreateLocks.delete(lockKey)
+  })
+  return next
 }
 
 export interface DetectNameResult {
   ok: boolean
   /** Present when detection ran and found a name (now saved). Absent (but
    *  ok:true) when detection ran cleanly and found nothing — not an error,
-   *  the rep just never explicitly said their name. */
+   *  the transcript just never made the other party's name clear. */
   name?: string
   message?: string
 }
 
-async function handleDetectName(callId: string): Promise<DetectNameResult> {
+async function detectAndSaveIdentity(callId: string): Promise<DetectNameResult> {
   if (getContactIntelligenceMode() === 'off') {
     return { ok: false, message: 'Contact Intelligence is off — turn it on in Settings → CRM.' }
   }
@@ -59,7 +119,7 @@ async function handleDetectName(callId: string): Promise<DetectNameResult> {
     return { ok: false, message: 'Already known.' }
   }
 
-  const name = await detectOtherPartyName(cleanSegments, other.speaker, multichannel)
+  const name = await detectOtherPartyName(cleanSegments, other.speaker, other.repSpeaker, multichannel)
   if (!name) return { ok: true }
 
   // skipIfAlreadyResolved (not skipIfManual alone) — the AI call above can
@@ -80,6 +140,99 @@ async function handleDetectName(callId: string): Promise<DetectNameResult> {
   return { ok: true, name }
 }
 
+function notifyAutoAttached(contactName: string): void {
+  const win = BrowserWindow.getAllWindows()[0]
+  const notification = new Notification({
+    title: 'Contact detected',
+    body: `Automatically created and attached "${contactName}" from this call's transcript.`
+  })
+  if (win) {
+    notification.on('click', () => {
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+    })
+  }
+  notification.show()
+}
+
+/** Full-auto mode's actual "complete my task" step: given whatever identity
+ *  is now resolved for the other party (from THIS workstream's detection
+ *  above, OR the pre-existing M19 calendar/contact cascade), create/link a
+ *  contact and attach it to the call — no click required — then show a
+ *  native notification so it's never silent. Safe to call unconditionally
+ *  after any resolution attempt: it no-ops immediately outside full-auto
+ *  mode, when the call already has a contact, or when nothing is resolved
+ *  yet, so callers never need to guard the call themselves.
+ *
+ *  The actual find-or-create-and-attach step is wrapped in
+ *  withAutoCreateLock, keyed by the resolved name (see that lock's own doc
+ *  comment for why name, not callId) — this can legitimately race against
+ *  another call for the same buyer, or another trigger for this same call
+ *  (background hook + renderer page-view effect), and the lock plus a
+ *  fresh re-read of the call INSIDE it (rather than trusting the snapshot
+ *  taken before the lock was acquired) closes both races. */
+export async function maybeAutoCreateContact(callId: string): Promise<void> {
+  if (getContactIntelligenceMode() !== 'full-auto') return
+
+  const call = await getCall(callsDir(), callId)
+  if (!call || call.contactId) return
+  if (call.consent?.recordOtherParty !== true) return
+
+  const lastRealSegment = [...call.segments].reverse().find((s) => s.kind !== 'gap')
+  const multichannel = lastRealSegment ? lastRealSegment.channel !== undefined : false
+  const repSpeaker = call.coaching?.metrics.repSpeaker ?? null
+  const cleanSegments = speechSegments(call.segments)
+
+  const other = otherPartyKey({ segments: cleanSegments, multichannel, repSpeaker })
+  if (!other) return
+
+  const identity = call.speakerIdentities?.[other.key]
+  if (!identity?.name) return
+
+  const lockKey = normalizeNameForLock(identity.name)
+  const attachedName = await withAutoCreateLock(lockKey, async () => {
+    // Re-read fresh, INSIDE the lock: another invocation for this same
+    // call (or, if this call's identity happened to change between reads,
+    // a differently-keyed concurrent invocation) may have already attached
+    // a contact while this one waited — the pre-lock `call` snapshot above
+    // can't see that write.
+    const fresh = await getCall(callsDir(), callId)
+    if (!fresh || fresh.contactId) return null
+
+    let contactId: string | null = null
+    if (identity.contactId) {
+      const existing = await getContact(contactsDir(), identity.contactId)
+      if (existing) contactId = existing.id
+    }
+    if (!contactId) {
+      const existing = await findContactByName(contactsDir(), identity.name)
+      if (existing) {
+        contactId = existing.id
+      } else {
+        const created = await createContact(contactsDir(), { name: identity.name })
+        if (created) contactId = created.id
+      }
+    }
+    if (!contactId) return null
+
+    const linked = await setCallContact(callsDir(), callId, contactId)
+    return linked ? identity.name : null
+  })
+
+  if (attachedName) notifyAutoAttached(attachedName)
+}
+
+/** Fire-and-forget from calls.ts, right after resolveAndSaveIdentities(), so
+ *  full-auto mode completes end-to-end without the rep ever opening the
+ *  call's page. Errors are swallowed by the caller, same as
+ *  resolveAndSaveIdentities' own call sites — this must never block a call
+ *  save or a coaching run. */
+export async function runFullAutoContactIntelligence(callId: string): Promise<void> {
+  await detectAndSaveIdentity(callId).catch(() => {})
+  await maybeAutoCreateContact(callId).catch(() => {})
+}
+
 let registered = false
 
 export function registerContactIntelligence(): void {
@@ -88,7 +241,11 @@ export function registerContactIntelligence(): void {
 
   ipcMain.handle('contactIntelligence:detectName', async (_e, callId: string): Promise<DetectNameResult> => {
     try {
-      return await handleDetectName(callId)
+      const result = await detectAndSaveIdentity(callId)
+      if (result.ok && result.name) {
+        await maybeAutoCreateContact(callId).catch(() => {})
+      }
+      return result
     } catch {
       return { ok: false, message: 'Something went wrong. Please try again.' }
     }
