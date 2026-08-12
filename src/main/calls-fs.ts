@@ -268,12 +268,19 @@ export interface CoachChatMessage {
  *  attached to the IPC response for the turn that produced them. */
 export interface CoachChatContextSuggestion {
   id: string
-  type: 'kyc' | 'next-steps' | 'call-notes'
+  type: 'kyc' | 'next-steps' | 'call-notes' | 'memory'
   /** Contact field name, only when type === 'kyc' (see KYC_UPDATABLE_FIELDS
    *  in coaching-chat.ts for the allowed set). */
   field?: string
   text: string
   confidence: 'high' | 'medium'
+  /** M25 Phase 4 — only present when type === 'memory': which Sales Brain
+   *  scope/category this fact belongs to (extends the M23 KYC-chip pattern
+   *  to rep/business scopes, per spec section 3's "Save to Sales Brain"
+   *  chip). `scope` is the resolved scope string ('rep' | 'business' |
+   *  'client:<id>'), not re-derived client-side. */
+  memoryScope?: string
+  memoryCategory?: string
 }
 
 // --- Commitments (§4.7 — who promised what) ---------------------------------
@@ -437,6 +444,13 @@ interface CallBase {
    *  sticky: re-coaching never overwrites a value already set here, so a
    *  rep's manual override (calls:setCallType) always wins going forward. */
   callType?: CallType
+  /** M25 Phase 5 — spec section 4's "Don't learn from this call" toggle.
+   *  When true, memory-hooks.ts's extraction skips this call entirely, and
+   *  turning it on retroactively deletes any memories already extracted
+   *  from it (memory-center-ipc.ts's setExcluded handler) — this is
+   *  intentionally a hard opt-out, not a soft one. Absent/false on every
+   *  call by default, including every call saved before this existed. */
+  salesBrainExcluded?: boolean
 }
 
 /** Lightweight item for the Past Calls list. */
@@ -450,6 +464,14 @@ export interface CallSummary extends CallBase {
    *  can roll up trend lines from listCalls() alone, without re-reading
    *  every full call record from disk. */
   skills?: SkillScoreSet
+  /** M25 Phase 3 — raw talk-ratio/question-count metrics, carried on the
+   *  summary for the exact same reason `skills` is: memory/personal-
+   *  benchmarks.ts needs a rep's own history across many calls to compute
+   *  personalized norms, and doing that from listCalls() alone (instead of
+   *  reading every full Call record from disk) is the difference between a
+   *  cheap directory scan and an expensive one on every single coaching run. */
+  talkRatio?: number | null
+  questionCount?: number
   /** True once this call has been read for Objection Library mining (auto on
    *  save, or via the manual "scan past calls" trigger) — lets both skip
    *  calls they've already processed. */
@@ -652,6 +674,8 @@ function toSummary(call: Call): CallSummary {
     coachScore:
       typeof call.coaching?.overallScore === 'number' ? call.coaching.overallScore : undefined,
     skills: call.coaching?.skills,
+    talkRatio: call.coaching?.metrics.talkRatio,
+    questionCount: call.coaching?.metrics.questionCount,
     objectionsMined: typeof call.objectionsMinedAt === 'string'
   }
 }
@@ -1426,6 +1450,27 @@ export async function setCallCallType(
     } else {
       return call
     }
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
+/** M25 Phase 5 — spec section 4's "Don't learn from this call" toggle. The
+ *  actual deletion of any already-extracted memories (when turning this ON
+ *  retroactively) is the caller's job (memory-center-ipc.ts) — this
+ *  function only owns the Call record's own field, matching this file's
+ *  own boundary (calls-fs.ts never imports the memory module). */
+export async function setCallSalesBrainExcluded(
+  dir: string,
+  callId: string,
+  excluded: boolean
+): Promise<Call | null> {
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    if (excluded) call.salesBrainExcluded = true
+    else delete call.salesBrainExcluded
     call.updatedAt = new Date().toISOString()
     await writeCall(dir, call)
     return call

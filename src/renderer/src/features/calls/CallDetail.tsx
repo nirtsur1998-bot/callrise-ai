@@ -54,6 +54,7 @@ import {
   type CalendarMatch
 } from '@renderer/features/contacts/calendarMatch'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
+import { SalesBrainCallToggle } from './SalesBrainCallToggle'
 import type { CalendarEvent } from '@renderer/features/calendar/types'
 import { recordRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import { formatDate, formatDuration, formatBytes } from './format'
@@ -708,6 +709,7 @@ export function CallDetail({
       <div className="mb-4 flex items-center justify-between">
         <BackButton onClick={onBack} label="Past Calls" />
         <div className="flex items-center gap-1.5">
+          {settings.salesBrain?.enabled && <SalesBrainCallToggle callId={call.id} />}
           {!confirmDelete && call.segments.length > 0 && (
             <Button
               variant="secondary"

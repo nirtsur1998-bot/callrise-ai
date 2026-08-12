@@ -15,6 +15,10 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): Unsubscr
 
 // The narrow, typed API exposed to the renderer (see preload/index.d.ts).
 const api = {
+  // Only ever used for platform-specific CSS/rendering decisions (e.g.
+  // DetectionOverlay.tsx's backdrop-filter workaround on win32) — not a
+  // general-purpose escape hatch, so keep it to this one primitive.
+  platform: process.platform,
   transcription: {
     ensureMicAccess: () => ipcRenderer.invoke('mic:ensureAccess'),
     openMicSettings: () => ipcRenderer.invoke('mic:openSettings'),
@@ -217,6 +221,37 @@ const api = {
     regenerate: (input: unknown) => ipcRenderer.invoke('prepBrief:regenerate', input),
     onOpenRequested: (cb: (eventId: string) => void) =>
       subscribe<string>('prepBrief:openRequested', cb)
+  },
+  salesBrain: {
+    onboarding: {
+      status: () => ipcRenderer.invoke('salesBrain:onboarding:status'),
+      submitAnswer: (topicId: string, answer: string) =>
+        ipcRenderer.invoke('salesBrain:onboarding:submitAnswer', topicId, answer),
+      skipTopic: (topicId: string) => ipcRenderer.invoke('salesBrain:onboarding:skipTopic', topicId),
+      skipAll: () => ipcRenderer.invoke('salesBrain:onboarding:skipAll'),
+      restart: () => ipcRenderer.invoke('salesBrain:onboarding:restart')
+    },
+    backfill: {
+      start: (opts: { includeContacts?: boolean; includeDeals?: boolean; includeCalls?: boolean }) =>
+        ipcRenderer.invoke('salesBrain:backfill:start', opts),
+      status: () => ipcRenderer.invoke('salesBrain:backfill:status')
+    },
+    memories: {
+      list: (opts?: { scope?: string; status?: string }) => ipcRenderer.invoke('salesBrain:memories:list', opts),
+      update: (id: string, newStatement: string) =>
+        ipcRenderer.invoke('salesBrain:memories:update', id, newStatement),
+      setPinned: (id: string, pinned: boolean) => ipcRenderer.invoke('salesBrain:memories:setPinned', id, pinned),
+      delete: (id: string) => ipcRenderer.invoke('salesBrain:memories:delete', id),
+      forgetEverything: () => ipcRenderer.invoke('salesBrain:memories:forgetEverything'),
+      changelog: (scope?: string) => ipcRenderer.invoke('salesBrain:memories:changelog', scope),
+      byCall: (callId: string) => ipcRenderer.invoke('salesBrain:memories:byCall', callId)
+    },
+    calls: {
+      setExcluded: (callId: string, excluded: boolean) =>
+        ipcRenderer.invoke('salesBrain:calls:setExcluded', callId, excluded),
+      getExcluded: (callId: string) => ipcRenderer.invoke('salesBrain:calls:getExcluded', callId)
+    },
+    onReviewRequested: (cb: (callId: string) => void) => subscribe<string>('salesBrain:reviewRequested', cb)
   },
   deals: {
     list: () => ipcRenderer.invoke('deals:list'),

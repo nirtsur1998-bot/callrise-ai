@@ -14,6 +14,7 @@ import type { AuthUser } from '@renderer/features/auth/types'
 import { getAutoOpenMeetingPage } from '@renderer/features/settings/prefs'
 import { useAutoTranscribeCalls } from '@renderer/features/settings/useAutoTranscribeCalls'
 import { CallDetectedBanner } from '@renderer/features/live/components/CallDetectedBanner'
+import { MemoryReviewModal } from '@renderer/features/settings/MemoryReviewModal'
 
 // Exactly one of these renders at a time (see the `active === ...` switch
 // below, itself remounted via `key={active}` on every switch) — so eagerly
@@ -226,6 +227,16 @@ export function MainApp({
     })
   }, [])
 
+  // M25 Phase 5 — clicking the "Sales Brain learned N things" native
+  // notification (memory-hooks.ts's notifyLearnedFromCall) opens a
+  // standalone review modal, regardless of which page is currently active.
+  const [reviewCallId, setReviewCallId] = useState<string | null>(null)
+  useEffect(() => {
+    return window.api.salesBrain.onReviewRequested((callId) => {
+      setReviewCallId(callId)
+    })
+  }, [])
+
   // Command palette's "jump to a specific record" search results — same
   // one-shot preselect pattern as openCallId above, just for the CRM tabs.
   const [openContactId, setOpenContactId] = useState<string | null>(null)
@@ -265,6 +276,9 @@ export function MainApp({
           onStart={startTranscribingDetectedCall}
           onDismiss={() => setDetectedCallApp(null)}
         />
+      )}
+      {reviewCallId && (
+        <MemoryReviewModal callId={reviewCallId} onClose={() => setReviewCallId(null)} />
       )}
     </>
   )

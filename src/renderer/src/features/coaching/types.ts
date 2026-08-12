@@ -180,16 +180,22 @@ export interface CoachChatMessage {
 
 export interface CoachChatContextSuggestion {
   id: string
-  type: 'kyc' | 'next-steps' | 'call-notes'
+  type: 'kyc' | 'next-steps' | 'call-notes' | 'memory'
   field?: string
   text: string
   confidence: 'high' | 'medium'
+  /** M25 Phase 4 — only present when type === 'memory'. Passed straight
+   *  back to coachChat:applySuggestion unchanged; the renderer never
+   *  interprets these itself. */
+  memoryScope?: string
+  memoryCategory?: string
 }
 
 export const CONTEXT_SUGGESTION_LABEL: Record<CoachChatContextSuggestion['type'], string> = {
   kyc: 'Update KYC',
   'next-steps': 'Update next steps',
-  'call-notes': 'Save to call notes'
+  'call-notes': 'Save to call notes',
+  memory: 'Save to Sales Brain'
 }
 
 export interface CoachChatSendResult {

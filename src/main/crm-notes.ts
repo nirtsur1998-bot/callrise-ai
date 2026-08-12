@@ -7,6 +7,7 @@
 import { type AITool } from './ai'
 import { completeWithFallback } from './ai/complete-with-fallback'
 import { crmNoteLengthClause, crmNoteMaxTokens, type CrmNoteLength } from './crm-note-length'
+import { businessProfileSection } from './memory/profile-injection'
 
 const MAX_TEXT_CHARS = 200_000
 
@@ -48,11 +49,17 @@ export async function generateCrmNote(
   if (!text.trim()) return { ok: false }
 
   try {
+    // M25 Phase 3 — a cheap, synchronous DB read of an already-compiled
+    // profile (see profile-injection.ts's own doc comment), so this note
+    // can use business-context-aware phrasing (correct terminology, ICP
+    // language) instead of generic wording. '' when Sales Brain is off or
+    // nothing's compiled yet — this is a no-op in that case.
+    const businessContext = businessProfileSection('standard')
     const result = await completeWithFallback({
       purpose: 'other',
       maxTokens: crmNoteMaxTokens(length),
       tool: noteTool(length),
-      messages: [{ role: 'user', content: `${prompt(length)}\n\n--- CONTENT ---\n${text}` }]
+      messages: [{ role: 'user', content: `${prompt(length)}${businessContext}\n\n--- CONTENT ---\n${text}` }]
     })
     const note = typeof result.toolInput?.note === 'string' ? result.toolInput.note.trim() : ''
     if (!note) return { ok: false }

@@ -123,6 +123,34 @@ function mergeContactIntelligence(
 }
 
 /**
+ * M25 — Sales Brain (Beta) master switch. Off by default, same pattern as
+ * every other milestone's opt-in flag in this file. When off, NOTHING in
+ * the memory module runs — no extraction, no consolidation, no DB writes —
+ * this is the single gate every memory-touching call site checks first
+ * (see memory-ipc.ts's isSalesBrainEnabled() re-export). Deliberately a
+ * plain boolean, not a mode enum like ContactIntelligenceSettings — the
+ * whole feature ships as one Beta unit, not staged suggest/full-auto tiers,
+ * since (unlike Contact Intelligence) there's no "still requires a click"
+ * middle ground here worth exposing yet.
+ */
+export interface SalesBrainSettings {
+  enabled: boolean
+}
+
+const EMPTY_SALES_BRAIN: SalesBrainSettings = { enabled: false }
+
+function sanitizeSalesBrain(value: unknown): SalesBrainSettings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return { enabled: v.enabled === true }
+}
+
+function mergeSalesBrain(current: SalesBrainSettings, patch: unknown): SalesBrainSettings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return { enabled: 'enabled' in p ? p.enabled === true : current.enabled }
+}
+
+/**
  * Objection Library mining — reads call transcripts to suggest reusable
  * objection→response scripts for review. HARD RULE: `enabled` is the ONLY
  * gate. OFF (default) means no call is ever read for this — not new calls
@@ -327,6 +355,18 @@ export interface BackupSyncScope {
   knowledgeBase: boolean
   settingsPersonalization: boolean
   contacts: boolean
+  /** M25 — the whole memory.db file, uploaded as one blob (Supabase
+   *  Storage, same mechanism as attachments — see uploadSalesBrainDb() in
+   *  backup.ts for the full reasoning). Off by default, same as every
+   *  other opt-in category here: this is local-first data (the whole point
+   *  of the feature — "your sales brain never leaves your device"), cloud
+   *  backup is disaster recovery, not the default. Whole-file blob is a
+   *  deliberately simpler v1 than the row-per-record sync every OTHER
+   *  category here uses — correct today because memory is single-machine-
+   *  scoped, and the known upgrade path if multi-device support ever ships
+   *  (see docs/M25-sales-brain.md) is to switch this to row-level sync like
+   *  everything else, not to redesign from scratch. */
+  salesBrain: boolean
 }
 
 const EMPTY_SYNC_SCOPE: BackupSyncScope = {
@@ -334,7 +374,8 @@ const EMPTY_SYNC_SCOPE: BackupSyncScope = {
   attachments: false,
   knowledgeBase: false,
   settingsPersonalization: false,
-  contacts: false
+  contacts: false,
+  salesBrain: false
 }
 
 export interface AppSettings {
@@ -416,6 +457,9 @@ export interface AppSettings {
   /** M23 Workstream D — Contact Intelligence mode. Off by default; see
    *  ContactIntelligenceSettings for the exact behavior per mode. */
   contactIntelligence: ContactIntelligenceSettings
+  /** M25 — Sales Brain (Beta) master switch. Off by default; see
+   *  SalesBrainSettings for what this gates. */
+  salesBrain: SalesBrainSettings
 }
 
 // AIProviderId is re-exported here (not re-declared) so existing importers
@@ -458,7 +502,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   aiModelAssignments: DEFAULT_MODEL_ASSIGNMENTS,
   autoUpdateEnabled: false,
   coach2: EMPTY_COACH2,
-  contactIntelligence: EMPTY_CONTACT_INTELLIGENCE
+  contactIntelligence: EMPTY_CONTACT_INTELLIGENCE,
+  salesBrain: EMPTY_SALES_BRAIN
 }
 
 function settingsPath(): string {
@@ -472,7 +517,8 @@ function sanitizeSyncScope(value: unknown): BackupSyncScope {
     attachments: v.attachments === true,
     knowledgeBase: v.knowledgeBase === true,
     settingsPersonalization: v.settingsPersonalization === true,
-    contacts: v.contacts === true
+    contacts: v.contacts === true,
+    salesBrain: v.salesBrain === true
   }
 }
 
@@ -487,7 +533,8 @@ function mergeSyncScope(current: BackupSyncScope, patch: unknown): BackupSyncSco
       'settingsPersonalization' in p
         ? p.settingsPersonalization === true
         : current.settingsPersonalization,
-    contacts: 'contacts' in p ? p.contacts === true : current.contacts
+    contacts: 'contacts' in p ? p.contacts === true : current.contacts,
+    salesBrain: 'salesBrain' in p ? p.salesBrain === true : current.salesBrain
   }
 }
 
@@ -528,7 +575,8 @@ export function loadAppSettings(): AppSettings {
       aiModelAssignments: sanitizeModelAssignments(parsed.aiModelAssignments),
       autoUpdateEnabled: parsed.autoUpdateEnabled === true,
       coach2: sanitizeCoach2(parsed.coach2),
-      contactIntelligence: sanitizeContactIntelligence(parsed.contactIntelligence)
+      contactIntelligence: sanitizeContactIntelligence(parsed.contactIntelligence),
+      salesBrain: sanitizeSalesBrain(parsed.salesBrain)
     }
   } catch {
     return {
@@ -540,7 +588,8 @@ export function loadAppSettings(): AppSettings {
       speakerId: { ...EMPTY_SPEAKER_ID },
       aiModelAssignments: { ...DEFAULT_MODEL_ASSIGNMENTS },
       coach2: { ...EMPTY_COACH2 },
-      contactIntelligence: { ...EMPTY_CONTACT_INTELLIGENCE }
+      contactIntelligence: { ...EMPTY_CONTACT_INTELLIGENCE },
+      salesBrain: { ...EMPTY_SALES_BRAIN }
     }
   }
 }
@@ -578,7 +627,8 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
     autoUpdateEnabled:
       'autoUpdateEnabled' in p ? p.autoUpdateEnabled === true : current.autoUpdateEnabled,
     coach2: mergeCoach2(current.coach2, p.coach2),
-    contactIntelligence: mergeContactIntelligence(current.contactIntelligence, p.contactIntelligence)
+    contactIntelligence: mergeContactIntelligence(current.contactIntelligence, p.contactIntelligence),
+    salesBrain: mergeSalesBrain(current.salesBrain, p.salesBrain)
   }
 }
 
@@ -752,6 +802,17 @@ export function isNoteGeneratorEnabled(): boolean {
  *  just hidden in the renderer. */
 export function getContactIntelligenceMode(): ContactIntelligenceMode {
   return loadAppSettings().contactIntelligence.mode
+}
+
+/** M25 — the single gate every Sales Brain call site checks first (memory
+ *  extraction, consolidation, retrieval, injection). Off means the memory
+ *  module does nothing at all — no DB writes, no AI calls, no injected
+ *  context anywhere else in the app. Also independently gated at startup
+ *  (index.ts only opens/migrates memory.db at all if this is true — see
+ *  that module's own comment), so a user who never opts in never even pays
+ *  the cost of the DB file existing. */
+export function isSalesBrainEnabled(): boolean {
+  return loadAppSettings().salesBrain.enabled
 }
 
 let registered = false

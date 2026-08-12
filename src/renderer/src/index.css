@@ -282,6 +282,35 @@
     );
   }
 
+  /* .glass-hud's backdrop-filter blurs whatever is painted BEHIND it inside
+     Chromium's own compositor — that works everywhere .glass-hud is used
+     inside the normal app window (CueCard, SuggestionRail, NudgeCard, the
+     in-window CallDetectedBanner...) because there's always real app content
+     behind them to blur.
+
+     detection-overlay.ts's floating HUD window is different: it's a
+     fully transparent, frameless BrowserWindow with nothing else painted in
+     it. backdrop-filter has no in-page content to sample there, and on
+     Windows that reliably renders as flat opaque BLACK instead of "no blur" —
+     confirmed on real hardware, not a theoretical gap (this was reported and
+     missed once already). macOS's `vibrancy: 'under-window'` sidesteps this
+     by giving the compositor a real native surface to blur, so it's left
+     alone there.
+
+     Fix, win32 only: drop backdrop-filter entirely and lean on the window's
+     own real per-pixel alpha (transparent: true) instead — the translucent
+     background color blends directly with the real desktop via DWM, which is
+     genuine transparency, just not blurred. Closest achievable "glass" on
+     win32 without reintroducing the acrylic square-backdrop bug documented in
+     detection-overlay.ts. Gated by a `platform-win32` class DetectionOverlay.tsx
+     applies only to its own overlay window, so every other .glass-hud usage
+     is untouched. */
+  .platform-win32 .glass-hud {
+    background: color-mix(in oklab, var(--color-surface) 88%, transparent);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
   /* Tactile press feedback — the whole-app "this responds" cue on buttons and
      tappable cards. Pairs with the existing hover states. */
   .press {

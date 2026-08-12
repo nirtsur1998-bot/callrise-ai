@@ -18,6 +18,7 @@ import {
 } from './calls-fs'
 import type { Contact } from './contacts-fs'
 import { SKILL_LABEL } from './coaching/skill-graph'
+import { CATEGORY_SCOPE_KIND, MEMORY_CATEGORIES, clientScope, type MemoryCategory } from './memory/types'
 
 const MAX_TRANSCRIPT_CHARS = 100_000 // leaves headroom for system prompt + history + reply, unlike a one-shot report
 
@@ -43,15 +44,23 @@ export interface ChatContextInput {
   call: Call
   contact: Contact | null
   pastCalls: PastCallSummary[]
+  /** M25 Phase 4 — the FULL-size compiled profile (rep + business + this
+   *  client, if linked), already labeled/formatted, assembled by the
+   *  caller (coaching-chat-ipc.ts, which has the Electron access this pure
+   *  module deliberately doesn't). '' when Sales Brain is off or nothing's
+   *  compiled yet — same "absent, not an empty section" contract as every
+   *  other profile-injection.ts consumer. */
+  salesBrainContext?: string
 }
 
 /** Everything the coaching chat is allowed to know about, assembled once
  *  and sent as the `system` block on every turn (stateless per-request,
  *  like every other AI call in this app — there is no server-side
  *  conversation state to lean on). */
-export function assembleChatContext({ call, contact, pastCalls }: ChatContextInput): string {
+export function assembleChatContext({ call, contact, pastCalls, salesBrainContext }: ChatContextInput): string {
   const parts: string[] = []
   parts.push(`Call: "${call.title}" on ${new Date(call.createdAt).toLocaleString()}`)
+  if (salesBrainContext) parts.push(salesBrainContext.trim())
 
   if (call.coaching) {
     const c = call.coaching
@@ -193,10 +202,21 @@ const SUGGESTION_TOOL: AITool = {
         items: {
           type: 'object',
           properties: {
-            type: { type: 'string', enum: ['kyc', 'next-steps', 'call-notes'] },
+            type: { type: 'string', enum: ['kyc', 'next-steps', 'call-notes', 'memory'] },
             field: {
               type: 'string',
               description: `Only when type is "kyc" — one of: ${KYC_UPDATABLE_FIELDS.join(', ')}. Omit for other types.`
+            },
+            memoryScopeKind: {
+              type: 'string',
+              enum: ['rep', 'business', 'client'],
+              description:
+                'Only when type is "memory" — who this fact is about: "rep" (the rep themselves, their patterns/goals/preferences), "business" (their product/pricing/ICP/competitors), or "client" (this specific call\'s contact — only if one is linked). Omit for other types.'
+            },
+            memoryCategory: {
+              type: 'string',
+              enum: [...MEMORY_CATEGORIES],
+              description: `Only when type is "memory" — must be exactly one of: ${MEMORY_CATEGORIES.join(', ')}. Omit for other types.`
             },
             text: {
               type: 'string',
@@ -215,13 +235,17 @@ const SUGGESTION_TOOL: AITool = {
 }
 
 const SUGGESTION_PROMPT =
-  'The rep just sent the following message to their sales coach in a chat. Identify facts worth SAVING for later — e.g. a correction to who the actual decision-maker is, an off-record agreement, a budget detail, a next step with a date, or something worth remembering about this deal/contact. Call record_context_suggestions. If nothing qualifies, return an empty array. Never invent — only extract what is actually stated in the message.'
+  'The rep just sent the following message to their sales coach in a chat. Identify facts worth SAVING for later — e.g. a correction to who the actual decision-maker is, an off-record agreement, a budget detail, a next step with a date, or something worth remembering about this deal/contact, OR a durable fact about the REP THEMSELVES or their BUSINESS (a "memory" type — a stated preference, goal, struggle, pricing detail, competitor, common objection). Call record_context_suggestions. If nothing qualifies, return an empty array. Never invent — only extract what is actually stated in the message.'
 
 /** Best-effort, non-blocking to the chat turn itself — a failure here never
- *  surfaces as a chat error, it just means no save chips this turn. */
+ *  surfaces as a chat error, it just means no save chips this turn.
+ *  `contactId` (M25 Phase 4 — was a plain `hasContact: boolean` before the
+ *  'memory' type needed the real id to build a client scope) — null means
+ *  no linked contact, so both 'kyc' and memory-scope-'client' suggestions
+ *  are dropped (nowhere to save them). */
 export async function extractContextSuggestions(
   userMessage: string,
-  hasContact: boolean
+  contactId: string | null
 ): Promise<CoachChatContextSuggestion[]> {
   const text = userMessage.trim()
   if (!text) return []
@@ -238,13 +262,13 @@ export async function extractContextSuggestions(
       if (!item || typeof item !== 'object') continue
       const s = item as Record<string, unknown>
       const type = s.type
-      if (type !== 'kyc' && type !== 'next-steps' && type !== 'call-notes') continue
+      if (type !== 'kyc' && type !== 'next-steps' && type !== 'call-notes' && type !== 'memory') continue
       const suggestionText = typeof s.text === 'string' ? s.text.trim().slice(0, 1000) : ''
       if (!suggestionText) continue
       const confidence = s.confidence === 'high' ? 'high' : s.confidence === 'medium' ? 'medium' : null
       if (!confidence) continue
       if (type === 'kyc') {
-        if (!hasContact) continue // nowhere to save it — no linked contact
+        if (!contactId) continue // nowhere to save it — no linked contact
         const field =
           typeof s.field === 'string' &&
           (KYC_UPDATABLE_FIELDS as readonly string[]).includes(s.field)
@@ -252,6 +276,25 @@ export async function extractContextSuggestions(
             : null
         if (!field) continue
         out.push({ id: randomUUID(), type, field, text: suggestionText, confidence })
+      } else if (type === 'memory') {
+        const scopeKind = s.memoryScopeKind
+        const category = s.memoryCategory
+        if (typeof category !== 'string' || !(MEMORY_CATEGORIES as readonly string[]).includes(category)) continue
+        // Same self-consistency check as extraction.ts's verifyAndBuild —
+        // the category's own fixed scope kind is the source of truth, a
+        // mismatch means the model contradicted itself.
+        const expectedKind = CATEGORY_SCOPE_KIND[category as MemoryCategory]
+        if (expectedKind !== scopeKind) continue
+        if (expectedKind === 'client' && !contactId) continue // nowhere to save it
+        const memoryScope = expectedKind === 'client' ? clientScope(contactId as string) : expectedKind
+        out.push({
+          id: randomUUID(),
+          type,
+          text: suggestionText,
+          confidence,
+          memoryScope,
+          memoryCategory: category
+        })
       } else {
         out.push({ id: randomUUID(), type, text: suggestionText, confidence })
       }

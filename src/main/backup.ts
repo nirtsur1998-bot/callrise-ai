@@ -26,6 +26,7 @@ import {
   type Call
 } from './calls-fs'
 import { listEntries, importEntry, type KnowledgeEntry } from './knowledge-fs'
+import { memoryDbPath } from './memory/db'
 import { listContacts, importContact, type Contact } from './contacts-fs'
 import { listDeals, importDeal, type Deal } from './deals-fs'
 import { loadDealStagesMeta, applyPulledDealStages } from './deal-stages'
@@ -429,6 +430,62 @@ async function downloadMissingAttachments(
   }
 }
 
+/** M25 — uploads the WHOLE memory.db file as one blob, same mechanism as
+ *  uploadAttachments (a private Storage bucket, path "<user_id>/memory.db")
+ *  — see supabase/2026-08-sales-brain-backup.sql for the bucket/RLS setup
+ *  and its own doc comment for why whole-file, not row-per-record, is the
+ *  correct v1 here. A no-op (not an error) if Sales Brain was never turned
+ *  on — there's simply no file to upload yet. */
+async function uploadSalesBrainDb(
+  client: NonNullable<ReturnType<typeof getSupabaseClient>>,
+  userId: string
+): Promise<void> {
+  const dbPath = memoryDbPath(app.getPath('userData'))
+  let data: Buffer
+  try {
+    data = await fs.readFile(dbPath)
+  } catch {
+    return // Sales Brain never enabled, or no memory yet — nothing to upload
+  }
+  const bucket = client.storage.from('sales-brain')
+  const { error } = await bucket.upload(`${userId}/memory.db`, data, {
+    upsert: true,
+    contentType: 'application/octet-stream'
+  })
+  if (error) console.error('[backup] Sales Brain DB upload failed:', error.message)
+}
+
+/** The counterpart to uploadSalesBrainDb — pulls the cloud copy down ONLY
+ *  if there is no local memory.db at all (a fresh install / new machine).
+ *  Deliberately never overwrites an EXISTING local file: since this is a
+ *  whole-file blob with no row-level merge, downloading over a local file
+ *  that already has newer local-only memories would silently lose them —
+ *  the safer default is "a brand new machine gets the cloud copy once,
+ *  after that local always wins" until real multi-device merge exists (see
+ *  this module's own doc comment on BackupSyncScope.salesBrain). */
+async function downloadSalesBrainDb(
+  client: NonNullable<ReturnType<typeof getSupabaseClient>>,
+  userId: string
+): Promise<void> {
+  const dbPath = memoryDbPath(app.getPath('userData'))
+  try {
+    await fs.access(dbPath)
+    return // already have a local copy — never overwrite it from the cloud
+  } catch {
+    /* no local file yet — try to fetch one */
+  }
+  try {
+    const bucket = client.storage.from('sales-brain')
+    const { data, error } = await bucket.download(`${userId}/memory.db`)
+    if (error || !data) return
+    const buf = Buffer.from(await data.arrayBuffer())
+    await fs.mkdir(dirname(dbPath), { recursive: true })
+    await fs.writeFile(dbPath, buf)
+  } catch {
+    /* best-effort — a missing/failed download just means Sales Brain starts fresh on this machine */
+  }
+}
+
 export type BackupResult =
   | { ok: true; pushed: { tasks: number; events: number; calls: number } }
   | { ok: false; error: string }
@@ -544,6 +601,13 @@ export async function pushAll(): Promise<BackupResult> {
         await uploadAttachments(client, userId, calls)
       } catch (err) {
         console.error('[backup] attachment upload failed:', err)
+      }
+    }
+    if (syncScope.salesBrain) {
+      try {
+        await uploadSalesBrainDb(client, userId)
+      } catch (err) {
+        console.error('[backup] Sales Brain DB upload failed:', err)
       }
     }
     if (syncScope.contacts) {
@@ -810,6 +874,13 @@ export async function pullAll(): Promise<RestoreResult> {
         await downloadMissingAttachments(client, userId, currentCalls)
       } catch (err) {
         console.error('[backup] attachment download failed:', err)
+      }
+    }
+    if (syncScope.salesBrain) {
+      try {
+        await downloadSalesBrainDb(client, userId)
+      } catch (err) {
+        console.error('[backup] Sales Brain DB download failed:', err)
       }
     }
     if (syncScope.contacts) {

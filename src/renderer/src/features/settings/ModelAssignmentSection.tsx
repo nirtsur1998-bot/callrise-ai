@@ -62,6 +62,11 @@ const JOBS: JobConfig[] = [
     purpose: 'coaching-chat',
     title: 'Coaching chat',
     blurb: 'Talking to your coach and practice-mode roleplay — a real conversation, streamed live.'
+  },
+  {
+    purpose: 'memory-extract',
+    title: 'Sales Brain — fact extraction',
+    blurb: 'Pulls candidate memories out of a call or chat — a small, fixed-shape job, benefits from speed over depth.'
   }
 ]
 

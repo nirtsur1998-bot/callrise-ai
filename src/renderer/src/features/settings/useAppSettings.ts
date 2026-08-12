@@ -21,7 +21,8 @@ const DEFAULT_SETTINGS: AppSettings = {
     attachments: false,
     knowledgeBase: false,
     settingsPersonalization: false,
-    contacts: false
+    contacts: false,
+    salesBrain: false
   },
   settingsUpdatedAt: new Date(0).toISOString(),
   googleCalendarConnected: false,
@@ -52,11 +53,13 @@ const DEFAULT_SETTINGS: AppSettings = {
     'prep-brief': { chain: [] },
     'deal-tier1': { chain: [] },
     'deal-tier2': { chain: [] },
-    'coaching-chat': { chain: [] }
+    'coaching-chat': { chain: [] },
+    'memory-extract': { chain: [] }
   },
   autoUpdateEnabled: false,
   coach2: { enabled: false, methodology: 'blended' },
-  contactIntelligence: { mode: 'off' }
+  contactIntelligence: { mode: 'off' },
+  salesBrain: { enabled: false }
 }
 
 export interface UseAppSettings {

@@ -162,6 +162,10 @@ import { registerCoachPdf } from './coach-pdf'
 import { registerAiKeys, loadStoredAiKeysIntoEnv } from './ai-keys'
 import { registerFallbackLog } from './ai/fallback-log'
 import { registerModelCatalog } from './ai/catalog-ipc'
+import { initSalesBrain, maybeRunNightlyConsolidation } from './memory/memory-runtime'
+import { registerOnboarding } from './memory/onboarding-ipc'
+import { registerBackfill } from './memory/backfill-ipc'
+import { registerMemoryCenter } from './memory/memory-center-ipc'
 import { registerUpdater } from './updater'
 import { buildDiagnoseReport, wantsDiagnose } from './diagnose'
 import { registerPrepBrief } from './prep-brief-ipc'
@@ -285,6 +289,23 @@ app.whenReady().then(async () => {
   registerModelCatalog()
   registerFallbackLog()
 
+  // M25 — must run BEFORE any registerX() below that could touch memory
+  // data (none do yet in Phase 1, but calls.ts's post-call hook and
+  // coaching-chat-ipc.ts's per-message hook will in short order). Awaited,
+  // not fire-and-forget: a renderer-triggered IPC call must never be able
+  // to reach a memory DB that's still mid-migration. No-ops instantly (no
+  // file even touched) if the Sales Brain setting is off — see its own doc
+  // comment. Never throws; a migration failure disables Sales Brain for
+  // this session and is logged, but never blocks the rest of the app from
+  // starting normally.
+  await initSalesBrain()
+  // Phase 2 — fire-and-forget, unlike the await above: the deep
+  // reflection+decay pass can take real wall-clock time (several AI
+  // calls per scope) and must never be something the user waits on just
+  // to open the app. No-ops instantly if Sales Brain is off, init failed,
+  // or it already ran within the last ~20h — see its own doc comment.
+  maybeRunNightlyConsolidation()
+
   // Any consent record still on disk belongs to a call that is already over —
   // this process has not started one. A crash mid-call must never leave behind
   // a grant that authorises the NEXT launch's first call.
@@ -377,6 +398,9 @@ app.whenReady().then(async () => {
   registerGoogle()
   registerOutlook()
   registerBackup()
+  registerOnboarding()
+  registerBackfill()
+  registerMemoryCenter()
   registerVirtualMic()
   registerKnowledge()
   registerObjectionQueue()
