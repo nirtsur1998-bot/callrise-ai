@@ -45,6 +45,12 @@ import {
   toDeviceIso,
   type CloudRow
 } from './backup-core'
+import { getJobManager } from './jobs/instance'
+import type { Job } from './jobs/types'
+
+/** M26 Phase 3 — the manual "Sync now" button's job. Registered from
+ *  registerBackup(), which runs after main creates the shared JobManager. */
+const SYNC_JOB_TYPE = 'backup:sync'
 
 function tasksDir(): string {
   return join(app.getPath('userData'), 'tasks')
@@ -967,13 +973,27 @@ function enqueue<T>(fn: () => Promise<T>): Promise<T> {
   return p
 }
 
+/** Which half of a sync is currently running. A "sync" is really two very
+ *  different operations back to back — pulling other devices' changes DOWN,
+ *  then pushing this device's changes UP — and the Settings card used to show
+ *  one undifferentiated "Syncing…" for both, so a rep watching a slow
+ *  first-run restore couldn't tell it apart from a routine backup. */
+export type SyncStage = 'restoring' | 'backing-up'
+
 /** Full sync: pull + reconcile, then push. The lastSyncAt cursor (used for
  *  concurrent-edit conflict detection) only advances when BOTH succeeded, and
  *  is stamped with a time captured BEFORE the pull — a conservative cursor can
- *  only produce an extra .conflict copy, never a missed one. */
-export async function syncNow(): Promise<{ pull: RestoreResult; push: BackupResult }> {
+ *  only produce an extra .conflict copy, never a missed one.
+ *
+ *  `onStage` is observation only — it changes no behaviour and every
+ *  automatic trigger omits it. */
+export async function syncNow(
+  onStage?: (stage: SyncStage) => void
+): Promise<{ pull: RestoreResult; push: BackupResult }> {
   const startedAt = new Date().toISOString()
+  onStage?.('restoring')
   const pull = await pullAll()
+  onStage?.('backing-up')
   const push = await pushAll()
   if (pull.ok && push.ok) await writeState({ lastSyncAt: startedAt })
   return { pull, push }
@@ -1000,9 +1020,75 @@ export function registerBackup(): void {
   // category (drained at the start of the next push, retried until done).
   setSyncScopeDisabledListener(queuePendingScrubs)
 
+  // M26 Phase 3 — the MANUAL "Sync now" button is a MAINTENANCE-lane job so
+  // its progress is visible (and survives leaving Settings). Deliberately
+  // NOT migrated: the three automatic syncNow triggers below (launch,
+  // sign-in, every 10 minutes) and scheduleBackup()'s debounced push. Two
+  // reasons — (a) they'd each mint a job entry on a timer and job history
+  // is never pruned today, so a long-running app would accumulate them
+  // forever; (b) they're already invisible-by-design background work, and
+  // making them visible is Batch 5's "visibility for automatic operations"
+  // question, not this adapter's.
+  //
+  // The executor still goes through enqueue(), the SAME single promise
+  // chain every automatic trigger uses — that chain is what guarantees a
+  // pull can never interleave with a push. Bypassing it here to "run the
+  // job directly" would silently remove that guarantee for every automatic
+  // trigger too, which is exactly the class of breakage the shared-code-
+  // path audit exists to catch.
+  getJobManager().registerType<Record<string, never>, string>({
+    type: SYNC_JOB_TYPE,
+    lane: 'MAINTENANCE',
+    titleFor: () => 'Syncing with the cloud',
+    // syncNow has no AbortSignal support, and adding one would mean
+    // rewriting the push/pull internals — out of scope for an adapter.
+    cancellable: false,
+    executor: {
+      kind: 'inline-async',
+      run: async (_input, handle) => {
+        // Honest about the wait: the chain may already be busy with an
+        // automatic sync, and "Restoring…" would be a lie until it isn't.
+        handle.reportProgress({
+          mode: 'stages',
+          stageLabel: 'Waiting for background sync to finish…'
+        })
+        const { pull, push } = await enqueue(() =>
+          syncNow((stage) =>
+            handle.reportProgress({
+              mode: 'stages',
+              stageLabel:
+                stage === 'restoring'
+                  ? 'Restoring changes from the cloud…'
+                  : 'Backing up to the cloud…'
+            })
+          )
+        )
+        // Report WHICH half failed rather than a generic "sync failed" —
+        // a broken restore (changes from another device missing) and a
+        // broken backup (this device's changes not saved) mean completely
+        // different things to the rep.
+        if (!pull.ok) {
+          throw Object.assign(new Error(`Restore failed: ${pull.error}`), { code: pull.error })
+        }
+        if (!push.ok) {
+          throw Object.assign(new Error(`Backup failed: ${push.error}`), { code: push.error })
+        }
+        return 'Restored and backed up.'
+      }
+    }
+  })
+
   // Manual triggers (the settings UI in a later step calls these).
   ipcMain.handle('backup:pushNow', () => enqueue(pushAll))
-  ipcMain.handle('backup:syncNow', () => enqueue(syncNow))
+  ipcMain.handle('backup:syncNow', async (): Promise<{ ok: boolean; jobId?: string }> => {
+    const manager = getJobManager()
+    const already = manager
+      .list()
+      .find((j: Job) => j.type === SYNC_JOB_TYPE && (j.state === 'running' || j.state === 'queued'))
+    if (already) return { ok: true, jobId: already.id }
+    const job = manager.enqueue(SYNC_JOB_TYPE, {})
+    return { ok: true, jobId: job.id }
+  })
   ipcMain.handle('backup:getStatus', async () => {
     const state = await readState()
     return {
@@ -1036,10 +1122,14 @@ export function registerBackup(): void {
     const uid = session?.user?.id
     // A fresh SIGN-IN is the restore moment (first run on a new machine pulls
     // everything back). Session restores are covered by the launch sync below.
-    if (event === 'SIGNED_IN' && uid) void enqueue(syncNow)
+    // Wrapped in an arrow rather than passed bare: enqueue() calls its fn as
+    // `chain.then(fn, fn)`, so a bare reference would receive the previous
+    // chain value as syncNow's `onStage` argument. Harmless today (the chain
+    // always settles to undefined) but a trap for the next edit.
+    if (event === 'SIGNED_IN' && uid) void enqueue(() => syncNow())
   })
 
   // Full sync shortly after launch (restore first, then push), then periodic.
-  setTimeout(() => void enqueue(syncNow), 3_000)
-  setInterval(() => void enqueue(syncNow), 10 * 60_000)
+  setTimeout(() => void enqueue(() => syncNow()), 3_000)
+  setInterval(() => void enqueue(() => syncNow()), 10 * 60_000)
 }

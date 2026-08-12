@@ -18,7 +18,7 @@ import { cn } from '@renderer/lib/cn'
 import { isMac } from '@renderer/lib/platform'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
-import { useBackupStatus } from './useBackupStatus'
+import { useBackupStatus, type SyncPhase } from './useBackupStatus'
 
 /** Plain-language size + direction of the device-vs-server clock difference,
  *  e.g. "2 days ahead of" / "35 minutes behind". */
@@ -59,6 +59,23 @@ function friendlyError(code: string, direction: 'backup' | 'restore'): string {
   }
 }
 
+/** BUG-051 — "Sync now" runs a RESTORE (pulling other devices' changes down)
+ *  and then a BACKUP (pushing this device's changes up). Both used to show
+ *  one undifferentiated "Syncing…", so on a slow first-run restore there was
+ *  no way to tell "your data is still arriving" from "your work is being
+ *  saved" — the two have opposite implications if you quit mid-way. */
+const PHASE_LABEL: Record<SyncPhase, string> = {
+  waiting: 'Waiting for a background sync to finish…',
+  restoring: 'Restoring changes from the cloud…',
+  'backing-up': 'Backing up to the cloud…'
+}
+
+const PHASE_BUTTON_LABEL: Record<SyncPhase, string> = {
+  waiting: 'Waiting…',
+  restoring: 'Restoring…',
+  'backing-up': 'Backing up…'
+}
+
 const ALWAYS_SYNCED: { icon: typeof ListChecks; label: string }[] = [
   { icon: ListChecks, label: 'Tasks' },
   { icon: CalendarDays, label: 'Calendar events' },
@@ -89,7 +106,7 @@ const OPTIONAL_ITEMS: { key: SyncScopeKey; icon: typeof ListChecks; label: strin
  * device gets a "reconnect" prompt instead (see CalendarSection.tsx).
  */
 export function BackupCard(): React.JSX.Element {
-  const { status, syncing, loading, syncNow } = useBackupStatus()
+  const { status, syncing, phase, loading, syncNow } = useBackupStatus()
   const { settings, update: updateSettings } = useAppSettings()
   const syncScope = settings.syncScope
 
@@ -133,7 +150,13 @@ export function BackupCard(): React.JSX.Element {
           </div>
           <div>
             <p className="font-medium">Cloud backup</p>
-            {loading ? (
+            {/* A sync is two different operations back to back, and which one
+                is running matters: a slow restore means "changes from your
+                other device are still arriving", a slow backup means "this
+                device's work isn't saved yet". They used to look identical. */}
+            {syncing ? (
+              <p className="text-[13px] text-accent">{PHASE_LABEL[phase ?? 'waiting']}</p>
+            ) : loading ? (
               <p className="text-[13px] text-faint">Checking status…</p>
             ) : errorMessage ? (
               <p className="text-[13px] text-warning">{errorMessage}</p>
@@ -156,7 +179,8 @@ export function BackupCard(): React.JSX.Element {
         >
           {syncing ? (
             <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Syncing…
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />{' '}
+              {PHASE_BUTTON_LABEL[phase ?? 'waiting']}
             </>
           ) : (
             <>

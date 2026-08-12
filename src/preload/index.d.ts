@@ -1369,8 +1369,10 @@ export interface BackupStatus {
 export interface BackupApi {
   /** Force a backup now (the "Back up now" button). */
   pushNow: () => Promise<BackupPushResult>
-  /** Full sync: restore (pull + reconcile) then push. */
-  syncNow: () => Promise<{ pull: BackupRestoreResult; push: BackupPushResult }>
+  /** Full sync: restore (pull + reconcile) then push. M26 Phase 3: enqueues
+   *  a MAINTENANCE-lane job and returns its id immediately; track progress
+   *  (including WHICH half is running) via window.api.jobs. */
+  syncNow: () => Promise<{ ok: boolean; jobId?: string }>
   /** Last-backed-up time / last error, for the trust UI. */
   getStatus: () => Promise<BackupStatus>
   /** Reveal the first `<id>.conflict` file in Finder (they're plain JSON —
