@@ -289,23 +289,6 @@ app.whenReady().then(async () => {
   registerModelCatalog()
   registerFallbackLog()
 
-  // M25 — must run BEFORE any registerX() below that could touch memory
-  // data (none do yet in Phase 1, but calls.ts's post-call hook and
-  // coaching-chat-ipc.ts's per-message hook will in short order). Awaited,
-  // not fire-and-forget: a renderer-triggered IPC call must never be able
-  // to reach a memory DB that's still mid-migration. No-ops instantly (no
-  // file even touched) if the Sales Brain setting is off — see its own doc
-  // comment. Never throws; a migration failure disables Sales Brain for
-  // this session and is logged, but never blocks the rest of the app from
-  // starting normally.
-  await initSalesBrain()
-  // Phase 2 — fire-and-forget, unlike the await above: the deep
-  // reflection+decay pass can take real wall-clock time (several AI
-  // calls per scope) and must never be something the user waits on just
-  // to open the app. No-ops instantly if Sales Brain is off, init failed,
-  // or it already ran within the last ~20h — see its own doc comment.
-  maybeRunNightlyConsolidation()
-
   // Any consent record still on disk belongs to a call that is already over —
   // this process has not started one. A crash mid-call must never leave behind
   // a grant that authorises the NEXT launch's first call.
@@ -398,6 +381,36 @@ app.whenReady().then(async () => {
   registerGoogle()
   registerOutlook()
   registerBackup()
+
+  // M25 — moved here (after auth/calls/everything else, not before ANY of
+  // it) following a real production incident: initSalesBrain() used to run
+  // right at the top of this function, awaited, before registerAuth() ever
+  // ran. On at least one real machine it stalled for tens of seconds
+  // (~48s observed) - most likely downloading the local embeddings model on
+  // first real use - which meant registerAuth() hadn't registered its IPC
+  // handler yet by the time the already-loaded renderer asked for auth
+  // status. The renderer's fallback for "no handler yet" reads identically
+  // to "Supabase isn't configured," so users saw a false "Accounts aren't
+  // set up yet" screen that had nothing to do with their actual account.
+  // Only registerOnboarding/registerBackfill/registerMemoryCenter below
+  // actually touch memory data - see their own race-prevention need in the
+  // Phase 0 notes - so this only needs to block THOSE three, never the rest
+  // of the app. Also wrapped defensively: the "never throws" promise in
+  // initSalesBrain()'s own doc comment wasn't actually enforced in code
+  // (better-sqlite3's Database constructor can throw synchronously on a
+  // native-module load failure) - belt-and-suspenders here so a Sales Brain
+  // failure genuinely can never take the rest of startup down with it,
+  // matching what was already documented as the intent.
+  try {
+    await Promise.race([
+      initSalesBrain(),
+      new Promise((resolve) => setTimeout(resolve, 15_000))
+    ])
+  } catch (err) {
+    console.error('[sales-brain] init failed at startup, disabled for this session:', err)
+  }
+  maybeRunNightlyConsolidation()
+
   registerOnboarding()
   registerBackfill()
   registerMemoryCenter()
