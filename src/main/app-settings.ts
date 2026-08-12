@@ -821,7 +821,26 @@ export function registerAppSettings(): void {
   if (registered) return
   registered = true
   ipcMain.handle('settings:get', (): AppSettings => loadAppSettings())
-  ipcMain.handle('settings:update', (_event, patch: unknown): AppSettings => saveAppSettings(patch))
+  ipcMain.handle('settings:update', async (_event, patch: unknown): Promise<AppSettings> => {
+    const wasEnabled = loadAppSettings().salesBrain.enabled
+    const next = saveAppSettings(patch)
+    if (!wasEnabled && next.salesBrain.enabled) {
+      // memory.db is normally only ever opened once, at app startup, gated
+      // on this same flag (see memory-runtime.ts's initSalesBrain doc
+      // comment) - which means flipping this toggle on mid-session, without
+      // restarting the app, left getMemoryDb() returning null for the rest
+      // of the session. Every Sales Brain IPC handler already treats a null
+      // DB as "not ready" and fails soft, so nothing crashed - it just did
+      // nothing, silently, for the whole session. Dynamic import to avoid a
+      // circular dependency (memory-runtime.ts imports isSalesBrainEnabled
+      // from this file).
+      const { initSalesBrain } = await import('./memory/memory-runtime')
+      await initSalesBrain().catch((err) => {
+        console.error('[sales-brain] live init on enable failed:', err)
+      })
+    }
+    return next
+  })
   // Shows exactly what text the AI would be given about the rep, so
   // Personalization isn't a black box (same idea as knowledge:preview).
   ipcMain.handle('settings:previewPersonalization', (): { text: string; charCount: number } => {

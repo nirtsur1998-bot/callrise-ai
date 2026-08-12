@@ -23,6 +23,7 @@ export function SalesBrainSection(): React.JSX.Element {
   const [status, setStatus] = useState<OnboardingStatusResult | null>(null)
   const [includeCalls, setIncludeCalls] = useState(false)
   const [backfill, setBackfill] = useState<SalesBrainBackfillProgress | null>(null)
+  const [startError, setStartError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const refreshStatus = (): void => {
@@ -75,6 +76,7 @@ export function SalesBrainSection(): React.JSX.Element {
   }, [backfill?.running])
 
   const startBackfill = async (): Promise<void> => {
+    setStartError(null)
     const result = await window.api.salesBrain.backfill.start({
       includeContacts: true,
       includeDeals: true,
@@ -83,6 +85,12 @@ export function SalesBrainSection(): React.JSX.Element {
     if (result.ok) {
       const p = await window.api.salesBrain.backfill.status()
       setBackfill(p)
+    } else {
+      // Was previously swallowed entirely — the button would just do
+      // nothing with no indication why (e.g. "Sales Brain is not ready
+      // yet" right after enabling the toggle mid-session, before the fix
+      // to initialize memory.db live). Surface it instead of silence.
+      setStartError(result.message ?? 'Import could not start.')
     }
   }
 
@@ -173,6 +181,9 @@ export function SalesBrainSection(): React.JSX.Element {
               )}
               {backfill?.stage === 'error' && (
                 <p className="mt-1 text-[11px] text-danger">Something went wrong: {backfill.lastError}</p>
+              )}
+              {startError && (
+                <p className="mt-1 text-[11px] text-danger">Couldn&apos;t start: {startError}</p>
               )}
             </div>
             <Button
