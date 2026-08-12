@@ -40,8 +40,19 @@ export function ContactPicker({
     const onDown = (e: MouseEvent): void => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
     }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
+    // BUG-047: capture phase, not bubble. Every dialog that hosts this picker
+    // (DealFormDialog, CallDetail, EventDialog) sits inside Modal.tsx, whose
+    // panel stops mousedown from bubbling (`onMouseDown={(e) =>
+    // e.stopPropagation()}`) so a click inside the dialog can't be mistaken
+    // for a click on the backdrop and close the WHOLE modal. That stop
+    // happens during the bubble phase, downstream of this listener's target
+    // (document) — so a plain bubble-phase listener here never even sees a
+    // mousedown that landed anywhere else inside the same modal, and the
+    // dropdown stays open no matter where else in the dialog you click.
+    // Capture fires top-down, before the modal's own bubble-phase stop ever
+    // runs, so this always sees the click regardless.
+    document.addEventListener('mousedown', onDown, true)
+    return () => document.removeEventListener('mousedown', onDown, true)
   }, [open])
 
   const results = useMemo(() => {
