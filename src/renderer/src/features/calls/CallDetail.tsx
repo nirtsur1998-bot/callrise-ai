@@ -103,6 +103,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024
 // buttons below, tracked per-call via useJobByTarget so the spinner/result
 // survives navigating away and back (see calls.ts for the executors).
 const SUMMARIZE_JOB_TYPE = 'calls:summarize'
+const COACH_JOB_TYPE = 'calls:coach'
 
 interface CallDetailProps {
   callId: string
@@ -125,7 +126,6 @@ export function CallDetail({
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [showTasks, setShowTasks] = useState(false)
   const [tasksAdded, setTasksAdded] = useState(0)
-  const [coaching, setCoaching] = useState(false)
   const [coachError, setCoachError] = useState<string | null>(null)
   const [findingCommitments, setFindingCommitments] = useState(false)
   const [commitmentsError, setCommitmentsError] = useState<string | null>(null)
@@ -299,22 +299,31 @@ export function CallDetail({
     }
   }, [callId, startSummaryJob])
 
+  const [coachJob, startCoachJob] = useJobByTarget(COACH_JOB_TYPE, callId, {
+    onSucceeded: () => void notifyChanged(),
+    onFailed: (job) => {
+      if (job.error?.code === 'no-key') setNoKey(true)
+      else setCoachError(job.error?.message ?? 'Could not coach this call. Please try again.')
+    }
+  })
+  const coaching = coachJob?.state === 'running' || coachJob?.state === 'queued'
+
   const coachCall = useCallback(async () => {
     setCoachError(null)
     setNoKey(false)
-    setCoaching(true)
     try {
       const res = await window.api.calls.coachCall(callId)
       if (!mountedRef.current) return
-      if (res.ok) await notifyChanged()
-      else if (res.error === 'no-key') setNoKey(true)
-      else setCoachError(res.message ?? 'Could not coach this call.')
+      if (res.ok && res.jobId) {
+        const fresh = await window.api.jobs.get(res.jobId)
+        if (mountedRef.current && fresh) startCoachJob(fresh)
+      } else {
+        setCoachError('Could not start coaching. Please try again.')
+      }
     } catch {
       if (mountedRef.current) setCoachError('Could not coach this call. Please try again.')
-    } finally {
-      if (mountedRef.current) setCoaching(false)
     }
-  }, [callId, notifyChanged])
+  }, [callId, startCoachJob])
 
   const findCommitments = useCallback(async () => {
     setCommitmentsError(null)

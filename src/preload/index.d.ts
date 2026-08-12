@@ -512,9 +512,6 @@ export interface FocusSkillAtCoaching {
   microBehavior: string
 }
 
-export type CoachResult =
-  { ok: true; report: CoachingReport } | { ok: false; error: 'no-key' | 'failed'; message?: string }
-
 export type CommitmentOwner = 'rep' | 'prospect'
 
 export interface Commitment {
@@ -792,7 +789,7 @@ export interface CallsApi {
   removeAttachment: (callId: string, attachmentId: string) => Promise<{ ok: boolean }>
   summarizeCall: (callId: string) => Promise<{ ok: boolean; jobId?: string }>
   summarizeAttachment: (callId: string, attachmentId: string) => Promise<SummaryResult>
-  coachCall: (callId: string) => Promise<CoachResult>
+  coachCall: (callId: string) => Promise<{ ok: boolean; jobId?: string }>
   /** Who promised what on this call, split rep vs. prospect (§4.7). */
   extractCommitments: (callId: string) => Promise<CommitmentResult>
   /** M24 §8 — persist the Radar Report source data onto an already-saved

@@ -30,7 +30,7 @@ import {
   type CallType
 } from './calls-fs'
 import { summarize, type SummarizeInput, type SummaryResult } from './summarize'
-import { coachCall, type CoachResult } from './coach'
+import { coachCall } from './coach'
 import { extractCommitments, type CommitmentResult } from './commitments'
 import { generateCallTitle, type GenerateTitleResult } from './call-title'
 import { mineObjections, makeVerifier, type ObjectionMiningResult } from './objection-mining'
@@ -84,6 +84,7 @@ const miningInFlight = new Set<string>()
  *  created and set the shared JobManager (see main/index.ts). */
 const SCAN_JOB_TYPE = 'objections:scanPastCalls'
 const SUMMARIZE_JOB_TYPE = 'calls:summarize'
+const COACH_JOB_TYPE = 'calls:coach'
 
 /** Mine one call and stage any grounded candidates in the review queue, then
  *  mark the call as mined — shared by the new-call auto-mine hook and the
@@ -504,78 +505,95 @@ export function registerCalls(): void {
   )
 
   // --- AI coaching ---------------------------------------------------------
-  ipcMain.handle('coach:call', async (_event, callId: string): Promise<CoachResult> => {
-    try {
-      const call = await getCall(callsDir(), callId)
-      if (!call) return { ok: false, error: 'failed', message: 'Call not found.' }
-      if (!call.segments?.length) {
-        return { ok: false, error: 'failed', message: 'This call has no transcript to coach.' }
-      }
-      // M23 — sticky per call: a prior manual override always wins over
-      // re-detecting from the title (setCallTypeIfUnset below only writes
-      // this back when it was still unset).
-      const callType = call.callType ?? detectCallType(call.title)
-      const coach2Enabled = loadAppSettings().coach2.enabled
-      // Read BEFORE coaching runs — this is what the rep was asked to
-      // practice going INTO this call (set after the PREVIOUS call), not
-      // what gets selected after this one. See FocusSkillAtCoaching's doc.
-      const priorFocus = coach2Enabled ? await loadFocusSkill() : null
-      // M25 Phase 3 (L3 procedural memory) — personal talk-ratio/question-
-      // count norms from the rep's own past calls of the SAME call type,
-      // only when Sales Brain is on. personal-benchmarks.ts's own
-      // MIN_SAMPLE_SIZE floor means this stays undefined (→ exact today's-
-      // behavior population defaults) until there's genuinely enough
-      // history — never a confidently-wrong personalization from 1-2 calls.
-      const personalBenchmarks = isSalesBrainEnabled()
-        ? await computePersonalBenchmarksForCallType(callType)
-        : undefined
-      const result = await coachCall(speechSegments(call.segments), call.durationMs, {
-        callType,
-        commitments: call.commitments,
-        personalBenchmarks
-      })
-      if (result.ok) {
+  // M26 Phase 3 — same shift as AI summary above: an INTERACTIVE-lane job
+  // instead of an inline blocking call. The scoring/save/cascade logic is
+  // unchanged, moved as-is into the executor.
+  getJobManager().registerType<{ callId: string }, string>({
+    type: COACH_JOB_TYPE,
+    lane: 'INTERACTIVE',
+    titleFor: () => 'Coaching call',
+    targetRefFor: (i) => i.callId,
+    executor: {
+      kind: 'inline-async',
+      run: async (input) => {
+        const call = await getCall(callsDir(), input.callId)
+        if (!call) throw new Error('Call not found.')
+        if (!call.segments?.length) throw new Error('This call has no transcript to coach.')
+        // M23 — sticky per call: a prior manual override always wins over
+        // re-detecting from the title (setCallTypeIfUnset below only writes
+        // this back when it was still unset).
+        const callType = call.callType ?? detectCallType(call.title)
+        const coach2Enabled = loadAppSettings().coach2.enabled
+        // Read BEFORE coaching runs — this is what the rep was asked to
+        // practice going INTO this call (set after the PREVIOUS call), not
+        // what gets selected after this one. See FocusSkillAtCoaching's doc.
+        const priorFocus = coach2Enabled ? await loadFocusSkill() : null
+        // M25 Phase 3 (L3 procedural memory) — personal talk-ratio/question-
+        // count norms from the rep's own past calls of the SAME call type,
+        // only when Sales Brain is on. personal-benchmarks.ts's own
+        // MIN_SAMPLE_SIZE floor means this stays undefined (→ exact today's-
+        // behavior population defaults) until there's genuinely enough
+        // history — never a confidently-wrong personalization from 1-2 calls.
+        const personalBenchmarks = isSalesBrainEnabled()
+          ? await computePersonalBenchmarksForCallType(callType)
+          : undefined
+        const result = await coachCall(speechSegments(call.segments), call.durationMs, {
+          callType,
+          commitments: call.commitments,
+          personalBenchmarks
+        })
+        if (!result.ok) {
+          throw Object.assign(new Error(result.message ?? 'Could not coach this call.'), {
+            code: result.error
+          })
+        }
         if (priorFocus) {
           result.report.focusSkillAtCoaching = {
             skill: priorFocus.skill,
             microBehavior: priorFocus.microBehavior
           }
         }
-        const saved = await setCallCoaching(callsDir(), callId, result.report)
-        if (!saved) {
-          return {
-            ok: false,
-            error: 'failed',
-            message: 'The coaching report could not be saved. Please try again.'
-          }
-        }
+        const saved = await setCallCoaching(callsDir(), input.callId, result.report)
+        if (!saved) throw new Error('The coaching report could not be saved. Please try again.')
         scheduleBackup() // quote-free scores/advice sync; evidence quotes never do
         // repSpeaker is only known from here on for a mono call — re-run so
         // its "me" key (and therefore single-other-party detection) can
         // resolve for the first time.
-        void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, callId)
-          .then(() => runFullAutoContactIntelligence(callId))
+        void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, input.callId)
+          .then(() => runFullAutoContactIntelligence(input.callId))
           .catch(() => {})
         // M25 — also re-run after coaching, same reasoning as the identity
         // cascade above: this call may have just gotten scorecard/skill
         // data it didn't have at save time, and a mono call's contactId may
         // only be known from here on. saveCandidate()'s dedupe makes a
         // second pass over the same transcript cheap/safe, not duplicate work.
-        void runMemoryExtractionForCall(callId).catch(() => {})
+        void runMemoryExtractionForCall(input.callId).catch(() => {})
         if (coach2Enabled) {
-          void setCallTypeIfUnset(callsDir(), callId, callType).catch(() => {})
-          void updateFocusSkillAfterCoaching(callId).catch(() => {})
+          void setCallTypeIfUnset(callsDir(), input.callId, callType).catch(() => {})
+          void updateFocusSkillAfterCoaching(input.callId).catch(() => {})
         }
-      }
-      return result
-    } catch {
-      return {
-        ok: false,
-        error: 'failed',
-        message: 'The coaching report could not be saved. Please try again.'
+        return input.callId
       }
     }
   })
+
+  ipcMain.handle(
+    'coach:call',
+    async (_event, callId: string): Promise<{ ok: boolean; jobId?: string }> => {
+      const manager = getJobManager()
+      const already = manager
+        .list()
+        .find(
+          (j: Job) =>
+            j.type === COACH_JOB_TYPE &&
+            j.targetRef === callId &&
+            (j.state === 'running' || j.state === 'queued')
+        )
+      if (already) return { ok: true, jobId: already.id }
+      const job = manager.enqueue(COACH_JOB_TYPE, { callId })
+      return { ok: true, jobId: job.id }
+    }
+  )
 
   // --- Commitments (§4.7) — who promised what -------------------------------
   ipcMain.handle(
