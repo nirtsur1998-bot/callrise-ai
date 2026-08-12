@@ -18,6 +18,7 @@ import {
   type LaneConfig
 } from './types'
 import { loadJobs, saveJobs } from './store'
+import { isTerminal, selectJobsToPrune } from './retention'
 import { throttle } from './throttle'
 
 const LANES: JobLane[] = ['LIVE', 'INTERACTIVE', 'BATCH', 'MAINTENANCE']
@@ -119,6 +120,7 @@ export class JobManager {
       createdAt: Date.now(),
       cancellable: def.cancellable ?? true,
       silent: def.silent ?? false,
+      retainUntilConsumed: def.retainUntilConsumed ?? false,
       input
     }
     this.jobs.set(job.id, job)
@@ -406,8 +408,27 @@ export class JobManager {
 
   private transition(job: Job, patch: Partial<Job>): void {
     Object.assign(job, patch)
+    if (isTerminal(job.state)) this.pruneHistory()
     this.notify()
     this.persistThrottled.call()
+  }
+
+  /** Drop the oldest disposable history once it exceeds the cap. Runs only
+   *  when a job reaches a terminal state (the only moment the retained set
+   *  can grow), never on a progress tick.
+   *
+   *  Deliberately does NOT notify() or persist here — the caller does both
+   *  immediately after, so a prune always rides along with the transition
+   *  that caused it rather than emitting a second, half-applied snapshot.
+   *  See retention.ts for what may and may not be dropped; the short
+   *  version is that a succeeded job still holding unreviewed AI output is
+   *  never touched. */
+  private pruneHistory(): void {
+    const doomed = selectJobsToPrune(this.list())
+    if (doomed.length === 0) return
+    for (const id of doomed) this.jobs.delete(id)
+    const dropped = new Set(doomed)
+    this.order = this.order.filter((id) => !dropped.has(id))
   }
 
   private notify(): void {

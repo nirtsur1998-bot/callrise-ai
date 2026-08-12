@@ -444,6 +444,141 @@ describe('enqueue', () => {
   })
 })
 
+describe('history pruning', () => {
+  // retention.ts covers the POLICY exhaustively; these prove it is actually
+  // WIRED UP in the manager. History is seeded through the constructor (the
+  // real "loaded from disk at launch" path) rather than by running hundreds
+  // of jobs, so each test triggers exactly ONE real transition and stays
+  // deterministic — no half-drained executor queue racing teardown.
+  function finishedJob(i: number, overrides: Partial<Job> = {}): Job {
+    return {
+      id: `old-${i}`,
+      type: 'test:old',
+      title: 'Old job',
+      state: 'succeeded',
+      progress: { mode: 'indeterminate' },
+      lane: 'INTERACTIVE',
+      priority: 0,
+      createdAt: i,
+      endedAt: i,
+      cancellable: true,
+      input: {},
+      ...overrides
+    }
+  }
+
+  async function managerWith(history: Job[]): Promise<{
+    manager: InstanceType<typeof import('../JobManager').JobManager>
+    finishOne: () => Promise<void>
+  }> {
+    const { JobManager } = await freshManager()
+    const manager = new JobManager(history)
+    manager.registerType<Record<string, never>, string>({
+      type: 'test:trigger',
+      lane: 'INTERACTIVE',
+      titleFor: () => 'trigger',
+      executor: { kind: 'inline-async', run: async () => 'ok' }
+    })
+    return {
+      manager,
+      finishOne: async () => {
+        manager.enqueue('test:trigger', {})
+        await settle()
+      }
+    }
+  }
+
+  it('caps retained history when a job finishes, instead of growing forever', async () => {
+    const { manager, finishOne } = await managerWith(
+      Array.from({ length: 520 }, (_, i) => finishedJob(i))
+    )
+    expect(manager.list()).toHaveLength(520) // nothing pruned merely by loading
+    await finishOne()
+    expect(manager.list().length).toBeLessThanOrEqual(500)
+    manager.dispose()
+  })
+
+  it('NEVER prunes a succeeded job that still holds unreviewed output', async () => {
+    const draft = finishedJob(0, {
+      id: 'unreviewed-draft',
+      retainUntilConsumed: true,
+      resultData: { tasks: ['send pricing'] }
+    })
+    // Buried under far more than the cap's worth of routine history, and the
+    // OLDEST of the lot — first in line to be dropped by age alone.
+    const { manager, finishOne } = await managerWith([
+      draft,
+      ...Array.from({ length: 600 }, (_, i) => finishedJob(i + 1))
+    ])
+    await finishOne()
+
+    const survivor = manager.get('unreviewed-draft')
+    expect(survivor).not.toBeNull()
+    expect(survivor?.resultData).toEqual({ tasks: ['send pricing'] })
+    expect(manager.list().length).toBeLessThanOrEqual(501)
+    manager.dispose()
+  })
+
+  it('gives up successes before failures and cancellations', async () => {
+    const { manager, finishOne } = await managerWith([
+      finishedJob(1, { id: 'a-failure', state: 'failed' }),
+      finishedJob(2, { id: 'a-cancellation', state: 'cancelled' }),
+      ...Array.from({ length: 500 }, (_, i) => finishedJob(i + 10))
+    ])
+    await finishOne()
+
+    expect(manager.get('a-failure')).not.toBeNull()
+    expect(manager.get('a-cancellation')).not.toBeNull()
+    manager.dispose()
+  })
+
+  it('never prunes a still-running job, however much history sits behind it', async () => {
+    const { JobManager } = await freshManager()
+    const manager = new JobManager(Array.from({ length: 600 }, (_, i) => finishedJob(i)))
+    manager.registerType<Record<string, never>, string>({
+      type: 'test:forever',
+      lane: 'BATCH',
+      titleFor: () => 'forever',
+      executor: { kind: 'inline-async', run: () => new Promise<string>(() => {}) }
+    })
+    manager.registerType<Record<string, never>, string>({
+      type: 'test:trigger',
+      lane: 'INTERACTIVE',
+      titleFor: () => 'trigger',
+      executor: { kind: 'inline-async', run: async () => 'ok' }
+    })
+    const running = manager.enqueue('test:forever', {})
+    manager.enqueue('test:trigger', {}) // finishes, triggering a prune
+    await settle()
+
+    expect(manager.get(running.id)?.state).toBe('running')
+    manager.dispose()
+  })
+
+  it('copies retainUntilConsumed from the job type onto each job, like cancellable', async () => {
+    const { JobManager } = await freshManager()
+    const manager = new JobManager([])
+    manager.registerType<Record<string, never>, string>({
+      type: 'test:retained',
+      lane: 'INTERACTIVE',
+      titleFor: () => 'retained',
+      retainUntilConsumed: true,
+      executor: { kind: 'inline-async', run: async () => 'ok' }
+    })
+    manager.registerType<Record<string, never>, string>({
+      type: 'test:plain',
+      lane: 'INTERACTIVE',
+      titleFor: () => 'plain',
+      executor: { kind: 'inline-async', run: async () => 'ok' }
+    })
+    const retained = manager.enqueue('test:retained', {})
+    const plain = manager.enqueue('test:plain', {})
+    expect(manager.get(retained.id)?.retainUntilConsumed).toBe(true)
+    expect(manager.get(plain.id)?.retainUntilConsumed).toBe(false)
+    manager.dispose()
+  })
+})
+
 describe('resultData', () => {
   it("attaches the executor's full resolved result to the job, not just a string resultRef", async () => {
     const { JobManager } = await freshManager()

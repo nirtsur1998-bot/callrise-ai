@@ -67,6 +67,14 @@ export interface Job {
    *  notifications. Copied from the job type at enqueue, same as
    *  `cancellable`. */
   silent?: boolean
+  /** This job's resultData may hold output the rep still has to review, so
+   *  automatic history pruning must never touch it while it's succeeded —
+   *  it leaves only via its own "you've dealt with it" dismiss. Set for the
+   *  job types behind BUG-048 (Generate tasks) and BUG-050 (Generate CRM
+   *  note), whose whole fix is that already-paid-for AI output survives in
+   *  a finished job until consumed. Copied from the job type at enqueue,
+   *  same as `cancellable`/`silent`. See jobs/retention.ts. */
+  retainUntilConsumed?: boolean
   /** The serializable input the executor was (or will be) called with.
    *  Kept so Retry can re-run a failed job identically. */
   input: unknown
@@ -136,6 +144,14 @@ export interface JobTypeDefinition<TInput = unknown, TResult = unknown> {
   /** Default false. Set true when this feature already fires its own,
    *  better-worded completion notification — see Job.silent. */
   silent?: boolean
+  /** Default false. Set true when a SUCCEEDED job of this type holds output
+   *  the rep must review before it can be discarded — see
+   *  Job.retainUntilConsumed and jobs/retention.ts. Getting this wrong for a
+   *  new adapter fails LOUDLY and recoverably ("my draft disappeared sooner
+   *  than I expected"), which is the deliberate trade against inferring it
+   *  automatically — an inferred rule would change meaning silently as the
+   *  code evolves and surface as missing customer data months later. */
+  retainUntilConsumed?: boolean
   /** Human title for the Activity Center ("Coaching call with Dana"),
    *  computed from the input at enqueue time. */
   titleFor: (input: TInput) => string
