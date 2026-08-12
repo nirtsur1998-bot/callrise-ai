@@ -485,6 +485,27 @@ const api = {
     /** Quits and installs — only succeeds from a 'downloaded' state; main
      *  re-verifies this itself rather than trusting the renderer's call. */
     install: () => ipcRenderer.invoke('updater:install')
+  },
+  // M26 — read-only + control surface over the job queue. No generic
+  // enqueue here on purpose (see jobs/ipc.ts's file header): only a real
+  // feature's own IPC handler, running in main, may start a job.
+  jobs: {
+    list: () => ipcRenderer.invoke('jobs:list'),
+    get: (id: string) => ipcRenderer.invoke('jobs:get', id),
+    cancel: (id: string) => ipcRenderer.invoke('jobs:cancel', id),
+    retry: (id: string) => ipcRenderer.invoke('jobs:retry', id),
+    resume: (id: string) => ipcRenderer.invoke('jobs:resume', id),
+    dismiss: (id: string) => ipcRenderer.invoke('jobs:dismiss', id),
+    /** Full current snapshot, pushed at most ~4/sec (see jobs/ipc.ts). */
+    onChanged: (cb: (payload: unknown) => void) => subscribe('jobs:changed', cb),
+    // Dev builds only — see the is.dev guard in main/index.ts and
+    // jobs/ipc.ts. Present on the bridge either way so the renderer's Job
+    // Inspector doesn't need its own separate is-dev branch to call it;
+    // main simply never registers the handler outside a dev build, so the
+    // invoke rejects instead.
+    dev: {
+      startFake: (req: unknown) => ipcRenderer.invoke('jobs:dev:startFake', req)
+    }
   }
 }
 

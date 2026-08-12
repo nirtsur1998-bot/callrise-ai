@@ -1879,6 +1879,68 @@ export interface UpdaterApi {
   install: () => Promise<{ ok: boolean }>
 }
 
+// --- M26 job queue -----------------------------------------------------
+// Mirrors src/main/jobs/types.ts — re-declared here rather than imported,
+// same convention as every other main-process event shape in this file
+// (TranscriptionStateEvent etc. above), since preload/renderer code never
+// imports directly from src/main/**.
+
+export type JobLane = 'LIVE' | 'INTERACTIVE' | 'BATCH' | 'MAINTENANCE'
+export type JobState = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
+
+export type JobProgress =
+  | { mode: 'determinate'; itemsDone: number; itemsTotal: number }
+  | { mode: 'stages'; stageLabel: string }
+  | { mode: 'indeterminate' }
+
+export interface JobErrorInfo {
+  message: string
+  code?: string
+}
+
+export interface Job {
+  id: string
+  type: string
+  title: string
+  targetRef?: string
+  state: JobState
+  progress: JobProgress
+  lane: JobLane
+  priority: number
+  createdAt: number
+  startedAt?: number
+  endedAt?: number
+  error?: JobErrorInfo
+  resultRef?: string
+  cancellable: boolean
+  input: unknown
+  checkpoint?: unknown
+}
+
+export interface JobsApi {
+  list: () => Promise<Job[]>
+  get: (id: string) => Promise<Job | null>
+  cancel: (id: string) => Promise<{ ok: boolean }>
+  retry: (id: string) => Promise<Job | null>
+  resume: (id: string) => Promise<Job | null>
+  dismiss: (id: string) => Promise<{ ok: boolean }>
+  /** Full current snapshot, pushed at most ~4/sec. */
+  onChanged: (cb: (payload: Job[]) => void) => () => void
+  /** Dev builds only (see main/index.ts's is.dev guard) — rejects in a
+   *  packaged build since main never registers the handler. */
+  dev: {
+    startFake: (
+      req:
+        | { kind: 'batch'; input: { title: string; itemsTotal: number; msPerItem: number; failAtItem?: number } }
+        | {
+            kind: 'staged'
+            input: { title: string; stages: string[]; msPerStage: number; failAtStage?: number }
+          }
+        | { kind: 'cpu'; input: { title: string; itemsTotal: number; msBudget: number; failAtItem?: number } }
+    ) => Promise<Job>
+  }
+}
+
 // --- Scheduled alerts (M19 Task 1) ------------------------------------------
 
 export type AlertTriggerType = 'meeting_starting' | 'task_due' | 'deal_cold' | 'no_next_step'
@@ -2185,6 +2247,7 @@ declare global {
       prepBrief: PrepBriefApi
       salesBrain: SalesBrainApi
       updater: UpdaterApi
+      jobs: JobsApi
     }
   }
 }

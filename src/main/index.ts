@@ -32,6 +32,9 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { DEFAULT_CONFIG } from './default-config'
 import { clearActiveConsent } from './consent-gate'
 import { registerCrashLogging, registerLog } from './log'
+import { JobManager } from './jobs/JobManager'
+import { registerJobsIpc } from './jobs/ipc'
+import { registerFakeJobTypes } from './jobs/fakeJobs'
 writeCrashLog('imports resolved', 'all top-level imports completed without throwing')
 
 // Renamed "Sales OS" -> "CallRise AI" (rebrand), but the on-disk data folder
@@ -174,6 +177,11 @@ import { registerCrmNoteGenerator } from './crm-note-generator-ipc'
 import { registerContactIntelligence } from './contact-intelligence-ipc'
 
 let mainWindow: BrowserWindow | null = null
+
+// M26 — created inside whenReady() below (needs userData, same as every
+// other -fs.ts/-ipc.ts module's own storage), read by before-quit further
+// down to flush state before the process actually exits.
+let jobManager: JobManager | undefined
 
 // Set by handleDeepLink() when it fires before the window exists yet (a cold
 // start via the protocol) — flushed once ready-to-show fires below. A send()
@@ -427,6 +435,15 @@ app.whenReady().then(async () => {
   registerCrmNoteGenerator()
   registerContactIntelligence()
   registerDetectionService()
+
+  // M26 Phase 1 — the job queue itself. Nothing from the Phase 0 inventory
+  // is wired to it yet (that's Phase 3, one adapter/one commit at a time);
+  // this just brings the engine + its IPC surface up so the Job Inspector
+  // (Settings, dev builds only) can exercise it with the fake job types.
+  jobManager = new JobManager()
+  registerJobsIpc(jobManager)
+  if (is.dev) registerFakeJobTypes(jobManager)
+
   writeCrashLog('registrations done', 'all registerX() calls completed, about to createWindow()')
 
   // A cold start via callrise://meeting/<id> on Windows/Linux — the URL
@@ -453,6 +470,16 @@ app.on('before-quit', () => {
   disposeDetectionService()
   disposeOverlay()
   disposeTray()
+  // M26 Phase 1 — best-effort only: abort in-flight job work and flush the
+  // last bit of state that hadn't hit disk yet (JobManager already
+  // persists throttled during normal operation, so this closes a small gap
+  // rather than doing the only save). NOT the real quit guard from
+  // CLAUDE.md's Phase 2 (a dialog listing running jobs, "wait" vs "cancel
+  // and quit") — that still needs to replace this once it exists; today
+  // quit always proceeds immediately and a running job simply reappears as
+  // "interrupted" on next launch, same as a crash would.
+  jobManager?.dispose()
+  void jobManager?.flush()
 })
 
 // Quit when all windows are closed, except on macOS.
