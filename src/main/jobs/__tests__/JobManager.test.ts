@@ -556,12 +556,18 @@ describe('history pruning', () => {
     }
   }
 
+  // A tiny cap instead of production's 500: the policy is identical, and a
+  // 500-job fixture is slow enough to cross the persist throttle mid-test
+  // and race the temp-dir teardown. retention.test.ts covers the real
+  // constant; this file covers the wiring.
+  const CAP = 5
+
   async function managerWith(history: Job[]): Promise<{
     manager: InstanceType<typeof import('../JobManager').JobManager>
     finishOne: () => Promise<void>
   }> {
     const { JobManager } = await freshManager()
-    const manager = new JobManager(history)
+    const manager = new JobManager(history, { maxRetainedJobs: CAP })
     manager.registerType<Record<string, never>, string>({
       type: 'test:trigger',
       lane: 'INTERACTIVE',
@@ -579,11 +585,11 @@ describe('history pruning', () => {
 
   it('caps retained history when a job finishes, instead of growing forever', async () => {
     const { manager, finishOne } = await managerWith(
-      Array.from({ length: 520 }, (_, i) => finishedJob(i))
+      Array.from({ length: CAP + 3 }, (_, i) => finishedJob(i))
     )
-    expect(manager.list()).toHaveLength(520) // nothing pruned merely by loading
+    expect(manager.list()).toHaveLength(CAP + 3) // nothing pruned merely by loading
     await finishOne()
-    expect(manager.list().length).toBeLessThanOrEqual(500)
+    expect(manager.list().length).toBeLessThanOrEqual(CAP)
     manager.dispose()
   })
 
@@ -597,14 +603,14 @@ describe('history pruning', () => {
     // OLDEST of the lot — first in line to be dropped by age alone.
     const { manager, finishOne } = await managerWith([
       draft,
-      ...Array.from({ length: 600 }, (_, i) => finishedJob(i + 1))
+      ...Array.from({ length: CAP * 3 }, (_, i) => finishedJob(i + 1))
     ])
     await finishOne()
 
     const survivor = manager.get('unreviewed-draft')
     expect(survivor).not.toBeNull()
     expect(survivor?.resultData).toEqual({ tasks: ['send pricing'] })
-    expect(manager.list().length).toBeLessThanOrEqual(501)
+    expect(manager.list().length).toBeLessThanOrEqual(CAP + 1) // +1 = the protected draft
     manager.dispose()
   })
 
@@ -612,7 +618,7 @@ describe('history pruning', () => {
     const { manager, finishOne } = await managerWith([
       finishedJob(1, { id: 'a-failure', state: 'failed' }),
       finishedJob(2, { id: 'a-cancellation', state: 'cancelled' }),
-      ...Array.from({ length: 500 }, (_, i) => finishedJob(i + 10))
+      ...Array.from({ length: CAP }, (_, i) => finishedJob(i + 10))
     ])
     await finishOne()
 
@@ -623,7 +629,10 @@ describe('history pruning', () => {
 
   it('never prunes a still-running job, however much history sits behind it', async () => {
     const { JobManager } = await freshManager()
-    const manager = new JobManager(Array.from({ length: 600 }, (_, i) => finishedJob(i)))
+    const manager = new JobManager(
+      Array.from({ length: CAP * 3 }, (_, i) => finishedJob(i)),
+      { maxRetainedJobs: CAP }
+    )
     manager.registerType<Record<string, never>, string>({
       type: 'test:forever',
       lane: 'BATCH',

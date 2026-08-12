@@ -171,6 +171,7 @@ import { initSalesBrain, maybeRunNightlyConsolidation } from './memory/memory-ru
 import { registerOnboarding } from './memory/onboarding-ipc'
 import { registerBackfill } from './memory/backfill-ipc'
 import { registerMemoryCenter } from './memory/memory-center-ipc'
+import { registerMemoryExtractionJob } from './memory/memory-extraction-job'
 import { registerUpdater } from './updater'
 import { buildDiagnoseReport, wantsDiagnose } from './diagnose'
 import { registerPrepBrief } from './prep-brief-ipc'
@@ -386,6 +387,12 @@ app.whenReady().then(async () => {
   registerUpdater()
 
   registerTranscription()
+  // Registers a job type only — no memory access of its own, so unlike
+  // registerOnboarding/registerBackfill/registerMemoryCenter it is NOT
+  // subject to the initSalesBrain() race below, and must NOT sit behind
+  // that await: registerCalls() below can enqueue against this the moment
+  // a call is saved, and enqueue() throws on an unregistered type.
+  registerMemoryExtractionJob()
   registerCalls()
   registerCoachPdf()
   registerTasks()

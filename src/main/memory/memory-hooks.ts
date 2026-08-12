@@ -42,6 +42,39 @@ function notifyLearnedFromCall(callId: string, newCount: number): void {
   notification.show()
 }
 
+/**
+ * Which of the two per-call extraction passes this is. Extraction runs twice
+ * — once after a call is saved, once after it's coached — and the pass
+ * decides whether CLIENT-scoped memories (facts about the buyer, filed under
+ * their contact) may be stored at all.
+ *
+ * THE RULE, stated deliberately rather than left to emerge from timing:
+ * **the post-save pass never stores client-scoped memories, full stop.**
+ * Only the post-coach pass does.
+ *
+ * That used to be true only by accident. The post-save pass would read the
+ * call's contactId before the contact-detection cascade (which needs an AI
+ * round trip) had written one, see null, and drop client candidates as a
+ * side effect of losing a race. Two problems with relying on that: it
+ * silently reverses the moment extraction runs behind a queue instead of
+ * inline, and it was never even reliably true — a call already linked to a
+ * contact at save time DID store client memories on the first pass.
+ *
+ * Making it explicit means the guarantee is a property of the code rather
+ * than of which network call happens to finish first, and it survives any
+ * queue latency. The founder chose the strict form ("no client data before
+ * coaching, no exceptions") over preserving the pre-linked case, because a
+ * privacy rule that states in one sentence with no caveat is worth more
+ * than the marginal extra data.
+ *
+ * `contactIdAtTrigger` on the post-coach pass is frozen at the moment the
+ * trigger fired, for the same reason: if the buyer is identified while the
+ * job sits in a queue, the job must still store what it would have stored
+ * had it run immediately, not more.
+ */
+export type MemoryExtractionPass =
+  { pass: 'post-save' } | { pass: 'post-coach'; contactIdAtTrigger: string | null }
+
 /** Called fire-and-forget from calls.ts, same chain as
  *  runFullAutoContactIntelligence — after a call is saved AND after it's
  *  coached. Each candidate goes through consolidateNewCandidate() (Phase 2:
@@ -50,8 +83,19 @@ function notifyLearnedFromCall(callId: string, newCount: number): void {
  *  consolidation pass (promotion + profile recompile — see
  *  consolidation.ts's runLightConsolidation doc comment for why this is
  *  cheap enough to run synchronously here rather than deferred to the
- *  nightly pass). */
-export async function runMemoryExtractionForCall(callId: string): Promise<void> {
+ *  nightly pass).
+ *
+ *  The gates below (Sales Brain enabled, call not excluded) are read FRESH
+ *  every time, deliberately NOT snapshotted alongside the contactId: they
+ *  are permissions, not scope. If the rep turns Sales Brain off or excludes
+ *  this call while a job waits in a queue, "I turned that off" has to
+ *  actually stop it — a frozen permission check would silently break that
+ *  promise, the same way the M11 consent invariants are always re-read
+ *  rather than trusted from a snapshot. */
+export async function runMemoryExtractionForCall(
+  callId: string,
+  pass: MemoryExtractionPass
+): Promise<void> {
   if (!isSalesBrainEnabled()) return
   const db = getMemoryDb()
   if (!db) return
@@ -59,7 +103,12 @@ export async function runMemoryExtractionForCall(callId: string): Promise<void> 
   const call = await getCall(callsDir(), callId)
   if (!call || call.salesBrainExcluded) return
 
-  const candidates = await extractMemoriesFromCall(call.segments, callId, call.contactId ?? null)
+  // null here is what makes extraction drop every client-scoped candidate
+  // (see verifyAndBuild's `expectedKind === 'client' && !contactId` guard in
+  // extraction.ts) — the post-save pass passes null unconditionally, never
+  // reading the call's actual contactId at all.
+  const contactId = pass.pass === 'post-save' ? null : pass.contactIdAtTrigger
+  const candidates = await extractMemoriesFromCall(call.segments, callId, contactId)
   const touchedScopes = new Set<MemoryScope>()
   let newCount = 0
   for (const candidate of candidates) {
@@ -89,7 +138,12 @@ export async function runMemoryExtractionForChatMessage(
   const call = await getCall(callsDir(), callId)
   if (!call || call.salesBrainExcluded) return
 
-  const candidates = await extractMemoriesFromChatMessage(message, callId, chatMessageId, call.contactId ?? null)
+  const candidates = await extractMemoriesFromChatMessage(
+    message,
+    callId,
+    chatMessageId,
+    call.contactId ?? null
+  )
   const touchedScopes = new Set<MemoryScope>()
   for (const candidate of candidates) {
     await consolidateNewCandidate(db, candidate)

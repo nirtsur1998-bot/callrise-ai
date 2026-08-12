@@ -18,7 +18,12 @@ import {
   type LaneConfig
 } from './types'
 import { loadJobs, saveJobs } from './store'
-import { holdsUnreviewedOutput, isTerminal, selectJobsToPrune } from './retention'
+import {
+  MAX_RETAINED_JOBS,
+  holdsUnreviewedOutput,
+  isTerminal,
+  selectJobsToPrune
+} from './retention'
 import { throttle } from './throttle'
 
 const LANES: JobLane[] = ['LIVE', 'INTERACTIVE', 'BATCH', 'MAINTENANCE']
@@ -66,7 +71,15 @@ export class JobManager {
     leading: false
   })
 
-  constructor(initialJobs: Job[] = loadJobs()) {
+  /** Cap on retained history. Overridable so tests can exercise pruning
+   *  with a handful of jobs instead of 500+ — building fixtures that large
+   *  is slow enough to cross the persist throttle mid-test and race the
+   *  temp-directory teardown, which is noise, not signal. Production always
+   *  uses the default. */
+  private maxRetainedJobs: number
+
+  constructor(initialJobs: Job[] = loadJobs(), opts: { maxRetainedJobs?: number } = {}) {
+    this.maxRetainedJobs = opts.maxRetainedJobs ?? MAX_RETAINED_JOBS
     for (const j of initialJobs) {
       this.jobs.set(j.id, j)
       this.order.push(j.id)
@@ -445,7 +458,7 @@ export class JobManager {
    *  version is that a succeeded job still holding unreviewed AI output is
    *  never touched. */
   private pruneHistory(): void {
-    const doomed = selectJobsToPrune(this.list())
+    const doomed = selectJobsToPrune(this.list(), this.maxRetainedJobs)
     if (doomed.length === 0) return
     for (const id of doomed) this.jobs.delete(id)
     const dropped = new Set(doomed)

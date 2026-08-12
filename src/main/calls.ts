@@ -46,7 +46,7 @@ import { addComment } from './contacts-fs'
 import { generateCrmNote } from './crm-notes'
 import { resolveAndSaveIdentities } from './speaker-identity/resolve-for-call'
 import { runFullAutoContactIntelligence } from './contact-intelligence-ipc'
-import { runMemoryExtractionForCall } from './memory/memory-hooks'
+import { enqueueMemoryExtraction } from './memory/memory-extraction-job'
 import {
   computePersonalTalkRatioTarget,
   computePersonalQuestionTarget
@@ -316,7 +316,11 @@ export function registerCalls(): void {
       // .then()-ed onto the identity/contact one above): a Sales Brain
       // failure must never be able to affect contact resolution, and vice
       // versa. No-ops instantly if the feature is off (see its own gate).
-      void runMemoryExtractionForCall(summary.id).catch(() => {})
+      //
+      // M26 Batch 5 — now a BATCH job. 'post-save' means this pass stores NO
+      // client-scoped memories, by rule rather than by winning a race with
+      // the contact cascade above (see MemoryExtractionPass).
+      enqueueMemoryExtraction(summary.id, { pass: 'post-save' })
       return summary
     }
   )
@@ -592,7 +596,17 @@ export function registerCalls(): void {
         // data it didn't have at save time, and a mono call's contactId may
         // only be known from here on. saveCandidate()'s dedupe makes a
         // second pass over the same transcript cheap/safe, not duplicate work.
-        void runMemoryExtractionForCall(input.callId).catch(() => {})
+        //
+        // M26 Batch 5 — the pass that DOES store client-scoped memories.
+        // contactIdAtTrigger is read here, now, and frozen into the job: if
+        // the buyer gets identified while this sits in the BATCH queue, the
+        // job must still store what it would have stored had it run
+        // inline, not more (see MemoryExtractionPass).
+        const coached = await getCall(callsDir(), input.callId)
+        enqueueMemoryExtraction(input.callId, {
+          pass: 'post-coach',
+          contactIdAtTrigger: coached?.contactId ?? null
+        })
         if (coach2Enabled) {
           void setCallTypeIfUnset(callsDir(), input.callId, callType).catch(() => {})
           void updateFocusSkillAfterCoaching(input.callId).catch(() => {})
