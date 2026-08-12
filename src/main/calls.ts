@@ -60,6 +60,7 @@ import {
 import { selectFocusSkill, type FocusSkillState } from './coaching/focus-skill'
 import { loadFocusSkill, saveFocusSkill } from './coaching/focus-skill-fs'
 import { getJobManager } from './jobs/instance'
+import { createScanTally } from './objection-scan-tally'
 import type { Job } from './jobs/types'
 
 function objectionQueueDir(): string {
@@ -87,12 +88,35 @@ const SUMMARIZE_JOB_TYPE = 'calls:summarize'
 const COACH_JOB_TYPE = 'calls:coach'
 const FIND_COMMITMENTS_JOB_TYPE = 'calls:findCommitments'
 
+/** What happened to one call's mining attempt. `skipped` is deliberately
+ *  DISTINCT from `ok: false` — see mineCallIntoQueue's own doc comment. */
+export interface MineCallOutcome {
+  ok: boolean
+  added: number
+  /** True when nothing was attempted because this exact call was already
+   *  being mined by the other trigger right now. Not a failure — the other
+   *  attempt is still running and will mark the call mined itself. */
+  skipped?: boolean
+}
+
 /** Mine one call and stage any grounded candidates in the review queue, then
  *  mark the call as mined — shared by the new-call auto-mine hook and the
  *  manual "scan past calls" trigger. Only marks the call mined on SUCCESS, so
- *  a transient failure (e.g. a rate limit) leaves it eligible for a retry. */
-async function mineCallIntoQueue(callId: string): Promise<{ ok: boolean; added: number }> {
-  if (miningInFlight.has(callId)) return { ok: false, added: 0 }
+ *  a transient failure (e.g. a rate limit) leaves it eligible for a retry.
+ *
+ *  The `skipped` flag exists because the two triggers genuinely collide: a
+ *  call saved shortly before a scan starts is still objectionsMined=false
+ *  when eligibleForMining() snapshots the list, so the scan picks it up
+ *  while its auto-mine AI call is still outstanding, and hits the
+ *  miningInFlight guard below. Reporting that as a plain `ok: false` made it
+ *  indistinguishable from a real API failure to the scan loop — which counts
+ *  consecutive failures and aborts the WHOLE remaining scan after 3, so a
+ *  handful of these harmless collisions could stop a scan early on a
+ *  perfectly healthy API and report "stopped after repeated errors". A
+ *  skip is now its own outcome: the scan moves on without counting it
+ *  toward that threshold (the other attempt is doing the work anyway). */
+async function mineCallIntoQueue(callId: string): Promise<MineCallOutcome> {
+  if (miningInFlight.has(callId)) return { ok: false, added: 0, skipped: true }
   miningInFlight.add(callId)
   try {
     const call = await getCall(callsDir(), callId)
@@ -755,43 +779,35 @@ export function registerCalls(): void {
         const calls = await listCalls(callsDir())
         const eligible = eligibleForMining(calls)
         const itemsTotal = eligible.length
-        let scanned = 0
-        let candidatesAdded = 0
-        let failed = 0
-        let consecutiveFailures = 0
-        let stopped: 'disabled' | 'errors' | undefined
+        // All the bookkeeping (including the skip-vs-failure distinction the
+        // circuit breaker depends on) lives in objection-scan-tally.ts as
+        // pure, unit-tested logic — this loop just drives it.
+        const tally = createScanTally()
         handle.reportProgress({ mode: 'determinate', itemsDone: 0, itemsTotal })
         for (const c of eligible) {
           if (handle.signal.aborted) throw new DOMException('Aborted', 'AbortError')
           // The toggle is the HARD gate ("off means no call is ever read") —
           // honor a mid-scan flip instead of only checking once at the start.
           if (!isObjectionMiningEnabled()) {
-            stopped = 'disabled'
+            tally.stopDisabled()
             break
           }
           const res = await mineCallIntoQueue(c.id)
-          if (res.ok) {
-            scanned++
-            candidatesAdded += res.added
-            consecutiveFailures = 0
-          } else {
-            failed++
-            // A run of failures means the API is down/rate-limited — stop
-            // instead of burning a doomed request per remaining call. The
-            // unmined calls stay eligible for a later retry.
-            if (++consecutiveFailures >= 3) {
-              stopped = 'errors'
-              break
-            }
-          }
-          handle.reportProgress({ mode: 'determinate', itemsDone: scanned + failed, itemsTotal })
+          const decision = tally.record(
+            res.skipped
+              ? { kind: 'skipped' }
+              : res.ok
+                ? { kind: 'ok', added: res.added }
+                : { kind: 'failed' }
+          )
+          handle.reportProgress({
+            mode: 'determinate',
+            itemsDone: tally.itemsDone(),
+            itemsTotal
+          })
+          if (decision === 'stop') break
         }
-        const parts = [`Scanned ${scanned} call${scanned === 1 ? '' : 's'}`]
-        parts.push(`found ${candidatesAdded} suggestion${candidatesAdded === 1 ? '' : 's'}`)
-        if (failed > 0) parts.push(`${failed} failed`)
-        if (stopped === 'errors') parts.push('stopped after repeated errors')
-        else if (stopped === 'disabled') parts.push('stopped — toggle turned off')
-        return parts.join(', ')
+        return tally.summary()
       }
     }
   })
