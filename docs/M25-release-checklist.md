@@ -25,6 +25,13 @@ explicit requirement going in.
       release, since it means a broken Sales Brain can ship without breaking
       anyone who hasn't opted in.
 
+## Lessons from actually shipping this (v1.1.9 → v1.1.10)
+
+Two real incidents happened getting this milestone out the door — both fixed, both worth carrying forward:
+
+- **A bad startup-ordering bug shipped in v1.1.9 despite the QA checklist above existing** — because the checklist wasn't run against a profile with the local embeddings model *not yet cached*, which is exactly the condition that triggered it. The checklist now has a dedicated section (0.5) forcing that specific condition. General lesson: when a QA checklist is written before a bug is known, revisit it after every real incident — "we had a checklist" isn't the same as "the checklist covered this."
+- **The GitHub Actions release workflow itself failed to publish cleanly twice** (a race between the NSIS and portable Windows targets both trying to create the GitHub release simultaneously) before being fixed with a dedicated "pre-create the release" step. If a future `release.yml` change ever reintroduces multiple Windows publish targets in one electron-builder invocation, check that a release-creation race can't reappear.
+
 ## Migration verification (do this literally, don't just re-read the code)
 
 - [ ] Take a real, existing `memory.db` from a profile that was on the
