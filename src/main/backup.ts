@@ -48,9 +48,29 @@ import {
 import { getJobManager } from './jobs/instance'
 import type { Job } from './jobs/types'
 
-/** M26 Phase 3 — the manual "Sync now" button's job. Registered from
- *  registerBackup(), which runs after main creates the shared JobManager. */
+/** M26 Phase 3 — the visible sync job. Registered from registerBackup(),
+ *  which runs after main creates the shared JobManager. */
 const SYNC_JOB_TYPE = 'backup:sync'
+
+/** Start a visible sync job unless one is already queued or running, and
+ *  return its id. Shared by the manual "Sync now" button and the sign-in
+ *  restore, so the two can never race into overlapping jobs.
+ *
+ *  Returns null only if the job system refuses — never throws: a failed
+ *  enqueue must not take down a sign-in. */
+function startSyncJob(): string | null {
+  try {
+    const manager = getJobManager()
+    const already = manager
+      .list()
+      .find((j: Job) => j.type === SYNC_JOB_TYPE && (j.state === 'running' || j.state === 'queued'))
+    if (already) return already.id
+    return manager.enqueue(SYNC_JOB_TYPE, {}).id
+  } catch (err) {
+    console.error('[backup] could not start the sync job:', err)
+    return null
+  }
+}
 
 function tasksDir(): string {
   return join(app.getPath('userData'), 'tasks')
@@ -1081,13 +1101,7 @@ export function registerBackup(): void {
   // Manual triggers (the settings UI in a later step calls these).
   ipcMain.handle('backup:pushNow', () => enqueue(pushAll))
   ipcMain.handle('backup:syncNow', async (): Promise<{ ok: boolean; jobId?: string }> => {
-    const manager = getJobManager()
-    const already = manager
-      .list()
-      .find((j: Job) => j.type === SYNC_JOB_TYPE && (j.state === 'running' || j.state === 'queued'))
-    if (already) return { ok: true, jobId: already.id }
-    const job = manager.enqueue(SYNC_JOB_TYPE, {})
-    return { ok: true, jobId: job.id }
+    return { ok: true, jobId: startSyncJob() ?? undefined }
   })
   ipcMain.handle('backup:getStatus', async () => {
     const state = await readState()
@@ -1122,14 +1136,30 @@ export function registerBackup(): void {
     const uid = session?.user?.id
     // A fresh SIGN-IN is the restore moment (first run on a new machine pulls
     // everything back). Session restores are covered by the launch sync below.
-    // Wrapped in an arrow rather than passed bare: enqueue() calls its fn as
-    // `chain.then(fn, fn)`, so a bare reference would receive the previous
-    // chain value as syncNow's `onStage` argument. Harmless today (the chain
-    // always settles to undefined) but a trap for the next edit.
-    if (event === 'SIGNED_IN' && uid) void enqueue(() => syncNow())
+    //
+    // M26 Batch 5 — the ONE automatic sync that runs as a visible job. It is
+    // rare (once per sign-in) and it is the slow one: on a new machine this
+    // pulls down everything, and without visible progress it looks like the
+    // app has hung. Exactly the case BUG-051's restore-vs-backup wording was
+    // written for.
+    if (event === 'SIGNED_IN' && uid) startSyncJob()
   })
 
   // Full sync shortly after launch (restore first, then push), then periodic.
+  //
+  // DELIBERATELY NOT JOBS, and not for the Batch 4 reason (unbounded history
+  // — retention.ts's 500-job cap fixed that). The remaining objection is
+  // noise: the 10-minute timer alone is ~144 jobs/day, which inside a
+  // 500-entry cap would bury every genuinely interesting entry — a failed
+  // coaching run, an interrupted import — under a wall of identical
+  // "Syncing with the cloud" rows within a couple of days. These two are
+  // routine heartbeats with no user decision attached, and "when did it last
+  // sync / did it fail" is already answered directly by the Settings card
+  // (lastSyncAt + the separate push/pull errors). Visibility here would cost
+  // more than it delivers.
+  //
+  // They still share the SAME enqueue() chain as the job's executor, so a
+  // heartbeat and a visible sync can never overlap.
   setTimeout(() => void enqueue(() => syncNow()), 3_000)
   setInterval(() => void enqueue(() => syncNow()), 10 * 60_000)
 }
