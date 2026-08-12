@@ -36,6 +36,7 @@ import { JobManager } from './jobs/JobManager'
 import { registerJobsIpc } from './jobs/ipc'
 import { registerFakeJobTypes } from './jobs/fakeJobs'
 import { wireJobActivity } from './jobs/activity'
+import { setJobManager } from './jobs/instance'
 writeCrashLog('imports resolved', 'all top-level imports completed without throwing')
 
 // Renamed "Sales OS" -> "CallRise AI" (rebrand), but the on-disk data folder
@@ -291,6 +292,17 @@ app.whenReady().then(async () => {
     return
   }
 
+  // M26 — created before every other registerX() call below: several of
+  // them (starting with Phase 3's adapters, e.g. calls.ts) register their
+  // own job type at registration time via jobs/instance.ts's singleton, so
+  // the manager has to exist and be set first, not merely before
+  // createWindow() (Phase 1/2's original, now too-late, placement).
+  jobManager = new JobManager()
+  setJobManager(jobManager)
+  registerJobsIpc(jobManager)
+  if (is.dev) registerFakeJobTypes(jobManager)
+  wireJobActivity(jobManager, () => mainWindow)
+
   // Before anything that might use Deepgram/Anthropic — a user's own
   // Settings-entered key (if any) needs to be in process.env first.
   await loadStoredAiKeysIntoEnv()
@@ -433,19 +445,6 @@ app.whenReady().then(async () => {
   registerCrmNoteGenerator()
   registerContactIntelligence()
   registerDetectionService()
-
-  // M26 Phase 1 — the job queue itself. Nothing from the Phase 0 inventory
-  // is wired to it yet (that's Phase 3, one adapter/one commit at a time);
-  // this just brings the engine + its IPC surface up so the Job Inspector
-  // (Settings, dev builds only) can exercise it with the fake job types.
-  jobManager = new JobManager()
-  registerJobsIpc(jobManager)
-  if (is.dev) registerFakeJobTypes(jobManager)
-  // A getter, not `mainWindow` itself — createWindow() (and therefore the
-  // real BrowserWindow) hasn't run yet at this point in startup; every
-  // callback inside wireJobActivity reads the CURRENT value when an event
-  // actually fires, not whatever it was here.
-  wireJobActivity(jobManager, () => mainWindow)
 
   writeCrashLog('registrations done', 'all registerX() calls completed, about to createWindow()')
 

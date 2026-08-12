@@ -47,11 +47,20 @@ import { generateCrmNote } from './crm-notes'
 import { resolveAndSaveIdentities } from './speaker-identity/resolve-for-call'
 import { runFullAutoContactIntelligence } from './contact-intelligence-ipc'
 import { runMemoryExtractionForCall } from './memory/memory-hooks'
-import { computePersonalTalkRatioTarget, computePersonalQuestionTarget } from './memory/personal-benchmarks'
+import {
+  computePersonalTalkRatioTarget,
+  computePersonalQuestionTarget
+} from './memory/personal-benchmarks'
 import { detectCallType, TALK_RATIO_TARGETS } from './coaching/benchmarks'
-import { computeSkillProgress, type PersonalBenchmarks, type SkillProgress } from './coaching/skill-graph'
+import {
+  computeSkillProgress,
+  type PersonalBenchmarks,
+  type SkillProgress
+} from './coaching/skill-graph'
 import { selectFocusSkill, type FocusSkillState } from './coaching/focus-skill'
 import { loadFocusSkill, saveFocusSkill } from './coaching/focus-skill-fs'
+import { getJobManager } from './jobs/instance'
+import type { Job } from './jobs/types'
 
 function objectionQueueDir(): string {
   return join(app.getPath('userData'), 'objection-queue')
@@ -70,7 +79,10 @@ function callsDir(): string {
  *  racing the manual scan — or two overlapping scans — would mine the same
  *  call twice and duplicate its candidates in the review queue. */
 const miningInFlight = new Set<string>()
-let scanInFlight = false
+/** M26 Phase 3 — job type for the manual "scan my past calls" trigger below.
+ *  Registered once, from registerCalls(), which always runs after main has
+ *  created and set the shared JobManager (see main/index.ts). */
+const SCAN_JOB_TYPE = 'objections:scanPastCalls'
 
 /** Mine one call and stage any grounded candidates in the review queue, then
  *  mark the call as mined — shared by the new-call auto-mine hook and the
@@ -120,7 +132,8 @@ async function computePersonalBenchmarksForCallType(
       TALK_RATIO_TARGETS[callType]
     ) ?? undefined
   const questionTarget =
-    computePersonalQuestionTarget(sameType.map((c) => ({ count: c.questionCount ?? 0 }))) ?? undefined
+    computePersonalQuestionTarget(sameType.map((c) => ({ count: c.questionCount ?? 0 }))) ??
+    undefined
 
   if (!talkRatioTarget && !questionTarget) return undefined
   return { talkRatioTarget, questionTarget }
@@ -642,45 +655,49 @@ export function registerCalls(): void {
     }
   )
 
-  // How many past calls are eligible (have a transcript, not yet mined) —
-  // shown before the user confirms the manual scan below.
-  ipcMain.handle('objections:scanEstimate', async (): Promise<{ eligibleCount: number }> => {
-    if (!isObjectionMiningEnabled()) return { eligibleCount: 0 }
-    const calls = await listCalls(callsDir())
-    return { eligibleCount: eligibleForMining(calls).length }
-  })
-
-  // The manual "scan my past calls" trigger — only ever runs when the user
-  // clicks it (never automatically), one call at a time so a slow or rate-
-  // limited request can't pile up concurrent API calls.
-  ipcMain.handle(
-    'objections:scanPastCalls',
-    async (): Promise<{
-      ok: boolean
-      scanned: number
-      candidatesAdded: number
-      failed: number
-      stopped?: 'disabled' | 'errors'
-    }> => {
-      if (!isObjectionMiningEnabled()) {
-        return { ok: false, scanned: 0, candidatesAdded: 0, failed: 0 }
-      }
-      // One scan at a time, enforced HERE — the renderer's disabled button
-      // resets on remount, so it can't be the only guard.
-      if (scanInFlight) return { ok: false, scanned: 0, candidatesAdded: 0, failed: 0 }
-      scanInFlight = true
-      try {
+  // M26 Phase 3 — registered once here rather than at module load, since it
+  // needs the shared JobManager, which main/index.ts creates and sets
+  // before calling registerCalls() (see jobs/instance.ts). The mining logic
+  // itself (mineCallIntoQueue -> mineObjections -> addToQueue) is completely
+  // unchanged from before this migration — only its execution home (was:
+  // inline inside this IPC handler, blocking the call until the whole scan
+  // finished; now: a BATCH-lane job that survives the renderer navigating
+  // away) and how progress/results reach the renderer (was: the handler's
+  // own return value once fully done; now: real progress + a resultRef,
+  // both visible in the Activity Center as the scan runs, not just at the
+  // end) changed.
+  //
+  // Deliberately NO handle.checkpoint() here: mineCallIntoQueue already
+  // marks each call objectionsMinedAt on success before moving to the next
+  // one, so eligibleForMining() naturally excludes finished calls on any
+  // later run -- an interrupted-then-resumed scan (or a plain Retry) just
+  // recomputes "what's still eligible" fresh and continues, with no extra
+  // bookkeeping needed to get that resumability for free. This is the exact
+  // per-item persistence the Phase 0 research already flagged as this
+  // operation's own existing resume story.
+  getJobManager().registerType<Record<string, never>, string>({
+    type: SCAN_JOB_TYPE,
+    lane: 'BATCH',
+    titleFor: () => 'Scanning past calls for objections',
+    executor: {
+      kind: 'inline-async',
+      run: async (_input, handle) => {
         const calls = await listCalls(callsDir())
         const eligible = eligibleForMining(calls)
+        const itemsTotal = eligible.length
         let scanned = 0
         let candidatesAdded = 0
         let failed = 0
         let consecutiveFailures = 0
+        let stopped: 'disabled' | 'errors' | undefined
+        handle.reportProgress({ mode: 'determinate', itemsDone: 0, itemsTotal })
         for (const c of eligible) {
+          if (handle.signal.aborted) throw new DOMException('Aborted', 'AbortError')
           // The toggle is the HARD gate ("off means no call is ever read") —
           // honor a mid-scan flip instead of only checking once at the start.
           if (!isObjectionMiningEnabled()) {
-            return { ok: true, scanned, candidatesAdded, failed, stopped: 'disabled' }
+            stopped = 'disabled'
+            break
           }
           const res = await mineCallIntoQueue(c.id)
           if (res.ok) {
@@ -693,16 +710,49 @@ export function registerCalls(): void {
             // instead of burning a doomed request per remaining call. The
             // unmined calls stay eligible for a later retry.
             if (++consecutiveFailures >= 3) {
-              return { ok: true, scanned, candidatesAdded, failed, stopped: 'errors' }
+              stopped = 'errors'
+              break
             }
           }
+          handle.reportProgress({ mode: 'determinate', itemsDone: scanned + failed, itemsTotal })
         }
-        return { ok: true, scanned, candidatesAdded, failed }
-      } finally {
-        scanInFlight = false
+        const parts = [`Scanned ${scanned} call${scanned === 1 ? '' : 's'}`]
+        parts.push(`found ${candidatesAdded} suggestion${candidatesAdded === 1 ? '' : 's'}`)
+        if (failed > 0) parts.push(`${failed} failed`)
+        if (stopped === 'errors') parts.push('stopped after repeated errors')
+        else if (stopped === 'disabled') parts.push('stopped — toggle turned off')
+        return parts.join(', ')
       }
     }
-  )
+  })
+
+  // How many past calls are eligible (have a transcript, not yet mined) —
+  // shown before the user confirms the manual scan below.
+  ipcMain.handle('objections:scanEstimate', async (): Promise<{ eligibleCount: number }> => {
+    if (!isObjectionMiningEnabled()) return { eligibleCount: 0 }
+    const calls = await listCalls(callsDir())
+    return { eligibleCount: eligibleForMining(calls).length }
+  })
+
+  // The manual "scan my past calls" trigger — only ever runs when the user
+  // clicks it (never automatically). Enqueues and returns immediately; the
+  // renderer tracks the actual run via window.api.jobs (list/onChanged),
+  // same as the Activity Center does, so it keeps working even if the
+  // Objection Library screen isn't the one open when it finishes.
+  ipcMain.handle('objections:scanPastCalls', async (): Promise<{ ok: boolean; jobId?: string }> => {
+    if (!isObjectionMiningEnabled()) return { ok: false }
+    const manager = getJobManager()
+    // One scan at a time, enforced HERE (BATCH's own maxConcurrent already
+    // guarantees this too, but checking explicitly means a second click
+    // hands back the SAME job instead of silently queuing a redundant one
+    // behind it).
+    const already = manager
+      .list()
+      .find((j: Job) => j.type === SCAN_JOB_TYPE && (j.state === 'running' || j.state === 'queued'))
+    if (already) return { ok: true, jobId: already.id }
+    const job = manager.enqueue(SCAN_JOB_TYPE, {})
+    return { ok: true, jobId: job.id }
+  })
 
   // §4.6 — the instant post-call brief. Generates the brief, next steps and a
   // follow-up email, and puts the lot on the clipboard. The clipboard write

@@ -809,18 +809,15 @@ export interface CallsApi {
   /** How many past calls have a transcript but haven't been mined yet — shown
    *  before the user confirms the manual "scan past calls" batch run. */
   objectionScanEstimate: () => Promise<{ eligibleCount: number }>
-  /** Mine every not-yet-mined call with a transcript, one at a time. Gated on
-   *  the toggle; only ever run when the user explicitly clicks the button. */
-  scanPastCallsForObjections: () => Promise<{
-    ok: boolean
-    scanned: number
-    candidatesAdded: number
-    /** Calls that errored (rate limit, network) — still eligible for a retry. */
-    failed: number
-    /** Set when the scan stopped early: the toggle was turned off mid-scan,
-     *  or repeated API errors made continuing pointless. */
-    stopped?: 'disabled' | 'errors'
-  }>
+  /** M26 Phase 3 — enqueues a BATCH-lane job (mines every not-yet-mined call
+   *  with a transcript, one at a time) and returns immediately; it survives
+   *  navigating away from the Objection Library screen. Track it via
+   *  window.api.jobs (list/onChanged), filtering for
+   *  type === 'objections:scanPastCalls' — same job the Activity Center
+   *  already shows. Gated on the toggle; only ever run when the user
+   *  explicitly clicks the button. If a scan is already running/queued,
+   *  hands back that job's id instead of starting a second one. */
+  scanPastCallsForObjections: () => Promise<{ ok: boolean; jobId?: string }>
   /** AI Note Taker's auto-title feature: generate + save a title in one step. */
   generateTitle: (callId: string) => Promise<{ ok: true; title: string } | { ok: false }>
   /** §4.6 — brief + next steps + follow-up email, written straight to the
