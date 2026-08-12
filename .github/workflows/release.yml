@@ -43,8 +43,17 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "v${{ inputs.version }}"
-          git push origin "v${{ inputs.version }}"
+          TAG="v${{ inputs.version }}"
+          # Idempotent: a manual re-dispatch to retry a failed publish (the
+          # release itself deleted, but the tag left in place on purpose so
+          # the commit identity doesn't drift) must not fail here just
+          # because the tag already exists from the first attempt.
+          if git ls-remote --exit-code --tags origin "$TAG" > /dev/null 2>&1; then
+            echo "Tag $TAG already exists on origin - reusing it."
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
 
       - uses: actions/setup-node@v4
         with:
