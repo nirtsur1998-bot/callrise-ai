@@ -65,6 +65,7 @@ import { formatDate, formatDuration, formatBytes } from './format'
 import { PracticeMode } from './PracticeMode'
 import { RadarReport } from '@renderer/features/deal-intelligence/ui/RadarReport'
 import type { Attachment, Call, Commitment } from './types'
+import type { DetectNameResult } from '../../../../preload/index.d'
 
 /** mm:ss relative to call start — bookmarks store `atMs` as milliseconds. */
 function formatMmSs(ms: number): string {
@@ -105,6 +106,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024
 const SUMMARIZE_JOB_TYPE = 'calls:summarize'
 const COACH_JOB_TYPE = 'calls:coach'
 const FIND_COMMITMENTS_JOB_TYPE = 'calls:findCommitments'
+const DETECT_JOB_TYPE = 'contactIntelligence:detectName'
 
 interface CallDetailProps {
   callId: string
@@ -160,7 +162,6 @@ export function CallDetail({
   // M23 Workstream D — post-hoc "Detect who this was" (transcript self-intro
   // scan). Mirrors autoLinkAttemptedFor's shape: which call id full-auto mode
   // has already tried detection for, so it fires at most once per call.
-  const [detecting, setDetecting] = useState(false)
   const [detectError, setDetectError] = useState<string | null>(null)
   const [detectedNothing, setDetectedNothing] = useState(false)
   const [autoDetectAttemptedFor, setAutoDetectAttemptedFor] = useState<string | null>(null)
@@ -194,7 +195,8 @@ export function CallDetail({
     setAutoLinkNotice(null)
     setAutoLinkAttemptedFor(null)
     setIdentityDismissed(isIdentitySuggestionDismissed(callId))
-    setDetecting(false)
+    // `detecting` is no longer local state — useJobByTarget re-adopts per
+    // callId on its own, so there is nothing to reset here.
     setDetectError(null)
     setDetectedNothing(false)
     setAutoDetectAttemptedFor(null)
@@ -552,29 +554,40 @@ export function CallDetail({
   // background hook in calls.ts usually beats the rep to it anyway (full-
   // auto mode also runs right after the call is saved/coached, independent
   // of this page ever being opened).
+  // M26 Phase 3 — tracked per-call, so the spinner and the outcome survive
+  // navigating away. The job resolves with the full DetectNameResult (see
+  // contact-intelligence-ipc.ts) rather than throwing on a non-error "found
+  // nothing"/"gate is off" outcome, so all three cases still read
+  // distinctly here.
+  const [detectJob, startDetectJob] = useJobByTarget(DETECT_JOB_TYPE, callId, {
+    onSucceeded: (job) => {
+      const res = job.resultData as DetectNameResult | undefined
+      if (!res) return
+      if (res.ok && res.name) void notifyChanged()
+      else if (res.ok) setDetectedNothing(true)
+      else setDetectError(res.message ?? 'Could not detect who this was.')
+    },
+    onFailed: () => setDetectError('Could not detect who this was.')
+  })
+  const detecting = detectJob?.state === 'running' || detectJob?.state === 'queued'
+
   const detectIdentity = useCallback(async () => {
     if (detecting) return
-    setDetecting(true)
     setDetectError(null)
     setDetectedNothing(false)
     try {
       const res = await window.api.contactIntelligence.detectName(callId)
       if (!mountedRef.current) return
-      if (res.ok) {
-        if (res.name) {
-          await notifyChanged() // refresh so the new identity shows up
-        } else {
-          setDetectedNothing(true) // ran cleanly, nothing found — not an error
-        }
+      if (res.ok && res.jobId) {
+        const fresh = await window.api.jobs.get(res.jobId)
+        if (mountedRef.current && fresh) startDetectJob(fresh)
       } else {
-        setDetectError(res.message ?? 'Could not detect who this was.')
+        setDetectError('Could not detect who this was.')
       }
     } catch {
       if (mountedRef.current) setDetectError('Could not detect who this was.')
-    } finally {
-      if (mountedRef.current) setDetecting(false)
     }
-  }, [callId, detecting, notifyChanged])
+  }, [callId, detecting, startDetectJob])
 
   // Auto-link (Settings → CRM, opt-in, default off): when there's exactly one
   // calendar match AND it points to a contact that already exists, link it

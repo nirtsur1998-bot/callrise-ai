@@ -35,6 +35,8 @@ import { getCall, setCallContact, setSpeakerIdentity, speechSegments } from './c
 import { getContactIntelligenceMode, isSelfIntroExtractionAllowed } from './app-settings'
 import { otherPartyKey, detectOtherPartyName } from './contact-intelligence'
 import { createContact, findContactByName, getContact } from './contacts-fs'
+import { getJobManager } from './jobs/instance'
+import type { Job } from './jobs/types'
 
 function callsDir(): string {
   return join(app.getPath('userData'), 'calls')
@@ -119,7 +121,12 @@ async function detectAndSaveIdentity(callId: string): Promise<DetectNameResult> 
     return { ok: false, message: 'Already known.' }
   }
 
-  const name = await detectOtherPartyName(cleanSegments, other.speaker, other.repSpeaker, multichannel)
+  const name = await detectOtherPartyName(
+    cleanSegments,
+    other.speaker,
+    other.repSpeaker,
+    multichannel
+  )
   if (!name) return { ok: true }
 
   // skipIfAlreadyResolved (not skipIfManual alone) — the AI call above can
@@ -235,19 +242,91 @@ export async function runFullAutoContactIntelligence(callId: string): Promise<vo
 
 let registered = false
 
+/** M26 Phase 3 — the manual "Detect who this was" button's job. */
+const DETECT_JOB_TYPE = 'contactIntelligence:detectName'
+
 export function registerContactIntelligence(): void {
   if (registered) return
   registered = true
 
-  ipcMain.handle('contactIntelligence:detectName', async (_e, callId: string): Promise<DetectNameResult> => {
-    try {
-      const result = await detectAndSaveIdentity(callId)
-      if (result.ok && result.name) {
-        await maybeAutoCreateContact(callId).catch(() => {})
+  // ==========================================================================
+  // WHY THIS JOB MUST STAY `kind: 'inline-async'` — DO NOT CHANGE TO 'worker'
+  // ==========================================================================
+  // This looks like an obvious candidate to move onto a worker thread "for
+  // free parallelism". It is not, and doing so would silently corrupt the
+  // AUTOMATIC path (runFullAutoContactIntelligence, fired twice per call from
+  // calls.ts) — not this one.
+  //
+  // The manual button and the automatic hook are not merely similar: they
+  // call the SAME two functions, detectAndSaveIdentity() and
+  // maybeAutoCreateContact(). Those are made safe against each other by two
+  // plain in-process JavaScript Maps:
+  //
+  //   * autoCreateLocks (this file, keyed by normalized contact NAME) — stops
+  //     two concurrent resolutions of the same buyer from both seeing
+  //     findContactByName() miss and both calling createContact(), which
+  //     would produce DUPLICATE CONTACTS.
+  //   * callLocks (calls-fs.ts) — serializes read-modify-write on a call file,
+  //     so two writers can't clobber each other's speakerIdentities/contactId.
+  //
+  // A 'worker' executor runs in a separate V8 isolate with its OWN module
+  // instances, hence its OWN copies of both Maps. They would still *appear*
+  // to work — every lock acquisition succeeds instantly — while guarding
+  // nothing at all across the two realms. The failure is silent, data-level,
+  // and would show up as occasional duplicate contacts and lost identity
+  // writes that no test in this file would catch.
+  //
+  // Verified by a shared-code-path audit (M26 Phase 3) and locked in by
+  // explicit founder decision. If a future change genuinely needs this off
+  // the main thread, the locks have to become cross-realm FIRST (a real
+  // design change), not as a side effect of switching executor kinds.
+  // ==========================================================================
+  getJobManager().registerType<{ callId: string }, DetectNameResult>({
+    type: DETECT_JOB_TYPE,
+    lane: 'INTERACTIVE',
+    titleFor: () => 'Detecting who this was',
+    targetRefFor: (i) => i.callId,
+    // This feature already fires its own, far more useful notification when
+    // it actually attaches someone (notifyAutoAttached: "Automatically
+    // created and attached 'Dana'"). Without this flag, migrating it to a
+    // job would produce TWO OS notifications for one auto-attach — the
+    // feature's, plus a generic "Detecting who this was — done".
+    silent: true,
+    executor: {
+      kind: 'inline-async',
+      run: async (input) => {
+        const result = await detectAndSaveIdentity(input.callId)
+        if (result.ok && result.name) {
+          await maybeAutoCreateContact(input.callId).catch(() => {})
+        }
+        // Resolves with the full DetectNameResult rather than throwing on
+        // !ok: "ran cleanly and found nothing" and "refused because a gate
+        // is off" are both legitimate non-error outcomes the button has
+        // distinct wording for, and collapsing them into a job failure
+        // would lose that. A genuine crash still rejects normally.
+        return result
       }
-      return result
-    } catch {
-      return { ok: false, message: 'Something went wrong. Please try again.' }
     }
   })
+
+  ipcMain.handle(
+    'contactIntelligence:detectName',
+    async (_e, callId: string): Promise<{ ok: boolean; jobId?: string }> => {
+      const manager = getJobManager()
+      // Dedupe per call: without this, repeated clicks (or CallDetail
+      // remounting under full-auto mode) queue N jobs and fire N concurrent
+      // AI calls — autoCreateLocks does NOT cover detectOtherPartyName.
+      const already = manager
+        .list()
+        .find(
+          (j: Job) =>
+            j.type === DETECT_JOB_TYPE &&
+            j.targetRef === callId &&
+            (j.state === 'running' || j.state === 'queued')
+        )
+      if (already) return { ok: true, jobId: already.id }
+      const job = manager.enqueue(DETECT_JOB_TYPE, { callId })
+      return { ok: true, jobId: job.id }
+    }
+  )
 }

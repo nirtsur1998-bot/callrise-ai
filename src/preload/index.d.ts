@@ -1056,7 +1056,11 @@ export interface DetectNameResult {
  *  Detail page. Scoped to one call, no callId->contactId mapping needed
  *  since it only writes a speakerIdentities entry, not a contact. */
 export interface ContactIntelligenceApi {
-  detectName: (callId: string) => Promise<DetectNameResult>
+  /** M26 Phase 3: enqueues a job and returns its id. The full
+   *  DetectNameResult comes back as that job's resultData, so the button's
+   *  three distinct outcomes (found / ran-clean-found-nothing / refused
+   *  with a reason) all survive. */
+  detectName: (callId: string) => Promise<{ ok: boolean; jobId?: string }>
 }
 
 export type DealStageKind = 'open' | 'won' | 'lost'

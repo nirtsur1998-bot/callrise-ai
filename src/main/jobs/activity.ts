@@ -68,6 +68,15 @@ export class ActivityNotifier {
       // read as an odd "Test job — done" the instant every call wraps up).
       // Only non-LIVE jobs are notification-worthy here.
       if (job.lane === 'LIVE') continue
+      // Job types that ship their own, better-worded completion
+      // notification — contact auto-attach's "Automatically created and
+      // attached 'Dana'" beats a generic "Detecting who this was — done".
+      // They still appear in the Activity Center; this only suppresses the
+      // toast/OS-notification stream, so migrating such a feature to a job
+      // doesn't silently double up its notifications. Safe to skip before
+      // the bookkeeping below: `previous` is rebuilt from the full list at
+      // the end of this method regardless.
+      if (job.silent) continue
       const prior = this.previous.get(job.id)
       if (!prior) {
         // A brand-new job. Suppressed entirely during a call, not

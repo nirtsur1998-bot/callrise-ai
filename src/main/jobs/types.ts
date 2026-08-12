@@ -58,6 +58,15 @@ export interface Job {
    *  (or resuming after a full app restart) finds the same result here. */
   resultData?: unknown
   cancellable: boolean
+  /** This job never produces its own toast/OS notification — it still shows
+   *  in the Activity Center like everything else. For features that already
+   *  ship a purpose-built completion notification of their own, whose
+   *  wording is far more useful than a generic "X — done" (e.g. contact
+   *  auto-attach's "Automatically created and attached 'Dana'"). Without
+   *  this, migrating such a feature to a job silently doubles up its
+   *  notifications. Copied from the job type at enqueue, same as
+   *  `cancellable`. */
+  silent?: boolean
   /** The serializable input the executor was (or will be) called with.
    *  Kept so Retry can re-run a failed job identically. */
   input: unknown
@@ -124,6 +133,9 @@ export interface JobTypeDefinition<TInput = unknown, TResult = unknown> {
   /** Default true. Set false only for work with no meaningful mid-flight
    *  stopping point (rare — most jobs should stay cancellable). */
   cancellable?: boolean
+  /** Default false. Set true when this feature already fires its own,
+   *  better-worded completion notification — see Job.silent. */
+  silent?: boolean
   /** Human title for the Activity Center ("Coaching call with Dana"),
    *  computed from the input at enqueue time. */
   titleFor: (input: TInput) => string

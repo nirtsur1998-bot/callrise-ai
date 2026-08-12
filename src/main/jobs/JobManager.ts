@@ -118,6 +118,7 @@ export class JobManager {
       priority: opts.priority ?? 0,
       createdAt: Date.now(),
       cancellable: def.cancellable ?? true,
+      silent: def.silent ?? false,
       input
     }
     this.jobs.set(job.id, job)

@@ -57,6 +57,59 @@ describe('ActivityNotifier — starts', () => {
   })
 })
 
+describe('ActivityNotifier — silent job types', () => {
+  // Some features already fire their own, better-worded completion
+  // notification (contact auto-attach's "Automatically created and attached
+  // 'Dana'"). Migrating those to a job must not silently double up what the
+  // rep actually sees.
+  it('never fires a started event for a silent job', () => {
+    const notifier = new ActivityNotifier()
+    const job = makeJob({ silent: true, title: 'Detecting who this was' })
+    expect(notifier.next([job])).toEqual([])
+  })
+
+  it('never fires a completion event for a silent job', () => {
+    const notifier = new ActivityNotifier()
+    const job = makeJob({ silent: true })
+    notifier.next([job])
+    expect(notifier.next([withState(job, 'succeeded')])).toEqual([])
+    const failing = makeJob({ silent: true })
+    notifier.next([failing])
+    expect(notifier.next([withState(failing, 'failed')])).toEqual([])
+  })
+
+  it('a silent job never lands in the post-call digest either', () => {
+    const notifier = new ActivityNotifier()
+    const liveCall = makeJob({ lane: 'LIVE', state: 'running' })
+    const silent = makeJob({ silent: true, state: 'running' })
+    const loud = makeJob({ title: 'Coach this call', state: 'running' })
+    notifier.next([liveCall, silent, loud])
+    notifier.next([liveCall, withState(silent, 'succeeded'), withState(loud, 'succeeded')])
+
+    const events = notifier.next([
+      withState(liveCall, 'succeeded'),
+      withState(silent, 'succeeded'),
+      withState(loud, 'succeeded')
+    ])
+    expect(events).toHaveLength(1)
+    expect(events[0].kind).toBe('digest')
+    if (events[0].kind === 'digest') {
+      // Only the loud one — the silent job's own feature already told the rep.
+      expect(events[0].jobs).toHaveLength(1)
+      expect(events[0].jobs[0].title).toBe('Coach this call')
+    }
+  })
+
+  it('a non-silent job of the same shape still notifies normally — the flag is doing the work, not something else', () => {
+    const notifier = new ActivityNotifier()
+    const job = makeJob({ silent: false, title: 'Detecting who this was' })
+    notifier.next([job])
+    const events = notifier.next([withState(job, 'succeeded')])
+    expect(events).toHaveLength(1)
+    expect(events[0].kind).toBe('succeeded')
+  })
+})
+
 describe('ActivityNotifier — completions outside a call', () => {
   it('fires a succeeded event the moment a job transitions to succeeded', () => {
     const notifier = new ActivityNotifier()
