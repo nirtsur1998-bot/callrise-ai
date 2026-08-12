@@ -12,7 +12,19 @@ export type JobState = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelle
  *  `indeterminate` is for the (hopefully rare) job that genuinely has
  *  neither yet — a spinner, not a lie. */
 export type JobProgress =
-  | { mode: 'determinate'; itemsDone: number; itemsTotal: number }
+  | {
+      mode: 'determinate'
+      itemsDone: number
+      itemsTotal: number
+      /** How to render the pair. Omitted (the default) means countable
+       *  things — "12 / 50 calls". 'percent' means itemsDone IS the
+       *  percentage and itemsTotal is 100, rendered "45%": a download has
+       *  no meaningful item count, and "47185920 / 98304000" is not
+       *  something to show a human. Deliberately narrow — this describes
+       *  presentation only, and the taskbar bar reads the same fraction
+       *  either way. */
+      unit?: 'percent'
+    }
   | { mode: 'stages'; stageLabel: string }
   | { mode: 'indeterminate' }
 

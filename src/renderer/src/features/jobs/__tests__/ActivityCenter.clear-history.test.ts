@@ -124,6 +124,10 @@ function buttonWith(text: string): HTMLButtonElement | undefined {
   ) as HTMLButtonElement | undefined
 }
 
+function bodyText(): string {
+  return document.body.textContent ?? ''
+}
+
 describe('ActivityCenter — Clear history must not destroy unreviewed AI output', () => {
   beforeEach(() => {
     container = document.createElement('div')
@@ -175,5 +179,50 @@ describe('ActivityCenter — Clear history must not destroy unreviewed AI output
     store = [UNREVIEWED_DRAFT, makeJob({ id: 'routine-1' })]
     await mountAndOpen()
     expect(buttonWith('Clear history')).toBeDefined()
+  })
+})
+
+describe('ActivityCenter — determinate progress rendering', () => {
+  beforeEach(() => {
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    setupApi()
+  })
+
+  afterEach(async () => {
+    await act(async () => root?.unmount())
+    root = null
+    container.remove()
+  })
+
+  it('renders a percent-unit job as "45%", not as a raw byte pair', async () => {
+    // The update download: electron-updater always knew the exact percent,
+    // but nothing listened, so this showed a fake spinner for what is often
+    // the longest operation in the product.
+    store = [
+      makeJob({
+        id: 'download',
+        type: 'updater:download',
+        title: 'Downloading update',
+        state: 'running',
+        progress: { mode: 'determinate', itemsDone: 45, itemsTotal: 100, unit: 'percent' }
+      })
+    ]
+    await mountAndOpen()
+    expect(bodyText()).toContain('45%')
+    expect(bodyText()).not.toContain('45 / 100')
+  })
+
+  it('still renders a countable job as "12 / 50" — the unit is opt-in, nothing else changed', async () => {
+    store = [
+      makeJob({
+        id: 'scan',
+        title: 'Scanning past calls',
+        state: 'running',
+        progress: { mode: 'determinate', itemsDone: 12, itemsTotal: 50 }
+      })
+    ]
+    await mountAndOpen()
+    expect(bodyText()).toContain('12 / 50')
   })
 })

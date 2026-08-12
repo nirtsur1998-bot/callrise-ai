@@ -26,7 +26,12 @@ const STATE_TONE: Record<JobState, BadgeTone> = {
 }
 
 function formatProgress(progress: Job['progress']): string | null {
-  if (progress.mode === 'determinate') return `${progress.itemsDone} / ${progress.itemsTotal}`
+  if (progress.mode === 'determinate') {
+    // A download has no item count worth showing — "47185920 / 98304000"
+    // is not something to put in front of a human.
+    if (progress.unit === 'percent') return `${progress.itemsDone}%`
+    return `${progress.itemsDone} / ${progress.itemsTotal}`
+  }
   if (progress.mode === 'stages') return progress.stageLabel
   return null
 }

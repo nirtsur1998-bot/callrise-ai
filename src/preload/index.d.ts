@@ -1915,7 +1915,15 @@ export type JobLane = 'LIVE' | 'INTERACTIVE' | 'BATCH' | 'MAINTENANCE'
 export type JobState = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
 
 export type JobProgress =
-  | { mode: 'determinate'; itemsDone: number; itemsTotal: number }
+  | {
+      mode: 'determinate'
+      itemsDone: number
+      itemsTotal: number
+      /** 'percent' means itemsDone IS the percentage (itemsTotal 100),
+       *  rendered "45%" — for work with no meaningful item count, like a
+       *  download. Omitted means countable things, "12 / 50". */
+      unit?: 'percent'
+    }
   | { mode: 'stages'; stageLabel: string }
   | { mode: 'indeterminate' }
 
