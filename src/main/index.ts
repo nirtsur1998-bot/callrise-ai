@@ -25,7 +25,7 @@ process.on('unhandledRejection', (err) => writeCrashLog('unhandledRejection', er
 writeCrashLog('process started', 'reached top of main/index.ts')
 
 import { config as loadEnv } from 'dotenv'
-import { app, shell, BrowserWindow, session } from 'electron'
+import { app, shell, BrowserWindow, session, dialog } from 'electron'
 import { join, dirname } from 'path'
 import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -35,6 +35,7 @@ import { registerCrashLogging, registerLog } from './log'
 import { JobManager } from './jobs/JobManager'
 import { registerJobsIpc } from './jobs/ipc'
 import { registerFakeJobTypes } from './jobs/fakeJobs'
+import { wireJobActivity } from './jobs/activity'
 writeCrashLog('imports resolved', 'all top-level imports completed without throwing')
 
 // Renamed "Sales OS" -> "CallRise AI" (rebrand), but the on-disk data folder
@@ -410,10 +411,7 @@ app.whenReady().then(async () => {
   // failure genuinely can never take the rest of startup down with it,
   // matching what was already documented as the intent.
   try {
-    await Promise.race([
-      initSalesBrain(),
-      new Promise((resolve) => setTimeout(resolve, 15_000))
-    ])
+    await Promise.race([initSalesBrain(), new Promise((resolve) => setTimeout(resolve, 15_000))])
   } catch (err) {
     console.error('[sales-brain] init failed at startup, disabled for this session:', err)
   }
@@ -443,6 +441,11 @@ app.whenReady().then(async () => {
   jobManager = new JobManager()
   registerJobsIpc(jobManager)
   if (is.dev) registerFakeJobTypes(jobManager)
+  // A getter, not `mainWindow` itself — createWindow() (and therefore the
+  // real BrowserWindow) hasn't run yet at this point in startup; every
+  // callback inside wireJobActivity reads the CURRENT value when an event
+  // actually fires, not whatever it was here.
+  wireJobActivity(jobManager, () => mainWindow)
 
   writeCrashLog('registrations done', 'all registerX() calls completed, about to createWindow()')
 
@@ -463,23 +466,68 @@ app.whenReady().then(async () => {
   })
 })
 
-// Stop any live session before the process exits.
-app.on('before-quit', () => {
-  disposeTranscription()
-  disposeVirtualMic()
-  disposeDetectionService()
-  disposeOverlay()
-  disposeTray()
-  // M26 Phase 1 — best-effort only: abort in-flight job work and flush the
-  // last bit of state that hadn't hit disk yet (JobManager already
-  // persists throttled during normal operation, so this closes a small gap
-  // rather than doing the only save). NOT the real quit guard from
-  // CLAUDE.md's Phase 2 (a dialog listing running jobs, "wait" vs "cancel
-  // and quit") — that still needs to replace this once it exists; today
-  // quit always proceeds immediately and a running job simply reappears as
-  // "interrupted" on next launch, same as a crash would.
-  jobManager?.dispose()
-  void jobManager?.flush()
+// M26 Phase 2 — the quit guard. Set once a quit is genuinely going ahead
+// (nothing was running, or the rep chose "Cancel and quit"), so the SECOND
+// before-quit firing (from this handler's own app.quit() call below) skips
+// straight to teardown instead of asking again.
+let quitConfirmed = false
+
+app.on('before-quit', (event) => {
+  if (quitConfirmed) {
+    disposeTranscription()
+    disposeVirtualMic()
+    disposeDetectionService()
+    disposeOverlay()
+    disposeTray()
+    jobManager?.dispose()
+    void jobManager?.flush()
+    return
+  }
+
+  const active =
+    jobManager?.list().filter((j) => j.state === 'running' || j.state === 'queued') ?? []
+  if (active.length === 0) {
+    quitConfirmed = true
+    return // nothing to guard against — let this same event proceed normally
+  }
+
+  event.preventDefault()
+  const count = active.length
+  const options = {
+    type: 'question' as const,
+    buttons: [`Wait for ${count} job${count === 1 ? '' : 's'}`, 'Cancel and quit'],
+    defaultId: 0,
+    cancelId: 0,
+    message: `${count} background job${count === 1 ? ' is' : 's are'} still running.`,
+    detail:
+      'Quitting now stops them (a live call is saved first either way). Backup/maintenance work gets a few seconds to finish on its own.'
+  }
+  const choice = mainWindow
+    ? dialog.showMessageBoxSync(mainWindow, options)
+    : dialog.showMessageBoxSync(options)
+  if (choice === 0) return // "Wait" — stay open, nothing else to do here
+
+  // "Cancel and quit": stop everything cancellable right away, but give
+  // MAINTENANCE-lane work (e.g. a backup already mid-write) a short grace
+  // window to finish on its own rather than yanking it mid-flight.
+  for (const job of active) {
+    if (job.lane !== 'MAINTENANCE') jobManager?.cancel(job.id)
+  }
+  const graceDeadline = Date.now() + 3000
+  const tryQuit = (): void => {
+    const stillFinishing =
+      jobManager
+        ?.list()
+        .some((j) => j.lane === 'MAINTENANCE' && (j.state === 'running' || j.state === 'queued')) ??
+      false
+    if (!stillFinishing || Date.now() >= graceDeadline) {
+      quitConfirmed = true
+      app.quit()
+      return
+    }
+    setTimeout(tryQuit, 250)
+  }
+  tryQuit()
 })
 
 // Quit when all windows are closed, except on macOS.

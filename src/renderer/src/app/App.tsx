@@ -8,6 +8,7 @@ import { isOnboardingComplete } from '@renderer/features/onboarding/prefs'
 import { ToastProvider } from '@renderer/features/notifications/ToastProvider'
 import type { NavId } from '@renderer/features/navigation/nav-items'
 import { ErrorBoundary } from '@renderer/components/ErrorBoundary'
+import { ActivityCenter } from '@renderer/features/jobs/ActivityCenter'
 import { MainApp } from './MainApp'
 
 /** A brief splash while we check whether someone is already signed in. */
@@ -49,9 +50,16 @@ function App(): React.JSX.Element {
       ) : !onboarded ? (
         <OnboardingFlow onComplete={handleOnboardingComplete} />
       ) : (
-        <ErrorBoundary>
-          <MainApp user={user} initialNav={initialNav} />
-        </ErrorBoundary>
+        <>
+          <ErrorBoundary>
+            <MainApp user={user} initialNav={initialNav} />
+          </ErrorBoundary>
+          {/* A sibling of MainApp, not something rendered from inside it —
+              MainApp swaps to a wholly separate tree for Settings, and this
+              needs to survive that swap (see ActivityCenter.tsx's own doc
+              comment for why that matters here specifically). */}
+          <ActivityCenter />
+        </>
       )}
     </ToastProvider>
   )

@@ -1917,6 +1917,12 @@ export interface Job {
   checkpoint?: unknown
 }
 
+/** Mirrors src/main/jobs/activity.ts's ActivityEvent. */
+export type JobActivityEvent =
+  | { kind: 'started'; job: Job; message: string }
+  | { kind: 'succeeded' | 'failed'; job: Job; message: string }
+  | { kind: 'digest'; jobs: Job[]; message: string }
+
 export interface JobsApi {
   list: () => Promise<Job[]>
   get: (id: string) => Promise<Job | null>
@@ -1926,17 +1932,28 @@ export interface JobsApi {
   dismiss: (id: string) => Promise<{ ok: boolean }>
   /** Full current snapshot, pushed at most ~4/sec. */
   onChanged: (cb: (payload: Job[]) => void) => () => void
+  /** One event per start/completion, already call-aware-DND-filtered. */
+  onNotify: (cb: (payload: JobActivityEvent) => void) => () => void
+  /** Clicked an OS-native job notification — undefined jobId means a digest
+   *  (open the Activity panel generally, not one specific job). */
+  onOpenRequested: (cb: (jobId: string | undefined) => void) => () => void
   /** Dev builds only (see main/index.ts's is.dev guard) — rejects in a
    *  packaged build since main never registers the handler. */
   dev: {
     startFake: (
       req:
-        | { kind: 'batch'; input: { title: string; itemsTotal: number; msPerItem: number; failAtItem?: number } }
+        | {
+            kind: 'batch'
+            input: { title: string; itemsTotal: number; msPerItem: number; failAtItem?: number }
+          }
         | {
             kind: 'staged'
             input: { title: string; stages: string[]; msPerStage: number; failAtStage?: number }
           }
-        | { kind: 'cpu'; input: { title: string; itemsTotal: number; msBudget: number; failAtItem?: number } }
+        | {
+            kind: 'cpu'
+            input: { title: string; itemsTotal: number; msBudget: number; failAtItem?: number }
+          }
     ) => Promise<Job>
   }
 }

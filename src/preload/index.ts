@@ -153,19 +153,23 @@ const api = {
       ipcRenderer.invoke('coachChat:send', callId, message, mode, startFreshPractice),
     applySuggestion: (callId: string, suggestion: unknown) =>
       ipcRenderer.invoke('coachChat:applySuggestion', callId, suggestion),
-    draftFollowUpEmail: (callId: string) => ipcRenderer.invoke('coachChat:draftFollowUpEmail', callId),
+    draftFollowUpEmail: (callId: string) =>
+      ipcRenderer.invoke('coachChat:draftFollowUpEmail', callId),
     proposeTask: (callId: string) => ipcRenderer.invoke('coachChat:proposeTask', callId),
     confirmTask: (callId: string, proposal: unknown) =>
       ipcRenderer.invoke('coachChat:confirmTask', callId, proposal),
-    regenerateCrmNote: (callId: string) => ipcRenderer.invoke('coachChat:regenerateCrmNote', callId),
-    saveCrmNote: (callId: string, note: string) => ipcRenderer.invoke('coachChat:saveCrmNote', callId, note),
+    regenerateCrmNote: (callId: string) =>
+      ipcRenderer.invoke('coachChat:regenerateCrmNote', callId),
+    saveCrmNote: (callId: string, note: string) =>
+      ipcRenderer.invoke('coachChat:saveCrmNote', callId, note),
     onDelta: (cb: (payload: unknown) => void) => subscribe('coachChat:delta', cb),
     onError: (cb: (payload: unknown) => void) => subscribe('coachChat:error', cb)
   },
   crmNoteGenerator: {
     generate: (contactId: string, length: string) =>
       ipcRenderer.invoke('crmNoteGenerator:generate', contactId, length),
-    save: (contactId: string, note: string) => ipcRenderer.invoke('crmNoteGenerator:save', contactId, note),
+    save: (contactId: string, note: string) =>
+      ipcRenderer.invoke('crmNoteGenerator:save', contactId, note),
     applyFact: (contactId: string, field: string, text: string) =>
       ipcRenderer.invoke('crmNoteGenerator:applyFact', contactId, field, text)
   },
@@ -227,20 +231,26 @@ const api = {
       status: () => ipcRenderer.invoke('salesBrain:onboarding:status'),
       submitAnswer: (topicId: string, answer: string) =>
         ipcRenderer.invoke('salesBrain:onboarding:submitAnswer', topicId, answer),
-      skipTopic: (topicId: string) => ipcRenderer.invoke('salesBrain:onboarding:skipTopic', topicId),
+      skipTopic: (topicId: string) =>
+        ipcRenderer.invoke('salesBrain:onboarding:skipTopic', topicId),
       skipAll: () => ipcRenderer.invoke('salesBrain:onboarding:skipAll'),
       restart: () => ipcRenderer.invoke('salesBrain:onboarding:restart')
     },
     backfill: {
-      start: (opts: { includeContacts?: boolean; includeDeals?: boolean; includeCalls?: boolean }) =>
-        ipcRenderer.invoke('salesBrain:backfill:start', opts),
+      start: (opts: {
+        includeContacts?: boolean
+        includeDeals?: boolean
+        includeCalls?: boolean
+      }) => ipcRenderer.invoke('salesBrain:backfill:start', opts),
       status: () => ipcRenderer.invoke('salesBrain:backfill:status')
     },
     memories: {
-      list: (opts?: { scope?: string; status?: string }) => ipcRenderer.invoke('salesBrain:memories:list', opts),
+      list: (opts?: { scope?: string; status?: string }) =>
+        ipcRenderer.invoke('salesBrain:memories:list', opts),
       update: (id: string, newStatement: string) =>
         ipcRenderer.invoke('salesBrain:memories:update', id, newStatement),
-      setPinned: (id: string, pinned: boolean) => ipcRenderer.invoke('salesBrain:memories:setPinned', id, pinned),
+      setPinned: (id: string, pinned: boolean) =>
+        ipcRenderer.invoke('salesBrain:memories:setPinned', id, pinned),
       delete: (id: string) => ipcRenderer.invoke('salesBrain:memories:delete', id),
       forgetEverything: () => ipcRenderer.invoke('salesBrain:memories:forgetEverything'),
       changelog: (scope?: string) => ipcRenderer.invoke('salesBrain:memories:changelog', scope),
@@ -251,7 +261,8 @@ const api = {
         ipcRenderer.invoke('salesBrain:calls:setExcluded', callId, excluded),
       getExcluded: (callId: string) => ipcRenderer.invoke('salesBrain:calls:getExcluded', callId)
     },
-    onReviewRequested: (cb: (callId: string) => void) => subscribe<string>('salesBrain:reviewRequested', cb)
+    onReviewRequested: (cb: (callId: string) => void) =>
+      subscribe<string>('salesBrain:reviewRequested', cb)
   },
   deals: {
     list: () => ipcRenderer.invoke('deals:list'),
@@ -498,6 +509,15 @@ const api = {
     dismiss: (id: string) => ipcRenderer.invoke('jobs:dismiss', id),
     /** Full current snapshot, pushed at most ~4/sec (see jobs/ipc.ts). */
     onChanged: (cb: (payload: unknown) => void) => subscribe('jobs:changed', cb),
+    /** One event per start/completion (never for a merely-queued or
+     *  cancelled/interrupted transition — see jobs/activity.ts), already
+     *  call-aware-DND-filtered by main: never fires while a live call is
+     *  active, delivered as a digest instead once it ends. */
+    onNotify: (cb: (payload: unknown) => void) => subscribe('jobs:notify', cb),
+    /** Fired when the rep clicks an OS-native job notification — id is the
+     *  job to open, or undefined for a digest (open the Activity panel). */
+    onOpenRequested: (cb: (jobId: string | undefined) => void) =>
+      subscribe('jobs:openRequested', cb),
     // Dev builds only — see the is.dev guard in main/index.ts and
     // jobs/ipc.ts. Present on the bridge either way so the renderer's Job
     // Inspector doesn't need its own separate is-dev branch to call it;
