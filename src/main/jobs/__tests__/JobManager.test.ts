@@ -466,6 +466,57 @@ describe('resultData', () => {
     manager.dispose()
   })
 
+  it("setResultData replaces a finished job's result — how incremental review state is kept with the output", async () => {
+    const { JobManager } = await freshManager()
+    const manager = new JobManager([])
+    manager.registerType<Record<string, never>, { note: string; facts: string[] }>({
+      type: 'test:reviewable',
+      lane: 'INTERACTIVE',
+      titleFor: () => 'reviewable',
+      executor: { kind: 'inline-async', run: async () => ({ note: 'draft', facts: ['a', 'b'] }) }
+    })
+    const job = manager.enqueue('test:reviewable', {})
+    await settle()
+    expect(manager.get(job.id)?.state).toBe('succeeded')
+
+    expect(
+      manager.setResultData(job.id, {
+        note: 'draft',
+        facts: ['a', 'b'],
+        review: { skipped: ['a'] }
+      })
+    ).toBe(true)
+    expect(manager.get(job.id)?.resultData).toEqual({
+      note: 'draft',
+      facts: ['a', 'b'],
+      review: { skipped: ['a'] }
+    })
+    manager.dispose()
+  })
+
+  it('setResultData REFUSES on a running job — an executor owns its own result while alive', async () => {
+    const { JobManager } = await freshManager()
+    const manager = new JobManager([])
+    manager.registerType<Record<string, never>, string>({
+      type: 'test:stillRunning',
+      lane: 'INTERACTIVE',
+      titleFor: () => 'still running',
+      executor: { kind: 'inline-async', run: () => new Promise<string>(() => {}) }
+    })
+    const job = manager.enqueue('test:stillRunning', {})
+    expect(manager.get(job.id)?.state).toBe('running')
+    expect(manager.setResultData(job.id, { hijacked: true })).toBe(false)
+    expect(manager.get(job.id)?.resultData).toBeUndefined()
+    manager.dispose()
+  })
+
+  it('setResultData returns false for an unknown job rather than throwing', async () => {
+    const { JobManager } = await freshManager()
+    const manager = new JobManager([])
+    expect(manager.setResultData('no-such-job', {})).toBe(false)
+    manager.dispose()
+  })
+
   it('still sets resultData for a plain string result (same value as resultRef)', async () => {
     const { JobManager } = await freshManager()
     const manager = new JobManager([])

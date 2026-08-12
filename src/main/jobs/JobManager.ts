@@ -196,6 +196,27 @@ export class JobManager {
     return true
   }
 
+  /** Replace a FINISHED job's resultData, persisting it like any other job
+   *  state change.
+   *
+   *  For job types whose result is reviewed incrementally rather than
+   *  consumed in one go: the executor produces the AI output, and the rep's
+   *  decisions ABOUT that output (accepted this, skipped that, saved the
+   *  note) have to live somewhere durable too, or a reopen can't tell what's
+   *  already been dealt with. Keeping them on the job means one source of
+   *  truth for the whole review, surviving an app restart with the output
+   *  itself — see crm-note-review.ts, the first user of this.
+   *
+   *  Deliberately refuses on a queued/running job: while an executor is
+   *  alive it owns its own result, and letting an IPC handler race a
+   *  finishSuccess() write would make which value survives a coin flip. */
+  setResultData(id: string, data: unknown): boolean {
+    const job = this.jobs.get(id)
+    if (!job || job.state === 'queued' || job.state === 'running') return false
+    this.transition(job, { resultData: data })
+    return true
+  }
+
   /** Write the current state to disk right now, bypassing the throttle —
    *  called on app quit so nothing since the last throttled write is lost. */
   async flush(): Promise<void> {

@@ -1001,20 +1001,47 @@ export interface KycFact {
   confidence: 'high' | 'medium'
 }
 
-export interface CrmNoteGeneratorResult {
-  ok: boolean
-  note?: string
-  facts?: KycFact[]
-  message?: string
+/** The rep's decisions about one generated draft. Mirrors main's
+ *  crm-note-review.ts. */
+export interface CrmNoteReview {
+  noteHandled?: boolean
+  accepted?: string[]
+  /** Permanent by design — a skipped suggestion never re-asks. Still shown
+   *  (collapsed) so a mis-click leaves a trace. */
+  skipped?: string[]
+}
+
+/** What a `crmNote:generate` job carries in Job.resultData. */
+export interface CrmNoteJobResult {
+  note: string
+  facts: KycFact[]
+  review?: CrmNoteReview
 }
 
 /** M23 Workstream C — the standalone "Generate CRM note" card on the
  *  Contact page. Contact-scoped, not call-scoped: `generate` finds that
- *  contact's own most recent linked call itself. */
+ *  contact's own most recent linked call itself.
+ *
+ *  M26 Phase 3: `generate` enqueues a job and returns its id; the drafted
+ *  note and harvested suggestions live in that job's resultData, so
+ *  navigating away mid-review no longer discards them. The save/apply/skip
+ *  calls take the jobId so each decision is recorded back onto the job. */
 export interface CrmNoteGeneratorApi {
-  generate: (contactId: string, length: CrmNoteLength) => Promise<CrmNoteGeneratorResult>
-  save: (contactId: string, note: string) => Promise<{ ok: boolean }>
-  applyFact: (contactId: string, field: string, text: string) => Promise<{ ok: boolean }>
+  generate: (
+    contactId: string,
+    length: CrmNoteLength,
+    opts?: { force?: boolean }
+  ) => Promise<{ ok: boolean; jobId?: string; message?: string }>
+  save: (contactId: string, note: string, jobId?: string) => Promise<{ ok: boolean }>
+  applyFact: (
+    contactId: string,
+    field: string,
+    text: string,
+    jobId?: string,
+    factId?: string
+  ) => Promise<{ ok: boolean }>
+  skipFact: (jobId: string, factId: string) => Promise<{ ok: boolean }>
+  discardNote: (jobId: string) => Promise<{ ok: boolean }>
 }
 
 export interface DetectNameResult {

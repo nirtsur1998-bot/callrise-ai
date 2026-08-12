@@ -166,12 +166,15 @@ const api = {
     onError: (cb: (payload: unknown) => void) => subscribe('coachChat:error', cb)
   },
   crmNoteGenerator: {
-    generate: (contactId: string, length: string) =>
-      ipcRenderer.invoke('crmNoteGenerator:generate', contactId, length),
-    save: (contactId: string, note: string) =>
-      ipcRenderer.invoke('crmNoteGenerator:save', contactId, note),
-    applyFact: (contactId: string, field: string, text: string) =>
-      ipcRenderer.invoke('crmNoteGenerator:applyFact', contactId, field, text)
+    generate: (contactId: string, length: string, opts?: { force?: boolean }) =>
+      ipcRenderer.invoke('crmNoteGenerator:generate', contactId, length, opts),
+    save: (contactId: string, note: string, jobId?: string) =>
+      ipcRenderer.invoke('crmNoteGenerator:save', contactId, note, jobId),
+    applyFact: (contactId: string, field: string, text: string, jobId?: string, factId?: string) =>
+      ipcRenderer.invoke('crmNoteGenerator:applyFact', contactId, field, text, jobId, factId),
+    skipFact: (jobId: string, factId: string) =>
+      ipcRenderer.invoke('crmNoteGenerator:skipFact', jobId, factId),
+    discardNote: (jobId: string) => ipcRenderer.invoke('crmNoteGenerator:discardNote', jobId)
   },
   contactIntelligence: {
     detectName: (callId: string) => ipcRenderer.invoke('contactIntelligence:detectName', callId)
