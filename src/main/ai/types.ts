@@ -38,7 +38,17 @@ export interface AIMessage {
  *  panel (advisor Q&A + practice/roleplay mode). Quality tier like summary/
  *  scorecard (a real conversation deserves a good model), but the FIRST
  *  real consumer of streamWithFallback() (complete-with-fallback.ts) since
- *  the user is actively watching tokens arrive. */
+ *  the user is actively watching tokens arrive. M25 adds 'memory-extract' —
+ *  the Sales Brain's post-call/post-chat fact-extraction pass. Cheap/fast
+ *  model tier by design (spec: "fast model for extraction, smart model for
+ *  consolidation/reflection") — it's simple structured pulling against a
+ *  fixed allowlist, not judgment work, and never blocks anything the user is
+ *  watching (fire-and-forget, same as objection-mining/contact-intelligence).
+ *  'memory-consolidate'/'memory-reflect' (Phase 2's dedupe/contradiction/
+ *  reflection engine, which DOES need real judgment) are deliberately not
+ *  added yet — added when that engine is actually built, same incremental
+ *  pattern 'prep-brief' followed (registered ahead of its first real
+ *  consumer only when the consumer was imminent, not speculatively early). */
 export type AIPurpose =
   | 'coaching-cue'
   | 'summary'
@@ -49,6 +59,16 @@ export type AIPurpose =
   | 'deal-tier1'
   | 'deal-tier2'
   | 'coaching-chat'
+  | 'memory-extract'
+  // M25 Phase 2 — the consolidation engine's judgment calls: deciding if
+  // two memories are really the same fact (merge), if a new one
+  // contradicts an old one (temporal invalidation), and synthesizing
+  // cross-memory reflections. Quality-tier by design (spec: "smart model
+  // for consolidation/reflection") — unlike extraction, these ARE judgment
+  // work, not fixed-shape pulling. Both are background/nightly jobs, never
+  // blocking anything the user is watching.
+  | 'memory-consolidate'
+  | 'memory-reflect'
 
 /** A single tool the model is FORCED to call — every real call site today
  *  needs structured JSON back, never free text. `inputSchema` is a plain
@@ -168,7 +188,17 @@ export const LATENCY_POLICY: Record<AIPurpose, LatencyPolicyEntry> = {
   // one retry is the right shape. streamWithFallback() only ever retries
   // BEFORE any token has reached the renderer (see its own doc comment) —
   // maxRetries here governs the SDK's own retry-before-first-byte behavior.
-  'coaching-chat': { maxRetries: 1, timeoutMs: 45_000 }
+  'coaching-chat': { maxRetries: 1, timeoutMs: 45_000 },
+  // Post-call/post-chat background job, never blocks a UI the user is
+  // watching — generous timeout is fine, but capped (not summary/scorecard's
+  // full 60s) since extraction is a small, fixed-shape allowlist pull, not
+  // deep reasoning.
+  'memory-extract': { maxRetries: 1, timeoutMs: 20_000 },
+  // Nightly/background judgment work, same tier as summary/scorecard — a
+  // real conversation-quality decision (is this a duplicate? a
+  // contradiction? a genuine cross-memory pattern?), never watched live.
+  'memory-consolidate': { maxRetries: 2, timeoutMs: 60_000 },
+  'memory-reflect': { maxRetries: 2, timeoutMs: 60_000 }
 }
 
 /** Total wall-clock budget for a whole completeWithFallback() chain on this

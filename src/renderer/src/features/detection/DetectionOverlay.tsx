@@ -31,8 +31,13 @@ function formatElapsed(ms: number): string {
  *  outside its own border to render at all; without it, the shadow gets
  *  clipped flush at the window's edge and is invisible. */
 function OverlayShell({ children }: { children: ReactNode }): React.JSX.Element {
+  // This window (unlike every other .glass-hud user) is a fully transparent
+  // BrowserWindow with nothing painted behind it, which makes CSS
+  // backdrop-filter render as flat opaque black on win32 — see index.css's
+  // .platform-win32 .glass-hud override for the actual fix and why.
+  const platformClass = window.api.platform === 'win32' ? 'platform-win32' : ''
   return (
-    <div className="h-full w-full p-4">
+    <div className={`h-full w-full p-4 ${platformClass}`}>
       {/* Same glass material as the call-detected banner (.glass-hud), because
           a rep can see both within the same second and two different-looking
           floating panels read as two different apps. The radius is larger here

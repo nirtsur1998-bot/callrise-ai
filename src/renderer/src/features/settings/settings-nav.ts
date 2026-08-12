@@ -18,6 +18,7 @@ import {
   Layers,
   Activity,
   GraduationCap,
+  Brain,
   type LucideIcon
 } from 'lucide-react'
 
@@ -35,6 +36,8 @@ export type SettingsPageId =
   | 'personalization'
   | 'objection-library'
   | 'coach2'
+  | 'sales-brain'
+  | 'sales-brain-memories'
   | 'calendar'
   | 'crm'
   | 'alerts'
@@ -161,6 +164,19 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         icon: GraduationCap,
         description:
           'Benchmarks, an 8-skill progress graph, a methodology picker, and the Focus Skill loop. Off by default.'
+      },
+      {
+        id: 'sales-brain',
+        label: 'Sales Brain (Beta)',
+        icon: Brain,
+        description:
+          'Learns who you are, how you sell, your business, and each client — every AI feature gets smarter from it. Runs entirely on your own device. Off by default.'
+      },
+      {
+        id: 'sales-brain-memories',
+        label: 'Sales Brain — Memories',
+        icon: Brain,
+        description: 'Browse, edit, pin, or delete anything Sales Brain has learned. Full history, nothing hidden.'
       }
     ]
   },

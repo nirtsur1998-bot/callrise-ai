@@ -420,10 +420,13 @@ export interface CoachChatMessage {
 
 export interface CoachChatContextSuggestion {
   id: string
-  type: 'kyc' | 'next-steps' | 'call-notes'
+  type: 'kyc' | 'next-steps' | 'call-notes' | 'memory'
   field?: string
   text: string
   confidence: 'high' | 'medium'
+  /** M25 Phase 4 — only present when type === 'memory'. */
+  memoryScope?: string
+  memoryCategory?: string
 }
 
 export interface CoachChatSendResult {
@@ -1582,6 +1585,8 @@ export interface BackupSyncScope {
   knowledgeBase: boolean
   settingsPersonalization: boolean
   contacts: boolean
+  /** M25 — whole memory.db file, uploaded as one blob (same as attachments). */
+  salesBrain: boolean
 }
 
 /** Objection Library mining master switch. OFF by default — the only gate
@@ -1658,6 +1663,7 @@ export type AiPurpose =
   | 'deal-tier1'
   | 'deal-tier2'
   | 'coaching-chat'
+  | 'memory-extract'
 
 export interface ModelAssignment {
   /** Ordered model-catalog entry IDs — see main/ai/model-catalog.ts. Empty
@@ -1714,12 +1720,19 @@ export interface AppSettings {
   coach2: Coach2Settings
   /** M23 Workstream D — Contact Intelligence mode. Off by default. */
   contactIntelligence: ContactIntelligenceSettings
+  /** M25 — Sales Brain (Beta) master switch. Off by default. */
+  salesBrain: SalesBrainSettings
 }
 
 /** M23 — see main/app-settings.ts's Coach2Settings for the exact behavior. */
 export interface Coach2Settings {
   enabled: boolean
   methodology: SalesMethodology
+}
+
+/** M25 — see main/app-settings.ts's SalesBrainSettings for the exact behavior. */
+export interface SalesBrainSettings {
+  enabled: boolean
 }
 
 /** M23 Workstream D — see main/app-settings.ts's ContactIntelligenceSettings
@@ -1768,6 +1781,8 @@ export interface AppSettingsPatch {
   coach2?: Partial<Coach2Settings>
   /** Partial — only the keys present are changed; others are left as-is. */
   contactIntelligence?: Partial<ContactIntelligenceSettings>
+  /** Partial — only the keys present are changed; others are left as-is. */
+  salesBrain?: Partial<SalesBrainSettings>
 }
 
 export interface AppSettingsApi {
@@ -2015,7 +2030,17 @@ export interface PrepBriefRecord {
 }
 
 export type PrepBriefResult =
-  | { ok: true; record: PrepBriefRecord; fromCache: boolean; focusSkillReminder?: FocusSkillAtCoaching }
+  | {
+      ok: true
+      record: PrepBriefRecord
+      fromCache: boolean
+      focusSkillReminder?: FocusSkillAtCoaching
+      /** M25 Phase 3 — "Your edge": what Sales Brain knows about this
+       *  client + the business's own proven objection responses. Absent
+       *  (not an empty string) when Sales Brain is off or nothing's been
+       *  compiled yet. */
+      salesBrainEdge?: string
+    }
   | { ok: false; error: 'no-key' | 'failed' | 'no-context'; message?: string }
 
 export interface PrepBriefApi {
@@ -2028,10 +2053,106 @@ export interface PrepBriefApi {
   onOpenRequested: (callback: (eventId: string) => void) => () => void
 }
 
+/** M25 Phase 4 — onboarding interview. */
+export interface OnboardingStatusResult {
+  status: 'not-started' | 'in-progress' | 'skipped' | 'finished'
+  nextTopic: { id: string; question: string } | null
+  completedCount: number
+  totalCount: number
+}
+
+export interface SalesBrainOnboardingApi {
+  status: () => Promise<OnboardingStatusResult>
+  submitAnswer: (topicId: string, answer: string) => Promise<OnboardingStatusResult>
+  skipTopic: (topicId: string) => Promise<OnboardingStatusResult>
+  skipAll: () => Promise<OnboardingStatusResult>
+  restart: () => Promise<OnboardingStatusResult>
+}
+
+/** M25 Phase 5 — Memory Center. Mirrors main/memory/types.ts's Memory shape
+ *  (hand-duplicated, same convention as every other main/preload/renderer
+ *  type mirror in this app). */
+export type MemoryScope = 'rep' | 'business' | `client:${string}`
+export type MemoryStatus = 'active' | 'hypothesis' | 'invalidated' | 'archived'
+export type MemorySource = 'auto' | 'user_stated' | 'user_confirmed'
+export type MemoryEvidence =
+  | { type: 'transcript'; callId: string; chatMessageId?: string; quote: string }
+  | { type: 'reflection'; memoryIds: string[] }
+
+export interface Memory {
+  id: string
+  scope: MemoryScope
+  category: string
+  statement: string
+  evidence: MemoryEvidence[]
+  confidence: number
+  importance: number
+  status: MemoryStatus
+  source: MemorySource
+  pinned: boolean
+  invalidatedBy?: string
+  createdAt: string
+  lastConfirmedAt: string
+  invalidatedAt?: string
+}
+
+export interface MemoryChangelogEntry {
+  memoryId: string
+  statement: string
+  scope: MemoryScope
+  kind: 'created' | 'reinforced' | 'invalidated'
+  at: string
+}
+
+export interface SalesBrainBackfillProgress {
+  running: boolean
+  stage: 'idle' | 'contacts' | 'deals' | 'calls' | 'done' | 'error'
+  processed: number
+  total: number
+  lastError?: string
+}
+
+export interface SalesBrainBackfillApi {
+  start: (opts: {
+    includeContacts?: boolean
+    includeDeals?: boolean
+    includeCalls?: boolean
+  }) => Promise<{ ok: boolean; message?: string }>
+  status: () => Promise<SalesBrainBackfillProgress>
+}
+
+export interface SalesBrainMemoriesApi {
+  list: (opts?: { scope?: string; status?: string }) => Promise<Memory[]>
+  update: (id: string, newStatement: string) => Promise<{ ok: boolean }>
+  setPinned: (id: string, pinned: boolean) => Promise<{ ok: boolean }>
+  delete: (id: string) => Promise<{ ok: boolean }>
+  forgetEverything: () => Promise<{ ok: boolean }>
+  changelog: (scope?: string) => Promise<MemoryChangelogEntry[]>
+  byCall: (callId: string) => Promise<Memory[]>
+}
+
+export interface SalesBrainCallsApi {
+  setExcluded: (callId: string, excluded: boolean) => Promise<{ ok: boolean }>
+  getExcluded: (callId: string) => Promise<boolean>
+}
+
+export interface SalesBrainApi {
+  onboarding: SalesBrainOnboardingApi
+  backfill: SalesBrainBackfillApi
+  memories: SalesBrainMemoriesApi
+  calls: SalesBrainCallsApi
+  /** Fired when a Sales Brain post-call review notification is clicked —
+   *  the caller opens that call's review screen. */
+  onReviewRequested: (callback: (callId: string) => void) => () => void
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
     api: {
+      /** process.platform, exposed only for platform-specific CSS/rendering
+       *  decisions (see DetectionOverlay.tsx). */
+      platform: NodeJS.Platform
       transcription: TranscriptionApi
       trackers: TrackersApi
       dealIntelligence: DealIntelligenceApi
@@ -2062,6 +2183,7 @@ declare global {
       detection: DetectionApi
       alerts: AlertsApi
       prepBrief: PrepBriefApi
+      salesBrain: SalesBrainApi
       updater: UpdaterApi
     }
   }

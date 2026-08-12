@@ -44,7 +44,7 @@ export function PrepBriefModal({ meeting, onClose }: PrepBriefModalProps): React
       meeting.dealId
     ]
   )
-  const { loading, record, error, focusSkillReminder, regenerate } = usePrepBrief(input)
+  const { loading, record, error, focusSkillReminder, salesBrainEdge, regenerate } = usePrepBrief(input)
 
   return (
     <Modal onClose={onClose} title="Prep brief" size="lg" className="flex max-h-[85vh] flex-col">
@@ -64,6 +64,7 @@ export function PrepBriefModal({ meeting, onClose }: PrepBriefModalProps): React
           record={record}
           error={error}
           focusSkillReminder={focusSkillReminder}
+          salesBrainEdge={salesBrainEdge}
           onRegenerate={regenerate}
         />
       </div>

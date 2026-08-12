@@ -29,7 +29,10 @@ export const DEFAULT_MODEL_ASSIGNMENTS: ModelAssignments = {
   'prep-brief': EMPTY_ASSIGNMENT,
   'deal-tier1': EMPTY_ASSIGNMENT,
   'deal-tier2': EMPTY_ASSIGNMENT,
-  'coaching-chat': EMPTY_ASSIGNMENT
+  'coaching-chat': EMPTY_ASSIGNMENT,
+  'memory-extract': EMPTY_ASSIGNMENT,
+  'memory-consolidate': EMPTY_ASSIGNMENT,
+  'memory-reflect': EMPTY_ASSIGNMENT
 }
 
 /** Deduplicated, and capped to CHAIN_BUDGET[purpose].maxChainLength when one
@@ -60,7 +63,10 @@ export function sanitizeModelAssignments(value: unknown): ModelAssignments {
     'prep-brief': sanitizeAssignment(v['prep-brief'], 'prep-brief'),
     'deal-tier1': sanitizeAssignment(v['deal-tier1'], 'deal-tier1'),
     'deal-tier2': sanitizeAssignment(v['deal-tier2'], 'deal-tier2'),
-    'coaching-chat': sanitizeAssignment(v['coaching-chat'], 'coaching-chat')
+    'coaching-chat': sanitizeAssignment(v['coaching-chat'], 'coaching-chat'),
+    'memory-extract': sanitizeAssignment(v['memory-extract'], 'memory-extract'),
+    'memory-consolidate': sanitizeAssignment(v['memory-consolidate'], 'memory-consolidate'),
+    'memory-reflect': sanitizeAssignment(v['memory-reflect'], 'memory-reflect')
   }
 }
 

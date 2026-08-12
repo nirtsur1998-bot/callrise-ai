@@ -17,6 +17,8 @@ import { SummaryLanguageSection } from './SummaryLanguageSection'
 import { PersonalizationSection } from './PersonalizationSection'
 import { ObjectionLibrarySection } from './ObjectionLibrarySection'
 import { Coach2Section } from './Coach2Section'
+import { SalesBrainSection } from './SalesBrainSection'
+import { MemoryCenterSection } from './MemoryCenterSection'
 import { CalendarSection } from './CalendarSection'
 import { CrmSection } from './CrmSection'
 import { AlertsSection } from '@renderer/features/alerts/AlertsSection'
@@ -38,6 +40,8 @@ const PAGE_CONTENT: Record<SettingsPageId, React.ComponentType> = {
   personalization: PersonalizationSection,
   'objection-library': ObjectionLibrarySection,
   coach2: Coach2Section,
+  'sales-brain': SalesBrainSection,
+  'sales-brain-memories': MemoryCenterSection,
   calendar: CalendarSection,
   crm: CrmSection,
   alerts: AlertsSection,

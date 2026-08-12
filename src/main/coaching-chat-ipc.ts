@@ -35,6 +35,13 @@ import {
   extractContextSuggestions,
   type PastCallSummary
 } from './coaching-chat'
+import { runMemoryExtractionForChatMessage } from './memory/memory-hooks'
+import { businessProfileSection, clientProfileSection, repProfileSection } from './memory/profile-injection'
+import { retrieveRelevantMemories } from './memory/rag'
+import { consolidateNewCandidate } from './memory/consolidation'
+import { getMemoryDb } from './memory/memory-runtime'
+import { isSalesBrainEnabled } from './app-settings'
+import type { MemoryCategory, MemoryScope } from './memory/types'
 
 function callsDir(): string {
   return join(app.getPath('userData'), 'calls')
@@ -141,7 +148,15 @@ async function handleSend(
 
   const contact = call.contactId ? await getContact(contactsDir(), call.contactId) : null
   const pastCalls = await loadPastCallSummaries(call.contactId, callId)
-  const context = assembleChatContext({ call, contact, pastCalls })
+  // M25 Phase 4 — the FULL-size profile (rep + business + this client, if
+  // linked — spec: "coaching chat... can afford the largest context") plus
+  // a fresh retrieval pass keyed to THIS specific message, so an
+  // open-ended question ("what do you know about how I sell?") surfaces
+  // the most relevant memories, not just the generic always-included set.
+  const salesBrainContext =
+    `${repProfileSection('full')}${businessProfileSection('full')}${clientProfileSection(call.contactId ?? null, 'full')}` +
+    (await retrieveRelevantMemories(message, call.contactId ?? null))
+  const context = assembleChatContext({ call, contact, pastCalls, salesBrainContext })
   const history = call.coachChat ?? []
   const endingPractice = mode === 'practice' && isEndPracticeMessage(message)
 
@@ -249,8 +264,23 @@ async function handleSend(
   // phrase — and must never hold up the turn the rep is waiting on.
   const suggestions =
     mode === 'advisor' && !endingPractice
-      ? await withTimeout(extractContextSuggestions(message, !!contact), 5_000, [])
+      ? await withTimeout(extractContextSuggestions(message, call.contactId ?? null), 5_000, [])
       : []
+
+  // M25 — per-message extraction (not awaited, unlike suggestions above:
+  // there's no chip UI consuming this yet in Phase 1, and it must never add
+  // latency to a reply the rep is actively waiting on). Same restriction as
+  // the KYC suggestions above: only real advisor-mode input from the rep,
+  // never in-character roleplay lines (those are a fictional buyer persona
+  // talking, not the rep — extracting "facts" from them would be exactly
+  // the kind of thing this feature must never do) and never the end-
+  // practice control phrase itself.
+  if (mode === 'advisor' && !endingPractice) {
+    const userMessageId = saved.coachChat?.[saved.coachChat.length - 2]?.id
+    if (userMessageId) {
+      void runMemoryExtractionForChatMessage(callId, userMessageId, message).catch(() => {})
+    }
+  }
 
   return { ok: true, reply: full, suggestions }
 }
@@ -336,6 +366,28 @@ export function registerCoachingChat(): void {
           // commitment if two suggestion chips are clicked in quick succession.
           const updated = await appendCommitment(callsDir(), callId, { owner: 'rep', text: suggestion.text })
           return { ok: !!updated }
+        }
+
+        if (suggestion.type === 'memory') {
+          // M25 Phase 4 — "Save to Sales Brain" chip. source: 'user_stated'
+          // (not 'auto'): a rep explicitly clicking Save on their own
+          // message IS direct confirmation — this starts 'active'
+          // immediately (memories-store.ts's initialStatus()), skipping
+          // the 3-call promotion hypotheses go through, the same way a
+          // manual KYC edit is trusted immediately.
+          if (!isSalesBrainEnabled() || !suggestion.memoryScope || !suggestion.memoryCategory) return { ok: false }
+          const db = getMemoryDb()
+          if (!db) return { ok: false }
+          await consolidateNewCandidate(db, {
+            scope: suggestion.memoryScope as MemoryScope,
+            category: suggestion.memoryCategory as MemoryCategory,
+            statement: suggestion.text,
+            evidence: [{ type: 'transcript', callId, quote: suggestion.text }],
+            confidence: 0.95,
+            importance: 6,
+            source: 'user_stated'
+          })
+          return { ok: true }
         }
 
         return { ok: false }

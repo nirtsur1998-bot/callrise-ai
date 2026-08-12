@@ -14,6 +14,7 @@ import {
 import { isCoach2Enabled } from './app-settings'
 import { loadFocusSkill } from './coaching/focus-skill-fs'
 import type { FocusSkillAtCoaching } from './calls-fs'
+import { rawBusinessProfileText, rawClientProfileText } from './memory/profile-injection'
 
 /** M23 A4 — "the M19 pre-call brief displays the current Focus Skill
  *  reminder at the top." Attached OUTSIDE the cached PrepBriefRecord
@@ -30,6 +31,31 @@ async function withFocusSkillReminder(
     ...result,
     focusSkillReminder: { skill: current.skill, microBehavior: current.microBehavior }
   }
+}
+
+/** M25 Phase 3 — "Your edge": current Focus Skill (attached separately,
+ *  above) plus what Sales Brain knows about this specific client and the
+ *  business's own proven objection responses. Same OUTSIDE-the-cache
+ *  pattern as withFocusSkillReminder above and for the identical reason —
+ *  a cached brief must never serve a stale Sales Brain snapshot, and
+ *  profile-injection.ts's reads are cheap DB lookups (never an AI call),
+ *  so there's no real cost to always computing this fresh. `''` sections
+ *  (Sales Brain off, or nothing compiled yet) collapse to an empty string,
+ *  making this genuinely absent rather than an empty-but-present field for
+ *  a founder-non-technical-friendly "no Sales Brain data yet" experience. */
+async function withSalesBrainEdge(
+  result: PrepBriefResult,
+  contactId: string | undefined
+): Promise<PrepBriefResult & { salesBrainEdge?: string }> {
+  if (!result.ok) return result
+  const client = rawClientProfileText(contactId ?? null, 'standard')
+  const business = rawBusinessProfileText('standard')
+  const parts = [
+    client && `About this client:\n${client}`,
+    business && `Proven responses for your business:\n${business}`
+  ].filter((p): p is string => Boolean(p))
+  if (!parts.length) return result
+  return { ...result, salesBrainEdge: parts.join('\n\n') }
 }
 
 const MAX_TITLE = 300
@@ -77,12 +103,14 @@ export function registerPrepBrief(): void {
   ipcMain.handle('prepBrief:getForEvent', async (_event, raw: unknown) => {
     const input = sanitizeInput(raw)
     if (!input) return { ok: false as const, error: 'failed' as const, message: 'Invalid event.' }
-    return withFocusSkillReminder(await ensurePrepBriefForEvent(input))
+    const withFocus = await withFocusSkillReminder(await ensurePrepBriefForEvent(input))
+    return withSalesBrainEdge(withFocus, input.contactId)
   })
 
   ipcMain.handle('prepBrief:regenerate', async (_event, raw: unknown) => {
     const input = sanitizeInput(raw)
     if (!input) return { ok: false as const, error: 'failed' as const, message: 'Invalid event.' }
-    return withFocusSkillReminder(await ensurePrepBriefForEvent(input, { force: true }))
+    const withFocus = await withFocusSkillReminder(await ensurePrepBriefForEvent(input, { force: true }))
+    return withSalesBrainEdge(withFocus, input.contactId)
   })
 }

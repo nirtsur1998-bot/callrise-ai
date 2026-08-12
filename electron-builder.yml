@@ -38,6 +38,29 @@ asarUnpack:
   # app.asar.unpacked path this produces). Must be built with `npm run
   # native:build:mac`/`:win` BEFORE packaging - build:mac/build:win do this.
   - native/*/build/Release/*.node
+  # M25 Sales Brain - better-sqlite3 (npm-installed, not an in-repo addon
+  # like the two above) ships its own prebuilt .node binaries directly
+  # inside the package (node_modules/better-sqlite3/prebuilds/), rebuilt
+  # against Electron's ABI by the existing `electron-builder install-app-
+  # deps` postinstall hook - same "can't require() a .node from inside
+  # asar" problem as every native addon above, same fix. sqlite-vec ships
+  # its platform binary (vec0.dll on Windows) as a SEPARATE optional-
+  # dependency package (sqlite-vec-windows-x64 etc.), loaded at runtime via
+  # sqlite3_load_extension rather than require()'d as a Node addon - not
+  # technically required to unpack for that reason, but unpacked anyway so
+  # both halves of the same feature are packaged identically and neither
+  # becomes the one exception someone has to remember. This whole file's own
+  # history is two separate incidents of a native binary silently breaking
+  # on real hardware from a packaging gap exactly like this - launch-test
+  # the actual packaged build (not dev mode) any time this block changes.
+  - node_modules/better-sqlite3/**
+  - node_modules/sqlite-vec/**
+  - node_modules/sqlite-vec-*/**
+  # @xenova/transformers (local embeddings) pulls in onnxruntime-node as its
+  # Node-side inference backend, which is itself a native addon
+  # (onnxruntime-node/bin/napi-v3/<platform>/<arch>/onnxruntime_binding.node)
+  # - same asar problem, same fix.
+  - node_modules/onnxruntime-node/**
 win:
   executableName: CallRiseAI
   # The "portable" target was added as a debugging alternative to the NSIS

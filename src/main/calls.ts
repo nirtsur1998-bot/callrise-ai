@@ -26,7 +26,8 @@ import {
   removeBookmark,
   setSpeakerIdentity,
   type CallSaveInput,
-  type CallSummary
+  type CallSummary,
+  type CallType
 } from './calls-fs'
 import { summarize, type SummarizeInput, type SummaryResult } from './summarize'
 import { coachCall, type CoachResult } from './coach'
@@ -37,15 +38,18 @@ import { addToQueue, purgeQueueForCall } from './objection-queue-fs'
 import {
   isObjectionMiningEnabled,
   loadAppSettings,
-  isSelfIntroExtractionAllowed
+  isSelfIntroExtractionAllowed,
+  isSalesBrainEnabled
 } from './app-settings'
 import { scheduleBackup, queueAttachmentBlobDeletes } from './backup'
 import { addComment } from './contacts-fs'
 import { generateCrmNote } from './crm-notes'
 import { resolveAndSaveIdentities } from './speaker-identity/resolve-for-call'
 import { runFullAutoContactIntelligence } from './contact-intelligence-ipc'
-import { detectCallType } from './coaching/benchmarks'
-import { computeSkillProgress, type SkillProgress } from './coaching/skill-graph'
+import { runMemoryExtractionForCall } from './memory/memory-hooks'
+import { computePersonalTalkRatioTarget, computePersonalQuestionTarget } from './memory/personal-benchmarks'
+import { detectCallType, TALK_RATIO_TARGETS } from './coaching/benchmarks'
+import { computeSkillProgress, type PersonalBenchmarks, type SkillProgress } from './coaching/skill-graph'
 import { selectFocusSkill, type FocusSkillState } from './coaching/focus-skill'
 import { loadFocusSkill, saveFocusSkill } from './coaching/focus-skill-fs'
 
@@ -95,6 +99,32 @@ async function mineCallIntoQueue(callId: string): Promise<{ ok: boolean; added: 
  *  as miningInFlight (the contact-link and summary-saved triggers can both
  *  fire for the same call in close succession). */
 const crmNoteInFlight = new Set<string>()
+
+/** M25 Phase 3 (L3 procedural memory) — the rep's own personal talk-ratio/
+ *  question-count norms, computed fresh from their own past coached calls
+ *  of the SAME call type every time coaching runs (not cached — cheap
+ *  enough: one directory scan via listCalls(), same cost this app already
+ *  pays for the Progress dashboard). Returns undefined for either field
+ *  individually when there isn't enough history yet — see personal-
+ *  benchmarks.ts's MIN_SAMPLE_SIZE, the guard against confidently-wrong
+ *  personalization from too small a sample. */
+async function computePersonalBenchmarksForCallType(
+  callType: CallType
+): Promise<PersonalBenchmarks | undefined> {
+  const past = await listCalls(callsDir())
+  const sameType = past.filter((c) => c.callType === callType && c.hasCoaching)
+
+  const talkRatioTarget =
+    computePersonalTalkRatioTarget(
+      sameType.map((c) => ({ talkRatio: c.talkRatio ?? null })),
+      TALK_RATIO_TARGETS[callType]
+    ) ?? undefined
+  const questionTarget =
+    computePersonalQuestionTarget(sameType.map((c) => ({ count: c.questionCount ?? 0 }))) ?? undefined
+
+  if (!talkRatioTarget && !questionTarget) return undefined
+  return { talkRatioTarget, questionTarget }
+}
 
 /** Draft a short AI CRM note from a call and append it to its linked
  *  contact — opt-in (Settings → CRM → "Auto-generate notes"), fires from
@@ -242,6 +272,11 @@ export function registerCalls(): void {
       void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, summary.id)
         .then(() => runFullAutoContactIntelligence(summary.id))
         .catch(() => {})
+      // M25 — same fire-and-forget convention, own independent chain (not
+      // .then()-ed onto the identity/contact one above): a Sales Brain
+      // failure must never be able to affect contact resolution, and vice
+      // versa. No-ops instantly if the feature is off (see its own gate).
+      void runMemoryExtractionForCall(summary.id).catch(() => {})
       return summary
     }
   )
@@ -438,9 +473,19 @@ export function registerCalls(): void {
       // practice going INTO this call (set after the PREVIOUS call), not
       // what gets selected after this one. See FocusSkillAtCoaching's doc.
       const priorFocus = coach2Enabled ? await loadFocusSkill() : null
+      // M25 Phase 3 (L3 procedural memory) — personal talk-ratio/question-
+      // count norms from the rep's own past calls of the SAME call type,
+      // only when Sales Brain is on. personal-benchmarks.ts's own
+      // MIN_SAMPLE_SIZE floor means this stays undefined (→ exact today's-
+      // behavior population defaults) until there's genuinely enough
+      // history — never a confidently-wrong personalization from 1-2 calls.
+      const personalBenchmarks = isSalesBrainEnabled()
+        ? await computePersonalBenchmarksForCallType(callType)
+        : undefined
       const result = await coachCall(speechSegments(call.segments), call.durationMs, {
         callType,
-        commitments: call.commitments
+        commitments: call.commitments,
+        personalBenchmarks
       })
       if (result.ok) {
         if (priorFocus) {
@@ -464,6 +509,12 @@ export function registerCalls(): void {
         void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, callId)
           .then(() => runFullAutoContactIntelligence(callId))
           .catch(() => {})
+        // M25 — also re-run after coaching, same reasoning as the identity
+        // cascade above: this call may have just gotten scorecard/skill
+        // data it didn't have at save time, and a mono call's contactId may
+        // only be known from here on. saveCandidate()'s dedupe makes a
+        // second pass over the same transcript cheap/safe, not duplicate work.
+        void runMemoryExtractionForCall(callId).catch(() => {})
         if (coach2Enabled) {
           void setCallTypeIfUnset(callsDir(), callId, callType).catch(() => {})
           void updateFocusSkillAfterCoaching(callId).catch(() => {})

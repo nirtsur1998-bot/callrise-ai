@@ -139,6 +139,49 @@ describe('computeSkillScores', () => {
     })
     expect(engaged.rapport).toBeGreaterThan(checkedOut.rapport)
   })
+
+  // M25 Phase 3 — personalized benchmarks (L3 procedural memory). The
+  // guarantee that matters most: a rep with no personal-benchmarks override
+  // gets EXACTLY today's population-default scoring, byte for byte.
+  describe('personalized benchmarks (M25 Phase 3)', () => {
+    it('is byte-for-byte identical to the population-default score when no override is passed', () => {
+      const withoutOverride = computeSkillScores(dims({}), baseMetrics, baseBenchmark)
+      const withEmptyOverride = computeSkillScores(dims({}), baseMetrics, baseBenchmark, undefined, {})
+      expect(withEmptyOverride).toEqual(withoutOverride)
+    })
+
+    it('uses a personal talk-ratio target instead of the population default when provided', () => {
+      // Population discovery target is 43% — a rep whose OWN personal norm
+      // is 55% should score 100 (at-or-under THEIR OWN target) even though
+      // 55% would be well over the population target.
+      const withoutPersonalization = computeSkillScores(
+        dims({}),
+        { ...baseMetrics, talkRatio: 0.55 },
+        baseBenchmark
+      )
+      const withPersonalization = computeSkillScores(
+        dims({}),
+        { ...baseMetrics, talkRatio: 0.55 },
+        baseBenchmark,
+        undefined,
+        { talkRatioTarget: { repTargetPct: 55, warnAbovePct: 77 } }
+      )
+      expect(withoutPersonalization.listening).toBeLessThan(100)
+      expect(withPersonalization.listening).toBe(100)
+    })
+
+    it('uses a personal question-count target instead of the population default when provided', () => {
+      const questionBenchmark: BenchmarkSnapshot = {
+        ...baseBenchmark,
+        questionSpread: { count: 6, evenness: 0.8 }
+      }
+      const withoutPersonalization = computeSkillScores(dims({}), baseMetrics, questionBenchmark)
+      const withPersonalization = computeSkillScores(dims({}), baseMetrics, questionBenchmark, undefined, {
+        questionTarget: { min: 5, max: 8 } // this rep's own norm is lower than the population's 11-14
+      })
+      expect(withPersonalization.discovery).toBeGreaterThan(withoutPersonalization.discovery)
+    })
+  })
 })
 
 describe('computeSkillProgress', () => {

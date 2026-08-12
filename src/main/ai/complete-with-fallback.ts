@@ -92,7 +92,14 @@ export const DEFAULT_CATALOG_CHAIN: Record<AIPurpose, string[]> = {
   // cap, since deal-tier2 has no CHAIN_BUDGET entry.
   'deal-tier2': QUALITY_CHAIN,
   // M23 Workstream B - quality-lane precedent, same as summary/scorecard.
-  'coaching-chat': QUALITY_CHAIN
+  'coaching-chat': QUALITY_CHAIN,
+  // M25 - fast/cheap-lane by design (spec: "fast model for extraction"),
+  // same speed chain as coaching-cue/deal-tier1, but no CHAIN_BUDGET entry
+  // since this isn't a live-latency path — the full chain is available.
+  'memory-extract': SPEED_CHAIN,
+  // Judgment work, quality-lane precedent same as summary/scorecard.
+  'memory-consolidate': QUALITY_CHAIN,
+  'memory-reflect': QUALITY_CHAIN
 }
 
 interface ResolvedStep {

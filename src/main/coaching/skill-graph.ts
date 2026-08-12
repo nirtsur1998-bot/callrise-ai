@@ -27,8 +27,22 @@ import {
   MONOLOGUE_FLAG_SECONDS,
   MONOLOGUE_WARN_SECONDS,
   TALK_RATIO_TARGETS,
-  type BenchmarkSnapshot
+  type BenchmarkSnapshot,
+  type TalkRatioTarget
 } from './benchmarks'
+
+/** M25 Phase 3 (L3 procedural memory) — the rep's own personal norms,
+ *  computed by memory/personal-benchmarks.ts from their own call history
+ *  when Sales Brain is on and there's enough of it (see that module's
+ *  MIN_SAMPLE_SIZE floor). Both fields are independently optional and
+ *  default to undefined — computeSkillScores() falls back to the exact
+ *  population-default behavior for whichever one is absent, so a rep with
+ *  Sales Brain off (or too little history yet) sees byte-for-byte the same
+ *  scores as before this existed. */
+export interface PersonalBenchmarks {
+  talkRatioTarget?: TalkRatioTarget
+  questionTarget?: { min: number; max: number }
+}
 
 export { SKILL_KEYS }
 
@@ -81,9 +95,9 @@ function monologuePenalty(metrics: CoachMetrics): number {
   return 0
 }
 
-function scoreListening(metrics: CoachMetrics, callType: CallType): number {
+function scoreListening(metrics: CoachMetrics, callType: CallType, personalTarget?: TalkRatioTarget): number {
   if (metrics.talkRatio === null) return 50 // not enough signal — neutral, not a penalty
-  const target = TALK_RATIO_TARGETS[callType]
+  const target = personalTarget ?? TALK_RATIO_TARGETS[callType]
   const repPct = metrics.talkRatio * 100
   // Being UNDER target (listening more) is never penalized the way being
   // over target is — a rep who talks less than the ideal share is not
@@ -98,18 +112,22 @@ function scoreListening(metrics: CoachMetrics, callType: CallType): number {
  *  headline discovery-question-COUNT benchmark) — a separate signal from
  *  spread/evenness below; a rep can ask evenly-spread but too FEW questions,
  *  and this term is what catches that. */
-function questionCountAdjust(count: number): number {
-  const { min, max } = DISCOVERY_QUESTION_TARGET
+function questionCountAdjust(count: number, personalTarget?: { min: number; max: number }): number {
+  const { min, max } = personalTarget ?? DISCOVERY_QUESTION_TARGET
   if (count >= min && count <= max) return 10
   const target = count < min ? min : max
   return Math.round(clamp(10 - Math.abs(count - target) * 2, -15, 10))
 }
 
-function scoreDiscovery(dims: CoachDimension[], benchmark: BenchmarkSnapshot): number {
+function scoreDiscovery(
+  dims: CoachDimension[],
+  benchmark: BenchmarkSnapshot,
+  personalTarget?: { min: number; max: number }
+): number {
   const base = dimensionScore(dims, 'discovery') ?? 50
   // Count and spread are both capped small adjustments — the AI-scored
   // rubric dimension stays the dominant signal; these only refine it.
-  const countAdjust = questionCountAdjust(benchmark.questionSpread.count)
+  const countAdjust = questionCountAdjust(benchmark.questionSpread.count, personalTarget)
   const evenness = benchmark.questionSpread.evenness
   const spreadAdjust = evenness === null ? 0 : Math.round((evenness - 0.5) * 30)
   return clamp(base + countAdjust + spreadAdjust, 0, 100)
@@ -173,11 +191,12 @@ export function computeSkillScores(
   dims: CoachDimension[],
   metrics: CoachMetrics,
   benchmark: BenchmarkSnapshot,
-  methodologyAdherence?: MethodologyAssessment
+  methodologyAdherence?: MethodologyAssessment,
+  personal?: PersonalBenchmarks
 ): SkillScoreSet {
   return {
-    discovery: scoreDiscovery(dims, benchmark),
-    listening: scoreListening(metrics, benchmark.callType),
+    discovery: scoreDiscovery(dims, benchmark, personal?.questionTarget),
+    listening: scoreListening(metrics, benchmark.callType, personal?.talkRatioTarget),
     objectionHandling: dimensionScore(dims, 'objection') ?? 50,
     valueArticulation: dimensionScore(dims, 'value') ?? 50,
     pricing: scorePricing(benchmark),

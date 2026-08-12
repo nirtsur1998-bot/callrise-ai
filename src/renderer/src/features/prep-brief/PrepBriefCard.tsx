@@ -5,7 +5,8 @@ import {
   History,
   ListChecks,
   ShieldAlert,
-  MessageSquare
+  MessageSquare,
+  Brain
 } from 'lucide-react'
 import { Button } from '@renderer/components/Button'
 import { Skeleton } from '@renderer/components/Skeleton'
@@ -19,6 +20,10 @@ interface PrepBriefCardProps {
   /** M23 A4 — "the M19 pre-call brief displays the current Focus Skill
    *  reminder at the top." Null when Coach 2.0 is off or no focus is set yet. */
   focusSkillReminder: FocusSkillAtCoaching | null
+  /** M25 Phase 3 — "Your edge": what Sales Brain knows about this client +
+   *  the business's own proven objection responses. Null when Sales Brain
+   *  is off or nothing's been compiled yet. */
+  salesBrainEdge: string | null
   onRegenerate: () => void
 }
 
@@ -51,6 +56,7 @@ export function PrepBriefCard({
   record,
   error,
   focusSkillReminder,
+  salesBrainEdge,
   onRegenerate
 }: PrepBriefCardProps): React.JSX.Element {
   if (loading && !record) {
@@ -126,6 +132,11 @@ export function PrepBriefCard({
           <span className="text-faint">—</span>
         )}
       </Section>
+      {salesBrainEdge && (
+        <Section icon={Brain} label="Your edge (Sales Brain)">
+          <p className="whitespace-pre-line">{salesBrainEdge}</p>
+        </Section>
+      )}
 
       <div className="flex items-center justify-between border-t border-line-soft pt-3">
         <p className="text-[11px] text-faint">

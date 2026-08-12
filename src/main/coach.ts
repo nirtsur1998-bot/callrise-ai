@@ -21,7 +21,8 @@ import { assembleKnowledgeContext } from './knowledge-context'
 import { loadAppSettings } from './app-settings'
 import { assemblePersonalizationContext } from './personalization-context'
 import { computeBenchmarkSnapshot } from './coaching/benchmarks'
-import { computeSkillScores } from './coaching/skill-graph'
+import { computeSkillScores, type PersonalBenchmarks } from './coaching/skill-graph'
+import { repProfileSection } from './memory/profile-injection'
 
 const METHODOLOGY_LABEL: Record<SalesMethodology, string> = {
   blended: 'Blended (whichever framework best fits this call)',
@@ -459,7 +460,13 @@ function assembleReport(
   segments: CallSegment[],
   durationMs: number,
   model: string,
-  coach2: { enabled: boolean; methodology: SalesMethodology; callType: CallType; commitments?: Commitment[] }
+  coach2: {
+    enabled: boolean
+    methodology: SalesMethodology
+    callType: CallType
+    commitments?: Commitment[]
+    personalBenchmarks?: PersonalBenchmarks
+  }
 ): CoachingReport | null {
   // Prefer the attribution the LIVE call already established over asking the
   // model again. The two used to be entirely independent decisions over the
@@ -552,7 +559,7 @@ function assembleReport(
       pricingMentionsLatePct: benchmark.pricing.latePct,
       nextStepsLocked: benchmark.nextStepsLocked
     }
-    skills = computeSkillScores(dimensions, metrics, benchmark, methodologyAdherence)
+    skills = computeSkillScores(dimensions, metrics, benchmark, methodologyAdherence, coach2.personalBenchmarks)
   }
 
   return {
@@ -603,8 +610,12 @@ export async function coachCall(
   durationMs: number,
   /** M23 — the caller (calls.ts) resolves callType from the call's own
    *  title/manual override before this runs, since coach.ts has no access
-   *  to the Call record's title. Ignored entirely when Coach 2.0 is off. */
-  context?: { callType?: CallType; commitments?: Commitment[] }
+   *  to the Call record's title. Ignored entirely when Coach 2.0 is off.
+   *  `personalBenchmarks` — M25 Phase 3 (L3 procedural memory) — is
+   *  likewise resolved by the caller (calls.ts has the call-history access
+   *  memory/personal-benchmarks.ts's pure functions need); coach.ts just
+   *  threads it through to computeSkillScores() unchanged. */
+  context?: { callType?: CallType; commitments?: Commitment[]; personalBenchmarks?: PersonalBenchmarks }
 ): Promise<CoachResult> {
   if (!segments.length) {
     return { ok: false, error: 'failed', message: 'This call has no transcript to coach.' }
@@ -619,6 +630,11 @@ export async function coachCall(
   const personalization = loadCoachPersonalization()
   const coach2Settings = loadAppSettings().coach2
   const methodology = coach2Settings.methodology
+  // M25 Phase 3 — a cheap DB read of an already-compiled profile, never an
+  // AI call (see profile-injection.ts's own doc comment) — '' when Sales
+  // Brain is off or nothing's been compiled yet, so this is a no-op byte-
+  // for-byte identical to pre-M25 behavior in that case.
+  const salesBrain = repProfileSection('standard')
 
   try {
     const result = await completeWithFallback({
@@ -628,7 +644,7 @@ export async function coachCall(
       messages: [
         {
           role: 'user',
-          content: `${PROMPT}${knowledgeSection(knowledge)}${personalizationSection(personalization)}${coach2Settings.enabled ? methodologySection(methodology) : ''}\n\n--- TRANSCRIPT ---\n${transcript}`
+          content: `${PROMPT}${knowledgeSection(knowledge)}${personalizationSection(personalization)}${salesBrain}${coach2Settings.enabled ? methodologySection(methodology) : ''}\n\n--- TRANSCRIPT ---\n${transcript}`
         }
       ]
     })
@@ -637,7 +653,8 @@ export async function coachCall(
       enabled: coach2Settings.enabled,
       methodology,
       callType: context?.callType ?? 'discovery',
-      commitments: context?.commitments
+      commitments: context?.commitments,
+      personalBenchmarks: context?.personalBenchmarks
     })
     if (!report) {
       return {
