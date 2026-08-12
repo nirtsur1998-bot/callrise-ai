@@ -83,6 +83,7 @@ const miningInFlight = new Set<string>()
  *  Registered once, from registerCalls(), which always runs after main has
  *  created and set the shared JobManager (see main/index.ts). */
 const SCAN_JOB_TYPE = 'objections:scanPastCalls'
+const SUMMARIZE_JOB_TYPE = 'calls:summarize'
 
 /** Mine one call and stage any grounded candidates in the review queue, then
  *  mark the call as mined — shared by the new-call auto-mine hook and the
@@ -393,30 +394,63 @@ export function registerCalls(): void {
   })
 
   // --- AI summaries --------------------------------------------------------
-  ipcMain.handle('summary:call', async (_event, callId: string): Promise<SummaryResult> => {
-    try {
-      const call = await getCall(callsDir(), callId)
-      if (!call) return { ok: false, error: 'failed', message: 'Call not found.' }
-      if (!call.segments?.length) {
-        return { ok: false, error: 'failed', message: 'This call has no transcript to summarize.' }
-      }
-      const text = speechSegments(call.segments)
-        .map((s) => `Speaker ${s.speaker + 1}: ${s.text}`)
-        .join('\n')
-      const result = await summarize({ kind: 'text', text })
-      if (result.ok) {
-        const saved = await setCallSummary(callsDir(), callId, result.summary)
-        if (!saved) return SAVE_FAILED
+  // M26 Phase 3 — an INTERACTIVE-lane job, not an inline blocking call: the
+  // work always finished and saved regardless of navigation (it runs in
+  // main either way), but the button's own spinner/error UI used to vanish
+  // the instant you left the call, so you couldn't tell it had finished
+  // without reopening it. The extraction/save logic itself is unchanged —
+  // moved as-is from this handler's body into the executor below. Also used
+  // fire-and-forget by the AI Note Taker auto-summarize path
+  // (useTranscription.ts), which never reads the return value — enqueuing
+  // and returning a jobId immediately is transparent to that caller.
+  getJobManager().registerType<{ callId: string }, string>({
+    type: SUMMARIZE_JOB_TYPE,
+    lane: 'INTERACTIVE',
+    titleFor: () => 'Summarizing call',
+    targetRefFor: (i) => i.callId,
+    executor: {
+      kind: 'inline-async',
+      run: async (input) => {
+        const call = await getCall(callsDir(), input.callId)
+        if (!call) throw new Error('Call not found.')
+        if (!call.segments?.length) throw new Error('This call has no transcript to summarize.')
+        const text = speechSegments(call.segments)
+          .map((s) => `Speaker ${s.speaker + 1}: ${s.text}`)
+          .join('\n')
+        const result = await summarize({ kind: 'text', text })
+        if (!result.ok) {
+          throw Object.assign(new Error(result.message ?? 'Could not generate the summary.'), {
+            code: result.error
+          })
+        }
+        const saved = await setCallSummary(callsDir(), input.callId, result.summary)
+        if (!saved) throw new Error('The summary could not be saved. Please try again.')
         scheduleBackup() // the summary (paraphrase, not the transcript) syncs
         // Fire-and-forget: only does anything if this call is ALREADY linked
         // to a contact (the other trigger, above, covers the reverse order).
-        void maybeGenerateCrmNote(callId).catch(() => {})
+        void maybeGenerateCrmNote(input.callId).catch(() => {})
+        return input.callId
       }
-      return result
-    } catch {
-      return SAVE_FAILED
     }
   })
+
+  ipcMain.handle(
+    'summary:call',
+    async (_event, callId: string): Promise<{ ok: boolean; jobId?: string }> => {
+      const manager = getJobManager()
+      const already = manager
+        .list()
+        .find(
+          (j: Job) =>
+            j.type === SUMMARIZE_JOB_TYPE &&
+            j.targetRef === callId &&
+            (j.state === 'running' || j.state === 'queued')
+        )
+      if (already) return { ok: true, jobId: already.id }
+      const job = manager.enqueue(SUMMARIZE_JOB_TYPE, { callId })
+      return { ok: true, jobId: job.id }
+    }
+  )
 
   ipcMain.handle(
     'summary:attachment',

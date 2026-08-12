@@ -790,7 +790,7 @@ export interface CallsApi {
     file: { name: string; ext: string; data: ArrayBuffer }
   ) => Promise<AddAttachmentResult>
   removeAttachment: (callId: string, attachmentId: string) => Promise<{ ok: boolean }>
-  summarizeCall: (callId: string) => Promise<SummaryResult>
+  summarizeCall: (callId: string) => Promise<{ ok: boolean; jobId?: string }>
   summarizeAttachment: (callId: string, attachmentId: string) => Promise<SummaryResult>
   coachCall: (callId: string) => Promise<CoachResult>
   /** Who promised what on this call, split rep vs. prospect (§4.7). */

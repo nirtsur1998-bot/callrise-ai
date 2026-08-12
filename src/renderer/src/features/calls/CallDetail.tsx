@@ -38,6 +38,7 @@ import { GenerateTasksDialog } from '@renderer/features/tasks/GenerateTasksDialo
 import { CoachReportView, CoachLoading } from '@renderer/features/coaching/CoachReportView'
 import { CoachChatCard } from '@renderer/features/coaching/CoachChatPanel'
 import { MineTestPanel } from '@renderer/features/objection-library/MineTestPanel'
+import { useJobByTarget } from '@renderer/features/jobs/useJobByTarget'
 import { useContacts } from '@renderer/features/contacts/useContacts'
 import { ContactPicker } from '@renderer/features/contacts/ContactPicker'
 import {
@@ -45,7 +46,10 @@ import {
   AutoLinkedNotice
 } from '@renderer/features/contacts/CalendarMatchSuggestion'
 import { IdentityContactSuggestion } from './IdentityContactSuggestion'
-import { isIdentitySuggestionDismissed, dismissIdentitySuggestion } from './identitySuggestionDismiss'
+import {
+  isIdentitySuggestionDismissed,
+  dismissIdentitySuggestion
+} from './identitySuggestionDismiss'
 import {
   findCalendarMatches,
   isMatchDismissed,
@@ -95,6 +99,11 @@ const ACCEPT = '.pdf,.txt,.md,.docx'
 const SUPPORTED = ['pdf', 'txt', 'md', 'docx']
 const MAX_FILE_BYTES = 20 * 1024 * 1024
 
+// M26 Phase 3 — job types backing the AI summary / Coach / Find commitments
+// buttons below, tracked per-call via useJobByTarget so the spinner/result
+// survives navigating away and back (see calls.ts for the executors).
+const SUMMARIZE_JOB_TYPE = 'calls:summarize'
+
 interface CallDetailProps {
   callId: string
   onBack: () => void
@@ -109,7 +118,6 @@ export function CallDetail({
   onChanged
 }: CallDetailProps): React.JSX.Element {
   const [call, setCall] = useState<Call | null>(null)
-  const [summarizing, setSummarizing] = useState(false)
   const [summaryError, setSummaryError] = useState<string | null>(null)
   const [noKey, setNoKey] = useState(false)
   const [adding, setAdding] = useState(false)
@@ -160,7 +168,9 @@ export function CallDetail({
   // two used to share one flag, so dismissing either suggestion silently
   // suppressed the other, unrelated one for that call. See
   // identitySuggestionDismiss.ts's own header comment.
-  const [identityDismissed, setIdentityDismissed] = useState(() => isIdentitySuggestionDismissed(callId))
+  const [identityDismissed, setIdentityDismissed] = useState(() =>
+    isIdentitySuggestionDismissed(callId)
+  )
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mountedRef = useRef(true)
@@ -257,22 +267,37 @@ export function CallDetail({
     onChanged()
   }, [reload, onChanged])
 
+  // M26 Phase 3 — tracks the summarize job for THIS call specifically
+  // (targetRef-scoped), so switching to a different call never shows this
+  // one's stale spinner/error, and coming back to a call whose summarize is
+  // still running (or already finished while you were away) picks up
+  // exactly where it left off instead of losing the button's feedback.
+  const [summaryJob, startSummaryJob] = useJobByTarget(SUMMARIZE_JOB_TYPE, callId, {
+    onSucceeded: () => void notifyChanged(),
+    onFailed: (job) => {
+      if (job.error?.code === 'no-key') setNoKey(true)
+      else
+        setSummaryError(job.error?.message ?? 'Could not generate the summary. Please try again.')
+    }
+  })
+  const summarizing = summaryJob?.state === 'running' || summaryJob?.state === 'queued'
+
   const summarizeCall = useCallback(async () => {
     setSummaryError(null)
     setNoKey(false)
-    setSummarizing(true)
     try {
       const res = await window.api.calls.summarizeCall(callId)
       if (!mountedRef.current) return
-      if (res.ok) await notifyChanged()
-      else if (res.error === 'no-key') setNoKey(true)
-      else setSummaryError(res.message ?? 'Could not generate the summary.')
+      if (res.ok && res.jobId) {
+        const fresh = await window.api.jobs.get(res.jobId)
+        if (mountedRef.current && fresh) startSummaryJob(fresh)
+      } else {
+        setSummaryError('Could not start the summary. Please try again.')
+      }
     } catch {
       if (mountedRef.current) setSummaryError('Could not generate the summary. Please try again.')
-    } finally {
-      if (mountedRef.current) setSummarizing(false)
     }
-  }, [callId, notifyChanged])
+  }, [callId, startSummaryJob])
 
   const coachCall = useCallback(async () => {
     setCoachError(null)
@@ -474,7 +499,9 @@ export function CallDetail({
       if (linkBusyRef.current) return
       linkBusyRef.current = true
       try {
-        const existing = contacts.find((c) => c.name.trim().toLowerCase() === name.trim().toLowerCase())
+        const existing = contacts.find(
+          (c) => c.name.trim().toLowerCase() === name.trim().toLowerCase()
+        )
         if (existing) {
           await doLink(existing.id)
           return
@@ -1005,7 +1032,11 @@ export function CallDetail({
         </Card>
 
         {/* M23 Workstream B — coaching chat (advisor + practice mode) */}
-        <CoachChatCard callId={callId} initialMessages={call.coachChat ?? []} hasContact={!!call.contactId} />
+        <CoachChatCard
+          callId={callId}
+          initialMessages={call.coachChat ?? []}
+          hasContact={!!call.contactId}
+        />
 
         {/* Commitments (§4.7) — who promised what */}
         <Card>
