@@ -102,11 +102,15 @@ export function ActivityCenter(): React.JSX.Element {
   }
 
   return (
-    // A plain screen-corner position, independent of whatever's rendered
-    // behind it — MainApp's normal 3-column layout and its completely
-    // separate Settings tree (SettingsShell) don't share a sidebar width to
-    // anchor against, and this needs to look right in both.
-    <div ref={rootRef} className="fixed bottom-5 left-5 z-50">
+    // Bottom-right, same corner as the toast stack (ToastProvider.tsx —
+    // `right-6 bottom-6`, growing upward as toasts stack) but parked well
+    // above it rather than sharing the exact spot, so a toast never
+    // physically covers this persistent button. Bottom-LEFT was tried
+    // first and rejected — it collided with the sidebar's own Settings +
+    // account block, which (like the copilot panel's own header icons)
+    // isn't visible from Settings' completely separate tree anyway, so it
+    // couldn't have anchored against it even on purpose.
+    <div ref={rootRef} className="fixed right-6 bottom-24 z-50">
       <button
         type="button"
         onClick={openPanel}
@@ -132,7 +136,7 @@ export function ActivityCenter(): React.JSX.Element {
       </button>
 
       {open && (
-        <div className="absolute bottom-12 left-0 flex max-h-[70vh] w-80 flex-col overflow-hidden rounded-2xl border border-line-soft bg-surface shadow-pop">
+        <div className="absolute right-0 bottom-12 flex max-h-[70vh] w-80 flex-col overflow-hidden rounded-2xl border border-line-soft bg-surface shadow-pop">
           <div className="flex items-center justify-between border-b border-line-soft px-3.5 py-2.5">
             <h3 className="text-[13px] font-semibold">Activity</h3>
             {recent.length > 0 && (
