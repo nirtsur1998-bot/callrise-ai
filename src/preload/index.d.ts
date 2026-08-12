@@ -711,9 +711,6 @@ export interface TaskUpdateInput {
   note?: string | null
 }
 
-export type GenerateTasksResult =
-  { ok: true; tasks: ProposedTask[] } | { ok: false; error: 'no-key' | 'failed'; message?: string }
-
 // --- Objection Library (mining step) ----------------------------------------
 
 export type MinedObjectionType = 'price' | 'timing' | 'competitor' | 'approval' | 'trust' | 'other'
@@ -855,7 +852,10 @@ export interface TasksApi {
   create: (input: TaskCreateInput) => Promise<Task>
   update: (id: string, patch: TaskUpdateInput) => Promise<Task | null>
   delete: (id: string) => Promise<{ ok: boolean }>
-  generateFromCall: (callId: string) => Promise<GenerateTasksResult>
+  generateFromCall: (
+    callId: string,
+    opts?: { force?: boolean }
+  ) => Promise<{ ok: boolean; jobId?: string }>
 }
 
 /** A comment left on a contact — either the rep's own note, or an AI-drafted

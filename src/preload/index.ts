@@ -181,7 +181,8 @@ const api = {
     create: (input: unknown) => ipcRenderer.invoke('tasks:create', input),
     update: (id: string, patch: unknown) => ipcRenderer.invoke('tasks:update', id, patch),
     delete: (id: string) => ipcRenderer.invoke('tasks:delete', id),
-    generateFromCall: (callId: string) => ipcRenderer.invoke('tasks:generateFromCall', callId)
+    generateFromCall: (callId: string, opts?: { force?: boolean }) =>
+      ipcRenderer.invoke('tasks:generateFromCall', callId, opts)
   },
   contacts: {
     list: () => ipcRenderer.invoke('contacts:list'),

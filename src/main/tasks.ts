@@ -12,8 +12,10 @@ import {
 import { getCall, speechSegments } from './calls-fs'
 import { listDeals } from './deals-fs'
 import { loadDealStages } from './deal-stages'
-import { generateTasks, type GenerateTasksResult } from './generate-tasks'
+import { generateTasks, type ProposedTask } from './generate-tasks'
 import { scheduleBackup } from './backup'
+import { getJobManager } from './jobs/instance'
+import type { Job } from './jobs/types'
 
 function tasksDir(): string {
   return join(app.getPath('userData'), 'tasks')
@@ -83,6 +85,14 @@ function buildCallText(summaryAndTranscript: {
 
 let registered = false
 
+/** M26 Phase 3 — same job type string as the old IPC channel name, matching
+ *  the rest of this milestone's adapters. Kept as an actual bug fix, not
+ *  just an architecture move (see docs — closing the review dialog before
+ *  Save used to permanently discard already-paid-for AI output): the
+ *  proposed tasks are attached to the job's own resultData the instant the
+ *  AI call finishes, so the job (not the dialog) is the source of truth. */
+const GENERATE_TASKS_JOB_TYPE = 'tasks:generateFromCall'
+
 export function registerTasks(): void {
   if (registered) return
   registered = true
@@ -107,27 +117,59 @@ export function registerTasks(): void {
 
   // Ask Claude for suggested tasks from a saved call. Returns proposals only —
   // nothing is saved until the user reviews and accepts them via tasks:create.
-  ipcMain.handle(
-    'tasks:generateFromCall',
-    async (_event, callId: string): Promise<GenerateTasksResult> => {
-      try {
-        const call = await getCall(callsDir(), callId)
-        if (!call) return { ok: false, error: 'failed', message: 'Call not found.' }
+  // The extraction logic itself is unchanged, moved as-is into the executor.
+  getJobManager().registerType<{ callId: string }, { tasks: ProposedTask[] }>({
+    type: GENERATE_TASKS_JOB_TYPE,
+    lane: 'INTERACTIVE',
+    titleFor: () => 'Generating tasks',
+    targetRefFor: (i) => i.callId,
+    executor: {
+      kind: 'inline-async',
+      run: async (input) => {
+        const call = await getCall(callsDir(), input.callId)
+        if (!call) throw new Error('Call not found.')
         if (!call.segments?.length) {
-          return {
-            ok: false,
-            error: 'failed',
-            message: 'This call has no transcript to generate tasks from.'
-          }
+          throw new Error('This call has no transcript to generate tasks from.')
         }
         const text = buildCallText({
           summary: call.summary,
           segments: speechSegments(call.segments)
         })
-        return await generateTasks(text)
-      } catch {
-        return { ok: false, error: 'failed', message: 'Something went wrong. Please try again.' }
+        const result = await generateTasks(text)
+        if (!result.ok) {
+          throw Object.assign(new Error(result.message ?? 'Could not generate tasks.'), {
+            code: result.error
+          })
+        }
+        return { tasks: result.tasks }
       }
+    }
+  })
+
+  ipcMain.handle(
+    'tasks:generateFromCall',
+    async (_event, callId: string, opts: unknown): Promise<{ ok: boolean; jobId?: string }> => {
+      const manager = getJobManager()
+      const force = !!(opts && typeof opts === 'object' && (opts as Record<string, unknown>).force)
+      // Unlike the other Phase 3 adapters, a SUCCEEDED job also counts as
+      // "already there" here — its resultData holds the last-generated,
+      // not-yet-reviewed proposals, and re-opening the dialog for this call
+      // should show those instead of silently re-running (and re-billing)
+      // the AI call. "Regenerate"/"Try again" pass force:true to bypass
+      // this and always start a fresh attempt.
+      if (!force) {
+        const already = manager
+          .list()
+          .find(
+            (j: Job) =>
+              j.type === GENERATE_TASKS_JOB_TYPE &&
+              j.targetRef === callId &&
+              (j.state === 'running' || j.state === 'queued' || j.state === 'succeeded')
+          )
+        if (already) return { ok: true, jobId: already.id }
+      }
+      const job = manager.enqueue(GENERATE_TASKS_JOB_TYPE, { callId })
+      return { ok: true, jobId: job.id }
     }
   )
 }
