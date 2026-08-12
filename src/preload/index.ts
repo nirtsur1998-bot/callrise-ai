@@ -185,7 +185,9 @@ const api = {
     update: (id: string, patch: unknown) => ipcRenderer.invoke('tasks:update', id, patch),
     delete: (id: string) => ipcRenderer.invoke('tasks:delete', id),
     generateFromCall: (callId: string, opts?: { force?: boolean }) =>
-      ipcRenderer.invoke('tasks:generateFromCall', callId, opts)
+      ipcRenderer.invoke('tasks:generateFromCall', callId, opts),
+    markGenerationConsumed: (jobId: string) =>
+      ipcRenderer.invoke('tasks:markGenerationConsumed', jobId)
   },
   contacts: {
     list: () => ipcRenderer.invoke('contacts:list'),

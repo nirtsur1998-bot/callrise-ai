@@ -18,7 +18,7 @@ import {
   type LaneConfig
 } from './types'
 import { loadJobs, saveJobs } from './store'
-import { isTerminal, selectJobsToPrune } from './retention'
+import { holdsUnreviewedOutput, isTerminal, selectJobsToPrune } from './retention'
 import { throttle } from './throttle'
 
 const LANES: JobLane[] = ['LIVE', 'INTERACTIVE', 'BATCH', 'MAINTENANCE']
@@ -188,10 +188,31 @@ export class JobManager {
 
   /** Remove a finished job from the list (Activity Center's "clear
    *  history"). Refuses on anything still active — dismiss is for history,
-   *  not for stopping work; use cancel() for that. */
-  dismiss(id: string): boolean {
+   *  not for stopping work; use cancel() for that.
+   *
+   *  ALSO refuses a succeeded job that still holds unreviewed output
+   *  (`retainUntilConsumed`), unless the caller passes `consumed: true`.
+   *
+   *  This guard lives HERE, not in each screen, on purpose. "Clear history"
+   *  in the Activity Center loops dismiss() over everything in Recent —
+   *  which includes a finished Generate tasks / Generate CRM note job whose
+   *  resultData is the ONLY copy of already-paid-for AI output the rep
+   *  hasn't looked at yet. One click, no confirmation, and it was gone
+   *  (BUG-052): the same data loss as BUG-048/BUG-050 through a different
+   *  door, plus a silent re-run and re-bill of the AI call, because both
+   *  adapters' dedupe treats a succeeded job as "already there". Putting
+   *  the check at this layer means every future job type is protected by
+   *  default rather than depending on someone remembering to add it.
+   *
+   *  `consumed: true` is deliberately NOT reachable over the generic
+   *  `jobs:dismiss` IPC — only a feature's own main-process code, which
+   *  actually knows the rep is done with the output, passes it (see
+   *  crm-note-generator-ipc's recordDecision and tasks.ts's
+   *  markGenerationConsumed). */
+  dismiss(id: string, opts: { consumed?: boolean } = {}): boolean {
     const job = this.jobs.get(id)
     if (!job || job.state === 'queued' || job.state === 'running') return false
+    if (!opts.consumed && holdsUnreviewedOutput(job)) return false
     this.jobs.delete(id)
     this.order = this.order.filter((x) => x !== id)
     this.notify()

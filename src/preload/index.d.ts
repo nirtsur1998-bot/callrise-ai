@@ -856,6 +856,10 @@ export interface TasksApi {
     callId: string,
     opts?: { force?: boolean }
   ) => Promise<{ ok: boolean; jobId?: string }>
+  /** The proposals have been saved, so the job holding them can be cleared.
+   *  Purpose-built rather than the generic jobs.dismiss, which cannot mark
+   *  a job consumed — see JobsApi.dismiss. */
+  markGenerationConsumed: (jobId: string) => Promise<{ ok: boolean }>
 }
 
 /** A comment left on a contact — either the rep's own note, or an AI-drafted
@@ -1939,6 +1943,15 @@ export interface Job {
    *  the full doc). */
   resultData?: unknown
   cancellable: boolean
+  /** This job produces no toast/OS notification of its own — the feature
+   *  behind it ships a better-worded one. Still shown in the Activity
+   *  Center. */
+  silent?: boolean
+  /** While succeeded, this job's resultData may be the only copy of AI
+   *  output the rep hasn't reviewed. It is exempt from automatic history
+   *  pruning and cannot be cleared from generic history UI — see
+   *  holdsUnreviewedOutput() and JobsApi.dismiss (BUG-052). */
+  retainUntilConsumed?: boolean
   input: unknown
   checkpoint?: unknown
 }
@@ -1955,6 +1968,11 @@ export interface JobsApi {
   cancel: (id: string) => Promise<{ ok: boolean }>
   retry: (id: string) => Promise<Job | null>
   resume: (id: string) => Promise<Job | null>
+  /** Clear a finished job from history. Refuses (ok:false) on a job still
+   *  running/queued, AND on one still holding unreviewed AI output — that
+   *  can only be cleared by the feature's own "you've dealt with it" path,
+   *  never from generic history UI (BUG-052). Use holdsUnreviewedOutput()
+   *  to avoid offering a dismiss that would be refused. */
   dismiss: (id: string) => Promise<{ ok: boolean }>
   /** Full current snapshot, pushed at most ~4/sec. */
   onChanged: (cb: (payload: Job[]) => void) => () => void

@@ -69,7 +69,11 @@ function recordDecision(jobId: string, decision: CrmNoteDecision): void {
   if (!result) return
   const next = withDecision(result, decision)
   manager.setResultData(jobId, next)
-  if (isFullyReviewed(next)) manager.dismiss(jobId)
+  // `consumed: true` — this is the one place that genuinely knows the rep is
+  // done with every part of this draft (isFullyReviewed requires the note
+  // handled AND every suggestion decided). Without it the dismiss would be
+  // refused by the BUG-052 guard, and the job would linger forever.
+  if (isFullyReviewed(next)) manager.dismiss(jobId, { consumed: true })
 }
 
 let registered = false

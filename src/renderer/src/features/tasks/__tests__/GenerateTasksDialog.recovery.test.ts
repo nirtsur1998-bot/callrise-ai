@@ -28,6 +28,10 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     priority: 0,
     createdAt: 0,
     cancellable: true,
+    // Main stamps this on every job of this type (tasks.ts) — it is what
+    // makes the generic dismiss refuse, so the mock must carry it too or
+    // these tests would pass against a dialog that regressed to using it.
+    retainUntilConsumed: true,
     input: {},
     ...overrides
   }
@@ -69,13 +73,27 @@ function setupWindowApi(): void {
           changeListeners = changeListeners.filter((l) => l !== cb)
         }
       },
+      // BUG-052 — the generic dismiss now REFUSES a job still holding
+      // unreviewed output, exactly as main does. If the dialog ever regressed
+      // to using this instead of the purpose-built channel below, the job
+      // would survive and the "starts fresh next time" test would fail.
       dismiss: (id: string) => {
+        const job = store.find((j) => j.id === id)
+        if (job?.retainUntilConsumed && job.state === 'succeeded') {
+          return Promise.resolve({ ok: false })
+        }
         dismissCalls.push(id)
         store = store.filter((j) => j.id !== id)
         return Promise.resolve({ ok: true })
       }
     },
     tasks: {
+      // The one path that legitimately knows the proposals were saved.
+      markGenerationConsumed: (jobId: string) => {
+        dismissCalls.push(jobId)
+        store = store.filter((j) => j.id !== jobId)
+        return Promise.resolve({ ok: true })
+      },
       generateFromCall: (callId: string, opts?: { force?: boolean }) => {
         generateCalls.push({ callId, force: !!opts?.force })
         if (!opts?.force) {

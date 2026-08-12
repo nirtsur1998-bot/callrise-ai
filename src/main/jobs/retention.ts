@@ -31,6 +31,17 @@ export function isTerminal(state: JobState): boolean {
 }
 
 /**
+ * True while this job's resultData may still be the only copy of output the
+ * rep hasn't reviewed. Both the automatic pruner and the manual dismiss path
+ * refuse to destroy one of these — see JobManager.dismiss (BUG-052) — and
+ * the Activity Center uses the same rule to stop OFFERING a dismiss that
+ * would be refused.
+ */
+export function holdsUnreviewedOutput(job: Job): boolean {
+  return job.state === 'succeeded' && job.retainUntilConsumed === true
+}
+
+/**
  * Jobs that must survive pruning no matter what:
  *
  *  - Anything not finished (queued/running) — pruning live work would orphan
@@ -53,7 +64,7 @@ export function isTerminal(state: JobState): boolean {
 export function isProtected(job: Job): boolean {
   if (!isTerminal(job.state)) return true
   if (job.state === 'interrupted') return true
-  return job.state === 'succeeded' && job.retainUntilConsumed === true
+  return holdsUnreviewedOutput(job)
 }
 
 /** Successes are routine and disposable; a failure, a cancellation, or an

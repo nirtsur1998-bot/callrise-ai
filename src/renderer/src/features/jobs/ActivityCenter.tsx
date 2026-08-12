@@ -5,6 +5,7 @@ import { Badge, type BadgeTone } from '@renderer/components/Badge'
 import { EmptyState } from '@renderer/components/EmptyState'
 import { useToast } from '@renderer/features/notifications/useToast'
 import { useJobs } from './useJobs'
+import { holdsUnreviewedOutput } from './holdsUnreviewedOutput'
 import type { Job, JobActivityEvent, JobState } from '../../../../preload/index.d'
 
 const LAST_VIEWED_KEY = 'salesos.activityCenter.lastViewedAt'
@@ -97,9 +98,20 @@ export function ActivityCenter(): React.JSX.Element {
     void fn()
   }
 
+  // BUG-052 — this used to sweep EVERYTHING in Recent, including a finished
+  // Generate tasks / Generate CRM note job whose result is the only copy of
+  // AI output the rep hasn't looked at yet. One click, no confirmation, and
+  // it was gone — plus a silent re-run and re-bill next time they opened it,
+  // since both adapters treat a succeeded job as "already generated". Main
+  // refuses those outright now; skipping them here too means the button
+  // clears what it legitimately can instead of half-failing invisibly.
   const clearHistory = (): void => {
-    for (const job of recent) act(() => window.api.jobs.dismiss(job.id))
+    for (const job of recent) {
+      if (holdsUnreviewedOutput(job)) continue
+      act(() => window.api.jobs.dismiss(job.id))
+    }
   }
+  const clearableCount = recent.filter((j) => !holdsUnreviewedOutput(j)).length
 
   return (
     // Bottom-right, same corner as the toast stack (ToastProvider.tsx —
@@ -139,7 +151,7 @@ export function ActivityCenter(): React.JSX.Element {
         <div className="absolute right-0 bottom-12 flex max-h-[70vh] w-80 flex-col overflow-hidden rounded-2xl border border-line-soft bg-surface shadow-pop">
           <div className="flex items-center justify-between border-b border-line-soft px-3.5 py-2.5">
             <h3 className="text-[13px] font-semibold">Activity</h3>
-            {recent.length > 0 && (
+            {clearableCount > 0 && (
               <button
                 type="button"
                 onClick={clearHistory}
@@ -206,8 +218,13 @@ function Row({
   const canCancel = (job.state === 'queued' || job.state === 'running') && job.cancellable
   const canRetry = job.state === 'failed'
   const canResume = job.state === 'interrupted'
+  // BUG-052 — never offer Dismiss on a job still holding unreviewed AI
+  // output; main refuses it, so the button would silently do nothing. The
+  // rep clears it by actually dealing with the draft (save, or discard it
+  // in the screen that owns it).
   const canDismiss =
-    job.state === 'succeeded' || job.state === 'failed' || job.state === 'interrupted'
+    (job.state === 'succeeded' || job.state === 'failed' || job.state === 'interrupted') &&
+    !holdsUnreviewedOutput(job)
 
   return (
     <div className="flex items-start gap-2 rounded-xl px-1.5 py-1.5 hover:bg-elevated">

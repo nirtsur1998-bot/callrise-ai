@@ -151,6 +151,20 @@ export function registerTasks(): void {
     }
   })
 
+  // The rep has saved the proposals, so this job's resultData is no longer
+  // the only copy of anything — it can go. A PURPOSE-BUILT channel rather
+  // than the generic `jobs:dismiss`, because only this path actually knows
+  // the output was consumed; the generic one is reachable from the Activity
+  // Center's "Clear history", which must never be able to claim that (see
+  // JobManager.dismiss, BUG-052).
+  ipcMain.handle(
+    'tasks:markGenerationConsumed',
+    async (_event, jobId: unknown): Promise<{ ok: boolean }> => {
+      if (typeof jobId !== 'string') return { ok: false }
+      return { ok: getJobManager().dismiss(jobId, { consumed: true }) }
+    }
+  )
+
   ipcMain.handle(
     'tasks:generateFromCall',
     async (_event, callId: string, opts: unknown): Promise<{ ok: boolean; jobId?: string }> => {

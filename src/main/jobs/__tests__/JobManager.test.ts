@@ -444,6 +444,95 @@ describe('enqueue', () => {
   })
 })
 
+describe('dismiss — unreviewed output cannot be cleared from generic history UI (BUG-052)', () => {
+  // The Activity Center's "Clear history" loops dismiss() over everything in
+  // Recent. A finished Generate tasks / Generate CRM note job whose
+  // resultData is the ONLY copy of already-paid-for AI output is in Recent.
+  // One click used to destroy it — no confirmation, no error, and a silent
+  // re-run/re-bill next time, since both adapters treat a succeeded job as
+  // "already generated".
+  async function managerWithDraft(): Promise<{
+    manager: InstanceType<typeof import('../JobManager').JobManager>
+    draftId: string
+    plainId: string
+  }> {
+    const { JobManager } = await freshManager()
+    const manager = new JobManager([])
+    manager.registerType<Record<string, never>, { tasks: string[] }>({
+      type: 'test:draft',
+      lane: 'INTERACTIVE',
+      titleFor: () => 'draft',
+      retainUntilConsumed: true,
+      executor: { kind: 'inline-async', run: async () => ({ tasks: ['send pricing'] }) }
+    })
+    manager.registerType<Record<string, never>, string>({
+      type: 'test:plain',
+      lane: 'INTERACTIVE',
+      titleFor: () => 'plain',
+      executor: { kind: 'inline-async', run: async () => 'ok' }
+    })
+    const draft = manager.enqueue('test:draft', {})
+    const plain = manager.enqueue('test:plain', {})
+    await settle()
+    return { manager, draftId: draft.id, plainId: plain.id }
+  }
+
+  it('REFUSES a plain dismiss of a job still holding unreviewed output', async () => {
+    const { manager, draftId } = await managerWithDraft()
+    expect(manager.dismiss(draftId)).toBe(false)
+    expect(manager.get(draftId)).not.toBeNull()
+    expect(manager.get(draftId)?.resultData).toEqual({ tasks: ['send pricing'] })
+    manager.dispose()
+  })
+
+  it('still allows dismissing an ordinary finished job — the guard is narrow, not a blanket freeze', async () => {
+    const { manager, plainId } = await managerWithDraft()
+    expect(manager.dismiss(plainId)).toBe(true)
+    expect(manager.get(plainId)).toBeNull()
+    manager.dispose()
+  })
+
+  it('allows it once the feature marks the output consumed', async () => {
+    const { manager, draftId } = await managerWithDraft()
+    expect(manager.dismiss(draftId)).toBe(false)
+    expect(manager.dismiss(draftId, { consumed: true })).toBe(true)
+    expect(manager.get(draftId)).toBeNull()
+    manager.dispose()
+  })
+
+  it('a FAILED job of a retain-until-consumed type dismisses freely — a failed run produced no output to lose', async () => {
+    const { JobManager } = await freshManager()
+    const manager = new JobManager([])
+    manager.registerType<Record<string, never>, string>({
+      type: 'test:failingDraft',
+      lane: 'INTERACTIVE',
+      titleFor: () => 'failing draft',
+      retainUntilConsumed: true,
+      executor: {
+        kind: 'inline-async',
+        run: async () => {
+          throw new Error('nope')
+        }
+      }
+    })
+    const job = manager.enqueue('test:failingDraft', {})
+    await settle()
+    expect(manager.get(job.id)?.state).toBe('failed')
+    expect(manager.dismiss(job.id)).toBe(true)
+    manager.dispose()
+  })
+
+  it('a whole "Clear history" sweep leaves the draft and takes everything else', async () => {
+    const { manager, draftId, plainId } = await managerWithDraft()
+    // Exactly what ActivityCenter.clearHistory does: dismiss every finished job.
+    for (const job of manager.list()) manager.dismiss(job.id)
+
+    expect(manager.get(draftId)).not.toBeNull() // survived
+    expect(manager.get(plainId)).toBeNull() // routine history cleared
+    manager.dispose()
+  })
+})
+
 describe('history pruning', () => {
   // retention.ts covers the POLICY exhaustively; these prove it is actually
   // WIRED UP in the manager. History is seeded through the constructor (the

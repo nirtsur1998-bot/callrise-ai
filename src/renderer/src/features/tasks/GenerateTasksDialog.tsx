@@ -168,11 +168,13 @@ export function GenerateTasksDialog({
         if (!mountedRef.current) return
         setRows(remaining)
       }
-      // The proposals are consumed now — dismiss the job so reopening
+      // The proposals are consumed now — clear the job so reopening
       // "Generate tasks" for this call later doesn't resurface an
-      // already-saved batch (best-effort: a failed dismiss just leaves it
-      // in Activity Center history, harmless).
-      if (job) void window.api.jobs.dismiss(job.id).catch(() => {})
+      // already-saved batch (best-effort: a failure just leaves it in
+      // Activity Center history, harmless). Goes through a purpose-built
+      // channel, not the generic jobs.dismiss, which deliberately cannot
+      // clear a job still holding unreviewed output (BUG-052).
+      if (job) void window.api.tasks.markGenerationConsumed(job.id).catch(() => {})
       onSaved(totalToSave) // parent unmounts the dialog
     } catch {
       if (mountedRef.current) {

@@ -4,6 +4,7 @@ import { Card } from '@renderer/components/Card'
 import { Button } from '@renderer/components/Button'
 import { Badge, type BadgeTone } from '@renderer/components/Badge'
 import { EmptyState } from '@renderer/components/EmptyState'
+import { holdsUnreviewedOutput } from '@renderer/features/jobs/holdsUnreviewedOutput'
 import type { Job, JobState } from '../../../../preload/index.d'
 
 const STATE_TONE: Record<JobState, BadgeTone> = {
@@ -240,7 +241,11 @@ function JobRow({
   const canCancel = (job.state === 'queued' || job.state === 'running') && job.cancellable
   const canRetry = job.state === 'failed' || job.state === 'cancelled'
   const canResume = job.state === 'interrupted'
-  const canDismiss = job.state !== 'queued' && job.state !== 'running'
+  // Same BUG-052 rule as the Activity Center: main refuses to clear a job
+  // still holding unreviewed AI output, so don't offer a dead button here
+  // either (dev-only surface, but it reads the same real job list).
+  const canDismiss =
+    job.state !== 'queued' && job.state !== 'running' && !holdsUnreviewedOutput(job)
 
   return (
     <div className="flex items-center gap-3 rounded-xl border border-line-soft bg-canvas px-3 py-2.5">
