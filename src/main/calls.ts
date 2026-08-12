@@ -31,7 +31,7 @@ import {
 } from './calls-fs'
 import { summarize, type SummarizeInput, type SummaryResult } from './summarize'
 import { coachCall } from './coach'
-import { extractCommitments, type CommitmentResult } from './commitments'
+import { extractCommitments } from './commitments'
 import { generateCallTitle, type GenerateTitleResult } from './call-title'
 import { mineObjections, makeVerifier, type ObjectionMiningResult } from './objection-mining'
 import { addToQueue, purgeQueueForCall } from './objection-queue-fs'
@@ -85,6 +85,7 @@ const miningInFlight = new Set<string>()
 const SCAN_JOB_TYPE = 'objections:scanPastCalls'
 const SUMMARIZE_JOB_TYPE = 'calls:summarize'
 const COACH_JOB_TYPE = 'calls:coach'
+const FIND_COMMITMENTS_JOB_TYPE = 'calls:findCommitments'
 
 /** Mine one call and stage any grounded candidates in the review queue, then
  *  mark the call as mined — shared by the new-call auto-mine hook and the
@@ -596,31 +597,48 @@ export function registerCalls(): void {
   )
 
   // --- Commitments (§4.7) — who promised what -------------------------------
+  // M26 Phase 3 — same shift as summary/coach above.
+  getJobManager().registerType<{ callId: string }, string>({
+    type: FIND_COMMITMENTS_JOB_TYPE,
+    lane: 'INTERACTIVE',
+    titleFor: () => 'Finding commitments',
+    targetRefFor: (i) => i.callId,
+    executor: {
+      kind: 'inline-async',
+      run: async (input) => {
+        const call = await getCall(callsDir(), input.callId)
+        if (!call) throw new Error('Call not found.')
+        const result = await extractCommitments(speechSegments(call.segments))
+        if (!result.ok) {
+          throw Object.assign(
+            new Error(result.message ?? 'Could not find commitments on this call.'),
+            {
+              code: result.error
+            }
+          )
+        }
+        const saved = await setCallCommitments(callsDir(), input.callId, result.commitments)
+        if (!saved) throw new Error('The commitments could not be saved. Please try again.')
+        return input.callId
+      }
+    }
+  })
+
   ipcMain.handle(
     'commitments:extract',
-    async (_event, callId: string): Promise<CommitmentResult> => {
-      try {
-        const call = await getCall(callsDir(), callId)
-        if (!call) return { ok: false, error: 'failed', message: 'Call not found.' }
-        const result = await extractCommitments(speechSegments(call.segments))
-        if (result.ok) {
-          const saved = await setCallCommitments(callsDir(), callId, result.commitments)
-          if (!saved) {
-            return {
-              ok: false,
-              error: 'failed',
-              message: 'The commitments could not be saved. Please try again.'
-            }
-          }
-        }
-        return result
-      } catch {
-        return {
-          ok: false,
-          error: 'failed',
-          message: 'The commitments could not be saved. Please try again.'
-        }
-      }
+    async (_event, callId: string): Promise<{ ok: boolean; jobId?: string }> => {
+      const manager = getJobManager()
+      const already = manager
+        .list()
+        .find(
+          (j: Job) =>
+            j.type === FIND_COMMITMENTS_JOB_TYPE &&
+            j.targetRef === callId &&
+            (j.state === 'running' || j.state === 'queued')
+        )
+      if (already) return { ok: true, jobId: already.id }
+      const job = manager.enqueue(FIND_COMMITMENTS_JOB_TYPE, { callId })
+      return { ok: true, jobId: job.id }
     }
   )
 

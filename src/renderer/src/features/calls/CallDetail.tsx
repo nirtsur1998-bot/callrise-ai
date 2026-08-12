@@ -104,6 +104,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024
 // survives navigating away and back (see calls.ts for the executors).
 const SUMMARIZE_JOB_TYPE = 'calls:summarize'
 const COACH_JOB_TYPE = 'calls:coach'
+const FIND_COMMITMENTS_JOB_TYPE = 'calls:findCommitments'
 
 interface CallDetailProps {
   callId: string
@@ -127,7 +128,6 @@ export function CallDetail({
   const [showTasks, setShowTasks] = useState(false)
   const [tasksAdded, setTasksAdded] = useState(0)
   const [coachError, setCoachError] = useState<string | null>(null)
-  const [findingCommitments, setFindingCommitments] = useState(false)
   const [commitmentsError, setCommitmentsError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [practicing, setPracticing] = useState(false)
@@ -325,26 +325,40 @@ export function CallDetail({
     }
   }, [callId, startCoachJob])
 
+  const [commitmentsJob, startCommitmentsJob] = useJobByTarget(FIND_COMMITMENTS_JOB_TYPE, callId, {
+    onSucceeded: () => void notifyChanged(),
+    onFailed: (job) => {
+      if (job.error?.code === 'no-key') setNoKey(true)
+      else if (job.error?.code === 'empty-call') {
+        setCommitmentsError('This call is too short to have any commitments worth extracting.')
+      } else {
+        setCommitmentsError(
+          job.error?.message ?? 'Could not find commitments on this call. Please try again.'
+        )
+      }
+    }
+  })
+  const findingCommitments =
+    commitmentsJob?.state === 'running' || commitmentsJob?.state === 'queued'
+
   const findCommitments = useCallback(async () => {
     setCommitmentsError(null)
     setNoKey(false)
-    setFindingCommitments(true)
     try {
       const res = await window.api.calls.extractCommitments(callId)
       if (!mountedRef.current) return
-      if (res.ok) await notifyChanged()
-      else if (res.error === 'no-key') setNoKey(true)
-      else if (res.error === 'empty-call') {
-        setCommitmentsError('This call is too short to have any commitments worth extracting.')
-      } else setCommitmentsError(res.message ?? 'Could not find commitments on this call.')
+      if (res.ok && res.jobId) {
+        const fresh = await window.api.jobs.get(res.jobId)
+        if (mountedRef.current && fresh) startCommitmentsJob(fresh)
+      } else {
+        setCommitmentsError('Could not start. Please try again.')
+      }
     } catch {
       if (mountedRef.current) {
         setCommitmentsError('Could not find commitments on this call. Please try again.')
       }
-    } finally {
-      if (mountedRef.current) setFindingCommitments(false)
     }
-  }, [callId, notifyChanged])
+  }, [callId, startCommitmentsJob])
 
   const handleFile = useCallback(
     async (file: File) => {

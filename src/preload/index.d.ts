@@ -520,10 +520,6 @@ export interface Commitment {
   dueDate?: string
 }
 
-export type CommitmentResult =
-  | { ok: true; commitments: Commitment[] }
-  | { ok: false; error: 'no-key' | 'failed' | 'empty-call'; message?: string }
-
 // M24 §8 — the post-call "Radar Report" source data. Mirrors main/calls-fs.ts's
 // same-named types verbatim (that file is the sanitizing authority).
 export interface DealNudgeRecord {
@@ -791,7 +787,7 @@ export interface CallsApi {
   summarizeAttachment: (callId: string, attachmentId: string) => Promise<SummaryResult>
   coachCall: (callId: string) => Promise<{ ok: boolean; jobId?: string }>
   /** Who promised what on this call, split rep vs. prospect (§4.7). */
-  extractCommitments: (callId: string) => Promise<CommitmentResult>
+  extractCommitments: (callId: string) => Promise<{ ok: boolean; jobId?: string }>
   /** M24 §8 — persist the Radar Report source data onto an already-saved
    *  call. No AI call; the renderer already has the full history. */
   saveDealIntelligence: (callId: string, record: DealIntelligenceRecord) => Promise<{ ok: boolean }>
