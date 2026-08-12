@@ -88,6 +88,51 @@ const SUMMARIZE_JOB_TYPE = 'calls:summarize'
 const COACH_JOB_TYPE = 'calls:coach'
 const FIND_COMMITMENTS_JOB_TYPE = 'calls:findCommitments'
 
+// M26 Batch 5 — the automatic post-call cascade. These used to be bare
+// fire-and-forget calls with a `.catch(() => {})`: they ran, they finished,
+// and nothing anywhere told the rep any of it had happened. As jobs they
+// show up in the Activity Center, which is the whole point of the
+// milestone for this group ("did my call actually get processed?").
+//
+// All BATCH, per the approved Phase 0 lane assignments. Note this DOES
+// change timing: today all six cascade steps fire simultaneously the
+// instant a call ends, which Phase 0 flagged as a real problem (nothing
+// stopped ten AI calls hitting the same rate limit at once). BATCH's single
+// slot serializes them, which is the lane system doing its job rather than
+// a regression.
+//
+// All silent: true. They belong in the Activity Center, but a burst of
+// four toasts the moment every call ends is not visibility, it's noise —
+// and the DND digest can't help here, because by then the call has already
+// ended. The two steps that already ship a genuinely useful notification
+// of their own (contact auto-attach, Sales Brain "learned N things") keep
+// theirs.
+const AUTO_MINE_JOB_TYPE = 'objections:mineNewCall'
+const RESOLVE_CONTACT_JOB_TYPE = 'calls:resolveContact'
+const AUTO_CRM_NOTE_JOB_TYPE = 'crmNote:auto'
+
+/** Queue one cascade step for a call.
+ *
+ *  Never throws into its caller. Every call site sits inside `calls:save`,
+ *  `calls:setContact`, or a coaching executor, and the long-standing
+ *  invariant is that a background AI step can never take down the thing
+ *  that triggered it — previously guaranteed by the `.catch(() => {})` on
+ *  each fire-and-forget call. enqueue() genuinely can throw (unregistered
+ *  type), so that guarantee is kept explicitly rather than assumed.
+ *
+ *  Deliberately NO same-target dedupe: several of these legitimately run
+ *  twice for one call (contact resolution after save AND after coaching,
+ *  the CRM note from whichever of link/summarize happens second), and a
+ *  targetRef-keyed guard would silently swallow the second — which is
+ *  usually the one with enough context to actually do the work. */
+function enqueueCascadeJob(type: string, callId: string): void {
+  try {
+    getJobManager().enqueue(type, { callId })
+  } catch (err) {
+    console.error(`[calls] could not enqueue ${type}:`, err)
+  }
+}
+
 /** What happened to one call's mining attempt. `skipped` is deliberately
  *  DISTINCT from `ok: false` — see mineCallIntoQueue's own doc comment. */
 export interface MineCallOutcome {
@@ -97,6 +142,12 @@ export interface MineCallOutcome {
    *  being mined by the other trigger right now. Not a failure — the other
    *  attempt is still running and will mark the call mined itself. */
   skipped?: boolean
+  /** True when there was simply nothing to mine (no transcript). Also not a
+   *  failure: separated out because the auto-mine JOB surfaces its outcome
+   *  in the Activity Center, where reporting a transcript-less call as
+   *  "Looking for objections — failed" would be a false alarm about a call
+   *  that was never minable in the first place. */
+  nothingToMine?: boolean
 }
 
 /** Mine one call and stage any grounded candidates in the review queue, then
@@ -120,7 +171,7 @@ async function mineCallIntoQueue(callId: string): Promise<MineCallOutcome> {
   miningInFlight.add(callId)
   try {
     const call = await getCall(callsDir(), callId)
-    if (!call?.segments?.length) return { ok: false, added: 0 }
+    if (!call?.segments?.length) return { ok: false, added: 0, nothingToMine: true }
     // Re-check on the fresh read: another path may have finished mining this
     // call after the caller built its eligible list.
     if (call.objectionsMinedAt) return { ok: true, added: 0 }
@@ -262,6 +313,77 @@ export function registerCalls(): void {
   if (registered) return
   registered = true
 
+  // --- The automatic post-call cascade, as jobs -----------------------------
+  // Each executor wraps its existing function UNCHANGED; only the execution
+  // home and the visibility changed. See the job-type constants above for
+  // why they're all BATCH and all silent.
+  getJobManager().registerType<{ callId: string }, string>({
+    type: AUTO_MINE_JOB_TYPE,
+    lane: 'BATCH',
+    titleFor: () => 'Looking for objections in this call',
+    targetRefFor: (i) => i.callId,
+    silent: true,
+    executor: {
+      kind: 'inline-async',
+      run: async (input) => {
+        // Re-checked here, not at enqueue: the toggle is the HARD gate
+        // ("off means no call is ever read"), and a job can sit in BATCH's
+        // queue long enough for the rep to turn it off in between.
+        if (!isObjectionMiningEnabled()) return 'skipped — objection mining is off'
+        const res = await mineCallIntoQueue(input.callId)
+        if (res.skipped) return 'already being mined by the past-calls scan'
+        if (res.nothingToMine) return 'no transcript to mine'
+        // Only a genuine AI/mining failure reaches here — a transcript-less
+        // call is reported above as the non-event it is, rather than as a
+        // red "failed" row in the Activity Center.
+        if (!res.ok) throw new Error('Could not mine this call for objections.')
+        return `found ${res.added} suggestion${res.added === 1 ? '' : 's'}`
+      }
+    }
+  })
+
+  // resolveAndSaveIdentities and runFullAutoContactIntelligence are ONE job,
+  // not two: the second reads the identity the first writes, so the existing
+  // .then() ordering is load-bearing. Two separate jobs in a 1-wide lane
+  // would happen to preserve it today and break silently the moment lane
+  // capacity or priorities changed.
+  getJobManager().registerType<{ callId: string }, string>({
+    type: RESOLVE_CONTACT_JOB_TYPE,
+    lane: 'BATCH',
+    titleFor: () => 'Working out who was on this call',
+    targetRefFor: (i) => i.callId,
+    // The feature fires its own far better "Automatically created and
+    // attached 'Dana'" notification when it actually attaches someone.
+    silent: true,
+    executor: {
+      kind: 'inline-async',
+      run: async (input) => {
+        await resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, input.callId)
+        await runFullAutoContactIntelligence(input.callId)
+        return input.callId
+      }
+    }
+  })
+
+  getJobManager().registerType<{ callId: string }, string>({
+    type: AUTO_CRM_NOTE_JOB_TYPE,
+    lane: 'BATCH',
+    titleFor: () => 'Drafting a CRM note',
+    targetRefFor: (i) => i.callId,
+    silent: true,
+    executor: {
+      kind: 'inline-async',
+      run: async (input) => {
+        // maybeGenerateCrmNote does all its own gating (setting off, already
+        // generated, no contact, no content) and no-ops silently — kept that
+        // way rather than hoisting the checks to the enqueue site, so a job
+        // queued before the rep flipped the setting still honors the flip.
+        await maybeGenerateCrmNote(input.callId)
+        return input.callId
+      }
+    }
+  })
+
   ipcMain.handle('calls:list', () => listCalls(callsDir()))
   ipcMain.handle('calls:get', (_event, id: string) => getCall(callsDir(), id))
   ipcMain.handle(
@@ -269,11 +391,13 @@ export function registerCalls(): void {
     async (_event, input: CallSaveInput, selfIntro?: { key: string; name: string }) => {
       const summary = await saveCall(callsDir(), input)
       scheduleBackup() // metadata only reaches the cloud (segments never included)
-      // Fire-and-forget: never block the save on an AI call. Only runs when the
-      // Objection Library toggle is on — this is the "new calls going forward"
-      // half of the mining scope (the other half is the manual scan below).
+      // Never blocks the save. Only runs when the Objection Library toggle is
+      // on — this is the "new calls going forward" half of the mining scope
+      // (the other half is the manual scan below). Checked here to avoid
+      // queueing a job that would only no-op, AND again inside the executor,
+      // which is the check that actually matters.
       if (isObjectionMiningEnabled()) {
-        void mineCallIntoQueue(summary.id).catch(() => {})
+        enqueueCascadeJob(AUTO_MINE_JOB_TYPE, summary.id)
       }
       // M19 Task 2 step 5 — applied and AWAITED before the cascade below
       // starts, so ordering is deterministic: self-intro lands first as a
@@ -306,12 +430,10 @@ export function registerCalls(): void {
           }).catch(() => {})
         }
       }
-      // Fire-and-forget, same as objection mining above — never block the save.
-      // Fully resolves multichannel calls (channel 0/1 are deterministic);
-      // mono calls only get "me" once coaching supplies repSpeaker (see below).
-      void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, summary.id)
-        .then(() => runFullAutoContactIntelligence(summary.id))
-        .catch(() => {})
+      // Same as objection mining above — never blocks the save. Fully
+      // resolves multichannel calls (channel 0/1 are deterministic); mono
+      // calls only get "me" once coaching supplies repSpeaker (see below).
+      enqueueCascadeJob(RESOLVE_CONTACT_JOB_TYPE, summary.id)
       // M25 — same fire-and-forget convention, own independent chain (not
       // .then()-ed onto the identity/contact one above): a Sales Brain
       // failure must never be able to affect contact resolution, and vice
@@ -360,9 +482,10 @@ export function registerCalls(): void {
   ipcMain.handle('calls:setContact', async (_event, callId: string, contactId: string | null) => {
     const call = await setCallContact(callsDir(), callId, contactId)
     scheduleBackup() // the link is metadata like a title edit
-    // Fire-and-forget: never block linking on an AI call. Only does anything
-    // when the call already has a summary or transcript to work from.
-    if (call && contactId) void maybeGenerateCrmNote(callId).catch(() => {})
+    // Never blocks linking on an AI call. Only does anything when the call
+    // already has a summary or transcript to work from — the executor's own
+    // gating decides that, same as before.
+    if (call && contactId) enqueueCascadeJob(AUTO_CRM_NOTE_JOB_TYPE, callId)
     return call
   })
 
@@ -456,9 +579,9 @@ export function registerCalls(): void {
         const saved = await setCallSummary(callsDir(), input.callId, result.summary)
         if (!saved) throw new Error('The summary could not be saved. Please try again.')
         scheduleBackup() // the summary (paraphrase, not the transcript) syncs
-        // Fire-and-forget: only does anything if this call is ALREADY linked
-        // to a contact (the other trigger, above, covers the reverse order).
-        void maybeGenerateCrmNote(input.callId).catch(() => {})
+        // Only does anything if this call is ALREADY linked to a contact
+        // (the other trigger, above, covers the reverse order).
+        enqueueCascadeJob(AUTO_CRM_NOTE_JOB_TYPE, input.callId)
         return input.callId
       }
     }
@@ -588,9 +711,7 @@ export function registerCalls(): void {
         // repSpeaker is only known from here on for a mono call — re-run so
         // its "me" key (and therefore single-other-party detection) can
         // resolve for the first time.
-        void resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, input.callId)
-          .then(() => runFullAutoContactIntelligence(input.callId))
-          .catch(() => {})
+        enqueueCascadeJob(RESOLVE_CONTACT_JOB_TYPE, input.callId)
         // M25 — also re-run after coaching, same reasoning as the identity
         // cascade above: this call may have just gotten scorecard/skill
         // data it didn't have at save time, and a mono call's contactId may
@@ -807,8 +928,13 @@ export function registerCalls(): void {
             break
           }
           const res = await mineCallIntoQueue(c.id)
+          // Both "already being mined" and "nothing to mine" are non-events
+          // that must never count toward the consecutive-failure breaker.
+          // (nothingToMine is effectively unreachable here — eligibleForMining
+          // already requires a non-empty preview — but mapping it to 'failed'
+          // would be wrong the day that stops being true.)
           const decision = tally.record(
-            res.skipped
+            res.skipped || res.nothingToMine
               ? { kind: 'skipped' }
               : res.ok
                 ? { kind: 'ok', added: res.added }
