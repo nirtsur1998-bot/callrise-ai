@@ -356,7 +356,13 @@ export class JobManager {
             itemsTotal: job.progress.itemsTotal
           }
         : job.progress
-    this.transition(job, { state: 'succeeded', endedAt: Date.now(), resultRef, progress })
+    this.transition(job, {
+      state: 'succeeded',
+      endedAt: Date.now(),
+      resultRef,
+      resultData: result,
+      progress
+    })
     this.tick()
   }
 

@@ -1,14 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Job } from '../../../../preload/index.d'
+import type { Job, JobState } from '../../../../preload/index.d'
+
+const DEFAULT_ADOPT_STATES: JobState[] = ['running', 'queued']
 
 /**
  * Tracks the single most relevant job of `jobType` scoped to `targetRef`
- * (e.g. a call id) — adopts an already-running/queued one on mount (the rep
- * clicked the button, navigated away, and came back), stays live via
- * window.api.jobs.onChanged, and calls onSucceeded/onFailed exactly once
- * per job that reaches a terminal state. Re-adopts from scratch whenever
- * `targetRef` changes, so a job tracked for a previous call/contact/deal
- * never leaks onto the next one shown in the same screen.
+ * (e.g. a call id) — adopts an already-there job matching `adoptStates` on
+ * mount (the rep clicked the button, navigated away, and came back), stays
+ * live via window.api.jobs.onChanged, and calls onSucceeded/onFailed
+ * exactly once per job that reaches a terminal state (whether it was
+ * already terminal at adoption time, or finished while being watched
+ * live). Re-adopts from scratch whenever `targetRef` changes, so a job
+ * tracked for a previous call/contact/deal never leaks onto the next one
+ * shown in the same screen.
+ *
+ * `adoptStates` defaults to running/queued — the common "track an
+ * in-flight operation" case. Pass `['running', 'queued', 'succeeded']` for
+ * a job type whose successful result is a not-yet-consumed payload the
+ * screen should show without re-running the job (see Job.resultData's own
+ * doc, and GenerateTasksDialog — closing it before Save must not lose
+ * already-paid-for AI output, so reopening needs to find the same
+ * finished job instead of starting a new one).
  *
  * This is the shared shape behind every "click a button, track one job
  * against a specific record" adapter — the objection-scan and Sales Brain
@@ -19,37 +31,55 @@ import type { Job } from '../../../../preload/index.d'
 export function useJobByTarget(
   jobType: string,
   targetRef: string,
-  handlers: { onSucceeded?: (job: Job) => void; onFailed?: (job: Job) => void } = {}
+  opts: {
+    onSucceeded?: (job: Job) => void
+    onFailed?: (job: Job) => void
+    adoptStates?: JobState[]
+  } = {}
 ): [Job | null, (job: Job) => void] {
   const [job, setJob] = useState<Job | null>(null)
   const notifiedRef = useRef<string | null>(null)
-  const handlersRef = useRef(handlers)
-  // Updated post-render (not during it) so the async onChanged subscription
-  // below always calls the latest onSucceeded/onFailed without needing to
+  const optsRef = useRef(opts)
+  // Updated post-render (not during it) so the async work below always
+  // calls the latest onSucceeded/onFailed/adoptStates without needing to
   // re-subscribe every render.
   useEffect(() => {
-    handlersRef.current = handlers
+    optsRef.current = opts
   })
+
+  // Adopts a job into tracked state, firing onSucceeded/onFailed exactly
+  // once if it's ALREADY terminal — covers both "found one already done on
+  // mount" and "start() was handed one that finished before this ran" the
+  // same way a job finishing while being watched live does.
+  const adopt = useCallback((candidate: Job): void => {
+    setJob(candidate)
+    if (notifiedRef.current === candidate.id) return
+    if (candidate.state === 'succeeded') {
+      notifiedRef.current = candidate.id
+      optsRef.current.onSucceeded?.(candidate)
+    } else if (candidate.state === 'failed') {
+      notifiedRef.current = candidate.id
+      optsRef.current.onFailed?.(candidate)
+    }
+  }, [])
 
   useEffect(() => {
     let mounted = true
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset tracked job when jobType/targetRef changes, then adopt
     setJob(null)
     notifiedRef.current = null
+    const adoptStates = optsRef.current.adoptStates ?? DEFAULT_ADOPT_STATES
     void window.api.jobs.list().then((jobs) => {
       if (!mounted) return
       const active = jobs.find(
-        (j) =>
-          j.type === jobType &&
-          j.targetRef === targetRef &&
-          (j.state === 'running' || j.state === 'queued')
+        (j) => j.type === jobType && j.targetRef === targetRef && adoptStates.includes(j.state)
       )
-      if (active) setJob(active)
+      if (active) adopt(active)
     })
     return () => {
       mounted = false
     }
-  }, [jobType, targetRef])
+  }, [jobType, targetRef, adopt])
 
   useEffect(() => {
     return window.api.jobs.onChanged((jobs) => {
@@ -60,10 +90,10 @@ export function useJobByTarget(
         if (notifiedRef.current !== next.id) {
           if (next.state === 'succeeded') {
             notifiedRef.current = next.id
-            handlersRef.current.onSucceeded?.(next)
+            optsRef.current.onSucceeded?.(next)
           } else if (next.state === 'failed') {
             notifiedRef.current = next.id
-            handlersRef.current.onFailed?.(next)
+            optsRef.current.onFailed?.(next)
           }
         }
         return next
@@ -71,10 +101,13 @@ export function useJobByTarget(
     })
   }, [])
 
-  const start = useCallback((startedJob: Job): void => {
-    notifiedRef.current = null
-    setJob(startedJob)
-  }, [])
+  const start = useCallback(
+    (startedJob: Job): void => {
+      notifiedRef.current = null
+      adopt(startedJob)
+    },
+    [adopt]
+  )
 
   return [job, start]
 }

@@ -443,3 +443,43 @@ describe('enqueue', () => {
     manager.dispose()
   })
 })
+
+describe('resultData', () => {
+  it("attaches the executor's full resolved result to the job, not just a string resultRef", async () => {
+    const { JobManager } = await freshManager()
+    const manager = new JobManager([])
+    manager.registerType<Record<string, never>, { tasks: string[] }>({
+      type: 'test:richResult',
+      lane: 'INTERACTIVE',
+      titleFor: () => 'rich result',
+      executor: {
+        kind: 'inline-async',
+        run: async () => ({ tasks: ['send pricing', 'follow up Friday'] })
+      }
+    })
+    const job = manager.enqueue('test:richResult', {})
+    await settle()
+    const final = manager.get(job.id)
+    expect(final?.state).toBe('succeeded')
+    expect(final?.resultRef).toBeUndefined() // no resultRefFor supplied, and the result isn't a string
+    expect(final?.resultData).toEqual({ tasks: ['send pricing', 'follow up Friday'] })
+    manager.dispose()
+  })
+
+  it('still sets resultData for a plain string result (same value as resultRef)', async () => {
+    const { JobManager } = await freshManager()
+    const manager = new JobManager([])
+    manager.registerType<Record<string, never>, string>({
+      type: 'test:stringResult',
+      lane: 'INTERACTIVE',
+      titleFor: () => 'string result',
+      executor: { kind: 'inline-async', run: async () => 'call-123' }
+    })
+    const job = manager.enqueue('test:stringResult', {})
+    await settle()
+    const final = manager.get(job.id)
+    expect(final?.resultRef).toBe('call-123')
+    expect(final?.resultData).toBe('call-123')
+    manager.dispose()
+  })
+})

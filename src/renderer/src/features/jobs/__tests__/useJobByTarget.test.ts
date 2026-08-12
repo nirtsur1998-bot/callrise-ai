@@ -3,7 +3,7 @@ import { act, createElement, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useJobByTarget } from '@renderer/features/jobs/useJobByTarget'
-import type { Job } from '../../../../../preload/index.d'
+import type { Job, JobState } from '../../../../../preload/index.d'
 
 function makeJob(overrides: Partial<Job> = {}): Job {
   return {
@@ -51,12 +51,14 @@ function emitChange(jobs: Job[]): void {
 
 function Harness({
   jobType,
-  targetRef
+  targetRef,
+  adoptStates
 }: {
   jobType: string
   targetRef: string
+  adoptStates?: JobState[]
 }): React.JSX.Element {
-  const [job, start] = useJobByTarget(jobType, targetRef, { onSucceeded, onFailed })
+  const [job, start] = useJobByTarget(jobType, targetRef, { onSucceeded, onFailed, adoptStates })
   // Recording into the outer `lastResult` for assertions is a test-only side
   // effect — kept out of the render body itself (react-hooks/set-state-in-
   // effect's sibling rule for outer-variable writes), same as production code.
@@ -70,9 +72,9 @@ function Harness({
 // in beforeEach) — a real React update on an already-mounted tree, not a
 // remount, so the "targetRef changes" test genuinely exercises the effect's
 // cleanup-then-rerun on a changed dependency, not just a fresh mount.
-async function render(jobType: string, targetRef: string): Promise<void> {
+async function render(jobType: string, targetRef: string, adoptStates?: JobState[]): Promise<void> {
   await act(async () => {
-    root.render(createElement(Harness, { jobType, targetRef }))
+    root.render(createElement(Harness, { jobType, targetRef, adoptStates }))
     await Promise.resolve()
   })
 }
@@ -177,5 +179,74 @@ describe('useJobByTarget', () => {
     listResult = []
     await render('calls:summarize', 'call-2')
     expect(lastResult?.job).toBeNull()
+  })
+
+  describe('adoptStates', () => {
+    it('ignores an already-succeeded job by default (running/queued only)', async () => {
+      listResult = [
+        makeJob({
+          id: 'done-already',
+          type: 'tasks:generateFromCall',
+          targetRef: 'call-1',
+          state: 'succeeded'
+        })
+      ]
+      await render('tasks:generateFromCall', 'call-1')
+      expect(lastResult?.job).toBeNull()
+      expect(onSucceeded).not.toHaveBeenCalled()
+    })
+
+    it('adopts an already-succeeded, not-yet-consumed job when told to — e.g. reopening Generate tasks for a call whose AI output already finished', async () => {
+      const done = makeJob({
+        id: 'done-already',
+        type: 'tasks:generateFromCall',
+        targetRef: 'call-1',
+        state: 'succeeded',
+        resultData: { tasks: ['send pricing'] }
+      })
+      listResult = [done]
+      await render('tasks:generateFromCall', 'call-1', ['running', 'queued', 'succeeded'])
+      expect(lastResult?.job?.id).toBe('done-already')
+      expect(lastResult?.job?.resultData).toEqual({ tasks: ['send pricing'] })
+      // Fires exactly once for the adoption itself — this is how the caller
+      // learns "here's the already-generated result", same as if it had
+      // watched the job finish live.
+      expect(onSucceeded).toHaveBeenCalledTimes(1)
+      expect(onSucceeded).toHaveBeenCalledWith(done)
+    })
+
+    it('does not re-fire onSucceeded for an adopted-already-succeeded job on a later unrelated onChanged tick', async () => {
+      const done = makeJob({
+        id: 'done-already',
+        type: 'tasks:generateFromCall',
+        targetRef: 'call-1',
+        state: 'succeeded'
+      })
+      listResult = [done]
+      await render('tasks:generateFromCall', 'call-1', ['running', 'queued', 'succeeded'])
+      expect(onSucceeded).toHaveBeenCalledTimes(1)
+
+      act(() => {
+        emitChange([done]) // still succeeded, nothing new
+      })
+      expect(onSucceeded).toHaveBeenCalledTimes(1)
+    })
+
+    it('start() also notifies once for a job that is already terminal at the moment it is started', async () => {
+      await render('tasks:generateFromCall', 'call-1', ['running', 'queued', 'succeeded'])
+      const alreadyDone = makeJob({
+        id: 'fast-job',
+        type: 'tasks:generateFromCall',
+        targetRef: 'call-1',
+        state: 'succeeded',
+        resultData: { tasks: [] }
+      })
+      act(() => {
+        lastResult!.start(alreadyDone)
+      })
+      expect(lastResult?.job?.id).toBe('fast-job')
+      expect(onSucceeded).toHaveBeenCalledTimes(1)
+      expect(onSucceeded).toHaveBeenCalledWith(alreadyDone)
+    })
   })
 })

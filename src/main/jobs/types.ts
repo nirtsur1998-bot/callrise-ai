@@ -47,6 +47,16 @@ export interface Job {
   /** Deep link to the finished result (a call id, note id, ...) — set from
    *  whatever string the executor resolves with, if any. */
   resultRef?: string
+  /** The executor's full resolved result, for job types whose output is
+   *  more than a single deep-link string (e.g. Generate tasks' proposed-
+   *  but-not-yet-saved task list). Must be JSON-serializable — persisted
+   *  to disk the same as everything else on Job. Set unconditionally on
+   *  success; most job types just leave it unread. This is what lets a
+   *  screen treat the JOB as the source of truth for real AI output
+   *  instead of its own transient state, so closing the screen before
+   *  reviewing/saving can never lose already-paid-for work — reopening
+   *  (or resuming after a full app restart) finds the same result here. */
+  resultData?: unknown
   cancellable: boolean
   /** The serializable input the executor was (or will be) called with.
    *  Kept so Retry can re-run a failed job identically. */

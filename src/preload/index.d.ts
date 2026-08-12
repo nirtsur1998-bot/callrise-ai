@@ -1902,6 +1902,10 @@ export interface Job {
   endedAt?: number
   error?: JobErrorInfo
   resultRef?: string
+  /** The executor's full resolved result, for job types whose output is
+   *  more than a single deep-link string (see main/jobs/types.ts's Job for
+   *  the full doc). */
+  resultData?: unknown
   cancellable: boolean
   input: unknown
   checkpoint?: unknown
