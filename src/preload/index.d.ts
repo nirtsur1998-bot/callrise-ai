@@ -2180,21 +2180,12 @@ export interface MemoryChangelogEntry {
   at: string
 }
 
-export interface SalesBrainBackfillProgress {
-  running: boolean
-  stage: 'idle' | 'contacts' | 'deals' | 'calls' | 'done' | 'error'
-  processed: number
-  total: number
-  lastError?: string
-}
-
 export interface SalesBrainBackfillApi {
   start: (opts: {
     includeContacts?: boolean
     includeDeals?: boolean
     includeCalls?: boolean
-  }) => Promise<{ ok: boolean; message?: string }>
-  status: () => Promise<SalesBrainBackfillProgress>
+  }) => Promise<{ ok: boolean; message?: string; jobId?: string }>
 }
 
 export interface SalesBrainMemoriesApi {

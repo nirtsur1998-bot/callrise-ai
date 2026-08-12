@@ -241,8 +241,7 @@ const api = {
         includeContacts?: boolean
         includeDeals?: boolean
         includeCalls?: boolean
-      }) => ipcRenderer.invoke('salesBrain:backfill:start', opts),
-      status: () => ipcRenderer.invoke('salesBrain:backfill:status')
+      }) => ipcRenderer.invoke('salesBrain:backfill:start', opts)
     },
     memories: {
       list: (opts?: { scope?: string; status?: string }) =>
