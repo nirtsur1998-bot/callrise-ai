@@ -1061,10 +1061,6 @@ export interface DealRiskAssessment {
   createdAt: string
 }
 
-export type AssessDealRiskResult =
-  | { ok: true; assessment: DealRiskAssessment }
-  | { ok: false; error: 'no-key' | 'failed'; message?: string }
-
 export interface Deal {
   id: string
   title: string
@@ -1103,8 +1099,11 @@ export interface DealsApi {
   create: (input: DealCreateInput) => Promise<Deal | null>
   update: (id: string, patch: DealUpdateInput) => Promise<Deal | null>
   delete: (id: string) => Promise<{ ok: boolean }>
-  /** Manual, per-deal AI risk assessment (Phase 5 Step 1) — never automatic. */
-  assessRisk: (id: string) => Promise<AssessDealRiskResult>
+  /** Manual, per-deal AI risk assessment (Phase 5 Step 1) — never automatic.
+   *  M26 Phase 3: enqueues a job and returns immediately; the assessment
+   *  itself is saved onto the deal by main, so the renderer refetches the
+   *  deal once the job succeeds rather than reading a result from here. */
+  assessRisk: (id: string) => Promise<{ ok: boolean; jobId?: string }>
 }
 
 export interface DealStagesApi {
