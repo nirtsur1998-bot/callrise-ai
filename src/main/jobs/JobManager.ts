@@ -37,6 +37,20 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+/** Pulls a machine-readable code off any thrown error that has one (e.g.
+ *  AIProviderError's `code` — 'no-key' | 'rate-limit' | ... — see
+ *  src/main/ai/types.ts), without JobManager needing to import or know
+ *  about any specific feature's error type. This is the wiring
+ *  JobError.code's own doc comment already promises but that never
+ *  actually existed until an adapter needed to preserve a "no API key
+ *  configured" distinction through the job system (see calls.ts's
+ *  summarize/coach/commitments adapters). */
+function errorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== 'object' || !('code' in err)) return undefined
+  const code = (err as { code: unknown }).code
+  return typeof code === 'string' ? code : undefined
+}
+
 export class JobManager {
   private jobs = new Map<string, Job>()
   private order: string[] = [] // insertion order, oldest first — stable listing
@@ -356,7 +370,7 @@ export class JobManager {
       this.transition(job, {
         state: 'failed',
         endedAt: Date.now(),
-        error: { message: errorMessage(err) }
+        error: { message: errorMessage(err), code: errorCode(err) }
       })
     }
     this.tick()

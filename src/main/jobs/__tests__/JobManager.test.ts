@@ -236,6 +236,47 @@ describe('cancellation propagation', () => {
     expect(final?.error?.message).toBe('boom')
     manager.dispose()
   })
+
+  it('carries a machine-readable error.code through when the thrown error has one (e.g. AIProviderError-style)', async () => {
+    const { JobManager } = await freshManager()
+    const manager = new JobManager([])
+    manager.registerType<Record<string, never>, string>({
+      type: 'test:failsWithCode',
+      lane: 'INTERACTIVE',
+      titleFor: () => 'fails with code',
+      executor: {
+        kind: 'inline-async',
+        run: async () => {
+          throw Object.assign(new Error('No AI key configured'), { code: 'no-key' })
+        }
+      }
+    })
+    const job = manager.enqueue('test:failsWithCode', {})
+    await settle()
+    const final = manager.get(job.id)
+    expect(final?.error).toEqual({ message: 'No AI key configured', code: 'no-key' })
+    manager.dispose()
+  })
+
+  it('leaves error.code undefined when the thrown error has none (a plain Error, say)', async () => {
+    const { JobManager } = await freshManager()
+    const manager = new JobManager([])
+    manager.registerType<Record<string, never>, string>({
+      type: 'test:failsPlain',
+      lane: 'INTERACTIVE',
+      titleFor: () => 'fails plain',
+      executor: {
+        kind: 'inline-async',
+        run: async () => {
+          throw new Error('just a plain failure')
+        }
+      }
+    })
+    const job = manager.enqueue('test:failsPlain', {})
+    await settle()
+    expect(manager.get(job.id)?.error).toEqual({ message: 'just a plain failure', code: undefined })
+    manager.dispose()
+  })
 })
 
 describe('checkpoint / resume', () => {
