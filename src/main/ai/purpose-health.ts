@@ -14,7 +14,7 @@
 // minutes on the founder's machine), pruning is a read-modify-write after
 // every append, and coaching-cue fires roughly every 2.5s mid-call. A counter
 // is state — twelve purposes times a few scalars — not events.
-import type { AIProviderErrorCode, AIProviderId, AIPurpose } from './types'
+import type { AIProviderErrorCode, AIProviderId } from './types'
 
 /** Three separate failure occasions. Not a new number: it is
  *  objection-scan-tally.ts's CONSECUTIVE_FAILURE_LIMIT, the same "three in a

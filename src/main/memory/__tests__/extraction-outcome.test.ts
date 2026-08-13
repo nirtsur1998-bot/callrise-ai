@@ -76,7 +76,11 @@ describe('extractMemoriesFromCall — failure is reported, not erased', () => {
     expect(outcome.aiFailed).toBe(false)
     expect(outcome.candidates.length).toBeGreaterThan(0)
     // Provenance still stamped — the mechanism BUG-056's diagnostic relied on.
-    expect(outcome.candidates[0].evidence[0].callId).toBe('call-1')
+    // MemoryEvidence is a discriminated union (transcript | reflection) —
+    // extraction from a call always produces 'transcript' evidence, but the
+    // type itself doesn't know that, so narrow explicitly rather than
+    // reaching for .callId on the union directly.
+    expect(outcome.candidates[0].evidence[0]).toMatchObject({ type: 'transcript', callId: 'call-1' })
   })
 })
 

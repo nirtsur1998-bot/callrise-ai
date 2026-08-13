@@ -8,13 +8,13 @@
 // same class of loss as the bug this milestone is about: the information
 // existed and was thrown away before it could reach anyone.
 import { describe, expect, it } from 'vitest'
-import OpenAI from 'openai'
+import { APIError } from 'openai'
 import { retryAfterMsFrom, toProviderError } from '../providers/openai-compatible'
 import { parseGeminiRetryDelayMs } from '../providers/gemini'
 
-function apiError(status: number, message: string): OpenAI.APIError {
+function apiError(status: number, message: string): APIError {
   // The SDK populates .message from the provider's response body.
-  return new OpenAI.APIError(status, undefined, message, undefined)
+  return new APIError(status, undefined, message, undefined)
 }
 
 describe('toProviderError keeps the provider\'s own message', () => {
