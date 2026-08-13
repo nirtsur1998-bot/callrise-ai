@@ -128,9 +128,11 @@ export function registerTasks(): void {
     // BUG-048 comes straight back (already-paid-for AI output silently
     // gone). It leaves via the dismiss in GenerateTasksDialog's save path.
     retainUntilConsumed: true,
+    // BUG-060 — earned: handle.signal is threaded into generateTasks below.
+    cancellable: true,
     executor: {
       kind: 'inline-async',
-      run: async (input) => {
+      run: async (input, handle) => {
         const call = await getCall(callsDir(), input.callId)
         if (!call) throw new Error('Call not found.')
         if (!call.segments?.length) {
@@ -140,7 +142,7 @@ export function registerTasks(): void {
           summary: call.summary,
           segments: speechSegments(call.segments)
         })
-        const result = await generateTasks(text)
+        const result = await generateTasks(text, { signal: handle.signal })
         if (!result.ok) {
           throw Object.assign(new Error(result.message ?? 'Could not generate tasks.'), {
             code: result.error

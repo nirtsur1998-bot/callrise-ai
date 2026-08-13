@@ -139,15 +139,20 @@ function toProposedTask(value: unknown): ProposedTask | null {
   }
 }
 
-/** Ask the model for suggested tasks from a call's text. Does not save anything. */
-export async function generateTasks(text: string): Promise<GenerateTasksResult> {
+/** Ask the model for suggested tasks from a call's text. Does not save anything.
+ *  BUG-060 — `opts.signal` is what makes this job's Cancel button real. */
+export async function generateTasks(
+  text: string,
+  opts?: { signal?: AbortSignal }
+): Promise<GenerateTasksResult> {
   const trimmed = text.slice(0, MAX_TEXT_CHARS)
   try {
     const result = await completeWithFallback({
       purpose: 'tasks',
       maxTokens: 4096,
       tool: TASKS_TOOL,
-      messages: [{ role: 'user', content: `${PROMPT}\n\n--- CALL ---\n${trimmed}` }]
+      messages: [{ role: 'user', content: `${PROMPT}\n\n--- CALL ---\n${trimmed}` }],
+      signal: opts?.signal
     })
 
     const raw = result.toolInput ?? {}

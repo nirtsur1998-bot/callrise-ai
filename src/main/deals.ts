@@ -156,22 +156,27 @@ export function registerDeals(): void {
     lane: 'INTERACTIVE',
     titleFor: () => 'Assessing deal risk',
     targetRefFor: (i) => i.dealId,
+    // BUG-060 — earned: handle.signal is threaded into assessDealRisk below.
+    cancellable: true,
     executor: {
       kind: 'inline-async',
-      run: async (input) => {
+      run: async (input, handle) => {
         const deal = await getDeal(dealsDir(), input.dealId)
         if (!deal) throw new Error('Deal not found.')
         const stages = loadDealStages()
         const stageLabel = stages.find((s) => s.id === deal.stageId)?.label ?? 'Unknown'
         const calls = await gatherRiskContext(deal.contactId)
-        const result = await assessDealRisk({
-          title: deal.title,
-          stageLabel,
-          value: deal.value,
-          expectedCloseDate: deal.expectedCloseDate,
-          createdAt: deal.createdAt,
-          calls
-        })
+        const result = await assessDealRisk(
+          {
+            title: deal.title,
+            stageLabel,
+            value: deal.value,
+            expectedCloseDate: deal.expectedCloseDate,
+            createdAt: deal.createdAt,
+            calls
+          },
+          { signal: handle.signal }
+        )
         if (!result.ok) {
           throw Object.assign(new Error(result.message ?? 'Could not assess this deal.'), {
             code: result.error

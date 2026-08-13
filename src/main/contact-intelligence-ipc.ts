@@ -239,8 +239,13 @@ export async function maybeAutoCreateContact(callId: string): Promise<void> {
  *  call's page. Errors are swallowed by the caller, same as
  *  resolveAndSaveIdentities' own call sites — this must never block a call
  *  save or a coaching run. */
-export async function runFullAutoContactIntelligence(callId: string): Promise<void> {
-  await detectAndSaveIdentity(callId).catch(() => {})
+/** BUG-060 — `opts.signal` is what makes this job's Cancel button real.
+ *  maybeAutoCreateContact does no AI call, so it doesn't need it. */
+export async function runFullAutoContactIntelligence(
+  callId: string,
+  opts?: { signal?: AbortSignal }
+): Promise<void> {
+  await detectAndSaveIdentity(callId, { signal: opts?.signal }).catch(() => {})
   await maybeAutoCreateContact(callId).catch(() => {})
 }
 

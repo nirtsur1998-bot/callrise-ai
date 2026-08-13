@@ -177,13 +177,18 @@ function assembleAssessment(
   }
 }
 
-export async function assessDealRisk(input: DealRiskInput): Promise<DealRiskResult> {
+/** BUG-060 — `opts.signal` is what makes this job's Cancel button real. */
+export async function assessDealRisk(
+  input: DealRiskInput,
+  opts?: { signal?: AbortSignal }
+): Promise<DealRiskResult> {
   try {
     const result = await completeWithFallback({
       purpose: 'other',
       maxTokens: 2048,
       tool: RISK_TOOL,
-      messages: [{ role: 'user', content: buildPrompt(input) }]
+      messages: [{ role: 'user', content: buildPrompt(input) }],
+      signal: opts?.signal
     })
 
     const assessment = assembleAssessment(result.toolInput ?? {}, input.calls, result.model)

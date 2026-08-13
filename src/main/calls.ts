@@ -167,7 +167,10 @@ export interface MineCallOutcome {
  *  perfectly healthy API and report "stopped after repeated errors". A
  *  skip is now its own outcome: the scan moves on without counting it
  *  toward that threshold (the other attempt is doing the work anyway). */
-async function mineCallIntoQueue(callId: string): Promise<MineCallOutcome> {
+async function mineCallIntoQueue(
+  callId: string,
+  opts?: { signal?: AbortSignal }
+): Promise<MineCallOutcome> {
   if (miningInFlight.has(callId)) return { ok: false, added: 0, skipped: true }
   miningInFlight.add(callId)
   try {
@@ -176,7 +179,7 @@ async function mineCallIntoQueue(callId: string): Promise<MineCallOutcome> {
     // Re-check on the fresh read: another path may have finished mining this
     // call after the caller built its eligible list.
     if (call.objectionsMinedAt) return { ok: true, added: 0 }
-    const result = await mineObjections(speechSegments(call.segments))
+    const result = await mineObjections(speechSegments(call.segments), { signal: opts?.signal })
     if (!result.ok) return { ok: false, added: 0 }
     const items = await addToQueue(objectionQueueDir(), result.candidates, callId, call.title)
     await setCallObjectionsMined(callsDir(), callId)
@@ -224,7 +227,7 @@ async function computePersonalBenchmarksForCallType(
  *  happens second actually has enough context + the link). Only marks the
  *  call as done on SUCCESS, so a transient failure (rate limit, no key)
  *  leaves it eligible for the other trigger to retry. */
-async function maybeGenerateCrmNote(callId: string): Promise<void> {
+async function maybeGenerateCrmNote(callId: string, opts?: { signal?: AbortSignal }): Promise<void> {
   if (!loadAppSettings().crm.autoGenerateNotes) return
   if (crmNoteInFlight.has(callId)) return
   crmNoteInFlight.add(callId)
@@ -237,7 +240,7 @@ async function maybeGenerateCrmNote(callId: string): Promise<void> {
           .map((s) => `Speaker ${s.speaker + 1}: ${s.text}`)
           .join('\n')
     if (!content.trim()) return
-    const result = await generateCrmNote(content)
+    const result = await generateCrmNote(content, undefined, { signal: opts?.signal })
     if (!result.ok) return
     const contact = await addComment(contactsDir(), call.contactId, result.note, 'ai')
     if (contact) scheduleBackup()
@@ -324,14 +327,16 @@ export function registerCalls(): void {
     titleFor: () => 'Looking for objections in this call',
     targetRefFor: (i) => i.callId,
     silent: true,
+    // BUG-060 — earned: handle.signal is threaded into mineCallIntoQueue below.
+    cancellable: true,
     executor: {
       kind: 'inline-async',
-      run: async (input) => {
+      run: async (input, handle) => {
         // Re-checked here, not at enqueue: the toggle is the HARD gate
         // ("off means no call is ever read"), and a job can sit in BATCH's
         // queue long enough for the rep to turn it off in between.
         if (!isObjectionMiningEnabled()) return 'skipped — objection mining is off'
-        const res = await mineCallIntoQueue(input.callId)
+        const res = await mineCallIntoQueue(input.callId, { signal: handle.signal })
         if (res.skipped) return 'already being mined by the past-calls scan'
         if (res.nothingToMine) return 'no transcript to mine'
         // Only a genuine AI/mining failure reaches here — a transcript-less
@@ -356,11 +361,15 @@ export function registerCalls(): void {
     // The feature fires its own far better "Automatically created and
     // attached 'Dana'" notification when it actually attaches someone.
     silent: true,
+    // BUG-060 — earned: handle.signal reaches runFullAutoContactIntelligence's
+    // AI call below. resolveAndSaveIdentities does no AI call, so it needs
+    // nothing.
+    cancellable: true,
     executor: {
       kind: 'inline-async',
-      run: async (input) => {
+      run: async (input, handle) => {
         await resolveAndSaveIdentities({ calls: callsDir(), contacts: contactsDir() }, input.callId)
-        await runFullAutoContactIntelligence(input.callId)
+        await runFullAutoContactIntelligence(input.callId, { signal: handle.signal })
         return input.callId
       }
     }
@@ -372,14 +381,16 @@ export function registerCalls(): void {
     titleFor: () => 'Drafting a CRM note',
     targetRefFor: (i) => i.callId,
     silent: true,
+    // BUG-060 — earned: handle.signal is threaded into maybeGenerateCrmNote.
+    cancellable: true,
     executor: {
       kind: 'inline-async',
-      run: async (input) => {
+      run: async (input, handle) => {
         // maybeGenerateCrmNote does all its own gating (setting off, already
         // generated, no contact, no content) and no-ops silently — kept that
         // way rather than hoisting the checks to the enqueue site, so a job
         // queued before the rep flipped the setting still honors the flip.
-        await maybeGenerateCrmNote(input.callId)
+        await maybeGenerateCrmNote(input.callId, { signal: handle.signal })
         return input.callId
       }
     }
@@ -974,6 +985,13 @@ export function registerCalls(): void {
     type: SCAN_JOB_TYPE,
     lane: 'BATCH',
     titleFor: () => 'Scanning past calls for objections',
+    // BUG-060 — earned, and already had been: this loop already checked
+    // handle.signal.aborted between items before the default inverted (the
+    // one adapter in the whole app that was genuinely honest). The default
+    // flip silently took its button away since it never set this explicitly.
+    // Restored here, and the signal now also reaches the AI call itself
+    // (below), so Cancel is immediate rather than only between items.
+    cancellable: true,
     executor: {
       kind: 'inline-async',
       run: async (_input, handle) => {
@@ -993,7 +1011,7 @@ export function registerCalls(): void {
             tally.stopDisabled()
             break
           }
-          const res = await mineCallIntoQueue(c.id)
+          const res = await mineCallIntoQueue(c.id, { signal: handle.signal })
           // Both "already being mined" and "nothing to mine" are non-events
           // that must never count toward the consecutive-failure breaker.
           // (nothingToMine is effectively unreachable here — eligibleForMining

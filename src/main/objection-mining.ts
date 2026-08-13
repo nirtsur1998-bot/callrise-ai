@@ -220,7 +220,13 @@ function friendlyError(err: unknown): string {
  *  before invoking this — this function does not check the toggle itself,
  *  so it stays a pure "given a transcript, propose candidates" building
  *  block for both the new-call hook and the manual scan (later steps). */
-export async function mineObjections(segments: CallSegment[]): Promise<ObjectionMiningResult> {
+/** BUG-060 — `opts.signal` is what makes this job's Cancel button real.
+ *  Optional so non-job callers (the manual scan's own tally loop) are
+ *  unchanged. */
+export async function mineObjections(
+  segments: CallSegment[],
+  opts?: { signal?: AbortSignal }
+): Promise<ObjectionMiningResult> {
   if (!segments.length) {
     return { ok: false, error: 'failed', message: 'This call has no transcript to mine.' }
   }
@@ -235,7 +241,8 @@ export async function mineObjections(segments: CallSegment[]): Promise<Objection
       purpose: 'other',
       maxTokens: 4096,
       tool: MINE_TOOL,
-      messages: [{ role: 'user', content: `${PROMPT}\n\n--- TRANSCRIPT ---\n${transcript}` }]
+      messages: [{ role: 'user', content: `${PROMPT}\n\n--- TRANSCRIPT ---\n${transcript}` }],
+      signal: opts?.signal
     })
 
     const candidates = assembleCandidates(result.toolInput ?? {}, segments)
