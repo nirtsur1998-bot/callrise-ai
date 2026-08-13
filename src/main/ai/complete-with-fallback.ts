@@ -16,11 +16,12 @@ import { catalogEntry, type CatalogEntry } from './model-catalog'
 import { logFallbackEvent } from './fallback-log'
 import {
   clearCooldown,
-  isUsable,
+  isUsableFor,
   markPeriodExhausted,
   markRateLimited,
   markStructurallyBroken,
-  soonestExpiry
+  soonestExpiry,
+  type CooldownTier
 } from './model-cooldown'
 import {
   AIProviderError,
@@ -444,6 +445,10 @@ async function completeWithSameModelRetry(
 export async function completeWithFallback(req: AICompletionRequest): Promise<AICompletionResult> {
   const purpose = req.purpose
   const resolved = resolveChain(purpose)
+  // BUG-057 Phase 5 — CHAIN_BUDGET is exactly the two live, latency-critical
+  // purposes (coaching-cue, deal-tier1); everything else is 'durable'. See
+  // model-cooldown.ts's CooldownTier doc comment for what this drives.
+  const tier: CooldownTier = purpose in CHAIN_BUDGET ? 'live' : 'durable'
 
   if (resolved.length === 0) {
     throw new AIProviderError('no-key', 'No AI provider is configured for this yet.')
@@ -454,7 +459,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   // + keys, and so the "everything is cooling down" case below can tell the
   // difference between "you have no keys" and "your keys need a minute".
   const startedNow = Date.now()
-  const chain = resolved.filter((s) => isUsable(s.catalogId, startedNow))
+  const chain = resolved.filter((s) => isUsableFor(s.catalogId, startedNow, tier))
 
   if (chain.length === 0) {
     // Every model is in cooldown. Refusing here is the POINT: walking the
@@ -463,7 +468,8 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     // Reported as a wait, with a number, rather than a generic failure.
     const until = soonestExpiry(
       resolved.map((s) => s.catalogId),
-      startedNow
+      startedNow,
+      tier
     )
     const secs = until ? Math.max(1, Math.ceil((until - startedNow) / 1000)) : 60
     throw new AIProviderError(
@@ -475,7 +481,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
 
   const budget = CHAIN_BUDGET[purpose]
   let remainingBudgetMs = budget?.totalBudgetMs ?? 0
-  const attempts: { catalogId: string; reason: string }[] = []
+  const attempts: { catalogId: string; reason: string; failureClass?: AIFailureClass }[] = []
   const attempted = new Set<string>() // defense-in-depth: chain is already deduped by construction
   // BUG-057 — an invalid or revoked key fails IDENTICALLY on every model that
   // provider offers, so once one step returns 'auth', every remaining step on
@@ -551,13 +557,15 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
         markPeriodExhausted(
           step.catalogId,
           err instanceof AIProviderError ? err.retryAfterMs : undefined,
-          Date.now()
+          Date.now(),
+          tier
         )
       } else if (reason === 'rate-limit') {
         markRateLimited(
           step.catalogId,
           err instanceof AIProviderError ? err.retryAfterMs : undefined,
-          Date.now()
+          Date.now(),
+          tier
         )
       } else if (failureClass === 'structural' && reason !== 'auth') {
         // 'auth' already gets a coarser, PROVIDER-wide skip (deadProviders,
@@ -635,12 +643,17 @@ export interface StreamWithFallbackResult extends AsyncIterable<{ delta: string 
 export function streamWithFallback(req: AICompletionRequest): StreamWithFallbackResult {
   const purpose = req.purpose
   const resolved = resolveChain(purpose)
+  // BUG-057 Phase 5 — coaching-chat (the only consumer today) isn't in
+  // CHAIN_BUDGET, so this is always 'durable' currently; computed the same
+  // way as completeWithFallback rather than hardcoded, so a future live
+  // streaming consumer gets the right tier automatically.
+  const tier: CooldownTier = purpose in CHAIN_BUDGET ? 'live' : 'durable'
   // BUG-058 — same cooldown filter as completeWithFallback: a model that just
   // 429'd must not be re-burned here either. coaching-chat is the only
   // consumer, and it is interactive, so spending its first attempt on a model
   // we already know is limited is the most visible possible version of this.
   const startedNow = Date.now()
-  const chain = resolved.filter((s) => isUsable(s.catalogId, startedNow))
+  const chain = resolved.filter((s) => isUsableFor(s.catalogId, startedNow, tier))
 
   let resolveFinal!: (v: { text: string; model: string; usage: AICompletionResult['usage'] }) => void
   let rejectFinal!: (e: unknown) => void
@@ -666,7 +679,8 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       // pattern (the non-streaming path already got this right).
       const until = soonestExpiry(
         resolved.map((s) => s.catalogId),
-        startedNow
+        startedNow,
+        tier
       )
       const secs = until ? Math.max(1, Math.ceil((until - startedNow) / 1000)) : 60
       const err = new AIProviderError(
@@ -681,7 +695,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     let fullText = ''
     let startedStreaming = false
     let lastErr: unknown = null
-    const attempts: { catalogId: string; reason: string }[] = []
+    const attempts: { catalogId: string; reason: string; failureClass?: AIFailureClass }[] = []
 
     for (let i = 0; i < chain.length; i++) {
       const step = chain[i]
@@ -741,13 +755,15 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           markPeriodExhausted(
             step.catalogId,
             err instanceof AIProviderError ? err.retryAfterMs : undefined,
-            Date.now()
+            Date.now(),
+            tier
           )
         } else if (reason === 'rate-limit') {
           markRateLimited(
             step.catalogId,
             err instanceof AIProviderError ? err.retryAfterMs : undefined,
-            Date.now()
+            Date.now(),
+            tier
           )
         } else if (failureClass === 'structural' && reason !== 'auth') {
           markStructurallyBroken(step.catalogId, Date.now())

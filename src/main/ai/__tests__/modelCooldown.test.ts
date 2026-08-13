@@ -64,14 +64,21 @@ const {
   markPeriodExhausted,
   markStructurallyBroken,
   isStructurallyBroken,
-  isUsable,
+  isUsableFor,
   isCoolingDown,
   cooldownUntil,
   clearCooldown,
+  soonestExpiry,
   DEFAULT_COOLDOWN_MS,
   MAX_COOLDOWN_MS,
   STRUCTURAL_BREAK_MS
 } = await import('../model-cooldown')
+
+// These pre-Phase-5 tests aren't about tiering — 'durable' on both the
+// write (causedBy) and read (callerTier) side reproduces the exact
+// pre-tiering "nothing ever bypasses" behavior, since a 'durable' caller
+// never bypasses a 'durable'-caused entry.
+const DURABLE = 'durable'
 
 const PURPOSES = [
   'coaching-cue', 'summary', 'scorecard', 'tasks', 'other', 'prep-brief',
@@ -80,6 +87,25 @@ const PURPOSES = [
 ]
 const allEmpty = () =>
   ({ aiModelAssignments: Object.fromEntries(PURPOSES.map((p) => [p, { chain: [] }])) }) as unknown as ReturnType<typeof loadAppSettings>
+
+// BUG-057 Phase 5 headline scenario — an EXPLICITLY CONFIGURED single-entry
+// chain, identical for both purposes, so "a configured chain wins" (this
+// file's own resolution-order comment) skips the implicit-tail logic
+// entirely. Without this, memory-extract's naturally longer implicit
+// fallback chain (it reaches google/openrouter/etc. that coaching-cue never
+// does) makes `built` non-empty regardless of whether tiering bypass ever
+// fires — a red-check that can't discriminate its own claim, caught by
+// actually reading what `built` contained on a real revert rather than
+// trusting a passing assertion.
+const sharedOverlapChain = () =>
+  ({
+    aiModelAssignments: Object.fromEntries(
+      PURPOSES.map((p) => [
+        p,
+        { chain: p === 'coaching-cue' || p === 'memory-extract' ? ['groq-llama-3.3-70b-versatile'] : [] }
+      ])
+    )
+  }) as unknown as ReturnType<typeof loadAppSettings>
 
 const ORIGINAL_ENV = { ...process.env }
 
@@ -105,39 +131,39 @@ afterEach(() => {
 describe('the cooldown store', () => {
   it('honours the provider\'s own retry hint over the default', () => {
     const now = 1_000_000
-    markRateLimited('m', 5_000, now)
+    markRateLimited('m', 5_000, now, DURABLE)
     expect(cooldownUntil('m', now)).toBe(now + 5_000)
   })
 
   it('falls back to a default when the provider gave no hint', () => {
     const now = 1_000_000
-    markRateLimited('m', undefined, now)
+    markRateLimited('m', undefined, now, DURABLE)
     expect(cooldownUntil('m', now)).toBe(now + DEFAULT_COOLDOWN_MS)
   })
 
   it('caps an absurd hint so one bad header cannot sideline a model all session', () => {
     const now = 1_000_000
-    markRateLimited('m', 86_400_000, now)
+    markRateLimited('m', 86_400_000, now, DURABLE)
     expect(cooldownUntil('m', now)).toBe(now + MAX_COOLDOWN_MS)
   })
 
   it('expires on its own, with no sweeper', () => {
     const now = 1_000_000
-    markRateLimited('m', 5_000, now)
+    markRateLimited('m', 5_000, now, DURABLE)
     expect(isCoolingDown('m', now + 4_999)).toBe(true)
     expect(isCoolingDown('m', now + 5_001)).toBe(false)
   })
 
   it('never shortens an existing cooldown — concurrent jobs must not undo each other', () => {
     const now = 1_000_000
-    markRateLimited('m', 30_000, now)
-    markRateLimited('m', 1_000, now) // a second job reports a shorter delay
+    markRateLimited('m', 30_000, now, DURABLE)
+    markRateLimited('m', 1_000, now, DURABLE) // a second job reports a shorter delay
     expect(cooldownUntil('m', now)).toBe(now + 30_000)
   })
 
   it('a success clears it — evidence beats estimate', () => {
     const now = 1_000_000
-    markRateLimited('m', 60_000, now)
+    markRateLimited('m', 60_000, now, DURABLE)
     clearCooldown('m')
     expect(isCoolingDown('m', now)).toBe(false)
   })
@@ -152,15 +178,15 @@ describe('the cooldown store', () => {
 describe('escalating backoff — repeated no-hint misses (BUG-057 Phase 4)', () => {
   it('the no-hint guess doubles on each consecutive miss: 60s -> 120s -> 240s', () => {
     let now = 1_000_000
-    markRateLimited('m', undefined, now)
+    markRateLimited('m', undefined, now, DURABLE)
     expect(cooldownUntil('m', now)).toBe(now + DEFAULT_COOLDOWN_MS) // 60s
 
     now += DEFAULT_COOLDOWN_MS + 1 // let the first cooldown actually expire
-    markRateLimited('m', undefined, now)
+    markRateLimited('m', undefined, now, DURABLE)
     expect(cooldownUntil('m', now)).toBe(now + DEFAULT_COOLDOWN_MS * 2) // 120s
 
     now += DEFAULT_COOLDOWN_MS * 2 + 1
-    markRateLimited('m', undefined, now)
+    markRateLimited('m', undefined, now, DURABLE)
     expect(cooldownUntil('m', now)).toBe(now + DEFAULT_COOLDOWN_MS * 4) // 240s
   })
 
@@ -169,44 +195,44 @@ describe('escalating backoff — repeated no-hint misses (BUG-057 Phase 4)', () 
     // Enough consecutive misses to blow well past the cap on an
     // unescalated guess (60s * 2^7 = 7680s, far over MAX_COOLDOWN_MS/10min).
     for (let i = 0; i < 8; i++) {
-      markRateLimited('m', undefined, now)
+      markRateLimited('m', undefined, now, DURABLE)
       const until = cooldownUntil('m', now) as number
       now = until + 1
     }
-    markRateLimited('m', undefined, now)
+    markRateLimited('m', undefined, now, DURABLE)
     expect(cooldownUntil('m', now)).toBe(now + MAX_COOLDOWN_MS)
   })
 
   it('an explicit Retry-After hint is honoured outright, never escalated — the provider\'s own instruction wins', () => {
     let now = 1_000_000
     // Build up a streak via no-hint misses first...
-    markRateLimited('m', undefined, now)
+    markRateLimited('m', undefined, now, DURABLE)
     now += DEFAULT_COOLDOWN_MS + 1
-    markRateLimited('m', undefined, now)
+    markRateLimited('m', undefined, now, DURABLE)
     now += DEFAULT_COOLDOWN_MS * 2 + 1
     // ...then a real hint arrives. It must be honoured exactly, not
     // multiplied by whatever streak count preceded it.
-    markRateLimited('m', 5_000, now)
+    markRateLimited('m', 5_000, now, DURABLE)
     expect(cooldownUntil('m', now)).toBe(now + 5_000)
   })
 
   it('clearCooldown resets the streak — a later no-hint miss starts back at the base default', () => {
     const now = 1_000_000
-    markRateLimited('m', undefined, now)
+    markRateLimited('m', undefined, now, DURABLE)
     clearCooldown('m')
 
     const later = now + 999_999
-    markRateLimited('m', undefined, later)
+    markRateLimited('m', undefined, later, DURABLE)
     expect(cooldownUntil('m', later)).toBe(later + DEFAULT_COOLDOWN_MS) // back to 60s, not 120s
   })
 
   it('a DIFFERENT catalogId has its own independent streak', () => {
     let now = 1_000_000
-    markRateLimited('a', undefined, now)
+    markRateLimited('a', undefined, now, DURABLE)
     now += DEFAULT_COOLDOWN_MS + 1
-    markRateLimited('a', undefined, now) // 'a' is now on its second miss (120s)
+    markRateLimited('a', undefined, now, DURABLE) // 'a' is now on its second miss (120s)
 
-    markRateLimited('b', undefined, now) // 'b's first ever miss
+    markRateLimited('b', undefined, now, DURABLE) // 'b's first ever miss
     expect(cooldownUntil('b', now)).toBe(now + DEFAULT_COOLDOWN_MS) // 60s, not 120s
   })
 })
@@ -311,7 +337,7 @@ describe('structural breaks — self-healing, not permanent (first-pass fatal #1
     const now = 1_000_000
     markStructurallyBroken('m', now)
     expect(isStructurallyBroken('m', now)).toBe(true)
-    expect(isUsable('m', now)).toBe(false)
+    expect(isUsableFor('m', now, DURABLE)).toBe(false)
   })
 
   it('self-heals after STRUCTURAL_BREAK_MS — fails on the first pass\'s permanent-map shape', () => {
@@ -339,7 +365,7 @@ describe('structural breaks — self-healing, not permanent (first-pass fatal #1
 describe('period-exhausted — a much longer wait than an ordinary rate limit', () => {
   it('defaults to PERIOD_EXHAUSTED_DEFAULT_MS when the provider gave no hint, far past MAX_COOLDOWN_MS', () => {
     const now = 1_000_000
-    markPeriodExhausted('m', undefined, now)
+    markPeriodExhausted('m', undefined, now, DURABLE)
     const until = cooldownUntil('m', now)
     expect(until).not.toBeNull()
     expect((until as number) - now).toBeGreaterThan(MAX_COOLDOWN_MS)
@@ -347,16 +373,16 @@ describe('period-exhausted — a much longer wait than an ordinary rate limit', 
 
   it('honours a provider retryAfterMs hint, capped at PERIOD_EXHAUSTED_MAX_MS (24h)', () => {
     const now = 1_000_000
-    markPeriodExhausted('m', 999 * 60 * 60_000, now) // an absurd 999h hint
+    markPeriodExhausted('m', 999 * 60 * 60_000, now, DURABLE) // an absurd 999h hint
     const until = cooldownUntil('m', now)
     expect((until as number) - now).toBe(24 * 60 * 60_000)
   })
 
   it('shares the ordinary cooldown map — isCoolingDown/isUsable both see it', () => {
     const now = 1_000_000
-    markPeriodExhausted('m', 5_000, now)
+    markPeriodExhausted('m', 5_000, now, DURABLE)
     expect(isCoolingDown('m', now)).toBe(true)
-    expect(isUsable('m', now)).toBe(false)
+    expect(isUsableFor('m', now, DURABLE)).toBe(false)
   })
 })
 
@@ -459,5 +485,156 @@ describe('the taxonomy, through the real chain walk', () => {
     // NOT excluded — a 'structural' default here would have blocked this
     // exact call, which is precisely the first-pass bug this fixes.
     expect(built).toContain(id)
+  })
+})
+
+// BUG-057 Phase 5 — tiered cooldown. coaching-cue polls every ~2.5s and can
+// cool down the 1-2 models it reaches; a much-slower durable purpose
+// (memory-extract, summary, ...) sharing one of those models used to be
+// starved by cooldowns it never caused. A 'durable' caller may now bypass a
+// cooldown a 'live' caller caused — but never one another 'durable' caller
+// caused, and never a structural break regardless of tier.
+describe('tiered cooldown — durable bypasses live, never durable, never structural (BUG-057 Phase 5)', () => {
+  it('a live-caused cooldown IS bypassable by a durable caller', () => {
+    const now = 1_000_000
+    markRateLimited('m', 5_000, now, 'live')
+    expect(isUsableFor('m', now, 'durable')).toBe(true)
+  })
+
+  it('a live-caused cooldown is NOT bypassable by another live caller — that would defeat BUG-058 entirely', () => {
+    const now = 1_000_000
+    markRateLimited('m', 5_000, now, 'live')
+    expect(isUsableFor('m', now, 'live')).toBe(false)
+  })
+
+  it('a durable-caused cooldown is NOT bypassable by a durable caller — durable purposes fire rare enough that their own failure is stronger evidence', () => {
+    const now = 1_000_000
+    markRateLimited('m', 5_000, now, 'durable')
+    expect(isUsableFor('m', now, 'durable')).toBe(false)
+  })
+
+  it('a durable-caused cooldown is NOT bypassable by a live caller either', () => {
+    const now = 1_000_000
+    markRateLimited('m', 5_000, now, 'durable')
+    expect(isUsableFor('m', now, 'live')).toBe(false)
+  })
+
+  it('durable causation is sticky: a later live re-mark does not downgrade it to bypassable', () => {
+    const now = 1_000_000
+    markRateLimited('m', 5_000, now, 'durable')
+    markRateLimited('m', 5_000, now + 1, 'live') // a live purpose also hits the same model
+    expect(isUsableFor('m', now + 1, 'durable')).toBe(false) // still not bypassable
+  })
+
+  it('a live re-mark of a live-caused cooldown stays bypassable by durable', () => {
+    const now = 1_000_000
+    markRateLimited('m', 5_000, now, 'live')
+    markRateLimited('m', 5_000, now + 1, 'live')
+    expect(isUsableFor('m', now + 1, 'durable')).toBe(true)
+  })
+
+  it('a structural break is never bypassable, regardless of tier — the critique\'s bug 2, fixed', () => {
+    // Mark a catalogId BOTH live-cooling AND independently structurally
+    // broken. The first-pass sketch skipped the structural check entirely
+    // on the bypass path, so a durable caller would have been let through
+    // into a request the system already knows will fail deterministically.
+    const now = 1_000_000
+    markRateLimited('m', 5_000, now, 'live')
+    markStructurallyBroken('m', now)
+    expect(isUsableFor('m', now, 'durable')).toBe(false)
+  })
+
+  it('period-exhausted cooldowns follow the same tiering as ordinary rate limits', () => {
+    const now = 1_000_000
+    markPeriodExhausted('m', 5_000, now, 'live')
+    expect(isUsableFor('m', now, 'durable')).toBe(true)
+    expect(isUsableFor('m', now, 'live')).toBe(false)
+  })
+
+  it('soonestExpiry only counts cooldowns THIS caller tier cannot bypass', () => {
+    const now = 1_000_000
+    markRateLimited('live-caused', 5_000, now, 'live')
+    markRateLimited('durable-caused', 60_000, now, 'durable')
+    // A durable caller can bypass 'live-caused' — only 'durable-caused'
+    // should count toward its reported wait.
+    expect(soonestExpiry(['live-caused', 'durable-caused'], now, 'durable')).toBe(now + 60_000)
+    // A live caller can bypass neither.
+    expect(soonestExpiry(['live-caused', 'durable-caused'], now, 'live')).toBe(now + 5_000)
+  })
+
+  it('an expired entry is usable for anyone and is cleaned up on read', () => {
+    const now = 1_000_000
+    markRateLimited('m', 1_000, now, 'live')
+    expect(isUsableFor('m', now + 1_001, 'live')).toBe(true)
+    expect(isCoolingDown('m', now + 1_001)).toBe(false)
+  })
+})
+
+describe('tiered cooldown, through the real chain walk — the headline scenario', () => {
+  it('memory-extract is NOT starved by a cooldown coaching-cue caused on the shared model', async () => {
+    // Explicitly configured, IDENTICAL single-entry chain for both purposes
+    // — no implicit tail, no ambiguity about which entry either purpose can
+    // reach. Without this, memory-extract's naturally longer implicit
+    // fallback chain (it also reaches google/openrouter/etc., which
+    // coaching-cue's 0-length CHAIN_BUDGET tail never does) makes `built`
+    // non-empty regardless of whether bypass ever fires — confirmed by
+    // directly inspecting `built` on an earlier draft of this test, which
+    // read `["google","openrouter","openrouter"]` on a full Phase 5 revert:
+    // passing for the wrong reason, not proving the claim at all.
+    vi.mocked(loadAppSettings).mockReturnValue(sharedOverlapChain())
+    behavior.throwCode = 'rate-limit'
+    behavior.retryAfterMs = undefined
+
+    // coaching-cue (a 'live' purpose, in CHAIN_BUDGET) hits the rate limit
+    // first and cools the shared model.
+    await expect(completeWithFallback({ purpose: 'coaching-cue', messages: [] } as never)).rejects.toBeTruthy()
+    built.length = 0
+
+    // memory-extract (a 'durable' purpose) fires next, on the SAME single
+    // configured entry, WHILE it's still cooling. Before Phase 5 this would
+    // spend zero requests, same as any other cooling model — the exact
+    // starvation bug.
+    await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
+    expect(built).toEqual(['groq']) // bypassed — the ONE shared entry was actually attempted
+  })
+
+  it('coaching-cue does NOT bypass its own cooldown on the shared model — that would defeat BUG-058', async () => {
+    // HONEST LIMITATION: this doesn't discriminate on its own — under the
+    // pre-Phase-5 code nothing ever bypasses anything either, so `built`
+    // would ALSO be empty on a full revert. It's a real boundary/regression
+    // test (bypass must not over-extend to same-tier callers), just not a
+    // red-check-provable one in isolation; the positive case above
+    // ("IS bypassable by a durable caller") is what actually proves the
+    // bypass mechanism exists at all.
+    vi.mocked(loadAppSettings).mockReturnValue(sharedOverlapChain())
+    behavior.throwCode = 'rate-limit'
+    behavior.retryAfterMs = undefined
+
+    await expect(completeWithFallback({ purpose: 'coaching-cue', messages: [] } as never)).rejects.toBeTruthy()
+    built.length = 0
+
+    // Another live-tier call (coaching-cue again) must NOT bypass — only a
+    // durable caller may.
+    await expect(completeWithFallback({ purpose: 'coaching-cue', messages: [] } as never)).rejects.toBeTruthy()
+    expect(built).toEqual([])
+  })
+
+  it('a genuine account-wide limit (durable purpose fails first) still blocks coaching-cue too', async () => {
+    // Same HONEST LIMITATION as the test above — a boundary case that's
+    // trivially true pre-Phase-5 too (nothing bypasses anything), so it
+    // doesn't discriminate this claim on its own either.
+    vi.mocked(loadAppSettings).mockReturnValue(sharedOverlapChain())
+    behavior.throwCode = 'rate-limit'
+    behavior.retryAfterMs = undefined
+
+    // memory-extract (durable) fails first — stronger evidence of a real,
+    // account-wide limit, per the sticky-durable-causation rule.
+    await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
+    built.length = 0
+
+    // coaching-cue must NOT get a special pass just for being live-tier —
+    // a durable-caused cooldown is bypassable by nobody.
+    await expect(completeWithFallback({ purpose: 'coaching-cue', messages: [] } as never)).rejects.toBeTruthy()
+    expect(built).toEqual([])
   })
 })

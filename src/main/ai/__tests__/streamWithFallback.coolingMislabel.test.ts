@@ -98,7 +98,12 @@ describe('streamWithFallback — cooling-down is no longer mislabeled as no-key'
   it('a real key IS configured but the only chain entry is genuinely cooling down: reports rate-limit, not no-key', async () => {
     // Real cooldown state, not asserted — put the actual catalogId in
     // cooldown via the real module before ever calling streamWithFallback.
-    markRateLimited('test-model-a', 30_000, Date.now())
+    // 'durable' causation: coaching-chat isn't in CHAIN_BUDGET, so the
+    // walker's own computed tier here is always 'durable' too — matching
+    // that is what makes this cooldown genuinely block it rather than being
+    // silently bypassed (a 'durable' caller only bypasses a 'live'-caused
+    // entry, never another 'durable'-caused one).
+    markRateLimited('test-model-a', 30_000, Date.now(), 'durable')
 
     const gen = streamWithFallback({ purpose: 'coaching-chat', messages: [] } as never)
     const err = await drain(gen)

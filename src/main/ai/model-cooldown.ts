@@ -34,7 +34,26 @@ export const DEFAULT_COOLDOWN_MS = 60_000
  *  again and find out, not to trust a number indefinitely. */
 export const MAX_COOLDOWN_MS = 10 * 60_000
 
-const cooldowns = new Map<string, number>()
+/** BUG-057 Phase 5 — which frequency tier CAUSED a given cooldown, not which
+ *  tier is asking right now. `'live'` = a purpose in CHAIN_BUDGET
+ *  (coaching-cue, deal-tier1 — fires every ~2.5s while a call is active).
+ *  `'durable'` = everything else (summary, memory-extract, etc. — fires on
+ *  its own, much slower cadence). Drives the tiered-cooldown bypass in
+ *  isUsableFor: a durable purpose may skip a cooldown a LIVE purpose caused
+ *  (that purpose's own aggressive polling burned this attempt, not a
+ *  genuine account-wide limit as far as a durable caller can tell), but
+ *  never a cooldown ANY durable purpose caused — durable purposes fire rare
+ *  enough that their own failure is much stronger evidence of a real
+ *  limit, and a live purpose bypassing another live purpose's cooldown
+ *  would defeat BUG-058 entirely. */
+export type CooldownTier = 'live' | 'durable'
+
+interface CooldownEntry {
+  until: number
+  causedBy: CooldownTier
+}
+
+const cooldowns = new Map<string, CooldownEntry>()
 
 /** BUG-057 Phase 4 — how many consecutive no-hint rate-limits this model has
  *  taken in a row. NOT LiteLLM's `allowed_fails_policy` (permit N failures,
@@ -44,14 +63,31 @@ const cooldowns = new Map<string, number>()
  *  reusing the codebase's actual primitive (a `Map<catalogId, until>`)
  *  rather than adding a new counter subsystem. A model that keeps getting
  *  rate-limited with no explicit hint is asked about progressively less
- *  often; reset to zero the moment a real attempt succeeds. */
+ *  often; reset to zero the moment a real attempt succeeds.
+ *
+ *  Shared across tiers deliberately — a live purpose's miss and a durable
+ *  purpose's miss on the SAME model both count toward the same streak, on
+ *  the same "repeated misses ARE evidence of sustained pressure" logic
+ *  regardless of who observed them. */
 const transientStreak = new Map<string, number>()
 
 /** Mark a model as not-worth-asking until `retryAfterMs` from now (or an
  *  escalating guess when the provider gave no hint at all). Never shortens
  *  an existing cooldown: two concurrent jobs can both get 429s, and the
- *  later one reporting a shorter delay must not undo the longer wait. */
-export function markRateLimited(catalogId: string, retryAfterMs: number | undefined, now: number): void {
+ *  later one reporting a shorter delay must not undo the longer wait.
+ *
+ *  BUG-057 Phase 5 — a 'live' caller's re-mark of an already-'durable'-
+ *  caused cooldown KEEPS 'durable' causation (the more restrictive tag)
+ *  rather than overwriting it: a durable purpose's failure is stronger
+ *  evidence of a real, account-wide limit than a live purpose's, since
+ *  durable purposes fire far less often and are less likely to be the
+ *  cause of a self-inflicted burst. */
+export function markRateLimited(
+  catalogId: string,
+  retryAfterMs: number | undefined,
+  now: number,
+  causedBy: CooldownTier
+): void {
   const streak = (transientStreak.get(catalogId) ?? 0) + 1
   transientStreak.set(catalogId, streak)
   // Escalate ONLY the no-hint guess. An explicit Retry-After is a direct
@@ -62,21 +98,24 @@ export function markRateLimited(catalogId: string, retryAfterMs: number | undefi
   const wait = Math.min(Math.max(retryAfterMs ?? guessed, 1_000), MAX_COOLDOWN_MS)
   const until = now + wait
   const existing = cooldowns.get(catalogId)
-  if (existing !== undefined && existing >= until) return
-  cooldowns.set(catalogId, until)
+  if (existing !== undefined && existing.until >= until) return
+  const nextCausedBy = existing?.causedBy === 'durable' ? 'durable' : causedBy
+  cooldowns.set(catalogId, { until, causedBy: nextCausedBy })
 }
 
-/** When this model becomes worth trying again, or null if it is available
- *  now. Expired entries are dropped on read — there is no sweeper, and this
- *  map only ever holds models that have actually been rate-limited. */
+/** When this model becomes worth trying again FOR ANYONE, or null if it is
+ *  available now. Tier-agnostic — a durable caller that could actually
+ *  bypass a live-caused cooldown should use isUsableFor, not this. Expired
+ *  entries are dropped on read — there is no sweeper, and this map only
+ *  ever holds models that have actually been rate-limited. */
 export function cooldownUntil(catalogId: string, now: number): number | null {
-  const until = cooldowns.get(catalogId)
-  if (until === undefined) return null
-  if (until <= now) {
+  const entry = cooldowns.get(catalogId)
+  if (entry === undefined) return null
+  if (entry.until <= now) {
     cooldowns.delete(catalogId)
     return null
   }
-  return until
+  return entry.until
 }
 
 export function isCoolingDown(catalogId: string, now: number): boolean {
@@ -101,18 +140,25 @@ const PERIOD_EXHAUSTED_MAX_MS = 24 * 60 * 60_000 // 24h — the common unit for
 
 /** Mark a model as period-exhausted (a quota/billing cap, not an ordinary
  *  rate limit) until `retryAfterMs` from now, or PERIOD_EXHAUSTED_DEFAULT_MS
- *  when the provider gave no hint. Same never-shorten rule as
- *  markRateLimited, and the same map — a period-exhausted entry IS a
- *  cooldown, just one with a deliberately longer default/cap. */
-export function markPeriodExhausted(catalogId: string, retryAfterMs: number | undefined, now: number): void {
+ *  when the provider gave no hint. Same never-shorten and same sticky-
+ *  durable-causation rules as markRateLimited, and the same map — a
+ *  period-exhausted entry IS a cooldown, just one with a deliberately
+ *  longer default/cap. */
+export function markPeriodExhausted(
+  catalogId: string,
+  retryAfterMs: number | undefined,
+  now: number,
+  causedBy: CooldownTier
+): void {
   const wait = Math.min(
     Math.max(retryAfterMs ?? PERIOD_EXHAUSTED_DEFAULT_MS, 60_000),
     PERIOD_EXHAUSTED_MAX_MS
   )
   const until = now + wait
   const existing = cooldowns.get(catalogId)
-  if (existing !== undefined && existing >= until) return
-  cooldowns.set(catalogId, until)
+  if (existing !== undefined && existing.until >= until) return
+  const nextCausedBy = existing?.causedBy === 'durable' ? 'durable' : causedBy
+  cooldowns.set(catalogId, { until, causedBy: nextCausedBy })
 }
 
 /** BUG-057 Phase 2 — a structural failure (auth rejected, model delisted, a
@@ -154,9 +200,35 @@ export function isStructurallyBroken(catalogId: string, now: number): boolean {
 /** The single gate chain resolution should filter on — cooling down (an
  *  ordinary rate limit or a period-exhausted cap, same map) OR structurally
  *  broken (a separate map, since "will not succeed for this request shape"
- *  isn't a wait-then-retry condition the same way a cooldown is). */
-export function isUsable(catalogId: string, now: number): boolean {
-  return !isCoolingDown(catalogId, now) && !isStructurallyBroken(catalogId, now)
+ *  isn't a wait-then-retry condition the same way a cooldown is), now tiered:
+ *  a `'durable'` caller may bypass a cooldown that a `'live'` caller caused
+ *  — but never one a `'durable'` caller caused, and never a structural
+ *  break regardless of tier (deterministic, not a wait-then-retry
+ *  condition any caller can reason its way past).
+ *
+ *  BUG-057 Phase 5 — bypass is deliberately ALL-OR-NOTHING with respect to
+ *  BUG-057 Phase 4's escalation: it does not partially respect an escalated
+ *  duration versus a base one. A live-tier cooldown only escalates through
+ *  REPEATED misses, each requiring the prior cooldown to have fully expired
+ *  first (coaching-cue polls every ~2.5s, so a live-only escalation to the
+ *  cap takes several minutes of genuinely sustained pressure) — so by the
+ *  time a durable purpose fires "minutes later" (the exact scenario this
+ *  tiering exists to fix), the cooldown it's checking is very likely
+ *  already in an escalated state. Requiring durable bypass to respect that
+ *  escalation would silently defeat Phase 5 in its own headline case. The
+ *  cost model backs this too: a bypass is framed as one bounded HTTP round
+ *  trip that falls through like any ordinary failure if wrong — a fixed
+ *  cost that doesn't scale with how escalated the cooldown is, so there's
+ *  no cost-based reason to make bypass conditional on it either. */
+export function isUsableFor(catalogId: string, now: number, callerTier: CooldownTier): boolean {
+  if (isStructurallyBroken(catalogId, now)) return false
+  const entry = cooldowns.get(catalogId)
+  if (entry === undefined) return true
+  if (entry.until <= now) {
+    cooldowns.delete(catalogId)
+    return true
+  }
+  return callerTier === 'durable' && entry.causedBy === 'live'
 }
 
 /** A success proves the limit lifted early — trust the evidence over the
@@ -171,14 +243,18 @@ export function clearCooldown(catalogId: string): void {
   transientStreak.delete(catalogId)
 }
 
-/** The soonest moment any of these models is worth trying again. Used to tell
- *  the user how long to wait instead of reporting a generic failure. */
-export function soonestExpiry(catalogIds: string[], now: number): number | null {
+/** The soonest moment any of these models is worth trying again — FOR THIS
+ *  CALLER TIER. BUG-057 Phase 5 — a cooldown the caller could bypass
+ *  (isUsableFor) doesn't count: reporting its expiry as "the wait" would
+ *  overstate how long a durable caller is actually blocked, since it isn't
+ *  blocked by that entry at all. */
+export function soonestExpiry(catalogIds: string[], now: number, callerTier: CooldownTier): number | null {
   let soonest: number | null = null
   for (const id of catalogIds) {
-    const until = cooldownUntil(id, now)
-    if (until === null) continue
-    if (soonest === null || until < soonest) soonest = until
+    if (isUsableFor(id, now, callerTier)) continue
+    const entry = cooldowns.get(id)
+    if (!entry) continue
+    if (soonest === null || entry.until < soonest) soonest = entry.until
   }
   return soonest
 }
