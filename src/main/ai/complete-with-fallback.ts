@@ -31,18 +31,69 @@ import {
   SAME_MODEL_RETRY_LIMIT,
   type AICompletionRequest,
   type AICompletionResult,
+  type AIFailureClass,
   type AIProviderId,
   type AIPurpose
 } from './types'
 
+/** BUG-057 Phase 3 — founder's explicit ask: exactly one of three actions,
+ *  always, instead of a flat join of raw reason codes that told a rep
+ *  nothing about what to actually DO. 'auth' is checked via the raw reason
+ *  string first (lossless — the code already distinguishes it) rather than
+ *  folded into 'structural', so an all-revoked-keys chain reads as "add/fix
+ *  a key," not "report a bug." Order matters: auth beats structural beats
+ *  period-exhausted beats the generic wait-and-retry default, since a key
+ *  problem is both the most actionable and the most likely single cause
+ *  when every attempt shares it. */
+export function summarizeExhaustion(
+  attempts: { reason: string; failureClass?: AIFailureClass }[]
+): { kind: 'wait' | 'add-key' | 'bug'; message: string } {
+  // Guards the `.every()` checks below from a vacuous truth on an empty
+  // array: `chain.length > 0` is checked before the walk starts, but every
+  // entry can still `continue` past the actual attempt (e.g. a key that
+  // resolved at chain-build time going missing mid-loop — the walker's own
+  // comment already flags this as possible "in theory"), leaving `attempts`
+  // empty even though the loop completed normally. Without this, an EMPTY
+  // array would vacuously satisfy `attempts.every(a => a.reason.startsWith
+  // ('auth'))` and claim "every configured key was rejected" for a case
+  // where nothing was ever actually attempted.
+  if (attempts.length === 0) {
+    return {
+      kind: 'wait',
+      message: 'No AI model could be attempted just now. Try again shortly.'
+    }
+  }
+  if (attempts.every((a) => a.reason.startsWith('auth'))) {
+    return { kind: 'add-key', message: 'Every configured key was rejected — check your API keys in Settings.' }
+  }
+  const classes = attempts.map((a) => a.failureClass ?? 'transient')
+  if (classes.every((c) => c === 'structural')) {
+    return {
+      kind: 'bug',
+      message:
+        'Every configured model rejected this request the same way — this looks like a bug, not a rate limit or a full key. Please report it.'
+    }
+  }
+  if (classes.some((c) => c === 'period-exhausted') && classes.every((c) => c !== 'transient')) {
+    return {
+      kind: 'add-key',
+      message:
+        "Every model set up for this has hit its free-tier limit for now. Add another provider's key in Settings, or wait for it to reset."
+    }
+  }
+  return {
+    kind: 'wait',
+    message:
+      'Every configured model failed to respond just now — this is usually temporary. Try again shortly, or add another provider key in Settings for backup.'
+  }
+}
+
 export class AllModelsExhaustedError extends Error {
   constructor(
     readonly purpose: AIPurpose,
-    readonly attempts: { catalogId: string; reason: string }[]
+    readonly attempts: { catalogId: string; reason: string; failureClass?: AIFailureClass }[]
   ) {
-    super(
-      `Every configured model for "${purpose}" failed: ${attempts.map((a) => a.reason).join('; ')}`
-    )
+    super(summarizeExhaustion(attempts).message)
     this.name = 'AllModelsExhaustedError'
   }
 }
@@ -515,7 +566,11 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
         // two independent encodings of the same exclusion drifting apart.
         markStructurallyBroken(step.catalogId, Date.now())
       }
-      attempts.push({ catalogId: step.catalogId, reason: detail ? `${reason}: ${detail}` : reason })
+      attempts.push({
+        catalogId: step.catalogId,
+        reason: detail ? `${reason}: ${detail}` : reason,
+        failureClass
+      })
       const nextStep = chain[i + 1] ?? null
       void logFallbackEvent({
         ts: new Date().toISOString(),
@@ -697,7 +752,11 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         } else if (failureClass === 'structural' && reason !== 'auth') {
           markStructurallyBroken(step.catalogId, Date.now())
         }
-        attempts.push({ catalogId: step.catalogId, reason: detail ? `${reason}: ${detail}` : reason })
+        attempts.push({
+          catalogId: step.catalogId,
+          reason: detail ? `${reason}: ${detail}` : reason,
+          failureClass
+        })
         const nextStep = chain[i + 1] ?? null
         void logFallbackEvent({
           ts: new Date().toISOString(),

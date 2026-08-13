@@ -585,9 +585,10 @@ function assembleReport(
 // --- Friendly errors --------------------------------------------------------
 
 function friendlyError(err: unknown): string {
-  if (err instanceof AllModelsExhaustedError) {
-    return 'Every configured AI model failed to produce a coaching report. Check your keys and free-tier limits in Settings, or try again shortly.'
-  }
+  // BUG-057 Phase 3 — err.message is now summarizeExhaustion()'s classified
+  // wait/add-key/bug message, not the old flat reason-code join this
+  // hardcoded string used to compensate for.
+  if (err instanceof AllModelsExhaustedError) return err.message
   if (err instanceof AIProviderError) return err.message
   return 'Something went wrong while coaching this call. Please try again.'
 }

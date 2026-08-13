@@ -268,3 +268,63 @@ describe('failureClass, wired into the REAL openai-compatible adapter (not just 
     expect(err).toMatchObject({ code: 'rate-limit', failureClass: 'transient' })
   })
 })
+
+// BUG-057 Phase 3 — summarizeExhaustion() is unit-tested in isolation
+// (summarizeExhaustion.test.ts), but whether AllModelsExhaustedError's
+// MESSAGE actually reflects a real chain walk — real provider, real
+// classifyFailureClass, real attempts.push(failureClass) wiring, real
+// summarizeExhaustion() call in the constructor — is a separate, larger
+// claim only an end-to-end walk through completeWithFallback can prove.
+describe('AllModelsExhaustedError.message, through a REAL chain walk (not just summarizeExhaustion in isolation)', () => {
+  function structural400Response(): Response {
+    return new Response(
+      JSON.stringify({
+        error: { message: 'tool_use_failed: model did not produce a valid function call for this schema' }
+      }),
+      { status: 400, headers: { 'content-type': 'application/json' } }
+    )
+  }
+
+  it('a real structural 400 on every attempt produces a "bug" message, not the old flat reason-join', async () => {
+    const fetchMock = vi.fn(async () => structural400Response())
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+    vi.mocked(loadAppSettings).mockReturnValue(assignments('memory-extract', ['groq-gpt-oss-120b']))
+
+    const err = await completeWithFallback({
+      purpose: 'memory-extract',
+      maxTokens: 50,
+      messages: [{ role: 'user', content: 'hi' }]
+    }).catch((e: unknown) => e)
+
+    expect(err).toMatchObject({ name: 'AllModelsExhaustedError' })
+    expect((err as Error).message).toMatch(/bug/i)
+    // The old message this replaces was a flat join of raw reason codes —
+    // confirm that shape is actually gone, not just that "bug" appears
+    // somewhere alongside it.
+    expect((err as Error).message).not.toMatch(/failed: failed:/i)
+  })
+
+  it('a real quota-exhaustion 429 on every attempt produces the free-tier-limit message, not "bug" or the auth message', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          error: { message: 'You have exceeded your current quota, please check your plan and billing details.' }
+        }),
+        { status: 429, headers: { 'content-type': 'application/json' } }
+      )
+    )
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+    vi.mocked(loadAppSettings).mockReturnValue(assignments('memory-extract', ['groq-gpt-oss-120b']))
+
+    const err = await completeWithFallback({
+      purpose: 'memory-extract',
+      maxTokens: 50,
+      messages: [{ role: 'user', content: 'hi' }]
+    }).catch((e: unknown) => e)
+
+    expect(err).toMatchObject({ name: 'AllModelsExhaustedError' })
+    expect((err as Error).message).toMatch(/free-tier limit/i)
+    expect((err as Error).message).not.toMatch(/bug/i)
+    expect((err as Error).message).not.toMatch(/api keys/i)
+  })
+})
