@@ -130,6 +130,9 @@ export interface TranscriptionApi {
   stop: () => Promise<{ ok: boolean; session: null }>
   /** M26 4.3 — what main knows about the call in progress, asked on mount. */
   attach: () => Promise<AttachSnapshot>
+  /** M26 4.4 — "the view went away", never "the call ended". A pure signal;
+   *  main does not stop, pause, or otherwise react to the session on it. */
+  detach: () => Promise<{ ok: true }>
   /** M26 4.3 — transcript deltas from main, which owns the transcript. */
   onSegments: (cb: (payload: TranscriptPatch) => void) => () => void
   onState: (cb: (payload: TranscriptionStateEvent) => void) => () => void

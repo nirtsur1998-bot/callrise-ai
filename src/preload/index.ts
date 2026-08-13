@@ -46,6 +46,11 @@ const api = {
     // mount, because the renderer no longer holds the transcript and cannot
     // answer that from its own state.
     attach: () => ipcRenderer.invoke('transcription:attach'),
+    // M26 4.4 — "the view went away", distinct from "the call ended" (that
+    // conflation was BUG-046). Fired from LiveView's own unmount, never from
+    // the Recorder/session's own lifecycle, which now lives in
+    // LiveCallProvider and outlives any one screen.
+    detach: () => ipcRenderer.invoke('transcription:detach'),
     onSegments: (cb: (payload: unknown) => void) => subscribe('transcription:segments', cb),
     onState: (cb: (payload: unknown) => void) => subscribe('transcription:state', cb),
     onTranscript: (cb: (payload: unknown) => void) => subscribe('transcription:transcript', cb),

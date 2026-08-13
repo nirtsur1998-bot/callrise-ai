@@ -10,6 +10,7 @@ import type { NavId } from '@renderer/features/navigation/nav-items'
 import { ErrorBoundary } from '@renderer/components/ErrorBoundary'
 import { ActivityCenter } from '@renderer/features/jobs/ActivityCenter'
 import { InterruptedCallPrompt } from '@renderer/features/live/InterruptedCallPrompt'
+import { LiveCallProvider } from '@renderer/features/live/LiveCallProvider'
 import { MainApp } from './MainApp'
 
 /** A brief splash while we check whether someone is already signed in. */
@@ -51,7 +52,16 @@ function App(): React.JSX.Element {
       ) : !onboarded ? (
         <OnboardingFlow onComplete={handleOnboardingComplete} />
       ) : (
-        <>
+        // M26 Phase 4.4 — LiveCallProvider wraps everything below it,
+        // including ErrorBoundary. That ordering is deliberate: a render
+        // error somewhere unrelated (say, CrmView) must not be able to tear
+        // down an in-progress call along with the tree that crashed. The
+        // provider owns the transcription session and consent state for the
+        // entire signed-in lifetime of the app — it only ever unmounts on
+        // sign-out, never on ordinary navigation. See
+        // LiveCallProvider.tsx's file header for why that had to be a whole
+        // Provider rather than just relocating the Recorder object.
+        <LiveCallProvider>
           <ErrorBoundary>
             <MainApp user={user} initialNav={initialNav} />
           </ErrorBoundary>
@@ -65,7 +75,7 @@ function App(): React.JSX.Element {
               not be unmounted by a navigation the rep happens to make while
               deciding. */}
           <InterruptedCallPrompt />
-        </>
+        </LiveCallProvider>
       )}
     </ToastProvider>
   )

@@ -16,11 +16,10 @@ import { IconButton } from '@renderer/components/IconButton'
 import { Button } from '@renderer/components/Button'
 import type { ConsentMethod } from '@renderer/features/calls/types'
 import type { DealIntelligenceRecord } from '../../../../preload/index.d'
-import { useTranscription } from './useTranscription'
 import { useLiveCues } from './useLiveCues'
 import { useLiveClips } from './useLiveClips'
 import { useCueSettings } from './useCueSettings'
-import { useConsent } from '@renderer/features/consent/useConsent'
+import { useLiveCall } from './useLiveCall'
 import { useAutoStartListening } from '@renderer/features/settings/useAutoStartListening'
 import { IdleStopWatcher, idleStopNotice } from './auto-stop'
 import { MustAskChecklist, emptyChecklistState, preHangupWarning } from './checklist/must-ask'
@@ -102,17 +101,16 @@ export function LiveView({
   remoteStopToken = 0,
   remotePauseToken = 0
 }: LiveViewProps): React.JSX.Element {
-  // Settings first: standing consent has to be known before useConsent builds
-  // the call's opening record, or the first call of a session would start from
-  // "not asked" and only correct itself a tick later.
   const appSettings = useAppSettings().settings
   const allowOtherPartyRecording = appSettings.allowOtherPartyRecording
-  // Standing consent is gated on the master switch — it can never grant
-  // capability the switch has removed.
-  const standingConsent = allowOtherPartyRecording && appSettings.alwaysRecordOtherParty
 
-  // Recording consent for the current call (gates other-party capture).
-  const consent = useConsent(standingConsent)
+  // M26 Phase 4.4 — consent and the transcription session both live in
+  // LiveCallProvider now (mounted once in App.tsx, above the navigation
+  // boundary), so they survive this component unmounting on every screen
+  // switch. See LiveCallProvider.tsx's file header for why that had to be a
+  // whole-hook hoist rather than just moving the Recorder object.
+  const liveCall = useLiveCall()
+  const { consent, buyerIdentityRef, setOnSaved } = liveCall
   const [consentOpen, setConsentOpen] = useState(false)
 
   // "Clip this" — a local, in-memory clip buffer (no callId exists yet for a
@@ -147,11 +145,33 @@ export function LiveView({
   )
 
   // M19 Task 2 step 5 — bridges useLiveCues' self-intro extraction (below,
-  // must run AFTER useTranscription per hooks' call-order rules) into
-  // useTranscription's save flow. A ref, not a hook argument, since
-  // useTranscription only ever READS it later at save time (async), by
-  // which point useLiveCues has already written the resolved value.
-  const buyerIdentityRef = useRef<{ key: string; name: string } | null>(null)
+  // must run AFTER this destructure per hooks' call-order rules) into
+  // useTranscription's save flow. Lives in the Provider now (see
+  // LiveCallProvider.tsx) because useTranscription itself does; destructured
+  // above alongside `consent`.
+
+  // M26 Phase 4.4 — handleSaved is registered with the Provider rather than
+  // passed as a constructor argument, because useTranscription is no longer
+  // instantiated here. Deliberately no cleanup on unmount — see
+  // LiveCallProvider.tsx's setOnSaved doc comment for why that's correct
+  // rather than a missing unsubscribe.
+  useEffect(() => {
+    setOnSaved(handleSaved)
+  }, [setOnSaved, handleSaved])
+
+  // M26 Phase 4.4 — "the view went away" as an event distinct from "the call
+  // ended", which is the whole point of this phase (BUG-046 was exactly that
+  // conflation). Nothing else in this cleanup: the Recorder, the socket, and
+  // the transcript all live in LiveCallProvider now and are untouched by this
+  // component unmounting. The Provider's OWN unmount cleanup (inside
+  // useTranscription — unmodified by this phase, see its file for why) still
+  // covers the rare case where the call genuinely must end without this
+  // screen's involvement, such as signing out mid-call.
+  useEffect(() => {
+    return () => {
+      void window.api.transcription.detach()
+    }
+  }, [])
 
   const {
     status,
@@ -179,7 +199,7 @@ export function LiveView({
     togglePause,
     enableOtherParty,
     disableOtherParty
-  } = useTranscription(consent.recordRef, consent.reset, handleSaved, buyerIdentityRef)
+  } = liveCall
 
   // M19 Task 3B — "show the prep brief again at call start": whichever
   // calendar event is happening right now (or started in the last 10

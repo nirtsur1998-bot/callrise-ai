@@ -1104,6 +1104,18 @@ export function registerTranscription(): void {
     }
   })
 
+  // M26 4.4 — "the view went away", distinct from "the call ended". A pure
+  // signal: it does not touch `session`, does not stop the socket, does not
+  // close the journal. Nothing in main needs to react differently to a
+  // detached view, because everything that used to depend on the renderer
+  // being mounted (the transcript, the patch listener, the journal) already
+  // moved to main in 4.1-4.3. This exists so the CONCEPT has a name on the
+  // wire, matching what replaced the old renderer-side stop()-on-unmount
+  // call — see LiveView.tsx's own unmount effect, the only caller.
+  ipcMain.handle('transcription:detach', () => {
+    return { ok: true as const }
+  })
+
   ipcMain.handle('transcription:stop', () => {
     const s = session
     // M26 4.3 — `session: null` is the renderer's ONLY licence to show the idle
