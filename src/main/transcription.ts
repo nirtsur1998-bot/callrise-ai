@@ -23,6 +23,7 @@ import { CrossTalkGate } from './session-health/crosstalk-gate'
 import {
   beginCall,
   currentTranscript,
+  endCall,
   liveCallInfo,
   recordGap,
   recordResult,
@@ -176,6 +177,16 @@ interface Session {
    *  the fallback event on every subsequent tick while the renderer's own
    *  `transcription:start({multichannel:false})` restart is still in flight. */
   multichannelFallbackSignaled: boolean
+  /** M26 4.4 — repeat-fault tracking for reportFault(). A count and a window
+   *  start, not a bare boolean: today an uncaught throw in healthTick is
+   *  silently swallowed by the process-wide uncaughtException handler and
+   *  the NEXT tick proceeds normally (verified empirically — the fourth tick
+   *  after three straight throws succeeds). Ending the session on the first
+   *  transient fault, now that main owns the transcript, would be stricter
+   *  than today's behaviour for no real benefit; ending it only once faults
+   *  are clearly RECURRING is the actual regression-worthy case. */
+  faultCount: number
+  firstFaultAt: number | null
 }
 
 let session: Session | null = null
@@ -272,9 +283,71 @@ function failSession(s: Session, message: string): void {
   if (session !== s) return
   logSessionSummary(s)
   teardown(s)
+  // M26 4.4 — main gaining its OWN end-of-call trigger. Never a real saveCall
+  // (main has no "the rep confirmed this call is done" signal, and no
+  // consent decision it's entitled to make on the rep's behalf) — just close
+  // the journal unsaved, exactly the outcome the founder's own conservative-
+  // recovery bar from 4.2 describes: the rep is asked next launch, not
+  // guessed for.
+  endLiveCallUnsaved()
   emit(s, 'transcription:error', { message })
   emitState(s, 'error')
   session = null
+}
+
+/** Close the journal for whatever call is in progress, WITHOUT saving it —
+ *  main's only lever when it decides on its own that a call is over
+ *  (failSession, a crashed renderer). See live-transcript.ts's endCall for
+ *  why this is deliberately never followed by a real saveCall. */
+function endLiveCallUnsaved(): void {
+  endCall({ saved: false })
+}
+
+// --- Session robustness (M26 4.4) -------------------------------------------
+//
+// Three hot paths had zero try/catch: the 1Hz health tick, audio ingest, and
+// the socket message handler (only its JSON.parse was ever guarded). Before
+// 4.1 that was survivable — main held no transcript, so a throw here cost
+// nothing durable. Once main OWNS the transcript, the same throw is a
+// total-loss event: the process-wide uncaughtException handler only logs (and
+// suppresses Electron's own crash dialog), a throwing setInterval keeps
+// firing every tick regardless, and the session slot is never cleared, so it
+// sits there wedged, doing nothing, forever.
+export const FAULT_WINDOW_MS = 5000
+export const FAULT_THRESHOLD = 3
+
+/**
+ * Pure counting logic, exported so it can be tested directly rather than only
+ * through a live Deepgram connection (there is no clean way to force one of
+ * healthTick/ingestAudio/the message handler to throw from outside this
+ * module without one).
+ *
+ * Mutates `state` in place and returns whether the threshold was just
+ * crossed. RECURRING within a short window, not on the first fault — today an
+ * uncaught throw in healthTick is already silently swallowed by the
+ * process-wide uncaughtException handler and the NEXT tick proceeds normally
+ * (verified empirically). Ending the session on the first transient fault,
+ * now that main owns the transcript, would be stricter than today's
+ * (accidental) tolerance for no real benefit.
+ */
+export function faultThresholdCrossed(
+  state: { faultCount: number; firstFaultAt: number | null },
+  now: number
+): boolean {
+  if (state.firstFaultAt === null || now - state.firstFaultAt > FAULT_WINDOW_MS) {
+    state.firstFaultAt = now
+    state.faultCount = 1
+  } else {
+    state.faultCount++
+  }
+  return state.faultCount >= FAULT_THRESHOLD
+}
+
+function reportFault(s: Session, site: string, err: unknown): void {
+  console.error(`[transcription:${site}] session=${s.id}`, err)
+  if (faultThresholdCrossed(s, Date.now())) {
+    failSession(s, 'A recurring internal error interrupted this call. Please start a new one.')
+  }
 }
 
 // --- State ------------------------------------------------------------------
@@ -464,6 +537,14 @@ function snapshot(s: Session): HealthSnapshot {
 /** One second of health: sleep, lag, liveness — in that order of authority. */
 function healthTick(s: Session): void {
   if (session !== s) return
+  try {
+    healthTickBody(s)
+  } catch (err) {
+    reportFault(s, 'healthTick', err)
+  }
+}
+
+function healthTickBody(s: Session): void {
   const at = s.timeline.elapsedMs()
 
   // A suspend invalidates every other reading, so it is judged first. Twenty
@@ -491,7 +572,11 @@ function healthTick(s: Session): void {
     // teardown, this session doesn't. Signaled once per session so the
     // renderer's own restart (which replaces this session outright) isn't
     // raced by repeat signals on the next 1s tick.
-    if (s.multichannel && !s.multichannelFallbackSignaled && s.lag.resetsInWindow(at) >= HEALTH_TUNING.maxResetsPerWindow) {
+    if (
+      s.multichannel &&
+      !s.multichannelFallbackSignaled &&
+      s.lag.resetsInWindow(at) >= HEALTH_TUNING.maxResetsPerWindow
+    ) {
       s.multichannelFallbackSignaled = true
       emit(s, 'transcription:multichannelFallback', {})
     }
@@ -631,119 +716,127 @@ function connect(s: Session): void {
     } catch {
       return
     }
-    if (msg.type === 'Results') {
-      const alt = (
-        msg.channel as
-          | {
-              alternatives?: Array<{
-                transcript?: string
-                words?: Array<{
-                  speaker?: number
-                  word?: string
-                  punctuated_word?: string
-                  confidence?: number
+    // A second, separate try/catch from JSON.parse's own above — a parse
+    // failure (malformed JSON) and a processing failure (this session's own
+    // code choking on a well-formed message) are different faults, and only
+    // the second should count toward the repeat-fault threshold.
+    try {
+      if (msg.type === 'Results') {
+        const alt = (
+          msg.channel as
+            | {
+                alternatives?: Array<{
+                  transcript?: string
+                  words?: Array<{
+                    speaker?: number
+                    word?: string
+                    punctuated_word?: string
+                    confidence?: number
+                  }>
                 }>
-              }>
-            }
-          | undefined
-      )?.alternatives?.[0]
-      const transcript = alt?.transcript ?? ''
-      // In multichannel mode the speaker IS the channel: channel_index[0] is 0
-      // (rep) or 1 (buyer). Otherwise fall back to per-word diarization.
-      const channelIndex = Array.isArray(msg.channel_index)
-        ? (msg.channel_index as unknown[])
-        : null
-      const channel =
-        channelIndex && typeof channelIndex[0] === 'number' ? (channelIndex[0] as number) : null
-      const rawWords = alt?.words ?? []
-      const deterministic = s.multichannel && (channel === 0 || channel === 1)
-      // In multichannel the speaker IS the channel, so attribution is
-      // deterministic and always certain. Under diarization it's a guess, and
-      // Deepgram sometimes omits `speaker` entirely — that used to fall through
-      // to 0, making "no idea who said this" indistinguishable from "definitely
-      // the rep". Track it instead of hiding it.
-      let speakerCertain = true
-      // The channel is ALSO stamped alongside the speaker (independent of the
-      // certainty tracking above): `speaker` alone is ambiguous — in mono it
-      // is a diarized guess, in multichannel it is the channel index. Without
-      // it, "speaker 0" means two different people either side of a mid-call
-      // switch to buyer capture, and the saved transcript cannot say which.
-      // Identity is the (channel, speaker) PAIR.
-      const words = rawWords.map((w) => {
-        if (!deterministic && typeof w.speaker !== 'number') speakerCertain = false
-        return {
-          speaker: deterministic ? channel : typeof w.speaker === 'number' ? w.speaker : 0,
-          ...(deterministic ? { channel } : {}),
-          text: w.punctuated_word ?? w.word ?? ''
-        }
-      })
-      // Lowest per-word confidence in this result — a single badly-heard word is
-      // enough to make the whole turn's attribution suspect.
-      const confidences = rawWords
-        .map((w) => w.confidence)
-        .filter((c): c is number => typeof c === 'number' && Number.isFinite(c))
-      const minConfidence = confidences.length ? Math.min(...confidences) : null
-      const start = typeof msg.start === 'number' ? msg.start : 0
-      const duration = typeof msg.duration === 'number' ? msg.duration : 0
-      // The acknowledgement cursor: how much of what we sent Deepgram has now
-      // accounted for. Connection-relative, rebased onto the session scale.
-      s.lag.onAcknowledged(start + duration)
+              }
+            | undefined
+        )?.alternatives?.[0]
+        const transcript = alt?.transcript ?? ''
+        // In multichannel mode the speaker IS the channel: channel_index[0] is 0
+        // (rep) or 1 (buyer). Otherwise fall back to per-word diarization.
+        const channelIndex = Array.isArray(msg.channel_index)
+          ? (msg.channel_index as unknown[])
+          : null
+        const channel =
+          channelIndex && typeof channelIndex[0] === 'number' ? (channelIndex[0] as number) : null
+        const rawWords = alt?.words ?? []
+        const deterministic = s.multichannel && (channel === 0 || channel === 1)
+        // In multichannel the speaker IS the channel, so attribution is
+        // deterministic and always certain. Under diarization it's a guess, and
+        // Deepgram sometimes omits `speaker` entirely — that used to fall through
+        // to 0, making "no idea who said this" indistinguishable from "definitely
+        // the rep". Track it instead of hiding it.
+        let speakerCertain = true
+        // The channel is ALSO stamped alongside the speaker (independent of the
+        // certainty tracking above): `speaker` alone is ambiguous — in mono it
+        // is a diarized guess, in multichannel it is the channel index. Without
+        // it, "speaker 0" means two different people either side of a mid-call
+        // switch to buyer capture, and the saved transcript cannot say which.
+        // Identity is the (channel, speaker) PAIR.
+        const words = rawWords.map((w) => {
+          if (!deterministic && typeof w.speaker !== 'number') speakerCertain = false
+          return {
+            speaker: deterministic ? channel : typeof w.speaker === 'number' ? w.speaker : 0,
+            ...(deterministic ? { channel } : {}),
+            text: w.punctuated_word ?? w.word ?? ''
+          }
+        })
+        // Lowest per-word confidence in this result — a single badly-heard word is
+        // enough to make the whole turn's attribution suspect.
+        const confidences = rawWords
+          .map((w) => w.confidence)
+          .filter((c): c is number => typeof c === 'number' && Number.isFinite(c))
+        const minConfidence = confidences.length ? Math.min(...confidences) : null
+        const start = typeof msg.start === 'number' ? msg.start : 0
+        const duration = typeof msg.duration === 'number' ? msg.duration : 0
+        // The acknowledgement cursor: how much of what we sent Deepgram has now
+        // accounted for. Connection-relative, rebased onto the session scale.
+        s.lag.onAcknowledged(start + duration)
 
-      // M19 Task 2 Part A — the loudspeaker/echo problem. Deepgram's start/
-      // duration are relative to THIS connection's own audio clock; rebase
-      // onto the session's continuous timeline (the same scale crossTalk was
-      // fed on) using the offset captured at connection-open, same principle
-      // as lag.ts's ackBaseSec rebasing just above. Synthetic silence-fill
-      // frames (healthTick's needsSilenceFill) advance Deepgram's clock
-      // without ever reaching crossTalk.observe() (they bypass ingestAudio
-      // entirely), so — exactly like lag.ts's own acknowledgedSeconds getter
-      // — that injected duration must be subtracted back out here too, or
-      // every crosstalk window drifts further ahead of real capture time
-      // with each fill on this connection.
-      const syntheticSec = s.lag.connectionSyntheticSeconds
-      if (s.multichannel && (channel === 0 || channel === 1) && (msg.is_final === true)) {
-        const windowStartMs = s.connectionOpenedAtMs + (start - syntheticSec) * 1000
-        const windowEndMs = s.connectionOpenedAtMs + (start + duration - syntheticSec) * 1000
-        if (s.crossTalk.disagreesWithClaim(channel, windowStartMs, windowEndMs)) {
-          emit(s, 'transcription:crossTalkWarning', {})
+        // M19 Task 2 Part A — the loudspeaker/echo problem. Deepgram's start/
+        // duration are relative to THIS connection's own audio clock; rebase
+        // onto the session's continuous timeline (the same scale crossTalk was
+        // fed on) using the offset captured at connection-open, same principle
+        // as lag.ts's ackBaseSec rebasing just above. Synthetic silence-fill
+        // frames (healthTick's needsSilenceFill) advance Deepgram's clock
+        // without ever reaching crossTalk.observe() (they bypass ingestAudio
+        // entirely), so — exactly like lag.ts's own acknowledgedSeconds getter
+        // — that injected duration must be subtracted back out here too, or
+        // every crosstalk window drifts further ahead of real capture time
+        // with each fill on this connection.
+        const syntheticSec = s.lag.connectionSyntheticSeconds
+        if (s.multichannel && (channel === 0 || channel === 1) && msg.is_final === true) {
+          const windowStartMs = s.connectionOpenedAtMs + (start - syntheticSec) * 1000
+          const windowEndMs = s.connectionOpenedAtMs + (start + duration - syntheticSec) * 1000
+          if (s.crossTalk.disagreesWithClaim(channel, windowStartMs, windowEndMs)) {
+            emit(s, 'transcription:crossTalkWarning', {})
+          }
         }
+
+        // M26 Phase 4.2 — main's own copy, journaled to disk as the call
+        // happens. Deliberately BEFORE the emit, and deliberately not awaited or
+        // error-checked: every entry point in live-transcript swallows its own
+        // failures and returns void, so this cannot affect the renderer's copy
+        // whatever the disk does. Ordering it first means a crash in the
+        // instant between the two loses nothing.
+        recordResult({
+          transcript,
+          words,
+          isFinal: msg.is_final === true,
+          speakerEpoch: s.speakerEpoch,
+          speakerCertain,
+          minConfidence,
+          multichannel: s.multichannel
+        })
+
+        emit(s, 'transcription:transcript', {
+          transcript,
+          words,
+          isFinal: msg.is_final === true,
+          speechFinal: msg.speech_final === true,
+          // The real (session-health) lag figure — a two-cursor measurement
+          // proven against Deepgram's 1.25x ingest cap, not the simple
+          // "seconds sent minus seconds acknowledged" estimate this superseded.
+          lagMs: Math.round(s.lag.instantLagSec * 1000),
+          speakerEpoch: s.speakerEpoch,
+          speakerCertain,
+          minConfidence,
+          // Multichannel labels are the CHANNEL, so speaker 0 is the rep by
+          // construction; diarization labels are a guess with no fixed meaning.
+          // Consumers need to tell those apart to know what a label is worth.
+          multichannel: s.multichannel
+        })
+      } else if (msg.type === 'UtteranceEnd') {
+        emit(s, 'transcription:utteranceEnd', {})
       }
-
-      // M26 Phase 4.2 — main's own copy, journaled to disk as the call
-      // happens. Deliberately BEFORE the emit, and deliberately not awaited or
-      // error-checked: every entry point in live-transcript swallows its own
-      // failures and returns void, so this cannot affect the renderer's copy
-      // whatever the disk does. Ordering it first means a crash in the
-      // instant between the two loses nothing.
-      recordResult({
-        transcript,
-        words,
-        isFinal: msg.is_final === true,
-        speakerEpoch: s.speakerEpoch,
-        speakerCertain,
-        minConfidence,
-        multichannel: s.multichannel
-      })
-
-      emit(s, 'transcription:transcript', {
-        transcript,
-        words,
-        isFinal: msg.is_final === true,
-        speechFinal: msg.speech_final === true,
-        // The real (session-health) lag figure — a two-cursor measurement
-        // proven against Deepgram's 1.25x ingest cap, not the simple
-        // "seconds sent minus seconds acknowledged" estimate this superseded.
-        lagMs: Math.round(s.lag.instantLagSec * 1000),
-        speakerEpoch: s.speakerEpoch,
-        speakerCertain,
-        minConfidence,
-        // Multichannel labels are the CHANNEL, so speaker 0 is the rep by
-        // construction; diarization labels are a guess with no fixed meaning.
-        // Consumers need to tell those apart to know what a label is worth.
-        multichannel: s.multichannel
-      })
-    } else if (msg.type === 'UtteranceEnd') {
-      emit(s, 'transcription:utteranceEnd', {})
+    } catch (err) {
+      reportFault(s, 'wsMessage', err)
     }
   })
 
@@ -816,6 +909,14 @@ function connect(s: Session): void {
  * drift resync would leave one of the two paths unmonitored.
  */
 function ingestAudio(s: Session, chunk: unknown): void {
+  try {
+    ingestAudioBody(s, chunk)
+  } catch (err) {
+    reportFault(s, 'ingestAudio', err)
+  }
+}
+
+function ingestAudioBody(s: Session, chunk: unknown): void {
   const bytes = toBytes(chunk)
   if (!bytes || bytes.byteLength <= 0 || bytes.byteLength > MAX_CHUNK_BYTES) return
 
@@ -905,6 +1006,30 @@ export function disposeTranscription(): void {
     teardown(session)
     session = null
   }
+}
+
+/**
+ * M26 4.4 — Electron's `render-process-gone`: the renderer crashed, was
+ * OOM-killed, or its GPU process died. Main keeps running regardless, so this
+ * is the only chance to end a session that would otherwise sit there forever
+ * — the liveness watchdog injects synthetic silence to satisfy Deepgram's
+ * no-audio deadline, which keeps the socket open, and billing, indefinitely,
+ * feeding a page that no longer exists.
+ *
+ * Order matters: `disposeTranscription()` runs FIRST because it is the only
+ * thing that strips the socket's own listeners (`removeAllListeners` before
+ * `terminate`). Leaving them attached even briefly risks the pre-existing,
+ * un-guarded `ws.on('close')` handler firing `emit()` against a webContents
+ * whose renderer just died — `emit()` only checks `window.isDestroyed()`,
+ * which stays false after a crash unless the window is also explicitly
+ * closed, not `webContents.isDestroyed()`.
+ *
+ * Both calls are safe no-ops when there is nothing to tear down: a crash
+ * with no live session, or with a call that already saved, does nothing.
+ */
+export function handleRenderProcessGone(): void {
+  disposeTranscription()
+  endLiveCallUnsaved()
 }
 
 /** Current session health, for the `--diagnose` report. Null when idle. */
@@ -1006,7 +1131,9 @@ export function registerTranscription(): void {
       lastState: 'connecting',
       reconnectAttempts: 0,
       stopping: false,
-      multichannelFallbackSignaled: false
+      multichannelFallbackSignaled: false,
+      faultCount: 0,
+      firstFaultAt: null
     }
     session = s
     lastLiveWindow = window

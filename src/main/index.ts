@@ -132,7 +132,11 @@ for (const [key, value] of Object.entries(DEFAULT_CONFIG)) {
   if (!process.env[key]) process.env[key] = value
 }
 import icon from '../../resources/icon.png?asset'
-import { registerTranscription, disposeTranscription } from './transcription'
+import {
+  registerTranscription,
+  disposeTranscription,
+  handleRenderProcessGone
+} from './transcription'
 import { registerCalls } from './calls'
 import { registerTasks } from './tasks'
 import { registerContacts } from './contacts'
@@ -259,6 +263,16 @@ function createWindow(): void {
     const devUrl = process.env['ELECTRON_RENDERER_URL']
     if ((devUrl && url.startsWith(devUrl)) || url.startsWith('file://')) return
     event.preventDefault()
+  })
+
+  // M26 4.4 — the renderer crashed, was OOM-killed, or its GPU process died.
+  // Without this a live transcription session just keeps running: nothing
+  // else in the app watches for a dead renderer, so the socket stays open
+  // (and billing) into a page that no longer exists. See
+  // handleRenderProcessGone's own doc comment for why ordering matters.
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error(`[main] render-process-gone: ${details.reason}`)
+    handleRenderProcessGone()
   })
 
   mainWindow.on('closed', () => {

@@ -223,6 +223,36 @@ export function recordConsent(consent: ConsentRecord | null): void {
   }
 }
 
+// M26 Phase 4.4 — closes a race that main gaining its own end-of-call
+// trigger (render-process-gone, a fault threshold) introduces.
+//
+// Before 4.4, endCall({saved:true}) was called from exactly one place —
+// calls.ts's calls:save handler, after a successful save — so there was
+// never a second, concurrent caller. Once main can independently decide a
+// call is over WHILE a save is still in flight, that stops being true: if
+// render-process-gone fires mid-await, it would call
+// endCall({saved:false}) and null `current` FIRST; when the in-flight save
+// then resolves and calls endCall({saved:true}), `current` is already
+// null, so THAT call is a no-op — the journal never gets its `.done`
+// marker despite a real Call record now existing on disk. Next launch,
+// listOrphanJournals() offers it as recoverable, and saving it again mints
+// a second Call record for the same conversation.
+//
+// The fix: a save in flight wins. A main-initiated saved:false during that
+// window is deferred to a no-op — the save's own eventual saved:true is
+// authoritative, because it corresponds to a real, successful write.
+let saveInFlight = false
+
+/** Call before awaiting saveCall(). */
+export function beginSave(): void {
+  saveInFlight = true
+}
+
+/** Call in a `finally` after saveCall() settles, success or failure. */
+export function endSave(): void {
+  saveInFlight = false
+}
+
 /**
  * The call is over.
  *
@@ -232,6 +262,7 @@ export function recordConsent(consent: ConsentRecord | null): void {
  * the rep gets asked either way rather than the app guessing.
  */
 export function endCall(opts: { saved: boolean }): void {
+  if (!opts.saved && saveInFlight) return
   const call = current
   current = null
   if (!call) return
@@ -281,4 +312,5 @@ export function resetLiveTranscriptForTests(): void {
   }
   current = null
   listener = null
+  saveInFlight = false
 }

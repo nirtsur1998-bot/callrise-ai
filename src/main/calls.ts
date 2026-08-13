@@ -61,7 +61,7 @@ import { selectFocusSkill, type FocusSkillState } from './coaching/focus-skill'
 import { loadFocusSkill, saveFocusSkill } from './coaching/focus-skill-fs'
 import { getJobManager } from './jobs/instance'
 import { createScanTally } from './objection-scan-tally'
-import { currentTranscript, endCall, liveCallInfo } from './live/live-transcript'
+import { beginSave, currentTranscript, endCall, endSave, liveCallInfo } from './live/live-transcript'
 import type { Job } from './jobs/types'
 
 function objectionQueueDir(): string {
@@ -417,7 +417,19 @@ export function registerCalls(): void {
                 : Math.max(0, Date.now() - live.startedAtMs)
           }
         : input
-      const summary = await saveCall(callsDir(), effective)
+      // M26 Phase 4.4 — beginSave()/endSave() bracket the write so a
+      // main-initiated endCall({saved:false}) landing in this exact window
+      // (render-process-gone, a fault threshold — both new in this phase)
+      // can never race a save that is about to succeed. See beginSave's own
+      // doc comment in live-transcript.ts for the failure this prevents: a
+      // second Call record minted for a conversation that already saved.
+      beginSave()
+      let summary: Awaited<ReturnType<typeof saveCall>>
+      try {
+        summary = await saveCall(callsDir(), effective)
+      } finally {
+        endSave()
+      }
       // M26 Phase 4.2 — the call now exists as a real Call record, so its
       // journal stops being a recovery candidate.
       //
