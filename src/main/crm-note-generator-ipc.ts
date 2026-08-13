@@ -97,9 +97,11 @@ export function registerCrmNoteGenerator(): void {
     // history pruning must never delete it, or BUG-050 comes straight back.
     // It leaves via recordDecision()'s isFullyReviewed() dismiss above.
     retainUntilConsumed: true,
+    // BUG-060 — earned: handle.signal is threaded into both AI calls below.
+    cancellable: true,
     executor: {
       kind: 'inline-async',
-      run: async (input) => {
+      run: async (input, handle) => {
         if (!isNoteGeneratorEnabled()) throw new Error(DISABLED_MESSAGE)
         const contact = await getContact(contactsDir(), input.contactId)
         if (!contact) throw new Error('Contact not found.')
@@ -115,8 +117,8 @@ export function registerCrmNoteGenerator(): void {
         }
 
         const [noteResult, facts] = await Promise.all([
-          generateCrmNote(source, input.length),
-          harvestKycFacts(source, contact)
+          generateCrmNote(source, input.length, { signal: handle.signal }),
+          harvestKycFacts(source, contact, { signal: handle.signal })
         ])
         if (!noteResult.ok) throw new Error('Could not draft a note. Please try again.')
 
