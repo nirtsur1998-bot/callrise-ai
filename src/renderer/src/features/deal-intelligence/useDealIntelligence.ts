@@ -78,7 +78,18 @@ const MAX_TIER2_DELTA_TURNS = 200
  *  main/calls-fs.ts's own save-time cap. */
 const MAX_RADAR_REPORT_HEALTH_POINTS = 100
 
-export type DealIntelligenceStatus = 'idle' | 'active' | 'paused'
+/** BUG-057 Phase 1 — 'timed-out' added, distinct from 'paused'. Deliberately
+ *  a SEPARATE declaration from ui/types.ts's own DealIntelligenceStatus, not
+ *  an import from it — see that file's own header comment on why the UI
+ *  layer keeps its own "reproduced verbatim" copy of this contract instead
+ *  of depending on the engine's types directly. The cost of that
+ *  intentional duplication is exactly what happened here: this copy was
+ *  missed when ui/types.ts's was widened, caught only by the REAL
+ *  `npm run typecheck` (not the no-op `tsc --noEmit` this session had been
+ *  trusting) discovering `setStatus('timed-out')` no longer type-checked
+ *  against this file's own un-widened declaration. Keep both in sync by
+ *  hand when this union changes again. */
+export type DealIntelligenceStatus = 'idle' | 'active' | 'paused' | 'timed-out'
 
 export interface UseDealIntelligence {
   status: DealIntelligenceStatus
