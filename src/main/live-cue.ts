@@ -267,8 +267,19 @@ export type LiveCueResult =
        *  entry failed (not on "not enough transcript yet" or "nothing
        *  configured", which return plain {ok:false} same as always). Lets
        *  the renderer show a small non-blocking "coaching paused" indicator
-       *  instead of just silently doing nothing this cycle. */
-      pausedReason?: 'all-models-unavailable'
+       *  instead of just silently doing nothing this cycle.
+       *
+       *  BUG-057 Phase 2 — 'timed-out' added: a HARD_CEILING_MS timeout is a
+       *  live, responding provider that was just too slow, genuinely
+       *  different from "every model is unreachable or rate-limited" —
+       *  before this it fell through to plain {ok:false} with NO
+       *  pausedReason at all, so the renderer's boolean check
+       *  (`!== undefined`, see useLiveCues.ts) silently read it as "not
+       *  paused" and the rep saw nothing. Consumers that only need the
+       *  boolean ("is coaching paused right now") should check
+       *  `!== undefined`, never compare to one literal — that comparison is
+       *  exactly the bug this comment exists to prevent recurring. */
+      pausedReason?: 'all-models-unavailable' | 'timed-out'
       /** M26 4.5 (BUG-055) — see deal-tier1.ts's Tier1AnalyzeResult for the
        *  full rationale. Never read as "paused" by the renderer. */
       blockedReason?: 'consent'
@@ -499,6 +510,21 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
         `[live-cue] all models exhausted: ${err.attempts.map((a) => a.reason).join(', ')}`
       )
       return { ok: false, pausedReason: 'all-models-unavailable' }
+    }
+    if (err instanceof AIProviderError) {
+      // BUG-057 Phase 2 — these two used to fall straight through to the
+      // generic branch below with NO pausedReason, which the renderer's
+      // strict-equality check (fixed this same phase) then silently read as
+      // "not paused." Both are real, ongoing conditions worth a visible
+      // indicator, not one-off errors.
+      if (err.code === 'timeout') {
+        console.log(`[live-cue] paused: ceiling timeout, message=${err.message}`)
+        return { ok: false, pausedReason: 'timed-out' }
+      }
+      if (err.code === 'rate-limit') {
+        console.log(`[live-cue] paused: every model cooling down, message=${err.message}`)
+        return { ok: false, pausedReason: 'all-models-unavailable' }
+      }
     }
     const providerErr = err instanceof AIProviderError ? err : null
     console.log(

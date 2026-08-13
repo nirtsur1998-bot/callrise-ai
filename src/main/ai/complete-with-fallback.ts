@@ -554,11 +554,13 @@ export interface StreamWithFallbackResult extends AsyncIterable<{ delta: string 
  */
 export function streamWithFallback(req: AICompletionRequest): StreamWithFallbackResult {
   const purpose = req.purpose
+  const resolved = resolveChain(purpose)
   // BUG-058 — same cooldown filter as completeWithFallback: a model that just
   // 429'd must not be re-burned here either. coaching-chat is the only
   // consumer, and it is interactive, so spending its first attempt on a model
   // we already know is limited is the most visible possible version of this.
-  const chain = resolveChain(purpose).filter((s) => !isCoolingDown(s.catalogId, Date.now()))
+  const startedNow = Date.now()
+  const chain = resolved.filter((s) => !isCoolingDown(s.catalogId, startedNow))
 
   let resolveFinal!: (v: { text: string; model: string; usage: AICompletionResult['usage'] }) => void
   let rejectFinal!: (e: unknown) => void
@@ -570,8 +572,28 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
   )
 
   async function* generator(): AsyncGenerator<{ delta: string }> {
-    if (chain.length === 0) {
+    if (resolved.length === 0) {
       const err = new AIProviderError('no-key', 'No AI provider is configured for this yet.')
+      rejectFinal(err)
+      throw err
+    }
+    if (chain.length === 0) {
+      // BUG-057 Phase 2 — resolved.length > 0 here by construction: real
+      // keys ARE configured, every entry is just cooling down right now.
+      // Before this, this case hit the SAME branch as genuinely-no-keys
+      // above, telling a user with valid keys "No AI provider is configured
+      // for this yet" — see complete-with-fallback.ts's own identical
+      // pattern (the non-streaming path already got this right).
+      const until = soonestExpiry(
+        resolved.map((s) => s.catalogId),
+        startedNow
+      )
+      const secs = until ? Math.max(1, Math.ceil((until - startedNow) / 1000)) : 60
+      const err = new AIProviderError(
+        'rate-limit',
+        `Every model set up for this is rate-limited right now. Try again in about ${secs}s.`,
+        until ? until - startedNow : undefined
+      )
       rejectFinal(err)
       throw err
     }

@@ -218,6 +218,9 @@ export interface UseLiveCues {
    *  just means AI cues are temporarily unavailable. Clears itself the
    *  moment a call succeeds again. */
   coachingPaused: boolean
+  /** BUG-057 Phase 2 — WHY coachingPaused is true, for copy only. undefined
+   *  whenever coachingPaused is false. */
+  coachingPausedReason: 'all-models-unavailable' | 'timed-out' | undefined
 }
 
 /**
@@ -262,6 +265,14 @@ export function useLiveCues(
   // Non-blocking: transcription keeps running, this just says AI cues are
   // temporarily unavailable. Cleared the moment a call succeeds again.
   const [coachingPaused, setCoachingPaused] = useState(false)
+  // BUG-057 Phase 2 — the WHY behind coachingPaused, for copy only. Kept as a
+  // separate field rather than folded into the boolean: LiveView's banner
+  // text needs to say something true ("taking too long" vs "unreachable or
+  // rate-limited"), but nothing else in this hook needs to branch on it —
+  // every other consumer only ever needed "is coaching paused right now."
+  const [coachingPausedReason, setCoachingPausedReason] = useState<
+    'all-models-unavailable' | 'timed-out' | undefined
+  >(undefined)
   const monologueRef = useRef(new MonologueTracker())
 
   const cfgRef = useRef<Thresholds>(SENSITIVITY_THRESHOLDS[sensitivity])
@@ -563,10 +574,17 @@ export function useLiveCues(
         .then((res) => {
           if (!mountedRef.current || generation !== generationRef.current) return
           if (!res.ok) {
-            setCoachingPaused(res.pausedReason === 'all-models-unavailable')
+            // BUG-057 Phase 2 — any pausedReason means paused, full stop.
+            // The old strict-equality check silently read a 'timed-out'
+            // result as NOT paused (since it only ever matched the single
+            // literal 'all-models-unavailable') — this is the exact bug
+            // that made a real, ongoing failure invisible to the rep.
+            setCoachingPaused(res.pausedReason !== undefined)
+            setCoachingPausedReason(res.pausedReason)
             return
           }
           setCoachingPaused(false)
+          setCoachingPausedReason(undefined)
           if (repSpeakerRef.current === null && res.repSpeaker !== null) {
             // Same guard as coach.ts's batch path (speakers.has(repSpeaker)):
             // never lock onto a speaker id that hasn't actually appeared in
@@ -733,6 +751,7 @@ export function useLiveCues(
     monologue,
     buyerName,
     buyerIdentityKey,
-    coachingPaused
+    coachingPaused,
+    coachingPausedReason
   }
 }

@@ -322,7 +322,19 @@ export function useDealIntelligence(
         if (myGeneration !== generationRef.current) return // stale — reset() ran mid-flight
 
         if (!outcome.ok) {
-          setStatus(outcome.pausedReason === 'all-models-unavailable' ? 'paused' : 'active')
+          // BUG-057 Phase 2 — three-way, not a boolean-shaped ternary: a
+          // 'timed-out' result used to fall to 'active' here, actively
+          // claiming "working fine" for a pass that just failed — worse
+          // than the coaching-cue side's old bug, which merely failed to
+          // distinguish the reason rather than reporting the wrong status
+          // outright.
+          setStatus(
+            outcome.pausedReason === 'all-models-unavailable'
+              ? 'paused'
+              : outcome.pausedReason === 'timed-out'
+                ? 'timed-out'
+                : 'active'
+          )
           return
         }
         setStatus('active')
@@ -388,7 +400,19 @@ export function useDealIntelligence(
         if (myGeneration !== generationRef.current) return
 
         if (!outcome.ok) {
-          setStatus(outcome.pausedReason === 'all-models-unavailable' ? 'paused' : 'active')
+          // BUG-057 Phase 2 — three-way, not a boolean-shaped ternary: a
+          // 'timed-out' result used to fall to 'active' here, actively
+          // claiming "working fine" for a pass that just failed — worse
+          // than the coaching-cue side's old bug, which merely failed to
+          // distinguish the reason rather than reporting the wrong status
+          // outright.
+          setStatus(
+            outcome.pausedReason === 'all-models-unavailable'
+              ? 'paused'
+              : outcome.pausedReason === 'timed-out'
+                ? 'timed-out'
+                : 'active'
+          )
           return
         }
         setStatus('active')

@@ -194,7 +194,7 @@ export interface TranscriptionApi {
          *  and every entry failed this cycle (not on "not enough transcript
          *  yet"). Renderer shows a small non-blocking "coaching paused"
          *  indicator, never a modal — see LiveView.tsx. */
-        pausedReason?: 'all-models-unavailable'
+        pausedReason?: 'all-models-unavailable' | 'timed-out'
         /** M26 4.5 (BUG-055) — never read as "paused"; see main/live-cue.ts. */
         blockedReason?: 'consent'
       }
@@ -239,7 +239,7 @@ export type DealTier1Result =
   | { ok: true; signals: DealSignal[] }
   | {
       ok: false
-      pausedReason?: 'all-models-unavailable'
+      pausedReason?: 'all-models-unavailable' | 'timed-out'
       /** M26 4.5 (BUG-055) — never read as "paused"; see main/deal-tier1.ts. */
       blockedReason?: 'consent'
     }
@@ -265,7 +265,7 @@ export type DealTier2Result =
   | { ok: true; result: DealHealthResult }
   | {
       ok: false
-      pausedReason?: 'all-models-unavailable'
+      pausedReason?: 'all-models-unavailable' | 'timed-out'
       blockedReason?: 'consent'
     }
 

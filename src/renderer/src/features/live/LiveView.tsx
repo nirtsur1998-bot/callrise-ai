@@ -291,7 +291,8 @@ export function LiveView({
     monologue,
     buyerName,
     buyerIdentityKey,
-    coachingPaused
+    coachingPaused,
+    coachingPausedReason
   } = liveCall.cues
 
   // M24 — Live Deal Intelligence (Beta).
@@ -939,8 +940,19 @@ export function LiveView({
       {coachingPaused && (
         <InlineBanner tone="warning">
           <span>
-            AI coaching cues are temporarily unavailable (every configured model is unreachable or
-            rate-limited right now) — transcription is unaffected. Resumes automatically.
+            {coachingPausedReason === 'timed-out' ? (
+              // BUG-057 Phase 2 — a HARD_CEILING_MS timeout is a live,
+              // responding provider that was just too slow, genuinely
+              // different from every model being unreachable/rate-limited.
+              // Before this it wasn't even distinguishable from "not paused"
+              // at all (see useLiveCues.ts's own comment on the strict-
+              // equality bug this closes).
+              <>AI coaching cues are temporarily unavailable (the model is taking too long to respond
+                right now) — transcription is unaffected. Resumes automatically.</>
+            ) : (
+              <>AI coaching cues are temporarily unavailable (every configured model is unreachable or
+                rate-limited right now) — transcription is unaffected. Resumes automatically.</>
+            )}
           </span>
         </InlineBanner>
       )}

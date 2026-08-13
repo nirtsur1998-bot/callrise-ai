@@ -75,14 +75,23 @@ export type Tier1AnalyzeResult =
       /** Set only when the whole fallback chain was tried and every entry
        *  failed this cycle — same shape/meaning as live-cue.ts's
        *  LiveCueResult.pausedReason, so the renderer can reuse the same
-       *  "paused" indicator pattern rather than inventing a second one. */
-      pausedReason?: 'all-models-unavailable'
+       *  "paused" indicator pattern rather than inventing a second one.
+       *  BUG-057 Phase 2 — 'timed-out' added; see live-cue.ts's identical
+       *  field for the full rationale (a HARD_CEILING_MS timeout is
+       *  genuinely distinct from every model being unreachable/rate-limited,
+       *  and used to be silently indistinguishable from "not paused" at
+       *  all). Consumers wanting the plain boolean must check
+       *  `!== undefined`, never compare to one literal. */
+      pausedReason?: 'all-models-unavailable' | 'timed-out'
       /** M26 4.5 (BUG-055) — set when this pass was refused because buyer-
        *  attributed content was in scope and a fresh consentPermitsCapture()
        *  check found no active grant. Deliberately NOT surfaced as "paused"
-       *  — the renderer's own check only treats `pausedReason ===
-       *  'all-models-unavailable'` that way, so this reads as an ordinary
-       *  quiet cycle to the rep. Present only so a consent refusal is
+       *  — this is a SEPARATE field from pausedReason (never both set on the
+       *  same result, since consent-blocking returns before the AI call
+       *  this cycle's exhaustion catch would come from), so the renderer's
+       *  `pausedReason !== undefined` check naturally excludes it without
+       *  needing to know about blockedReason at all. Present only so a
+       *  consent refusal is
        *  distinguishable from a genuine AI failure in logs/tests, rather
        *  than both collapsing into the same silent "nothing this cycle". */
       blockedReason?: 'consent'
@@ -268,6 +277,19 @@ export async function analyzeDealTier1(input: unknown): Promise<Tier1AnalyzeResu
         `[deal-tier1] all models exhausted: ${err.attempts.map((a) => a.reason).join(', ')}`
       )
       return { ok: false, pausedReason: 'all-models-unavailable' }
+    }
+    if (err instanceof AIProviderError) {
+      // BUG-057 Phase 2 — see live-cue.ts's identical branch for the full
+      // rationale: both used to fall through to plain {ok:false} with no
+      // pausedReason at all.
+      if (err.code === 'timeout') {
+        console.log(`[deal-tier1] paused: ceiling timeout, message=${err.message}`)
+        return { ok: false, pausedReason: 'timed-out' }
+      }
+      if (err.code === 'rate-limit') {
+        console.log(`[deal-tier1] paused: every model cooling down, message=${err.message}`)
+        return { ok: false, pausedReason: 'all-models-unavailable' }
+      }
     }
     const providerErr = err instanceof AIProviderError ? err : null
     console.log(

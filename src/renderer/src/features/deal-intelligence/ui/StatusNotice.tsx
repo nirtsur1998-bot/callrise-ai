@@ -1,14 +1,19 @@
 import { AlertTriangle } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 
-type NoticeVariant = 'idle' | 'quiet' | 'paused'
+// BUG-057 Phase 2 — 'timed-out' added, distinct from 'paused'. See
+// DealIntelligenceStatus's own doc comment (ui/types.ts) for why these stay
+// separate rather than sharing one string.
+type NoticeVariant = 'idle' | 'quiet' | 'paused' | 'timed-out'
 
 const COPY: Record<NoticeVariant, string> = {
   idle: 'Calibrating on this call — the first read needs a few turns of real signal.',
   quiet:
     "Nothing rare enough to flag yet. Quiet is normal — most of a call doesn't earn an interruption.",
   paused:
-    'Live intelligence is temporarily unavailable — the model provider chain is unreachable or rate-limited. Resumes automatically; transcription is unaffected.'
+    'Live intelligence is temporarily unavailable — the model provider chain is unreachable or rate-limited. Resumes automatically; transcription is unaffected.',
+  'timed-out':
+    'Live intelligence is temporarily unavailable — the model is taking too long to respond right now. Resumes automatically; transcription is unaffected.'
 }
 
 /**
@@ -24,7 +29,10 @@ const COPY: Record<NoticeVariant, string> = {
  * isn't, so this component only ever renders what its caller tells it to.
  */
 export function StatusNotice({ variant }: { variant: NoticeVariant }): React.JSX.Element {
-  const isPaused = variant === 'paused'
+  // BUG-057 Phase 2 — 'timed-out' gets the same warning styling as 'paused'.
+  // Not a Record, so this needs the explicit OR (a missed case here would
+  // silently render as unstyled, not a compile error).
+  const isPaused = variant === 'paused' || variant === 'timed-out'
   return (
     <div
       className={cn(

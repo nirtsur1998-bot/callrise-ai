@@ -4,19 +4,25 @@ import type { DealIntelligenceStatus } from './types'
 const STATUS_WORD: Record<DealIntelligenceStatus, string> = {
   idle: 'Calibrating',
   active: 'Watching',
-  paused: 'Paused'
+  paused: 'Paused',
+  'timed-out': 'Paused'
 }
 
 const STATUS_TEXT_TONE: Record<DealIntelligenceStatus, string> = {
   idle: 'text-faint',
   active: 'text-accent',
-  paused: 'text-warning'
+  paused: 'text-warning',
+  'timed-out': 'text-warning'
 }
 
 const STATUS_DESCRIPTION: Record<DealIntelligenceStatus, string> = {
   idle: 'Deal intelligence warming up — calibrating on this call',
   active: 'Deal intelligence active — watching the call for signals',
-  paused: 'Deal intelligence paused — provider chain unreachable, resumes automatically'
+  paused: 'Deal intelligence paused — provider chain unreachable, resumes automatically',
+  // BUG-057 Phase 2 — same dot/label as 'paused' (the compact pill has no
+  // room for the distinction), but the full-sentence screen-reader text and
+  // StatusNotice's own card (which DOES have room) say something true.
+  'timed-out': 'Deal intelligence paused — the model is taking too long to respond, resumes automatically'
 }
 
 interface PresenceDotProps {
@@ -50,7 +56,11 @@ function PresenceDot({ status, justArrived }: PresenceDotProps): React.JSX.Eleme
           'relative h-2.5 w-2.5 rounded-full transition-colors duration-300',
           status === 'active' && 'bg-accent shadow-[0_0_8px_1px_var(--color-accent)]',
           status === 'idle' && 'bg-faint/60',
-          status === 'paused' && 'bg-warning',
+          // BUG-057 Phase 2 — 'timed-out' shares 'paused''s dot colour
+          // deliberately (this is not a Record, so a missing case here
+          // silently renders no colour at all rather than a compile error —
+          // checked explicitly for exactly that reason).
+          (status === 'paused' || status === 'timed-out') && 'bg-warning',
           // One-shot accent glow — the app's existing "this just changed"
           // idiom (see PipelineBoard's flash-on-move) reused here for "a
           // signal just arrived" instead of a new keyframe.
