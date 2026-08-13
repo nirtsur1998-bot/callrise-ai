@@ -36,15 +36,30 @@ export const MAX_COOLDOWN_MS = 10 * 60_000
 
 const cooldowns = new Map<string, number>()
 
-/** Mark a model as not-worth-asking until `retryAfterMs` from now (or the
- *  default when the provider gave no hint). Never shortens an existing
- *  cooldown: two concurrent jobs can both get 429s, and the later one
- *  reporting a shorter delay must not undo the longer wait. */
+/** BUG-057 Phase 4 — how many consecutive no-hint rate-limits this model has
+ *  taken in a row. NOT LiteLLM's `allowed_fails_policy` (permit N failures,
+ *  then deprioritize) — this escalates the cooldown's DURATION using this
+ *  file's existing exponential-backoff idiom
+ *  (`completeWithSameModelRetry`'s `Math.min(200 * 2**attempt, 2_000)`),
+ *  reusing the codebase's actual primitive (a `Map<catalogId, until>`)
+ *  rather than adding a new counter subsystem. A model that keeps getting
+ *  rate-limited with no explicit hint is asked about progressively less
+ *  often; reset to zero the moment a real attempt succeeds. */
+const transientStreak = new Map<string, number>()
+
+/** Mark a model as not-worth-asking until `retryAfterMs` from now (or an
+ *  escalating guess when the provider gave no hint at all). Never shortens
+ *  an existing cooldown: two concurrent jobs can both get 429s, and the
+ *  later one reporting a shorter delay must not undo the longer wait. */
 export function markRateLimited(catalogId: string, retryAfterMs: number | undefined, now: number): void {
-  const wait = Math.min(
-    Math.max(retryAfterMs ?? DEFAULT_COOLDOWN_MS, 1_000),
-    MAX_COOLDOWN_MS
-  )
+  const streak = (transientStreak.get(catalogId) ?? 0) + 1
+  transientStreak.set(catalogId, streak)
+  // Escalate ONLY the no-hint guess. An explicit Retry-After is a direct
+  // instruction from the provider and must win outright — that's BUG-058's
+  // whole point, unaffected here. Only the DEFAULT_COOLDOWN_MS guess grows
+  // with repeated misses.
+  const guessed = Math.min(DEFAULT_COOLDOWN_MS * 2 ** (streak - 1), MAX_COOLDOWN_MS)
+  const wait = Math.min(Math.max(retryAfterMs ?? guessed, 1_000), MAX_COOLDOWN_MS)
   const until = now + wait
   const existing = cooldowns.get(catalogId)
   if (existing !== undefined && existing >= until) return
@@ -146,11 +161,14 @@ export function isUsable(catalogId: string, now: number): boolean {
 
 /** A success proves the limit lifted early — trust the evidence over the
  *  estimate. Matters most when the default 60s guess was too pessimistic.
- *  Clears BOTH maps: a success is proof regardless of what class the LAST
- *  failure was classified as. */
+ *  Clears ALL THREE maps: a success is proof regardless of what class the
+ *  LAST failure was classified as, and resets the escalation streak — a
+ *  model that just worked has earned back the ordinary default, not a
+ *  progressively longer wait from failures before it recovered. */
 export function clearCooldown(catalogId: string): void {
   cooldowns.delete(catalogId)
   structuralBreaks.delete(catalogId)
+  transientStreak.delete(catalogId)
 }
 
 /** The soonest moment any of these models is worth trying again. Used to tell
@@ -169,4 +187,5 @@ export function soonestExpiry(catalogIds: string[], now: number): number | null 
 export function resetCooldownsForTests(): void {
   cooldowns.clear()
   structuralBreaks.clear()
+  transientStreak.clear()
 }

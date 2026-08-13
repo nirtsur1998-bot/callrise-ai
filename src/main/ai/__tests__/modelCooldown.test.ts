@@ -143,6 +143,104 @@ describe('the cooldown store', () => {
   })
 })
 
+// BUG-057 Phase 4 — a model that keeps getting rate-limited with no explicit
+// hint gets progressively less of our attention, reusing the same
+// exponential-backoff idiom completeWithSameModelRetry already uses.
+// Deliberately NOT a strikes-counter that deprioritizes after N failures —
+// see the design doc's own scope narrowing — this escalates the cooldown's
+// DURATION, one existing primitive (Map<catalogId, until>), not a new one.
+describe('escalating backoff — repeated no-hint misses (BUG-057 Phase 4)', () => {
+  it('the no-hint guess doubles on each consecutive miss: 60s -> 120s -> 240s', () => {
+    let now = 1_000_000
+    markRateLimited('m', undefined, now)
+    expect(cooldownUntil('m', now)).toBe(now + DEFAULT_COOLDOWN_MS) // 60s
+
+    now += DEFAULT_COOLDOWN_MS + 1 // let the first cooldown actually expire
+    markRateLimited('m', undefined, now)
+    expect(cooldownUntil('m', now)).toBe(now + DEFAULT_COOLDOWN_MS * 2) // 120s
+
+    now += DEFAULT_COOLDOWN_MS * 2 + 1
+    markRateLimited('m', undefined, now)
+    expect(cooldownUntil('m', now)).toBe(now + DEFAULT_COOLDOWN_MS * 4) // 240s
+  })
+
+  it('the escalating guess is capped at MAX_COOLDOWN_MS, same ceiling as an explicit hint', () => {
+    let now = 1_000_000
+    // Enough consecutive misses to blow well past the cap on an
+    // unescalated guess (60s * 2^7 = 7680s, far over MAX_COOLDOWN_MS/10min).
+    for (let i = 0; i < 8; i++) {
+      markRateLimited('m', undefined, now)
+      const until = cooldownUntil('m', now) as number
+      now = until + 1
+    }
+    markRateLimited('m', undefined, now)
+    expect(cooldownUntil('m', now)).toBe(now + MAX_COOLDOWN_MS)
+  })
+
+  it('an explicit Retry-After hint is honoured outright, never escalated — the provider\'s own instruction wins', () => {
+    let now = 1_000_000
+    // Build up a streak via no-hint misses first...
+    markRateLimited('m', undefined, now)
+    now += DEFAULT_COOLDOWN_MS + 1
+    markRateLimited('m', undefined, now)
+    now += DEFAULT_COOLDOWN_MS * 2 + 1
+    // ...then a real hint arrives. It must be honoured exactly, not
+    // multiplied by whatever streak count preceded it.
+    markRateLimited('m', 5_000, now)
+    expect(cooldownUntil('m', now)).toBe(now + 5_000)
+  })
+
+  it('clearCooldown resets the streak — a later no-hint miss starts back at the base default', () => {
+    const now = 1_000_000
+    markRateLimited('m', undefined, now)
+    clearCooldown('m')
+
+    const later = now + 999_999
+    markRateLimited('m', undefined, later)
+    expect(cooldownUntil('m', later)).toBe(later + DEFAULT_COOLDOWN_MS) // back to 60s, not 120s
+  })
+
+  it('a DIFFERENT catalogId has its own independent streak', () => {
+    let now = 1_000_000
+    markRateLimited('a', undefined, now)
+    now += DEFAULT_COOLDOWN_MS + 1
+    markRateLimited('a', undefined, now) // 'a' is now on its second miss (120s)
+
+    markRateLimited('b', undefined, now) // 'b's first ever miss
+    expect(cooldownUntil('b', now)).toBe(now + DEFAULT_COOLDOWN_MS) // 60s, not 120s
+  })
+})
+
+describe('escalating backoff, through the real chain walk', () => {
+  it('a model that keeps missing with no hint waits longer each time it recovers and misses again', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-08-13T12:00:00Z'))
+      behavior.throwCode = 'rate-limit'
+      behavior.retryAfterMs = undefined // the walker's own default guess, escalated per streak
+
+      // First miss: cools for the base default (60s).
+      await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
+      built.length = 0
+      vi.setSystemTime(new Date(Date.now() + DEFAULT_COOLDOWN_MS + 1_000)) // past the 60s cooldown
+      await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
+      // It WAS retried (cooldown had genuinely expired) -- this is the
+      // second consecutive miss, so the NEXT cooldown escalates to 120s.
+      expect(built.length).toBeGreaterThan(0)
+
+      built.length = 0
+      vi.setSystemTime(new Date(Date.now() + DEFAULT_COOLDOWN_MS + 1_000)) // 60s later -- NOT past a 120s cooldown
+      await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
+      // Still cooling: if this were still the un-escalated 60s default, the
+      // model would have recovered by now and been retried.
+      expect(built).toEqual([])
+    } finally {
+      vi.useFakeTimers().clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('the spiral, through the real chain walk', () => {
   it('a rate-limited model is NOT retried on the very next call', async () => {
     // The heart of the bug: before this, call 2 hit the same 429 first.
