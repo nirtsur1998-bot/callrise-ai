@@ -57,7 +57,7 @@ vi.mock('../registry', () => {
 })
 
 const { loadAppSettings } = await import('../../app-settings')
-const { completeWithFallback } = await import('../complete-with-fallback')
+const { completeWithFallback, AllModelsExhaustedError } = await import('../complete-with-fallback')
 const {
   resetCooldownsForTests,
   markRateLimited,
@@ -450,28 +450,38 @@ describe('the taxonomy, through the real chain walk', () => {
 
   it('an auth failure does NOT also get marked structurally broken — deadProviders already excludes it, avoiding two independent encodings drifting apart', async () => {
     behavior.throwCode = 'auth'
-    // Left undefined deliberately: real auth branches across all 4
+    // Left set to 'structural' deliberately: real auth branches across all 4
     // providers set failureClass:'structural' too, but the catch block's
     // own `reason !== 'auth'` guard must be what actually prevents the
     // double-mark, not an accident of this test's fixture leaving
     // failureClass unset. Set it explicitly to prove the guard, not the gap.
     behavior.failureClass = 'structural'
-    await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
+    const caught = await completeWithFallback({ purpose: 'memory-extract', messages: [] } as never).catch(
+      (err: unknown) => err
+    )
+    expect(caught).toBeInstanceOf(AllModelsExhaustedError)
+    const attempts = (caught as InstanceType<typeof AllModelsExhaustedError>).attempts
+    expect(attempts.length).toBeGreaterThan(0) // sanity: the walk actually reached and recorded attempts
 
-    // HONEST LIMITATION: on a full revert (markStructurallyBroken/
-    // isStructurallyBroken don't exist pre-Phase-2), this fails via a
-    // TypeError — the import itself is missing — not via a wrong boolean.
-    // That only proves the guard is REACHED and WIRED (the code path exists
-    // and runs), not that its LOGIC is correct — those are different
-    // claims, and this test only backs the first one today. A companion
-    // test that keeps markStructurallyBroken/isStructurallyBroken intact
-    // but reverts ONLY the `reason !== 'auth'` condition (e.g. to
-    // `failureClass === 'structural'` alone, which would also match auth)
-    // is the one that would actually discriminate correct routing from
-    // present-but-wrong routing — tracked as a follow-up in the M26 vault
-    // doc's taxonomy section rather than built here, since it doesn't block
-    // Phase 3.
-    expect(isStructurallyBroken(built[0], Date.now())).toBe(false)
+    // FIXED FOLLOW-UP (was tracked in the M26 vault doc's taxonomy section):
+    // this used to check `isStructurallyBroken(built[0], ...)`, where
+    // `built[0]` is the mock provider's bare id (e.g. 'groq') pushed by the
+    // registry fixture below — NOT the catalogId `markStructurallyBroken`
+    // actually keys on (e.g. 'groq-llama-3.3-70b-versatile', see
+    // DEFAULT_CATALOG_CHAIN's SPEED_CHAIN in complete-with-fallback.ts).
+    // Those are different strings, so the old assertion checked a key that
+    // could never be marked either way — vacuously true regardless of
+    // whether the `reason !== 'auth'` guard existed, worked, or was
+    // removed. Confirmed empirically, not just reasoned about: narrowing
+    // the guard from `failureClass === 'structural' && reason !== 'auth'`
+    // to `failureClass === 'structural'` alone left the old assertion
+    // passing, while THIS version (checking every real attempt.catalogId
+    // from the thrown error) correctly fails under that exact narrowed
+    // condition — verified by making that one-line change locally and
+    // watching this assertion flip red, then reverting it.
+    for (const attempt of attempts) {
+      expect(isStructurallyBroken(attempt.catalogId, Date.now())).toBe(false)
+    }
   })
 
   it('an ambiguous failure (failureClass unset) defaults to transient, not structural — the first-pass fatal #2 fix', async () => {
