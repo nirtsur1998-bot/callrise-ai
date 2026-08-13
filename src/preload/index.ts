@@ -42,6 +42,11 @@ const api = {
     reportAudioDropped: (frames: number, producerId?: number) =>
       ipcRenderer.send('transcription:audioDropped', frames, producerId),
     stop: () => ipcRenderer.invoke('transcription:stop'),
+    // M26 4.3 — "is there a call in progress, and what is it?". Asked on every
+    // mount, because the renderer no longer holds the transcript and cannot
+    // answer that from its own state.
+    attach: () => ipcRenderer.invoke('transcription:attach'),
+    onSegments: (cb: (payload: unknown) => void) => subscribe('transcription:segments', cb),
     onState: (cb: (payload: unknown) => void) => subscribe('transcription:state', cb),
     onTranscript: (cb: (payload: unknown) => void) => subscribe('transcription:transcript', cb),
     onError: (cb: (payload: unknown) => void) => subscribe('transcription:error', cb),

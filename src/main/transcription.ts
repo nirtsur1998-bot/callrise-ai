@@ -20,7 +20,15 @@ import { DriftMeter } from './session-health/drift'
 import { HEALTH_TUNING, type GapReason, type HealthSnapshot } from './session-health/types'
 import { BuyerSilenceWatcher } from './windows-capture/buyer-silence'
 import { CrossTalkGate } from './session-health/crosstalk-gate'
-import { beginCall, recordGap, recordResult } from './live/live-transcript'
+import {
+  beginCall,
+  currentTranscript,
+  liveCallInfo,
+  recordGap,
+  recordResult,
+  setTranscriptListener
+} from './live/live-transcript'
+import type { AttachSnapshot } from './live/transcript-patch'
 
 const DEEPGRAM_LISTEN_URL = 'wss://api.deepgram.com/v1/listen'
 
@@ -152,6 +160,13 @@ interface Session {
   pendingShedReason: GapReason
   /** True once a socket has opened, so we can tell a reconnect from a start. */
   connectedOnce: boolean
+  /** The last state emitted to the renderer.
+   *
+   *  M26 4.3 — recorded because a renderer that mounts mid-call has to be told
+   *  what state the call is IN, and every emit site previously computed this
+   *  value and immediately forgot it. Without it `transcription:attach` could
+   *  say a call exists but not that it is currently reconnecting. */
+  lastState: TranscriptionState
 
   reconnectAttempts: number
   stopping: boolean
@@ -164,6 +179,10 @@ interface Session {
 }
 
 let session: Session | null = null
+/** The window that most recently owned a live session. Kept so a transcript
+ *  patch produced in the gap where `session` is null still reaches the renderer
+ *  that is displaying that call. */
+let lastLiveWindow: BrowserWindow | null = null
 let nextSessionId = 1
 // Monotonic across the whole app run, so an epoch value is never reused and a
 // late/stale result can't be mistaken for the current namespace.
@@ -254,8 +273,33 @@ function failSession(s: Session, message: string): void {
   logSessionSummary(s)
   teardown(s)
   emit(s, 'transcription:error', { message })
-  emit(s, 'transcription:state', { state: 'error' })
+  emitState(s, 'error')
   session = null
+}
+
+// --- State ------------------------------------------------------------------
+
+export type TranscriptionState = 'connecting' | 'listening' | 'reconnecting' | 'error' | 'idle'
+
+/** Emit a state change AND remember it, so `transcription:attach` can answer
+ *  "what is this call doing right now" for a renderer that just mounted. Every
+ *  state emit goes through here — a raw emit would leave lastState lying. */
+function emitState(s: Session, state: TranscriptionState, extra?: Record<string, unknown>): void {
+  s.lastState = state
+  emit(s, 'transcription:state', { state, ...extra })
+}
+
+/**
+ * The session backing a call that is genuinely still in progress, or null.
+ *
+ * `session !== null` is NOT the same thing, and the difference is exactly the
+ * case attach exists for: the stop path sets `stopping` and emits state 'idle'
+ * but deliberately keeps the socket alive for STOP_FLUSH_MS so the last words
+ * still arrive. A renderer attaching in that window must be told there is no
+ * call — otherwise it shows an in-call screen for a call that has ended.
+ */
+function liveSession(): Session | null {
+  return session && !session.stopping ? session : null
 }
 
 // --- Gaps -------------------------------------------------------------------
@@ -364,7 +408,7 @@ function resetToLiveEdge(s: Session, reason: GapReason): void {
     clearTimeout(s.stableTimer)
     s.stableTimer = null
   }
-  emit(s, 'transcription:state', { state: 'reconnecting', attempt: s.reconnectAttempts })
+  emitState(s, 'reconnecting', { attempt: s.reconnectAttempts })
   connect(s)
 }
 
@@ -565,7 +609,7 @@ function connect(s: Session): void {
     // back to "now" when the queue is genuinely empty (nothing to replay).
     s.connectionOpenedAtMs = s.queue.peek()?.atMs ?? at
 
-    emit(s, 'transcription:state', { state: 'listening' })
+    emitState(s, 'listening')
     // Only forgive the retry budget once the connection has proven stable.
     s.stableTimer = setTimeout(() => {
       s.reconnectAttempts = 0
@@ -743,7 +787,7 @@ function connect(s: Session): void {
     // rather than growing; the reconnect then keeps only a short tail.
     if (s.reconnectAttempts < MAX_RECONNECTS) {
       s.reconnectAttempts += 1
-      emit(s, 'transcription:state', { state: 'reconnecting', attempt: s.reconnectAttempts })
+      emitState(s, 'reconnecting', { attempt: s.reconnectAttempts })
       const delay = 500 * 2 ** (s.reconnectAttempts - 1)
       setTimeout(() => {
         if (session === s && !s.stopping) connect(s)
@@ -959,17 +1003,19 @@ export function registerTranscription(): void {
       pendingShedMs: 0,
       pendingShedReason: 'shed',
       connectedOnce: false,
+      lastState: 'connecting',
       reconnectAttempts: 0,
       stopping: false,
       multichannelFallbackSignaled: false
     }
     session = s
+    lastLiveWindow = window
     s.liveness.start(timeline.elapsedMs())
     s.drainTimer = setInterval(() => {
       if (session === s) drain(s)
     }, DRAIN_MS)
     s.healthTimer = setInterval(() => healthTick(s), HEALTH_TUNING.lagSampleMs)
-    emit(s, 'transcription:state', { state: 'connecting' })
+    emitState(s, 'connecting')
     connect(s)
     return { ok: true as const, sessionId: s.id }
   })
@@ -1013,9 +1059,58 @@ export function registerTranscription(): void {
 
   registerAudioPort()
 
+  // M26 4.3 — push transcript deltas to the window that owns the call.
+  //
+  // `lastLiveWindow` rather than `session.window` alone: a patch can legitimately
+  // be produced while `session` is momentarily null (a rep identification landing
+  // just after stop, for instance), and dropping it would leave the renderer's
+  // mirror one behind with nothing to tell it so.
+  setTranscriptListener((patch) => {
+    const w = session?.window ?? lastLiveWindow
+    if (!w || w.isDestroyed()) return
+    try {
+      w.webContents.send('transcription:segments', patch)
+    } catch {
+      /* the window went away mid-send; the renderer re-attaches on remount */
+    }
+  })
+
+  /**
+   * "Is there a call in progress, and what is it?"
+   *
+   * The renderer asks this on every mount, because it no longer keeps the
+   * transcript itself and cannot know from its own state whether a call is
+   * running. A null `session` here is the single affirmative answer that lets
+   * the idle screen appear — never a timeout, never a default.
+   *
+   * `session` and `call` are reported separately because they end at different
+   * moments: a mono<->multichannel switch replaces the session mid-call, and
+   * the stop path keeps a session object alive for STOP_FLUSH_MS after the call
+   * is logically over.
+   */
+  ipcMain.handle('transcription:attach', (): AttachSnapshot => {
+    const s = liveSession()
+    const info = liveCallInfo()
+    return {
+      session: s
+        ? {
+            id: s.id,
+            multichannel: s.multichannel,
+            producerId: s.producerId,
+            state: s.lastState
+          }
+        : null,
+      call: info ? { ...info, segments: currentTranscript() } : null
+    }
+  })
+
   ipcMain.handle('transcription:stop', () => {
     const s = session
-    if (!s) return { ok: true as const }
+    // M26 4.3 — `session: null` is the renderer's ONLY licence to show the idle
+    // screen. Returned on every path here (including this one, where there was
+    // never a session), because a bare `{ok:true}` carries no information and
+    // the renderer used to go idle on it unconditionally.
+    if (!s) return { ok: true as const, session: null }
     logSessionSummary(s)
     s.stopping = true
     s.liveness.setSending(false)
@@ -1067,8 +1162,8 @@ export function registerTranscription(): void {
       session = null
       emit(s, 'transcription:closed', {})
     }
-    emit(s, 'transcription:state', { state: 'idle' })
-    return { ok: true as const }
+    emitState(s, 'idle')
+    return { ok: true as const, session: null }
   })
 
   // --- Microphone permission helpers (macOS) --------------------------------

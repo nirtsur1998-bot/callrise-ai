@@ -1,6 +1,11 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type { DetectedCall, DetectorEvent, DetectorState } from '../main/detection/types'
 import type { UpdateStatus } from '../main/updater'
+// M26 4.3 — the live-transcript wire format, defined once in main and re-exported
+// so the renderer describes the protocol with the same types that produce it.
+import type { AttachSnapshot, TranscriptPatch } from '../main/live/transcript-patch'
+
+export type { AttachSnapshot, TranscriptPatch }
 
 export type MicAccessStatus = 'granted' | 'denied' | 'restricted' | 'not-determined'
 
@@ -119,7 +124,14 @@ export interface TranscriptionApi {
   sendAudio: (chunk: ArrayBuffer, producerId?: number) => void
   requestAudioPort: () => void
   reportAudioDropped: (frames: number, producerId?: number) => void
-  stop: () => Promise<{ ok: boolean }>
+  /** `session: null` is the ONLY affirmative "there is no call in progress"
+   *  answer in the system. Nothing else may conclude that — not a timeout,
+   *  not a default. */
+  stop: () => Promise<{ ok: boolean; session: null }>
+  /** M26 4.3 — what main knows about the call in progress, asked on mount. */
+  attach: () => Promise<AttachSnapshot>
+  /** M26 4.3 — transcript deltas from main, which owns the transcript. */
+  onSegments: (cb: (payload: TranscriptPatch) => void) => () => void
   onState: (cb: (payload: TranscriptionStateEvent) => void) => () => void
   onTranscript: (cb: (payload: TranscriptResultEvent) => void) => () => void
   onError: (cb: (payload: TranscriptionErrorEvent) => void) => () => void

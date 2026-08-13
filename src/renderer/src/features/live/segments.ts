@@ -1,3 +1,19 @@
+// FROZEN PRE-4.3 REFERENCE — no longer production code.
+//
+// M26 Phase 4.3 moved transcript accumulation into the main process
+// (main/live/transcript-accumulator.ts). Nothing in the running app calls this
+// file any more: the renderer mirrors what main sends instead of building
+// anything itself.
+//
+// It is kept deliberately, because it is the ORACLE. The tests that prove the
+// transcript survived changing processes byte-for-byte
+// (transcript-source-of-truth.test.ts and transcript-accumulator.equivalence.test.ts)
+// run this implementation alongside main's and compare the two. Deleting it as
+// "dead code" would delete half of that comparison and leave the other half
+// asserting only that main agrees with itself.
+//
+// Retire it in 4.7, alongside the BUG-046 hotfix, once the migration has been
+// live long enough that the comparison has stopped earning its keep.
 import type { CallSegment, SpeakerRole } from '@renderer/features/calls/types'
 
 /**

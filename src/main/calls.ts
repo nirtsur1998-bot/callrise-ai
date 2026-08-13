@@ -61,7 +61,7 @@ import { selectFocusSkill, type FocusSkillState } from './coaching/focus-skill'
 import { loadFocusSkill, saveFocusSkill } from './coaching/focus-skill-fs'
 import { getJobManager } from './jobs/instance'
 import { createScanTally } from './objection-scan-tally'
-import { endCall } from './live/live-transcript'
+import { currentTranscript, endCall, liveCallInfo } from './live/live-transcript'
 import type { Job } from './jobs/types'
 
 function objectionQueueDir(): string {
@@ -390,7 +390,34 @@ export function registerCalls(): void {
   ipcMain.handle(
     'calls:save',
     async (_event, input: CallSaveInput, selfIntro?: { key: string; name: string }) => {
-      const summary = await saveCall(callsDir(), input)
+      // M26 Phase 4.3 — what gets persisted comes from MAIN's copy of the
+      // call, not from the renderer's payload.
+      //
+      // Read synchronously, before any await: main's transcript at the moment
+      // the save is requested is the truth, and an await here would let a
+      // late-arriving final change it underneath us.
+      //
+      // The renderer still sends its mirror, and it is still what decides
+      // WHETHER to save (the "was anything actually said?" gate that BUG-053
+      // turns on) — this only decides what the saved bytes are. When there is
+      // no live call in main at all (a recovered call, a test), the payload is
+      // used unchanged, so nothing that worked before this line can regress.
+      const live = liveCallInfo()
+      const effective: CallSaveInput = live
+        ? {
+            ...input,
+            segments: currentTranscript(),
+            // A renderer that attached mid-call has no start time of its own —
+            // it never saw the call begin. Main always does. Only ever fills a
+            // gap; a renderer-supplied duration is left alone.
+            startedAt: input?.startedAt || live.startedAt,
+            durationMs:
+              Number.isFinite(input?.durationMs) && input.durationMs > 0
+                ? input.durationMs
+                : Math.max(0, Date.now() - live.startedAtMs)
+          }
+        : input
+      const summary = await saveCall(callsDir(), effective)
       // M26 Phase 4.2 — the call now exists as a real Call record, so its
       // journal stops being a recovery candidate.
       //

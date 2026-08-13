@@ -48,6 +48,7 @@ import { useDealIntelligenceSettings } from '@renderer/features/deal-intelligenc
 import { DealIntelligencePanel } from '@renderer/features/deal-intelligence/ui/DealIntelligencePanel'
 import {
   IdleHero,
+  AttachingState,
   CenteredState,
   DeniedState,
   NoKeyState,
@@ -234,6 +235,11 @@ export function LiveView({
   // status of a fresh session (also clears any clips left from a prior call).
   const callStartRef = useRef<number | null>(null)
   useEffect(() => {
+    // M26 4.3 — 'attaching' is neither "a call started" nor "no call". Falling
+    // into the else-branch here at mount would stamp a fresh call start AND
+    // call clips.reset(), silently discarding every bookmark the rep had
+    // clicked in the call we are in the middle of re-attaching to.
+    if (status === 'attaching') return
     if (status === 'idle') {
       callStartRef.current = null
     } else if (callStartRef.current === null) {
@@ -500,7 +506,9 @@ export function LiveView({
   }, [segments, interimText])
 
   useEffect(() => {
-    if (status === 'idle' || status === 'error') {
+    // 'attaching' included: the auto-stop clock must not run against a call we
+    // have not been told the shape of yet.
+    if (status === 'idle' || status === 'error' || status === 'attaching') {
       idleWatcherRef.current.disarm()
       return
     }
@@ -637,6 +645,11 @@ export function LiveView({
 
   // Full-screen states — only when there's no transcript worth preserving.
   if (!hasTranscript) {
+    // M26 4.3 — BEFORE the idle branch, and before the fall-through into the
+    // in-call layout. Without this, "attaching" with no transcript yet renders
+    // the full in-call chrome, complete with a Start button and a "Stopped"
+    // badge, during a call that is running perfectly well.
+    if (status === 'attaching') return <AttachingState />
     if (status === 'idle') {
       return (
         <>

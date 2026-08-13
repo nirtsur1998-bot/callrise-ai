@@ -15,7 +15,7 @@ import {
   replayJournal,
   retireJournal
 } from './call-journal'
-import { recordRepIdentified } from './live-transcript'
+import { liveCallInfo, recordRepIdentified } from './live-transcript'
 
 /** What the rep is shown about one interrupted call, before deciding. Enough
  *  to recognise the conversation — never so much that the prompt itself
@@ -46,8 +46,17 @@ function preview(segments: Array<{ text: string; kind?: string }>): string {
  *  only reads. */
 export async function listRecoverableCalls(): Promise<RecoverableCall[]> {
   const orphans = await listOrphanJournals()
+  // The call in progress is an orphan by definition — its journal has no
+  // completion marker yet, because it has not been saved yet. Offering it would
+  // put a "we found an interrupted call" prompt on screen DURING that call,
+  // with a Discard button that deletes the journal out from under the process
+  // still writing to it. Harmless in 4.2, where the prompt only ran at launch
+  // and nothing is ever live then; real from 4.3 on, where attaching mid-call
+  // is a supported state.
+  const liveId = liveCallInfo()?.callId
   const out: RecoverableCall[] = []
   for (const orphan of orphans) {
+    if (orphan.id === liveId) continue
     const replayed = replayJournal(orphan)
     // A journal whose events replay to nothing (all interims, or only a
     // consent line) describes a call in which nobody said anything. Offering

@@ -55,6 +55,43 @@ type Handlers = {
   onState?: (p: { state: string }) => void
   onTranscript?: (p: Record<string, unknown>) => void
   onClosed?: () => void
+  /** M26 4.3 — the transcript itself now arrives from main as deltas. */
+  onSegments?: (p: {
+    callId: string
+    seq: number
+    from: number
+    segments: Array<{ speaker: number; text: string }>
+  }) => void
+}
+
+/**
+ * M26 4.3 — one spoken, finalized turn, as the real pipeline delivers it.
+ *
+ * Main sends TWO things for every final: the raw result (which still drives
+ * interim text and the latency meter) and a transcript patch (which is the
+ * transcript). Firing both keeps this test honest about the actual event flow
+ * rather than about whichever half happens to be enough to pass.
+ */
+function makeSpeaker(handlers: Handlers): (text: string) => void {
+  const spoken: Array<{ speaker: number; text: string }> = []
+  let seq = -1
+  return (text: string): void => {
+    handlers.onTranscript?.({
+      transcript: text,
+      words: [],
+      isFinal: true,
+      speechFinal: true,
+      lagMs: 40,
+      speakerEpoch: 0,
+      speakerCertain: true,
+      minConfidence: 0.95,
+      multichannel: false
+    })
+    const from = spoken.length
+    spoken.push({ speaker: 0, text })
+    seq += 1
+    handlers.onSegments?.({ callId: 'call-1', seq, from, segments: spoken.slice(from) })
+  }
 }
 
 function installMockApi(): { handlers: Handlers; save: ReturnType<typeof vi.fn> } {
@@ -68,13 +105,20 @@ function installMockApi(): { handlers: Handlers; save: ReturnType<typeof vi.fn> 
       sendAudio: vi.fn(),
       requestAudioPort: vi.fn(),
       reportAudioDropped: vi.fn(),
-      stop: vi.fn(async () => ({ ok: true })),
+      stop: vi.fn(async () => ({ ok: true, session: null })),
       onState: vi.fn((cb: Handlers['onState']) => {
         handlers.onState = cb
         return () => {}
       }),
       onTranscript: vi.fn((cb: Handlers['onTranscript']) => {
         handlers.onTranscript = cb
+        return () => {}
+      }),
+      // M26 4.3 — no call in progress when this view mounts, said
+      // affirmatively. The hook refuses to show idle on anything weaker.
+      attach: vi.fn(async () => ({ session: null, call: null })),
+      onSegments: vi.fn((cb: Handlers['onSegments']) => {
+        handlers.onSegments = cb
         return () => {}
       }),
       onError: vi.fn(() => () => {}),
@@ -105,20 +149,6 @@ function installMockApi(): { handlers: Handlers; save: ReturnType<typeof vi.fn> 
   return { handlers, save }
 }
 
-function finalTranscript(text: string): Record<string, unknown> {
-  return {
-    transcript: text,
-    words: [],
-    isFinal: true,
-    speechFinal: true,
-    lagMs: 40,
-    speakerEpoch: 0,
-    speakerCertain: true,
-    minConfidence: 0.95,
-    multichannel: false
-  }
-}
-
 function Harness({ onApi }: { onApi: (api: ReturnType<typeof useTranscription>) => void }): null {
   onApi(useTranscription())
   return null
@@ -143,6 +173,8 @@ describe('useTranscription — BUG-053 (Stop on a short call must not lose it)',
     api: ReturnType<typeof useTranscription>
     handlers: Handlers
     save: ReturnType<typeof vi.fn>
+    /** M26 4.3 — speak one finalized turn the way main delivers it. */
+    speak: (text: string) => void
   }> {
     const { handlers, save } = installMockApi()
     let api!: ReturnType<typeof useTranscription>
@@ -154,11 +186,11 @@ describe('useTranscription — BUG-053 (Stop on a short call must not lose it)',
       await api.start()
     })
     act(() => handlers.onState?.({ state: 'listening' }))
-    return { api, handlers, save }
+    return { api, handlers, save, speak: makeSpeaker(handlers) }
   }
 
   it('saves a call whose ONLY words arrive after Stop, in the Finalize flush', async () => {
-    const { api, handlers, save } = await startCall()
+    const { api, handlers, save, speak } = await startCall()
 
     // The whole point: nothing has finalized yet when Stop is pressed. This
     // is an ordinary short call, not an exotic edge case.
@@ -168,7 +200,7 @@ describe('useTranscription — BUG-053 (Stop on a short call must not lose it)',
     expect(save).not.toHaveBeenCalled()
 
     // Deepgram's Finalize now delivers the only words of the call...
-    act(() => handlers.onTranscript?.(finalTranscript('Sounds good, I will send that over')))
+    act(() => speak('Sounds good, I will send that over'))
     // ...and the session closes, which is what triggers the save.
     await act(async () => {
       handlers.onClosed?.()
@@ -182,9 +214,9 @@ describe('useTranscription — BUG-053 (Stop on a short call must not lose it)',
   })
 
   it('still saves the ordinary case where words arrived BEFORE Stop', async () => {
-    const { api, handlers, save } = await startCall()
+    const { api, handlers, save, speak } = await startCall()
 
-    act(() => handlers.onTranscript?.(finalTranscript('The buyer agreed to a demo')))
+    act(() => speak('The buyer agreed to a demo'))
     await act(async () => {
       await api.stop()
     })
@@ -199,13 +231,13 @@ describe('useTranscription — BUG-053 (Stop on a short call must not lose it)',
   })
 
   it('saves words from BOTH before and after Stop, in order', async () => {
-    const { api, handlers, save } = await startCall()
+    const { api, handlers, save, speak } = await startCall()
 
-    act(() => handlers.onTranscript?.(finalTranscript('First half before stop')))
+    act(() => speak('First half before stop'))
     await act(async () => {
       await api.stop()
     })
-    act(() => handlers.onTranscript?.(finalTranscript('Second half in the flush')))
+    act(() => speak('Second half in the flush'))
     await act(async () => {
       handlers.onClosed?.()
       await Promise.resolve()
@@ -233,9 +265,9 @@ describe('useTranscription — BUG-053 (Stop on a short call must not lose it)',
   })
 
   it('saves exactly once even if the close fires more than once', async () => {
-    const { api, handlers, save } = await startCall()
+    const { api, handlers, save, speak } = await startCall()
 
-    act(() => handlers.onTranscript?.(finalTranscript('Only say this once')))
+    act(() => speak('Only say this once'))
     await act(async () => {
       await api.stop()
     })
