@@ -230,3 +230,52 @@ export const CHAIN_BUDGET: Partial<Record<AIPurpose, ChainBudget>> = {
   'coaching-cue': { totalBudgetMs: LATENCY_POLICY['coaching-cue'].timeoutMs, maxChainLength: 2 },
   'deal-tier1': { totalBudgetMs: LATENCY_POLICY['deal-tier1'].timeoutMs, maxChainLength: 2 }
 }
+
+/**
+ * BUG-059 — a HARD wall-clock ceiling on one completeWithFallback() call,
+ * covering the whole chain walk INCLUDING each provider SDK's own internal
+ * retries.
+ *
+ * Why a crude backstop rather than part of the proper budget design: today
+ * two independently-bounded loops multiply with nothing bounding the product.
+ * Our loop is bounded by chain length; each SDK's retry loop is bounded by
+ * LATENCY_POLICY.maxRetries; NOTHING bounds chain x retries x timeout. For
+ * `summary` that is 9 entries x 3 attempts x 60s ~= 27 MINUTES of a user
+ * watching a spinner before being told it failed.
+ *
+ * CHAIN_BUDGET does not save us: it exists for exactly two purposes
+ * ('coaching-cue', 'deal-tier1'), and both are maxRetries:0 — so it has never
+ * had to bound an SDK retry loop at all. Every purpose that DOES retry has no
+ * budget whatsoever.
+ *
+ * And it could not be cancelled out of: JobManager hands every executor an
+ * AbortSignal and its own doc comment says adapters MUST thread it into
+ * `req.signal` "for cancel to mean anything" — no adapter does, so pressing
+ * Cancel removed the job from the UI while the loop kept running and kept
+ * spending quota.
+ *
+ * These values are CHOSEN, not sourced: generous enough that a legitimately
+ * slow chain still finishes (a real summary attempt can use most of its 60s
+ * timeout, and a model or two may fail first), tight enough that nothing
+ * approaches the pathological case. Deliberately blunt — a backstop, not the
+ * eventual shared-budget design, and it must stay correct even if that design
+ * changes underneath it.
+ */
+export const HARD_CEILING_MS: Record<AIPurpose, number> = {
+  // Live paths: CHAIN_BUDGET already bounds these tightly. The ceiling sits
+  // just above it purely as a backstop and should never be what fires.
+  'coaching-cue': 10_000,
+  'deal-tier1': 8_000,
+  // A human is blocked on these.
+  other: 90_000,
+  'coaching-chat': 120_000,
+  tasks: 120_000,
+  'memory-extract': 120_000,
+  // Background/post-call: a progress chip is watching, nobody is blocked.
+  summary: 180_000,
+  scorecard: 180_000,
+  'prep-brief': 180_000,
+  'deal-tier2': 180_000,
+  'memory-consolidate': 180_000,
+  'memory-reflect': 180_000
+}

@@ -18,6 +18,7 @@ import { clearCooldown, isCoolingDown, markRateLimited, soonestExpiry } from './
 import {
   AIProviderError,
   CHAIN_BUDGET,
+  HARD_CEILING_MS,
   LATENCY_POLICY,
   type AICompletionRequest,
   type AICompletionResult,
@@ -343,8 +344,18 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   // on the same key really can succeed.
   const deadProviders = new Set<AIProviderId>()
 
+  // BUG-059 — one hard wall-clock ceiling across the ENTIRE walk, including
+  // each SDK's own internal retries (the signal below is threaded all the way
+  // into the SDK call, so aborting it cuts a retry loop mid-flight). Without
+  // this, our chain bound and the SDK's retry bound multiply unbounded: up to
+  // ~27 minutes for one summary, with no way to cancel out of it.
+  const ceiling = new AbortController()
+  const ceilingTimer = setTimeout(() => ceiling.abort(), HARD_CEILING_MS[purpose])
+
+  try {
   for (let i = 0; i < chain.length; i++) {
     const step = chain[i]
+    if (ceiling.signal.aborted) break
     if (attempted.has(step.catalogId)) continue
     attempted.add(step.catalogId)
     if (deadProviders.has(step.providerId)) continue
@@ -360,7 +371,6 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     // doc comment). Every other purpose is post-call, not time-critical the
     // same way, so it keeps using LATENCY_POLICY's uncapped per-attempt
     // timeout (handled inside the provider itself).
-    let attemptSignal = req.signal
     let budgetController: AbortController | null = null
     let budgetTimer: ReturnType<typeof setTimeout> | null = null
     if (budget) {
@@ -368,10 +378,13 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
       const perAttemptMs = Math.max(500, Math.floor(remainingBudgetMs / remainingEntries))
       budgetController = new AbortController()
       budgetTimer = setTimeout(() => budgetController?.abort(), perAttemptMs)
-      attemptSignal = req.signal
-        ? AbortSignal.any([req.signal, budgetController.signal])
-        : budgetController.signal
     }
+    // The ceiling is ALWAYS in the combined signal — that is what makes it
+    // bound the SDK's retries and not just our own loop.
+    const parts: AbortSignal[] = [ceiling.signal]
+    if (req.signal) parts.push(req.signal)
+    if (budgetController) parts.push(budgetController.signal)
+    const attemptSignal = parts.length === 1 ? parts[0] : AbortSignal.any(parts)
 
     const startedAt = Date.now()
     try {
@@ -417,6 +430,21 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
         remainingBudgetMs = Math.max(0, remainingBudgetMs - (Date.now() - startedAt))
       }
     }
+  }
+  } finally {
+    clearTimeout(ceilingTimer)
+  }
+
+  if (ceiling.signal.aborted) {
+    // Distinct from AllModelsExhaustedError on purpose: "we ran out of time"
+    // and "every model rejected us" are different problems with different
+    // user actions, and collapsing them is how the 27-minute path stayed
+    // invisible. Surfaced as an AIProviderError so the existing
+    // friendlyError() handlers pass the real message through to the user.
+    throw new AIProviderError(
+      'timeout',
+      `This took too long and was stopped after ${Math.round(HARD_CEILING_MS[purpose] / 1000)}s. Your AI provider may be rate-limiting or slow right now — try again shortly.`
+    )
   }
 
   throw new AllModelsExhaustedError(purpose, attempts)
