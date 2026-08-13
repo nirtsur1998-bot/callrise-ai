@@ -150,8 +150,27 @@ export interface JobTypeDefinition<TInput = unknown, TResult = unknown> {
   type: string
   lane: JobLane
   executor: JobExecutorSpec<TInput, TResult>
-  /** Default true. Set false only for work with no meaningful mid-flight
-   *  stopping point (rare — most jobs should stay cancellable). */
+  /**
+   * Default **FALSE** (BUG-060 inverted this — it used to default true).
+   *
+   * Set `true` ONLY once this job type's executor genuinely threads
+   * `handle.signal` into every long thing it awaits — into
+   * completeWithFallback's `req.signal`, an abortable sleep, a loop's own
+   * `if (signal.aborted) throw`. A 'worker' executor is the one exception:
+   * it is cancelled preemptively by worker.terminate() and needs no wiring.
+   *
+   * Why the default flipped: it used to be `true`, so every job type got a
+   * Cancel button for free whether or not anything honoured it. 10 of 12
+   * registered types offered the button; exactly ONE adapter checked the
+   * signal. Cancel marked the job cancelled and the work ran on, still
+   * spending the user's API key.
+   *
+   * The principle: a forgotten flag must fail as "this feature is MISSING"
+   * (visible — someone reports it), never as "this feature silently doesn't
+   * work" (invisible for months). Leaving this unset now ships a job with no
+   * Cancel button, which is honest. Setting it true is a deliberate act, and
+   * that is the moment to ask whether the signal is actually wired.
+   */
   cancellable?: boolean
   /** Default false. Set true when this feature already fires its own,
    *  better-worded completion notification — see Job.silent. */

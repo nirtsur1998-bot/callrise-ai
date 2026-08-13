@@ -611,6 +611,11 @@ export function registerCalls(): void {
     lane: 'INTERACTIVE',
     titleFor: () => 'Summarizing call',
     targetRefFor: (i) => i.callId,
+    // BUG-060 — EARNED. `cancellable` now defaults to false, and is only set
+    // true by an adapter that has genuinely threaded handle.signal into the
+    // work it awaits (below). Do not set this on a new job type without doing
+    // that first: a Cancel button that doesn't cancel is worse than none.
+    cancellable: true,
     executor: {
       kind: 'inline-async',
       run: async (input, handle) => {

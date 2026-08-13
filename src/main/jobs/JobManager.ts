@@ -131,7 +131,23 @@ export class JobManager {
       lane: def.lane,
       priority: opts.priority ?? 0,
       createdAt: Date.now(),
-      cancellable: def.cancellable ?? true,
+      // BUG-060 — defaults to FALSE, deliberately inverted.
+      //
+      // This defaulted to `true`, so every job type got a Cancel button for
+      // free whether or not its executor had wired the signal up. The audit:
+      // 10 of 12 registered types offered the button, exactly ONE adapter
+      // checked the signal at all, and the only two honest ones were honest
+      // because someone explicitly opted out. Pressing Cancel marked the job
+      // cancelled while the work ran on, still spending the user's API key.
+      //
+      // A forgotten flag must fail as "this feature is MISSING" — visible,
+      // someone reports it — never as "this feature silently doesn't work",
+      // which stays invisible for months. Defaulting to true failed in the
+      // wrong direction. Now an adapter author who does nothing ships a job
+      // with no Cancel button, and setting this to `true` is a deliberate act
+      // — which is exactly the moment to ask "did I thread handle.signal into
+      // the work?" (see the doc comment on cancel() below).
+      cancellable: def.cancellable ?? false,
       silent: def.silent ?? false,
       retainUntilConsumed: def.retainUntilConsumed ?? false,
       input

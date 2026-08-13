@@ -161,6 +161,11 @@ describe('cancellation propagation', () => {
       type: 'test:cancellable',
       lane: 'INTERACTIVE',
       titleFor: () => 'cancellable',
+      // BUG-060 — `cancellable` now defaults to FALSE, so a type must opt in.
+      // This executor genuinely honours handle.signal (below), so it
+      // qualifies. That this test broke the instant the default flipped is
+      // the inversion working: cancel() refuses a type that never opted in.
+      cancellable: true,
       executor: {
         kind: 'inline-async',
         run: (_input, handle: JobHandle) =>
@@ -412,6 +417,9 @@ describe('dismiss', () => {
       type: 'test:cooperativeBlocker',
       lane: 'BATCH',
       titleFor: () => 'blocker',
+      // BUG-060 — must opt in now that the default is false; this executor
+      // does honour the signal, which is the whole point of the fixture.
+      cancellable: true,
       executor: {
         kind: 'inline-async',
         run: (_input, handle) =>
@@ -764,6 +772,40 @@ describe('resultData', () => {
     const final = manager.get(job.id)
     expect(final?.resultRef).toBe('call-123')
     expect(final?.resultData).toBe('call-123')
+    manager.dispose()
+  })
+})
+
+describe('BUG-060 — cancellable defaults to FALSE', () => {
+  it('a job type that does not opt in gets NO cancel button, and cancel() refuses', async () => {
+    // The inversion. This used to default true, so every job type advertised
+    // a Cancel button whether or not anything honoured it: 10 of 12 registered
+    // types offered one, exactly ONE adapter checked the signal, and pressing
+    // Cancel marked the job cancelled while the work ran on spending the
+    // user's API key.
+    //
+    // A forgotten flag must fail as "this feature is MISSING" (visible),
+    // never as "this feature silently doesn't work" (invisible for months).
+    const { JobManager } = await freshManager()
+    const manager = new JobManager([])
+    manager.registerType<Record<string, never>, string>({
+      type: 'test:forgotToWireCancel',
+      lane: 'BATCH',
+      titleFor: () => 'forgetful',
+      executor: {
+        kind: 'inline-async',
+        // Deliberately ignores handle.signal — the realistic mistake.
+        run: () => new Promise<string>(() => {})
+      }
+    })
+
+    const job = manager.enqueue('test:forgotToWireCancel', {})
+
+    // No button is offered...
+    expect(manager.get(job.id)?.cancellable).toBe(false)
+    // ...and the operation is refused rather than lying about it.
+    expect(manager.cancel(job.id)).toBe(false)
+    expect(manager.get(job.id)?.state).not.toBe('cancelled')
     manager.dispose()
   })
 })

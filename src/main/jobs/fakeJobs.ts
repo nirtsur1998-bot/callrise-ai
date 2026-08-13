@@ -85,6 +85,10 @@ export function registerFakeJobTypes(manager: JobManager): void {
     type: 'dev:fakeBatch',
     lane: 'BATCH',
     titleFor: (input) => input.title,
+    // BUG-060 — earned: the loop below genuinely checks handle.signal and
+    // uses an abortable sleep. These dev fixtures are the reference for what
+    // "wired for cancellation" actually looks like.
+    cancellable: true,
     executor: {
       kind: 'inline-async',
       run: async (input, handle) => {
@@ -110,6 +114,8 @@ export function registerFakeJobTypes(manager: JobManager): void {
     type: 'dev:fakeStaged',
     lane: 'INTERACTIVE',
     titleFor: (input) => input.title,
+    // BUG-060 — earned, same as dev:fakeBatch above.
+    cancellable: true,
     executor: {
       kind: 'inline-async',
       run: async (input, handle) => {
@@ -128,6 +134,10 @@ export function registerFakeJobTypes(manager: JobManager): void {
     type: 'dev:fakeCpu',
     lane: 'MAINTENANCE',
     titleFor: (input) => input.title,
+    // BUG-060 — earned, and the ONLY kind that gets it for free: a 'worker'
+    // executor is cancelled by worker.terminate(), which is preemptive rather
+    // than cooperative. No production job type uses this kind today.
+    cancellable: true,
     executor: { kind: 'worker', workerSource: FAKE_CPU_WORKER_SOURCE }
   })
 }
