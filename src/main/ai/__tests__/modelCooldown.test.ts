@@ -337,11 +337,16 @@ describe('the taxonomy, through the real chain walk', () => {
     // HONEST LIMITATION: on a full revert (markStructurallyBroken/
     // isStructurallyBroken don't exist pre-Phase-2), this fails via a
     // TypeError — the import itself is missing — not via a wrong boolean.
-    // It doesn't discriminate "the reason!=='auth' guard is what prevents
-    // the double-mark" from "structural marking doesn't exist at all yet".
-    // What it DOES prove, against the CURRENT code, is real: that the guard
-    // is actually reached and actually short-circuits for this exact
-    // fixture, not just present in a comment.
+    // That only proves the guard is REACHED and WIRED (the code path exists
+    // and runs), not that its LOGIC is correct — those are different
+    // claims, and this test only backs the first one today. A companion
+    // test that keeps markStructurallyBroken/isStructurallyBroken intact
+    // but reverts ONLY the `reason !== 'auth'` condition (e.g. to
+    // `failureClass === 'structural'` alone, which would also match auth)
+    // is the one that would actually discriminate correct routing from
+    // present-but-wrong routing — tracked as a follow-up in the M26 vault
+    // doc's taxonomy section rather than built here, since it doesn't block
+    // Phase 3.
     expect(isStructurallyBroken(built[0], Date.now())).toBe(false)
   })
 
