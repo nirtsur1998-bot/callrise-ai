@@ -12,6 +12,10 @@ import { configureEmbeddingsCacheDir } from './embeddings'
 import { isSalesBrainEnabled } from '../app-settings'
 import { writeJsonAtomic } from '../atomic-write'
 import { runNightlyConsolidation } from './consolidation'
+import {
+  enqueueNightlyConsolidation,
+  registerNightlyConsolidationJob
+} from './nightly-consolidation-job'
 
 let db: Database.Database | null = null
 let lastInitResult: { ok: boolean; detail: string } | null = null
@@ -34,7 +38,9 @@ function nightlySchedulePath(userDataDir: string): string {
 
 async function shouldRunNightlyConsolidation(userDataDir: string): Promise<boolean> {
   try {
-    const raw = JSON.parse(await readFile(nightlySchedulePath(userDataDir), 'utf8')) as { lastRunAt?: string }
+    const raw = JSON.parse(await readFile(nightlySchedulePath(userDataDir), 'utf8')) as {
+      lastRunAt?: string
+    }
     if (!raw.lastRunAt) return true
     const last = Date.parse(raw.lastRunAt)
     if (Number.isNaN(last)) return true
@@ -45,7 +51,9 @@ async function shouldRunNightlyConsolidation(userDataDir: string): Promise<boole
 }
 
 async function markNightlyConsolidationRan(userDataDir: string): Promise<void> {
-  await writeJsonAtomic(nightlySchedulePath(userDataDir), { lastRunAt: new Date().toISOString() }).catch(() => {})
+  await writeJsonAtomic(nightlySchedulePath(userDataDir), {
+    lastRunAt: new Date().toISOString()
+  }).catch(() => {})
 }
 
 /** Called once at startup, after initSalesBrain() — fire-and-forget, never
@@ -58,9 +66,19 @@ export function maybeRunNightlyConsolidation(): void {
   const userDataDir = app.getPath('userData')
   void shouldRunNightlyConsolidation(userDataDir).then((should) => {
     if (!should || !db) return
-    void runNightlyConsolidation(db)
-      .then(() => markNightlyConsolidationRan(userDataDir))
-      .catch((err) => console.error('[sales-brain] nightly consolidation failed:', err))
+    // M26 Batch 5 — runs as a MAINTENANCE job so the longest recurring AI
+    // operation in the app stops being completely invisible (Phase 0 row 36:
+    // "no 'is it running' indicator anywhere"). The once-a-day decision and
+    // the ran-marker stay here; the job owns only the work itself.
+    registerNightlyConsolidationJob(async () => {
+      // `db` is re-read INSIDE the executor rather than captured from the
+      // check above: the job can start after this function returns, and a
+      // Sales Brain that shut down in between must not be written to.
+      if (!db) return
+      await runNightlyConsolidation(db)
+      await markNightlyConsolidationRan(userDataDir)
+    })
+    enqueueNightlyConsolidation()
   })
 }
 
@@ -101,7 +119,9 @@ export async function initSalesBrain(): Promise<{ ok: boolean; detail: string }>
   db = handle
   lastInitResult = {
     ok: true,
-    detail: result.migrated ? `migrated ${result.fromVersion} -> ${result.toVersion}` : 'already current'
+    detail: result.migrated
+      ? `migrated ${result.fromVersion} -> ${result.toVersion}`
+      : 'already current'
   }
   return lastInitResult
 }
