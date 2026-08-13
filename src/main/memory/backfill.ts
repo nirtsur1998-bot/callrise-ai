@@ -38,16 +38,43 @@ function isTotalCallsFailure(tally: ScanTally | null): boolean {
   return s.failed > 0 && s.scanned === 0
 }
 
+const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
+
+/**
+ * BUG-057 — the full accounting, not a headline.
+ *
+ * Deliberately NOT tally.summary(): that sentence is the objection scan's,
+ * and it reports `scanned` (which counts SUCCESSES only) under the word
+ * "Scanned", so a 100-call run with 40 failures reads "Scanned 60 calls" —
+ * indistinguishable from a healthy 60-call run unless you already know to
+ * subtract. Building it here instead leaves the shared tally's own wording
+ * untouched while giving this run the four numbers that actually separate
+ * the cases.
+ *
+ * Every count is stated even when zero. The circuit breaker only catches
+ * THREE IN A ROW, so a run failing 40% of calls while never failing three
+ * consecutively completes normally — and under an "only mention failures if
+ * there are any" rule that run is typographically identical to a clean one.
+ * Health has to be asserted ("0 failed"), not implied by silence; implying it
+ * by silence is the entire bug this fix exists for.
+ */
 function buildSummary(tally: ScanTally | null, failureReason: string | undefined): string {
   // No calls stage requested — the contacts/deals passes are structured-data
   // mapping with no AI call at all, so there is nothing that can silently fail.
   if (!tally) return 'Import complete.'
   const s = tally.state()
-  const base = tally.summary()
-  if (s.failed === 0) return base
-  // The provider's own words, once, appended to the count — "why" and "how
-  // much" belong in the same sentence, per the reason this bug existed.
-  return failureReason ? `${base} (${failureReason})` : base
+  const attempted = tally.itemsDone()
+
+  let out =
+    `Checked ${plural(attempted, 'call')}: ${s.scanned} read, ${s.failed} failed, ` +
+    `${s.skipped} skipped (no transcript, or excluded from Sales Brain). ` +
+    `Learned ${plural(s.candidatesAdded, 'new thing')}.`
+
+  if (s.stopped === 'errors') out += ' Stopped early after 3 failures in a row.'
+  else if (s.stopped === 'disabled') out += ' Stopped — Sales Brain was turned off.'
+  // The provider's own words, once — "why" and "how much" belong together.
+  if (s.failed > 0 && failureReason) out += ` (${failureReason})`
+  return out
 }
 
 /** BUG-046 — backfill can run long enough that a rep turns Sales Brain off,
@@ -207,10 +234,7 @@ export async function runBackfill(
       // remaining call." Without the breaker, one rate-limited provider cost
       // 99 doomed requests per run, twice in one morning, and still reported
       // "Import complete."
-      tally = createScanTally({
-        noun: 'new thing',
-        skippedLabel: 'skipped (no transcript, or excluded from Sales Brain)'
-      })
+      tally = createScanTally()
       for (let i = 0; i < withTranscripts.length; i++) {
         assertStillEnabled()
         let verdict: 'continue' | 'stop' = 'continue'

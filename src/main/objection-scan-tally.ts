@@ -51,21 +51,14 @@ export interface ScanTally {
   summary: () => string
 }
 
-/** The two nouns the summary sentence needs. Defaulted to the objection
- *  scan's own wording so its call site (calls.ts) stays unchanged — BUG-057
- *  reused this module for the Sales Brain backfill rather than cloning it,
- *  since the accounting rule (skips aren't failures, 3 consecutive failures
- *  trip the breaker) is identical and worth having in exactly one place. */
-export interface ScanTallyOptions {
-  /** What one unit of yield is called: 'suggestion', 'new thing'. */
-  noun?: string
-  /** Why an item was passed over without being a failure. */
-  skippedLabel?: string
-}
-
-export function createScanTally(opts: ScanTallyOptions = {}): ScanTally {
-  const noun = opts.noun ?? 'suggestion'
-  const skippedLabel = opts.skippedLabel ?? 'already being mined'
+/** BUG-057 also reuses this module (memory/backfill.ts) for the Sales Brain
+ *  import — the accounting rule it encodes (a skip is not a failure; three
+ *  consecutive failures mean the API is down, so stop burning a doomed
+ *  request per remaining item) is identical there, and worth having in
+ *  exactly one place. That caller composes its own summary sentence from
+ *  state()/itemsDone() rather than calling summary() below, so this module's
+ *  wording stays the objection scan's own and needs no parameterization. */
+export function createScanTally(): ScanTally {
   let scanned = 0
   let candidatesAdded = 0
   let failed = 0
@@ -107,11 +100,11 @@ export function createScanTally(opts: ScanTallyOptions = {}): ScanTally {
     },
     summary() {
       const parts = [`Scanned ${scanned} call${scanned === 1 ? '' : 's'}`]
-      parts.push(`found ${candidatesAdded} ${noun}${candidatesAdded === 1 ? '' : 's'}`)
+      parts.push(`found ${candidatesAdded} suggestion${candidatesAdded === 1 ? '' : 's'}`)
       if (failed > 0) parts.push(`${failed} failed`)
       // Named honestly rather than hidden: these calls WERE mined, just by
       // the other trigger, so the totals adding up needs explaining.
-      if (skipped > 0) parts.push(`${skipped} ${skippedLabel}`)
+      if (skipped > 0) parts.push(`${skipped} already being mined`)
       if (stopped === 'errors') parts.push('stopped after repeated errors')
       else if (stopped === 'disabled') parts.push('stopped — toggle turned off')
       return parts.join(', ')

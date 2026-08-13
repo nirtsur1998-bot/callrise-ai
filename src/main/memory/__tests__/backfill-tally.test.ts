@@ -105,8 +105,48 @@ describe('runBackfill — an honest account of what the run did (BUG-057)', () =
     const done = await run()
 
     expect(done.stage).toBe('done')
-    expect(done.summary).toContain('Scanned 2 calls')
+    expect(done.summary).toContain('Checked 2 calls')
+    expect(done.summary).toContain('2 read')
     expect(done.summary).toContain('4 new things')
+    expect(done.callsTotalFailure).toBe(false)
+  })
+
+  it('states 0 failed EXPLICITLY on a clean run — health asserted, not implied by silence', async () => {
+    listCalls.mockResolvedValue([summaryOf('a'), summaryOf('b')])
+
+    const done = await run()
+
+    expect(done.summary).toContain('0 failed')
+    expect(done.summary).toContain('0 skipped')
+  })
+
+  it('an intermittent failure rate that never trips the breaker is still fully visible', async () => {
+    // The hole this closes: the breaker only catches THREE IN A ROW. A run
+    // failing ~40% of calls while never failing three consecutively runs to
+    // completion and succeeds — so the counts are the only thing separating
+    // it from a genuinely healthy run. It must never read as a clean success.
+    listCalls.mockResolvedValue(Array.from({ length: 10 }, (_, i) => summaryOf(`c${i}`)))
+    let n = 0
+    extractMemoriesFromCall.mockImplementation(async () => {
+      n++
+      // fail on 3,6,9 — never three consecutively, so the breaker never trips
+      return n % 3 === 0
+        ? { candidates: [], aiFailed: true, failureReason: 'sporadic 429' }
+        : { candidates: [CANDIDATE], aiFailed: false }
+    })
+
+    const done = await run()
+
+    // All ten attempted: the breaker correctly did NOT stop this run.
+    expect(extractMemoriesFromCall).toHaveBeenCalledTimes(10)
+    expect(done.summary).not.toContain('Stopped early')
+    // ...and the failures are on the face of the summary regardless.
+    expect(done.summary).toContain('Checked 10 calls')
+    expect(done.summary).toContain('7 read')
+    expect(done.summary).toContain('3 failed')
+    expect(done.summary).toContain('sporadic 429')
+    // Not a total failure — some calls genuinely worked — so the job still
+    // succeeds. The counts, not the job state, are what tell the truth here.
     expect(done.callsTotalFailure).toBe(false)
   })
 
@@ -121,8 +161,9 @@ describe('runBackfill — an honest account of what the run did (BUG-057)', () =
     const done = await run()
 
     expect(done.callsTotalFailure).toBe(true)
-    expect(done.summary).toContain('failed')
-    expect(done.summary).toContain('stopped after repeated errors')
+    expect(done.summary).toContain('0 read')
+    expect(done.summary).toContain('3 failed')
+    expect(done.summary).toContain('Stopped early after 3 failures in a row')
     expect(done.summary).toContain('rate-limiting')
   })
 
@@ -145,8 +186,12 @@ describe('runBackfill — an honest account of what the run did (BUG-057)', () =
     const done = await run()
 
     expect(done.callsTotalFailure).toBe(false)
-    expect(done.summary).toContain('found 0 new things')
-    expect(done.summary).not.toContain('failed')
+    expect(done.summary).toContain('2 read')
+    expect(done.summary).toContain('Learned 0 new things')
+    // "0 failed" is stated rather than omitted — that IS the signal that this
+    // empty result is a healthy one, and the reason it can't be confused with
+    // the every-call-failed run above.
+    expect(done.summary).toContain('0 failed')
   })
 
   it('excluded / transcript-less calls count as skips, never as failures', async () => {
