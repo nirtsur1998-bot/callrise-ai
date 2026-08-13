@@ -6,6 +6,7 @@ import { listEntries } from './knowledge-fs'
 import { assembleKnowledgeContext } from './knowledge-context'
 import { listCustomTrackers, saveCustomTrackers } from './custom-trackers'
 import { isSelfIntroExtractionAllowed } from './app-settings'
+import { consentPermitsCapture } from './consent-gate'
 import { repProfileSection } from './memory/profile-injection'
 
 // A fast, cheap "next question" suggestion for the live monologue cue. Uses
@@ -268,6 +269,9 @@ export type LiveCueResult =
        *  the renderer show a small non-blocking "coaching paused" indicator
        *  instead of just silently doing nothing this cycle. */
       pausedReason?: 'all-models-unavailable'
+      /** M26 4.5 (BUG-055) — see deal-tier1.ts's Tier1AnalyzeResult for the
+       *  full rationale. Never read as "paused" by the renderer. */
+      blockedReason?: 'consent'
     }
 
 // The buyerName/buyerSpeaker fields only exist on the schema the model sees
@@ -359,12 +363,31 @@ Return a SHORT cue (8–10 words max) the rep can read in a glance. It MUST be a
 }
 
 export async function liveCue(input: unknown): Promise<LiveCueResult> {
-  const body = (input ?? {}) as { transcript?: unknown; repSpeaker?: unknown }
+  const body = (input ?? {}) as {
+    transcript?: unknown
+    repSpeaker?: unknown
+    sessionId?: unknown
+    includesBuyerContent?: unknown
+  }
   const transcript = (typeof body.transcript === 'string' ? body.transcript : '').slice(-MAX_INPUT)
   const repHint =
     typeof body.repSpeaker === 'number' && Number.isFinite(body.repSpeaker)
       ? Math.trunc(body.repSpeaker)
       : null
+
+  // M26 4.5 (BUG-055) — see deal-tier1.ts's identical check for the full
+  // rationale. `transcript` here is a diarized "Speaker N:" window, not
+  // structured turns, so main cannot derive "does this include buyer
+  // content" from it — a diarization guess is not a genuine other-party
+  // signal either way (BUG-002). The caller (useLiveCues.ts) tells main
+  // explicitly, from real channel-tagged data.
+  if (body.includesBuyerContent === true) {
+    const sessionId = typeof body.sessionId === 'number' ? body.sessionId : undefined
+    if (!consentPermitsCapture(sessionId)) {
+      return { ok: false, blockedReason: 'consent' }
+    }
+  }
+
   if (transcript.trim().length < 30) return { ok: false } // not enough yet
 
   // Speaker ids actually present in this window ("Speaker N:" labels). Like

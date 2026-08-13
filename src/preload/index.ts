@@ -71,8 +71,15 @@ const api = {
     suggestQuestion: (text: string) => ipcRenderer.invoke('live:suggestQuestion', text),
     askCoach: (transcript: string, question: string) =>
       ipcRenderer.invoke('live:askCoach', { transcript, question }),
-    liveCue: (transcript: string, repSpeaker: number | null) =>
-      ipcRenderer.invoke('live:cue', { transcript, repSpeaker })
+    // M26 4.5 (BUG-055) — sessionId + includesBuyerContent let main check
+    // fresh consent before a pass that may include buyer-attributed content
+    // ever reaches an AI prompt. See main/live-cue.ts's own doc comment.
+    liveCue: (
+      transcript: string,
+      repSpeaker: number | null,
+      sessionId?: number,
+      includesBuyerContent?: boolean
+    ) => ipcRenderer.invoke('live:cue', { transcript, repSpeaker, sessionId, includesBuyerContent })
   },
   trackers: {
     /** Turn a rep's plain-English request into a candidate tracker (§4.8).
@@ -91,6 +98,9 @@ const api = {
       compactState: string
       dealContext?: string
       triggerReason?: string
+      /** M26 4.5 (BUG-055) — see main/deal-tier1.ts's own doc comment. */
+      sessionId?: number
+      includesBuyerContent?: boolean
     }) => ipcRenderer.invoke('dealIntelligence:analyzeTier1', input),
     /** M24 §4 — Tier 2 strategic analysis: a wider transcript delta +
      *  compact call state + deal context in, a Deal Health Score out. See
@@ -100,6 +110,8 @@ const api = {
       compactState: string
       dealContext?: string
       triggerReason?: string
+      sessionId?: number
+      includesBuyerContent?: boolean
     }) => ipcRenderer.invoke('dealIntelligence:analyzeTier2', input),
     /** M24 §8 — the feedback loop. recordFeedback fires immediately per
      *  rating (so it accumulates across calls); getFeedbackSummary is read

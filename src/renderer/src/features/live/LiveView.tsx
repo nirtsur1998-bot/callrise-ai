@@ -16,9 +16,7 @@ import { IconButton } from '@renderer/components/IconButton'
 import { Button } from '@renderer/components/Button'
 import type { ConsentMethod } from '@renderer/features/calls/types'
 import type { DealIntelligenceRecord } from '../../../../preload/index.d'
-import { useLiveCues } from './useLiveCues'
 import { useLiveClips } from './useLiveClips'
-import { useCueSettings } from './useCueSettings'
 import { useLiveCall } from './useLiveCall'
 import { useAutoStartListening } from '@renderer/features/settings/useAutoStartListening'
 import { IdleStopWatcher, idleStopNotice } from './auto-stop'
@@ -42,8 +40,6 @@ import { CueControls } from './components/CueControls'
 import { AskCoach } from './components/AskCoach'
 import { EngagementGauge } from './components/EngagementGauge'
 import { MonologueMeter } from './components/MonologueMeter'
-import { useDealIntelligence } from '@renderer/features/deal-intelligence/useDealIntelligence'
-import { useDealIntelligenceSettings } from '@renderer/features/deal-intelligence/useDealIntelligenceSettings'
 import { DealIntelligencePanel } from '@renderer/features/deal-intelligence/ui/DealIntelligencePanel'
 import {
   IdleHero,
@@ -182,7 +178,6 @@ export function LiveView({
     errorMessage,
     analyser,
     savedNotice,
-    identifyRep,
     otherPartyLive,
     otherPartyError,
     micPrompting,
@@ -225,7 +220,13 @@ export function LiveView({
     })
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Date.now() forces this out of render; syncing derived state from the calendar data is exactly what an effect is for
     setCurrentMeeting(match ?? null)
-  }, [calEvents, googleEvents, outlookEvents])
+    // M26 4.5 — mirror into the Provider's own useDealIntelligence instance,
+    // which now lives above this screen and needs the same value. Calendar
+    // matching itself stays here (needs useCalendar(), a screen concern);
+    // only the RESULT is bridged, the same shape setOnSaved bridges a
+    // callback.
+    liveCall.setCurrentMeeting(match ?? null)
+  }, [calEvents, googleEvents, outlookEvents, liveCall])
 
   // M19 Task 2 Part A — per-channel attribution is only deterministic on
   // headphones; on speakers the buyer's voice leaks back into the mic. Best-
@@ -274,10 +275,12 @@ export function LiveView({
     clips.captureClip(elapsed, segments, interimText)
   }, [clips, segments, interimText])
 
-  // Live coaching cues (hooks must run before any early return).
-  const { enabled, setEnabled, sensitivity, setSensitivity } = useCueSettings()
-  // When buyer capture is live, the rep is channel 0 — tell the cues so they
-  // don't have to guess who the rep is.
+  // M26 4.5 (BUG-055) — both engines now live in LiveCallProvider, for the
+  // same reason and the same way the transcript does: their timing-dependent
+  // state must survive a navigation and an ordinary mid-call restart, not
+  // reset on either. This screen is a pure attach/subscribe client for them
+  // now, same shape it already is for the transcript.
+  const { enabled, setEnabled, sensitivity, setSensitivity } = liveCall.cueSettings
   const {
     cue,
     dismiss,
@@ -289,24 +292,10 @@ export function LiveView({
     buyerName,
     buyerIdentityKey,
     coachingPaused
-  } = useLiveCues(
-    status === 'listening',
-    enabled,
-    sensitivity,
-    otherPartyLive ? 0 : null,
-    identifyRep
-  )
+  } = liveCall.cues
 
-  // M24 — Live Deal Intelligence (Beta). A sibling to useLiveCues above, same
-  // shape: reads useTranscription's own `segments`/`status` rather than
-  // re-subscribing to the raw transcript event, so it never re-derives the
-  // role attribution useTranscription already solved.
-  const {
-    enabled: dealIntelligenceEnabled,
-    sensitivity: dealIntelligenceSensitivity,
-    enabledTypes: dealIntelligenceEnabledTypes,
-    frequency: dealIntelligenceFrequency
-  } = useDealIntelligenceSettings()
+  // M24 — Live Deal Intelligence (Beta).
+  const { enabled: dealIntelligenceEnabled } = liveCall.dealIntelligenceSettings
   const {
     status: dealIntelligenceStatus,
     nudges: dealIntelligenceNudges,
@@ -314,19 +303,7 @@ export function LiveView({
     healthScore: dealIntelligenceHealthScore,
     rateNudge: rateDealIntelligenceNudge,
     getDealIntelligenceReport
-  } = useDealIntelligence(
-    segments,
-    status === 'listening',
-    dealIntelligenceEnabled,
-    dealIntelligenceSensitivity,
-    [],
-    // M24 §5 context fusion — the same "which meeting is this call" match
-    // the M19 prep-brief banner below already computes; reused rather than
-    // a second independent lookup.
-    currentMeeting,
-    dealIntelligenceEnabledTypes,
-    dealIntelligenceFrequency
-  )
+  } = liveCall.dealIntelligence
   // Completes the ref bridge declared above handleSaved — kept in sync on
   // every render rather than a mount-only effect, since getDealIntelligenceReport's
   // own identity can change (e.g. across the per-call reset this hook does internally).

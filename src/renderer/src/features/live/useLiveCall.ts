@@ -1,14 +1,36 @@
-// M26 Phase 4.4 — context + hook only, split from LiveCallProvider.tsx to
+// M26 Phase 4.4/4.5 — context + hook only, split from LiveCallProvider.tsx to
 // match the codebase's own convention (useToast.ts / ToastProvider.tsx):
 // a component file may only export components, or Fast Refresh breaks.
 import { createContext, useContext } from 'react'
 import type { ConsentController } from '@renderer/features/consent/useConsent'
+import type { CueSettings } from './useCueSettings'
+import type { UseLiveCues } from './useLiveCues'
+import type { CalendarEvent } from '@renderer/features/calendar/types'
+import type { DealIntelligenceSettings } from '@renderer/features/deal-intelligence/useDealIntelligenceSettings'
+import type { UseDealIntelligence } from '@renderer/features/deal-intelligence/useDealIntelligence'
 import type { useTranscription } from './useTranscription'
 
 type UseTranscriptionReturn = ReturnType<typeof useTranscription>
 
 export interface LiveCallContextValue extends UseTranscriptionReturn {
   consent: ConsentController
+  /** M26 4.5 (BUG-055) — hoisted alongside useTranscription for the same
+   *  reason: their timing-dependent state (the interrupt channel's cooldown,
+   *  Deal Intelligence's nudge history and health-score baseline) must
+   *  survive a screen navigation and an ordinary mid-call restart, not reset
+   *  on either. See useLiveCues.ts / useDealIntelligence.ts's own comments on
+   *  the reset effects this fixes. */
+  cueSettings: CueSettings
+  cues: UseLiveCues
+  dealIntelligenceSettings: DealIntelligenceSettings
+  dealIntelligence: UseDealIntelligence
+  /** LiveView's own calendar-matched "what's happening right now" — genuinely
+   *  screen-local (needs useCalendar()), bridged into the Provider's
+   *  useDealIntelligence instance the same shape setOnSaved uses for a
+   *  callback: LiveView pushes updates in an effect, the Provider just holds
+   *  the latest value. A plain value, not a ref, because useDealIntelligence
+   *  reacts to it via its own dependency array. */
+  setCurrentMeeting: (meeting: CalendarEvent | null) => void
   /** M19 Task 2 step 5's ref bridge — created in the Provider because it must
    *  be shared between `useLiveCues` (still local to `LiveView`, the writer)
    *  and `useTranscription` (now in the Provider, the reader at save time). */

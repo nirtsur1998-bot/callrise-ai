@@ -140,7 +140,15 @@ function installMockApi(): {
       })),
       onChange: vi.fn(() => () => {})
     },
-    app: { getActiveApp: vi.fn(async () => null) }
+    app: { getActiveApp: vi.fn(async () => null) },
+    // M26 4.5 (BUG-055) — useLiveCues now mounts inside the Provider too (not
+    // just useTranscription), and its own effects reach for these on mount.
+    trackers: { list: vi.fn(async () => []) },
+    dealIntelligence: {
+      getFeedbackSummary: vi.fn(async () => []),
+      recordFeedback: vi.fn(async () => ({ ok: true }))
+    },
+    live: { repIdentified: vi.fn() }
   }
   ;(window as unknown as { api: typeof api }).api = api
   return { handlers, save, detach, stop }

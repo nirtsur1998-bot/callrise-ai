@@ -105,6 +105,17 @@ export function useDealIntelligence(
   /** Mirrors how useLiveCues is invoked: `status === 'listening'`. */
   active: boolean,
   enabled: boolean,
+  /** M26 4.5 (BUG-055) — the CALL id, from useTranscription's getCallId().
+   *  Distinguishes "a genuinely new call started" from "this call's `active`
+   *  merely blipped" (a mono<->multichannel restart, or — before this hook was
+   *  hoisted above the navigation boundary — a screen remount). Only a change
+   *  in THIS value, not in `active`, may trigger the per-call reset below. */
+  getCallId: () => string | null,
+  /** M26 4.5 (BUG-055) — from useTranscription's getSessionId(). Passed with
+   *  every Tier 1/Tier 2 call so main can check FRESH consent (never a
+   *  renderer-held snapshot) before any buyer-attributed turn in the batch
+   *  reaches an AI prompt. */
+  getSessionId: () => number | null,
   sensitivity: Sensitivity,
   agendaTopics: string[] = [],
   /** LiveView's own currentMeeting (§5 context fusion) — null when this call
@@ -123,6 +134,12 @@ export function useDealIntelligence(
   const [nudges, setNudges] = useState<Nudge[]>([])
   const [status, setStatus] = useState<DealIntelligenceStatus>('idle')
   const [healthScore, setHealthScore] = useState<DealHealthScore | null>(null)
+
+  // M26 4.5 (BUG-055) — see the reset effect below. Tracks what the LAST
+  // reset decision was based on, so the effect can tell a genuine call
+  // boundary apart from `active` merely blipping mid-call.
+  const lastCallIdRef = useRef<string | null>(null)
+  const wasEnabledRef = useRef(enabled)
 
   const engineRef = useRef<LiveCallStateEngine | null>(null)
   const nudgeStateRef = useRef<NudgeEngineState>(createNudgeEngineState())
@@ -216,10 +233,42 @@ export function useDealIntelligence(
     setStatus('idle')
   }, [computeReport])
 
+  // M26 4.5 (BUG-055) — `active` (`status === 'listening'`) is NOT a proxy for
+  // "the call ended." It also goes false during a mono<->multichannel restart
+  // mid-call (main emits `state:'connecting'` for that too — see
+  // transcription.ts's transcription:start handler) — a real, ordinary event
+  // that must not wipe this call's nudge history, health-score baseline, or
+  // (before this hook was hoisted into LiveCallProvider) simply the screen
+  // being navigated away from and back. Resetting on every such blip is what
+  // let a fresh `LiveCallStateEngine` replay the ENTIRE transcript from
+  // scratch on the next segment tick, re-deriving and re-firing signals that
+  // had already fired once.
+  //
+  // The only two events that legitimately mean "start over": a genuinely NEW
+  // call (a different callId than last observed — never fires on the FIRST
+  // call, since there is nothing yet to reset), or the rep explicitly turning
+  // the feature off (a true→false edge on `enabled`, not merely `enabled`
+  // being false on the very first render).
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset per-call state when the call ends or the feature is toggled off, same pattern as CallDetail.tsx's per-call reset
-    if (!active || !enabled) reset()
-  }, [active, enabled, reset])
+    const currentCallId = getCallId()
+    const isGenuineNewCall =
+      currentCallId !== null &&
+      lastCallIdRef.current !== null &&
+      currentCallId !== lastCallIdRef.current
+    const justDisabled = wasEnabledRef.current && !enabled
+    lastCallIdRef.current = currentCallId
+    wasEnabledRef.current = enabled
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset per-call state on a genuine call boundary or the feature being toggled off, same pattern as CallDetail.tsx's per-call reset
+    if (isGenuineNewCall || justDisabled) reset()
+    // `active` is deliberately still a dependency — not because its VALUE is
+    // trusted (that's the bug this fix removes), but because `getCallId()` is
+    // a stable function reference by design (see useTranscription.ts's own
+    // comment on why) and cannot itself trigger a re-run. `active` toggling is
+    // what reliably brings this effect back to LOOK at the current callId at
+    // both of the moments that matter (a call starting, a call ending) — it's
+    // just no longer trusted to mean "start over" on its own.
+  }, [active, enabled, getCallId, reset])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing status to the active+enabled transition, mirrors the reset effect above
@@ -257,11 +306,18 @@ export function useDealIntelligence(
         .join(' ')
 
       try {
+        // M26 4.5 (BUG-055) — precise per-turn check: any turn in THIS batch
+        // attributed to the buyer means main must verify consent is
+        // currently active before the batch reaches a prompt. `role` is
+        // decided at record time and never a diarization guess reused as a
+        // consent signal (BUG-002's own lesson).
         const outcome = await analyzeTier1({
           transcriptDelta,
           compactState,
           dealContext: dealContextRef.current,
-          triggerReason
+          triggerReason,
+          sessionId: getSessionId() ?? undefined,
+          includesBuyerContent: turns.some((t) => t.role === 'other')
         })
         if (myGeneration !== generationRef.current) return // stale — reset() ran mid-flight
 
@@ -290,7 +346,7 @@ export function useDealIntelligence(
         if (myGeneration === generationRef.current) tier1InFlightRef.current = false
       }
     },
-    [enabled]
+    [enabled, getSessionId]
   )
 
   const runTier2Pass = useCallback(
@@ -320,11 +376,14 @@ export function useDealIntelligence(
       const compactState = summarizeLiveCallState(engine.state)
 
       try {
+        // M26 4.5 (BUG-055) — see the identical check in runTier1Pass above.
         const outcome = await analyzeTier2({
           transcriptDelta,
           compactState,
           dealContext: dealContextRef.current,
-          triggerReason
+          triggerReason,
+          sessionId: getSessionId() ?? undefined,
+          includesBuyerContent: turns.some((t) => t.role === 'other')
         })
         if (myGeneration !== generationRef.current) return
 
@@ -362,7 +421,7 @@ export function useDealIntelligence(
         if (myGeneration === generationRef.current) tier2InFlightRef.current = false
       }
     },
-    [enabled]
+    [enabled, getSessionId]
   )
 
   // The ~20s Tier 1 idle cadence — fires regardless of Tier 0 activity, so a

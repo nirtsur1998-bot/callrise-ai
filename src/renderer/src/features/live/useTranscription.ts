@@ -69,6 +69,15 @@ interface UseTranscription {
    *  plain value) so callers always read the freshest ref, regardless of
    *  whether a re-render has happened since the last change. */
   getSessionId: () => number | null
+  /** M26 4.5 — the CALL id (`live-transcript.ts`'s journal id), distinct from
+   *  the session id above: a mono<->multichannel restart mints a new session
+   *  id but is the SAME call (see `beginCall({restart: true})`), while this
+   *  stays stable across it. Exists so other engines hoisted alongside this
+   *  one (cue/deal-intelligence) can tell "this is genuinely a new call,
+   *  reset" apart from "the same call's status merely blipped" — the
+   *  distinction `status`/`active` alone cannot make. A function for the same
+   *  reason as getSessionId: always the freshest value, not a stale render. */
+  getCallId: () => string | null
   stop: () => Promise<void>
   togglePause: () => void
   /** Begin capturing the other party (call from a user gesture — opens
@@ -696,6 +705,7 @@ export function useTranscription(
   }, [beginSession])
 
   const getSessionId = useCallback(() => sessionIdRef.current, [])
+  const getCallId = useCallback(() => mirrorCallIdRef.current, [])
 
   const stop = useCallback(async () => {
     armSave()
@@ -945,6 +955,7 @@ export function useTranscription(
     dismissMultichannelFallbackNotice: useCallback(() => setMultichannelFallbackNotice(false), []),
     start,
     getSessionId,
+    getCallId,
     stop,
     togglePause,
     enableOtherParty,

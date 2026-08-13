@@ -4,6 +4,7 @@ import { AIProviderError, type AITool } from './ai'
 import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
 import { listEntries } from './knowledge-fs'
 import { assembleKnowledgeContext } from './knowledge-context'
+import { consentPermitsCapture } from './consent-gate'
 
 // M24 §4 — Tier 2 strategic analysis. Runs every 2-3 minutes or on a call-
 // stage change (the renderer decides when — see useDealIntelligence.ts),
@@ -68,6 +69,9 @@ export type Tier2AnalyzeResult =
       /** Same shape/meaning as deal-tier1.ts's pausedReason — the renderer
        *  reuses the same "paused" status rather than a second indicator. */
       pausedReason?: 'all-models-unavailable'
+      /** M26 4.5 (BUG-055) — see deal-tier1.ts's Tier1AnalyzeResult for the
+       *  full rationale. Never read as "paused" by the renderer. */
+      blockedReason?: 'consent'
     }
 
 const TOOL: AITool = {
@@ -158,6 +162,8 @@ export async function analyzeDealTier2(input: unknown): Promise<Tier2AnalyzeResu
     compactState?: unknown
     dealContext?: unknown
     triggerReason?: unknown
+    sessionId?: unknown
+    includesBuyerContent?: unknown
   }
   const transcriptDelta = (
     typeof body.transcriptDelta === 'string' ? body.transcriptDelta : ''
@@ -170,6 +176,15 @@ export async function analyzeDealTier2(input: unknown): Promise<Tier2AnalyzeResu
   )
   const triggerReason =
     typeof body.triggerReason === 'string' ? body.triggerReason.slice(0, 200) : undefined
+
+  // M26 4.5 (BUG-055) — see deal-tier1.ts's identical check for the full
+  // rationale. A pass with no buyer content has no consent question to ask.
+  if (body.includesBuyerContent === true) {
+    const sessionId = typeof body.sessionId === 'number' ? body.sessionId : undefined
+    if (!consentPermitsCapture(sessionId)) {
+      return { ok: false, blockedReason: 'consent' }
+    }
+  }
 
   // Unlike Tier 1's empty signals array, there's no meaningful "empty" health
   // score — skip the pass silently (ok:false, no pausedReason) so the caller

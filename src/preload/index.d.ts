@@ -171,7 +171,12 @@ export interface TranscriptionApi {
   /** Conversation-aware live cue from a speaker-labeled transcript window. */
   liveCue: (
     transcript: string,
-    repSpeaker: number | null
+    repSpeaker: number | null,
+    /** M26 4.5 (BUG-055) — see main/live-cue.ts's own doc comment: lets main
+     *  check fresh consent before a pass that may include buyer-attributed
+     *  content ever reaches an AI prompt. */
+    sessionId?: number,
+    includesBuyerContent?: boolean
   ) => Promise<
     | {
         ok: true
@@ -190,6 +195,8 @@ export interface TranscriptionApi {
          *  yet"). Renderer shows a small non-blocking "coaching paused"
          *  indicator, never a modal — see LiveView.tsx. */
         pausedReason?: 'all-models-unavailable'
+        /** M26 4.5 (BUG-055) — never read as "paused"; see main/live-cue.ts. */
+        blockedReason?: 'consent'
       }
   >
 }
@@ -229,7 +236,13 @@ export interface DealSignal {
 }
 
 export type DealTier1Result =
-  { ok: true; signals: DealSignal[] } | { ok: false; pausedReason?: 'all-models-unavailable' }
+  | { ok: true; signals: DealSignal[] }
+  | {
+      ok: false
+      pausedReason?: 'all-models-unavailable'
+      /** M26 4.5 (BUG-055) — never read as "paused"; see main/deal-tier1.ts. */
+      blockedReason?: 'consent'
+    }
 
 /** M24 §4 — Tier 2 strategic analysis output. Trajectory is NOT part of this
  *  shape — see deal-intelligence/healthScore.ts's computeTrajectory(), which
@@ -249,7 +262,12 @@ export interface DealHealthResult {
 }
 
 export type DealTier2Result =
-  { ok: true; result: DealHealthResult } | { ok: false; pausedReason?: 'all-models-unavailable' }
+  | { ok: true; result: DealHealthResult }
+  | {
+      ok: false
+      pausedReason?: 'all-models-unavailable'
+      blockedReason?: 'consent'
+    }
 
 export interface DealIntelligenceApi {
   analyzeTier1: (input: {
@@ -257,12 +275,17 @@ export interface DealIntelligenceApi {
     compactState: string
     dealContext?: string
     triggerReason?: string
+    /** M26 4.5 (BUG-055) — see main/deal-tier1.ts's own doc comment. */
+    sessionId?: number
+    includesBuyerContent?: boolean
   }) => Promise<DealTier1Result>
   analyzeTier2: (input: {
     transcriptDelta: string
     compactState: string
     dealContext?: string
     triggerReason?: string
+    sessionId?: number
+    includesBuyerContent?: boolean
   }) => Promise<DealTier2Result>
   /** M24 §8 — the feedback loop. */
   recordFeedback: (input: {

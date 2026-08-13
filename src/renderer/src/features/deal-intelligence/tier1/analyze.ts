@@ -11,16 +11,21 @@ export interface Tier1AnalyzeInput {
   compactState: string
   dealContext?: string
   triggerReason?: string
+  /** M26 4.5 (BUG-055) — see main/deal-tier1.ts's own doc comment. */
+  sessionId?: number
+  includesBuyerContent?: boolean
 }
 
 export type Tier1AnalyzeOutcome =
   | { ok: true; candidates: Tier1SignalCandidate[] }
-  | { ok: false; pausedReason?: 'all-models-unavailable' }
+  | { ok: false; pausedReason?: 'all-models-unavailable'; blockedReason?: 'consent' }
 
 export async function analyzeTier1(input: Tier1AnalyzeInput): Promise<Tier1AnalyzeOutcome> {
   try {
     const result = await window.api.dealIntelligence.analyzeTier1(input)
-    if (!result.ok) return { ok: false, pausedReason: result.pausedReason }
+    if (!result.ok) {
+      return { ok: false, pausedReason: result.pausedReason, blockedReason: result.blockedReason }
+    }
     return {
       ok: true,
       candidates: result.signals.map((s) => ({

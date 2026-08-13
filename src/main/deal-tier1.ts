@@ -4,6 +4,7 @@ import { AIProviderError, type AITool } from './ai'
 import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
 import { listEntries } from './knowledge-fs'
 import { assembleKnowledgeContext } from './knowledge-context'
+import { consentPermitsCapture } from './consent-gate'
 
 // M24 §3 — Tier 1 fast micro-analysis. Triggered mid-call every ~20s or off
 // a Tier 0 event (renderer decides when; this file only answers "given what
@@ -76,6 +77,15 @@ export type Tier1AnalyzeResult =
        *  LiveCueResult.pausedReason, so the renderer can reuse the same
        *  "paused" indicator pattern rather than inventing a second one. */
       pausedReason?: 'all-models-unavailable'
+      /** M26 4.5 (BUG-055) — set when this pass was refused because buyer-
+       *  attributed content was in scope and a fresh consentPermitsCapture()
+       *  check found no active grant. Deliberately NOT surfaced as "paused"
+       *  — the renderer's own check only treats `pausedReason ===
+       *  'all-models-unavailable'` that way, so this reads as an ordinary
+       *  quiet cycle to the rep. Present only so a consent refusal is
+       *  distinguishable from a genuine AI failure in logs/tests, rather
+       *  than both collapsing into the same silent "nothing this cycle". */
+      blockedReason?: 'consent'
     }
 
 const TOOL: AITool = {
@@ -200,6 +210,8 @@ export async function analyzeDealTier1(input: unknown): Promise<Tier1AnalyzeResu
     compactState?: unknown
     dealContext?: unknown
     triggerReason?: unknown
+    sessionId?: unknown
+    includesBuyerContent?: unknown
   }
   const transcriptDelta = (
     typeof body.transcriptDelta === 'string' ? body.transcriptDelta : ''
@@ -212,6 +224,21 @@ export async function analyzeDealTier1(input: unknown): Promise<Tier1AnalyzeResu
   )
   const triggerReason =
     typeof body.triggerReason === 'string' ? body.triggerReason.slice(0, 200) : undefined
+
+  // M26 4.5 (BUG-055) — buyer-attributed content may never reach an AI
+  // prompt without a CURRENTLY active, freshly-checked consent grant — never
+  // trusted from whatever the renderer believed at some earlier moment (same
+  // principle memory-hooks.ts already established: scope is frozen at
+  // trigger time, but PERMISSION is always re-read). A pass with no buyer
+  // content at all has no consent question to ask — mono/diarized turns were
+  // never gated on this (BUG-002), and this must not become the first place
+  // that changes.
+  if (body.includesBuyerContent === true) {
+    const sessionId = typeof body.sessionId === 'number' ? body.sessionId : undefined
+    if (!consentPermitsCapture(sessionId)) {
+      return { ok: false, blockedReason: 'consent' }
+    }
+  }
 
   if (transcriptDelta.trim().length < 20) return { ok: true, signals: [] } // nothing new worth spending a call on
 

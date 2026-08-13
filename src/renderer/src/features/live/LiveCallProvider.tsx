@@ -31,9 +31,14 @@
 // happens to be showing. This file follows its context/component split too
 // (useLiveCall.ts has the context + hook; this file has only the component),
 // which Fast Refresh requires of any file that exports a component.
-import { useCallback, useRef, type ReactNode } from 'react'
+import { useCallback, useRef, useState, type ReactNode } from 'react'
 import { useConsent } from '@renderer/features/consent/useConsent'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
+import type { CalendarEvent } from '@renderer/features/calendar/types'
+import { useCueSettings } from './useCueSettings'
+import { useLiveCues } from './useLiveCues'
+import { useDealIntelligenceSettings } from '@renderer/features/deal-intelligence/useDealIntelligenceSettings'
+import { useDealIntelligence } from '@renderer/features/deal-intelligence/useDealIntelligence'
 import { useTranscription } from './useTranscription'
 import { LiveCallContext, type LiveCallContextValue } from './useLiveCall'
 
@@ -69,11 +74,55 @@ export function LiveCallProvider({ children }: { children: ReactNode }): React.J
 
   const transcription = useTranscription(consent.recordRef, consent.reset, onSaved, buyerIdentityRef)
 
+  // M26 4.5 (BUG-055) — hoisted alongside the transcript, for the same
+  // reason and the same way: both engines' timing-dependent state (the
+  // interrupt channel's cooldown, Deal Intelligence's nudge history and
+  // health-score baseline) must survive a screen navigation, and — this is
+  // the part a Recorder-only-style hoist would have missed — an ordinary
+  // mid-call mono<->multichannel restart too. `getCallId` (not `status`) is
+  // what lets both hooks tell those apart from a genuine new call; see their
+  // own reset-effect comments for the full story.
+  const cueSettings = useCueSettings()
+  const cues = useLiveCues(
+    transcription.status === 'listening',
+    cueSettings.enabled,
+    transcription.getCallId,
+    transcription.getSessionId,
+    cueSettings.sensitivity,
+    transcription.otherPartyLive ? 0 : null,
+    transcription.identifyRep
+  )
+
+  // LiveView's own calendar-matched "what's happening right now" — genuinely
+  // screen-local (needs useCalendar()) — bridged in via a plain setter,
+  // mirroring setOnSaved's shape but for a value useDealIntelligence reacts
+  // to reactively rather than reads once at save time.
+  const [currentMeeting, setCurrentMeeting] = useState<CalendarEvent | null>(null)
+
+  const dealIntelligenceSettings = useDealIntelligenceSettings()
+  const dealIntelligence = useDealIntelligence(
+    transcription.segments,
+    transcription.status === 'listening',
+    dealIntelligenceSettings.enabled,
+    transcription.getCallId,
+    transcription.getSessionId,
+    dealIntelligenceSettings.sensitivity,
+    [],
+    currentMeeting,
+    dealIntelligenceSettings.enabledTypes,
+    dealIntelligenceSettings.frequency
+  )
+
   const value: LiveCallContextValue = {
     ...transcription,
     consent,
     buyerIdentityRef,
-    setOnSaved
+    setOnSaved,
+    cueSettings,
+    cues,
+    dealIntelligenceSettings,
+    dealIntelligence,
+    setCurrentMeeting
   }
 
   return <LiveCallContext.Provider value={value}>{children}</LiveCallContext.Provider>
