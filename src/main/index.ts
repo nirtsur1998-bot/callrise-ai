@@ -145,6 +145,7 @@ import { registerDealFeedback } from './deal-feedback-fs'
 import { registerEvents } from './events'
 import { registerLiveCue } from './live-cue'
 import { registerLoopbackCapture } from './loopback'
+import { registerLiveTranscriptIpc } from './live/live-transcript-ipc'
 import { registerGoogle } from './google'
 import { registerOutlook } from './outlook'
 import { registerBackup } from './backup'
@@ -394,6 +395,10 @@ app.whenReady().then(async () => {
   // a call is saved, and enqueue() throws on an unregistered type.
   registerMemoryExtractionJob()
   registerCalls()
+  // M26 Phase 4.2 — journaled-call recovery. Registered right after
+  // registerCalls because recovery writes a real Call through the same
+  // saveCall path, into the same directory.
+  registerLiveTranscriptIpc(() => join(app.getPath('userData'), 'calls'))
   registerCoachPdf()
   registerTasks()
   registerContacts()

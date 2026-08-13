@@ -2268,6 +2268,33 @@ export interface SalesBrainApi {
   onReviewRequested: (callback: (callId: string) => void) => () => void
 }
 
+/** M26 Phase 4.2 — a call that was interrupted before it could be saved, found
+ *  by sweeping the on-disk journals at launch. */
+export interface RecoverableCall {
+  id: string
+  startedAt: string
+  durationMs: number
+  segmentCount: number
+  /** First ~200 characters, so a rep with two interrupted calls can tell them
+   *  apart without opening either. */
+  preview: string
+  /** The journal's last line was torn by the crash. The call is recoverable;
+   *  its final utterance may be missing. Shown rather than hidden. */
+  truncated: boolean
+}
+
+export interface LiveApi {
+  /** Fire-and-forget: tells main which speaker is the rep, so its journaled
+   *  copy carries the same attribution the on-screen one does. */
+  repIdentified: (epoch: number, speaker: number) => void
+  /** Interrupted calls awaiting a decision. Never acts on them. */
+  listRecoverable: () => Promise<RecoverableCall[]>
+  /** Turn one into a real saved call, on the rep's explicit say-so. */
+  recoverCall: (id: string) => Promise<{ ok: boolean; call?: CallSummary }>
+  /** Throw one away, on the rep's explicit say-so. */
+  discardRecoverable: (id: string) => Promise<{ ok: boolean }>
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -2308,6 +2335,7 @@ declare global {
       salesBrain: SalesBrainApi
       updater: UpdaterApi
       jobs: JobsApi
+      live: LiveApi
     }
   }
 }

@@ -9,6 +9,7 @@ import { ToastProvider } from '@renderer/features/notifications/ToastProvider'
 import type { NavId } from '@renderer/features/navigation/nav-items'
 import { ErrorBoundary } from '@renderer/components/ErrorBoundary'
 import { ActivityCenter } from '@renderer/features/jobs/ActivityCenter'
+import { InterruptedCallPrompt } from '@renderer/features/live/InterruptedCallPrompt'
 import { MainApp } from './MainApp'
 
 /** A brief splash while we check whether someone is already signed in. */
@@ -59,6 +60,11 @@ function App(): React.JSX.Element {
               needs to survive that swap (see ActivityCenter.tsx's own doc
               comment for why that matters here specifically). */}
           <ActivityCenter />
+          {/* M26 Phase 4.2 — a sibling for the same reason as ActivityCenter:
+              it must survive MainApp's swap to the Settings tree, and it must
+              not be unmounted by a navigation the rep happens to make while
+              deciding. */}
+          <InterruptedCallPrompt />
         </>
       )}
     </ToastProvider>

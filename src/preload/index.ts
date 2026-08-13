@@ -502,6 +502,17 @@ const api = {
      *  re-verifies this itself rather than trusting the renderer's call. */
     install: () => ipcRenderer.invoke('updater:install')
   },
+  // M26 Phase 4.2 — main's own journaled copy of the call in progress, plus
+  // the recovery surface for calls that never reached a save.
+  live: {
+    // `send`, not `invoke` — nothing waits on this, and nothing about it may
+    // ever be able to affect a live call.
+    repIdentified: (epoch: number, speaker: number) =>
+      ipcRenderer.send('live:repIdentified', epoch, speaker),
+    listRecoverable: () => ipcRenderer.invoke('live:listRecoverable'),
+    recoverCall: (id: string) => ipcRenderer.invoke('live:recoverCall', id),
+    discardRecoverable: (id: string) => ipcRenderer.invoke('live:discardRecoverable', id)
+  },
   // M26 — read-only + control surface over the job queue. No generic
   // enqueue here on purpose (see jobs/ipc.ts's file header): only a real
   // feature's own IPC handler, running in main, may start a job.

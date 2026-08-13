@@ -184,6 +184,13 @@ export function useTranscription(
   const identifyRep = useCallback((epoch: number, speaker: number) => {
     if (repByEpochRef.current.get(epoch) === speaker) return
     repByEpochRef.current.set(epoch, speaker)
+    // M26 Phase 4.2 — tell main, which keeps its own journaled copy of this
+    // call. Who the rep is comes back from the coaching engine and is known
+    // only here, so main cannot derive it (unlike gaps and speaker
+    // boundaries, which it can and does). Without this a recovered transcript
+    // is still complete, but every turn reads 'unknown' instead of rep/other.
+    // Fire-and-forget on purpose: a failure here must never affect the call.
+    window.api.live.repIdentified(epoch, speaker)
     let changed = false
     const next = segmentsRef.current.map((s) => {
       if (s.epoch !== epoch || s.role !== 'unknown') return s

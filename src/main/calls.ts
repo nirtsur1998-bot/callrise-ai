@@ -61,6 +61,7 @@ import { selectFocusSkill, type FocusSkillState } from './coaching/focus-skill'
 import { loadFocusSkill, saveFocusSkill } from './coaching/focus-skill-fs'
 import { getJobManager } from './jobs/instance'
 import { createScanTally } from './objection-scan-tally'
+import { endCall } from './live/live-transcript'
 import type { Job } from './jobs/types'
 
 function objectionQueueDir(): string {
@@ -390,6 +391,16 @@ export function registerCalls(): void {
     'calls:save',
     async (_event, input: CallSaveInput, selfIntro?: { key: string; name: string }) => {
       const summary = await saveCall(callsDir(), input)
+      // M26 Phase 4.2 — the call now exists as a real Call record, so its
+      // journal stops being a recovery candidate.
+      //
+      // Deliberately here, after a SUCCESSFUL saveCall, and deliberately not
+      // on transcription:stop. Stopping is not saving: the renderer's
+      // flushPendingSave swallows a failed save on the grounds that "the
+      // transcript is still on screen", so until this line runs the journal is
+      // the only durable copy. Retiring it any earlier would discard the one
+      // thing that survives precisely the failure it exists for.
+      endCall({ saved: true })
       scheduleBackup() // metadata only reaches the cloud (segments never included)
       // Never blocks the save. Only runs when the Objection Library toggle is
       // on — this is the "new calls going forward" half of the mining scope

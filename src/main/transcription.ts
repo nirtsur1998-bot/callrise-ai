@@ -20,6 +20,7 @@ import { DriftMeter } from './session-health/drift'
 import { HEALTH_TUNING, type GapReason, type HealthSnapshot } from './session-health/types'
 import { BuyerSilenceWatcher } from './windows-capture/buyer-silence'
 import { CrossTalkGate } from './session-health/crosstalk-gate'
+import { beginCall, recordGap, recordResult } from './live/live-transcript'
 
 const DEEPGRAM_LISTEN_URL = 'wss://api.deepgram.com/v1/listen'
 
@@ -264,6 +265,10 @@ function failSession(s: Session, message: string): void {
 function markGap(s: Session, durationMs: number, reason: GapReason): void {
   const gap = s.timeline.markGap(durationMs, reason)
   if (!gap) return
+  // Same marker text the renderer will render, into main's own copy (4.2), so
+  // a recovered transcript shows the same honest hole rather than splicing two
+  // distant moments together seamlessly.
+  recordGap(formatGapMarker(gap.durationMs))
   emit(s, 'transcription:gap', {
     durationMs: gap.durationMs,
     reason: gap.reason,
@@ -660,6 +665,22 @@ function connect(s: Session): void {
         }
       }
 
+      // M26 Phase 4.2 — main's own copy, journaled to disk as the call
+      // happens. Deliberately BEFORE the emit, and deliberately not awaited or
+      // error-checked: every entry point in live-transcript swallows its own
+      // failures and returns void, so this cannot affect the renderer's copy
+      // whatever the disk does. Ordering it first means a crash in the
+      // instant between the two loses nothing.
+      recordResult({
+        transcript,
+        words,
+        isFinal: msg.is_final === true,
+        speakerEpoch: s.speakerEpoch,
+        speakerCertain,
+        minConfidence,
+        multichannel: s.multichannel
+      })
+
       emit(s, 'transcription:transcript', {
         transcript,
         words,
@@ -888,6 +909,18 @@ export function registerTranscription(): void {
     if (typeof expected === 'number' && session?.id !== expected) {
       return { ok: false, error: 'stale' as const }
     }
+
+    // M26 Phase 4.2 — a CALL is not a SESSION. A mono<->multichannel switch
+    // disposes and recreates the session while the rep is still on the same
+    // call, and the renderer carries one transcript across it. So the journal
+    // must survive that, and only a genuinely new call starts a new one.
+    // `expectedSessionId` naming the session we are about to replace is
+    // exactly what distinguishes the two, and it is already required for the
+    // restart to be honoured at all (see the staleness check above). Getting
+    // this backwards would end every buyer-capture call with a spurious
+    // "we found an interrupted call" prompt for a call that saved fine.
+    const isRestart = typeof expected === 'number' && session?.id === expected
+    beginCall({ restart: isRestart })
 
     // Replace any previous session entirely.
     disposeTranscription()
