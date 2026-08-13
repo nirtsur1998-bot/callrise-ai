@@ -613,14 +613,20 @@ export function registerCalls(): void {
     targetRefFor: (i) => i.callId,
     executor: {
       kind: 'inline-async',
-      run: async (input) => {
+      run: async (input, handle) => {
         const call = await getCall(callsDir(), input.callId)
         if (!call) throw new Error('Call not found.')
         if (!call.segments?.length) throw new Error('This call has no transcript to summarize.')
         const text = speechSegments(call.segments)
           .map((s) => `Speaker ${s.speaker + 1}: ${s.text}`)
           .join('\n')
-        const result = await summarize({ kind: 'text', text })
+        // BUG-060 — threading handle.signal is what makes this job's Cancel
+        // button real. Without it, Cancel removed the row from the Activity
+        // Center while this AI call ran on to completion, still spending the
+        // user's API key. See JobManager's own doc comment: cancellation is
+        // cooperative for 'inline-async', and means nothing unless the signal
+        // reaches the awaited work.
+        const result = await summarize({ kind: 'text', text }, { signal: handle.signal })
         if (!result.ok) {
           throw Object.assign(new Error(result.message ?? 'Could not generate the summary.'), {
             code: result.error

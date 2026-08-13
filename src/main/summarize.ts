@@ -93,7 +93,16 @@ function errorCodeFrom(err: unknown): 'no-key' | 'failed' {
   return err instanceof AIProviderError && err.code === 'no-key' ? 'no-key' : 'failed'
 }
 
-export async function summarize(input: SummarizeInput): Promise<SummaryResult> {
+/** BUG-060 — `signal` is what makes Cancel real. JobManager hands every
+ *  executor an AbortSignal, and its own doc comment says adapters MUST thread
+ *  it into completeWithFallback's `req.signal` "for cancel to mean anything".
+ *  No adapter ever did, so every Cancel button removed the job from the UI
+ *  while the work ran on underneath, still spending the user's API key.
+ *  Optional, so the non-job callers (plain IPC handlers) are unchanged. */
+export async function summarize(
+  input: SummarizeInput,
+  opts?: { signal?: AbortSignal }
+): Promise<SummaryResult> {
   const personalization = loadSummaryPersonalization()
   const language = loadSummaryLanguageInstruction()
   const promptWithPersonalization = `${PROMPT}${language ? ` ${language}` : ''}${personalizationSection(personalization)}`
@@ -109,7 +118,8 @@ export async function summarize(input: SummarizeInput): Promise<SummaryResult> {
       maxTokens: 4096,
       tool: SUMMARY_TOOL,
       document: input.kind === 'pdf' ? { base64: input.base64 } : undefined,
-      messages: [{ role: 'user', content: promptText }]
+      messages: [{ role: 'user', content: promptText }],
+      signal: opts?.signal
     })
 
     const raw = result.toolInput ?? {}
