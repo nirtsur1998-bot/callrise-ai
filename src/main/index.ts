@@ -505,8 +505,15 @@ app.on('before-quit', (event) => {
     defaultId: 0,
     cancelId: 0,
     message: `${count} background job${count === 1 ? ' is' : 's are'} still running.`,
+    // BUG-054 — this used to read "a live call is saved first either way",
+    // which is false: nothing in before-quit asks the renderer to save an
+    // in-progress call, and a quit mid-call loses it entirely. Telling the
+    // rep their call is safe at the exact moment it is being destroyed is
+    // worse than saying nothing. The honest warning stands until Phase 4's
+    // incremental journaling actually makes a mid-call quit survivable, at
+    // which point this copy should change to match the new truth.
     detail:
-      'Quitting now stops them (a live call is saved first either way). Backup/maintenance work gets a few seconds to finish on its own.'
+      'Quitting now stops them. A call still in progress is NOT saved — stop the call first if you want to keep it. Backup/maintenance work gets a few seconds to finish on its own.'
   }
   const choice = mainWindow
     ? dialog.showMessageBoxSync(mainWindow, options)
