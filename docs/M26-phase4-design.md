@@ -340,6 +340,15 @@ so an ongoing call is visible from every screen.
 
 **4.7 — Remove the hotfix's now-dead code**, and the `savePendingRef` mechanism with it.
 
+Also **required in 4.7, not optional** (added during 4.2): retire `*.jsonl.recovered`
+journals. 4.2 keeps every recovered journal on disk forever, deliberately — while
+journaled recovery is new, a replay that produces something subtly wrong is still
+plausible, and cleaning up early destroys the only evidence available to diagnose it.
+That reasoning expires exactly when the mechanism stops being new, which is the end of
+Phase 4. Without this, the "deliberate" part quietly becomes an unbounded directory that
+nobody ever revisits. Retention should follow the same shape as the job-history cap:
+a count, not a time window.
+
 ---
 
 ## Testing, and what only you can verify
