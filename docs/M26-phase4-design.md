@@ -335,14 +335,41 @@ idempotency key, so the real end of that call writes a SECOND record: two calls 
 for one conversation. Keeping the hotfix live until 4.7 is the stronger commitment, so detach
 moved to 4.4 where its replacement lands in the same commit as its removal.
 
-**4.3b / 4.4 — Detach ≠ stop.** `transcription:detach`, Recorder ownership hoisted above the
-navigation boundary, and main gaining its own end-of-call trigger so the hotfix's job is
-genuinely done rather than merely duplicated. *This is the step that fixes navigation.*
+**4.4 — Detach ≠ stop, plus session robustness.** Recombined into one authorized step (the
+founder's own call, once the split above happened): shipped as two commits on disjoint file
+sets rather than one, since each leaves the app independently working and verifiable.
 
-**4.4b — Session robustness.** try/catch at every main entry point, `render-process-gone`
-handling, disconnect-without-failure, and giving main its own end-of-call triggers (today
-`transcription:stop` is called *only* by the renderer — five sites — so a call whose renderer
-vanished can never end itself).
+*Commit 1 — Detach ≠ stop.* Recorder ownership, hoisted above the navigation boundary.
+**Correction found during implementation:** "hoist the Recorder" (the object alone) does not
+work — `armSave()`/`flushPendingSave()` live inside `useTranscription`, not inside the raw
+Recorder, so as long as `useTranscription` was still instantiated inside `LiveView` those
+lines would keep firing on every navigation regardless of where the Recorder object lived.
+The actual fix hoists the *whole hook instantiation* into `LiveCallProvider`, mounted once in
+`App.tsx` above `MainApp` (the same shape `ToastProvider` already uses). One further
+correction: the hotfix's own `stop()` call does **not** become `detach()` — once
+`useTranscription` lives in the Provider, that effect only fires on a genuine
+provider-level teardown (in practice: sign-out), where ending the call outright is still
+correct. Ordinary navigation now fires a different, new effect in `LiveView` instead.
+`useTranscription.ts` ends up with **zero lines changed**.
+
+*Commit 2 — Session robustness.* try/catch at the three named entry points (health tick,
+audio ingest, the socket message handler), routed through a shared repeat-fault threshold
+rather than ending the session on the first throw (today's accidental tolerance for a
+one-off fault is more permissive than a hair-trigger threshold would be — matching it, not
+tightening it, was the actual goal). `render-process-gone` handling, so a crashed renderer's
+session no longer runs (and bills) forever. Main's own end-of-call trigger — never a real
+`saveCall`, always a journal-close-unsaved, recovered the same way any other interrupted call
+is. A `saveInFlight` latch closes a race that trigger introduces: a main-initiated
+`endCall({saved:false})` landing while a real save is in flight would otherwise leave a
+successfully-saved call's journal without its `.done` marker, offering it for recovery and
+minting a duplicate `Call` record.
+
+**Known gap, named rather than silently bundled:** `drain()` has its own unguarded
+`setInterval` and `ws.on('open')` call site, separate from `ingestAudio` (wrapping
+`ingestAudio`'s body only covers a throw reached *via* `ingestAudio`, not drain's other two
+entry points). Not one of the three explicitly-named paths, so left unwrapped for this
+step — a fault there still only reaches today's status quo (the process-wide
+`uncaughtException` logger), not a regression, just an inconsistency worth closing later.
 
 **4.5 — Move the live engines.** Deal Intelligence `LiveCallState` and the cue turn buffer into
 the session; write the Radar Report from main rather than from a renderer callback.
