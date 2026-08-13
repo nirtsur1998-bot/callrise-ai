@@ -23,7 +23,24 @@ import { listDeals, type Deal } from '../deals-fs'
 import { extractMemoriesFromCall } from './extraction'
 import { consolidateNewCandidate, runLightConsolidation } from './consolidation'
 import { clientScope, type MemoryCandidate, type MemoryEvidence, type MemoryScope } from './types'
+import { isSalesBrainEnabled } from '../app-settings'
 import type Database from 'better-sqlite3'
+
+/** BUG-046 — backfill can run long enough that a rep turns Sales Brain off,
+ *  or excludes a specific call, WHILE it's still going. backfill-ipc.ts's own
+ *  isSalesBrainEnabled() check only gates whether the job is allowed to
+ *  START; it's not re-checked once the job is running. Per memory-hooks.ts's
+ *  own rule, this is a permission, not scope, so it must be read fresh on
+ *  every iteration rather than trusted from the moment the job began.
+ *  Thrown, not silently returned, so the existing catch below surfaces the
+ *  stop instead of reporting a misleading 'done'. */
+class BackfillHaltedError extends Error {}
+
+function assertStillEnabled(): void {
+  if (!isSalesBrainEnabled()) {
+    throw new BackfillHaltedError('Sales Brain was turned off — import stopped partway through.')
+  }
+}
 
 export interface BackfillProgress {
   running: boolean
@@ -99,7 +116,10 @@ export interface BackfillOptions {
  *  tradeoff as everywhere else "progress" is surfaced in this app.
  *  Never throws — a single item's failure (one call's extraction erroring)
  *  is skipped, not fatal to the whole run, same as every other extraction
- *  call site's own best-effort contract. */
+ *  call site's own best-effort contract. The one exception reported through
+ *  the SAME 'error' stage rather than skipped: Sales Brain being turned off
+ *  mid-run (assertStillEnabled) — that one must stop the whole backfill, not
+ *  just the current item, so it's surfaced rather than swallowed. */
 export async function runBackfill(
   db: Database.Database,
   opts: BackfillOptions,
@@ -108,10 +128,13 @@ export async function runBackfill(
   const touchedScopes = new Set<MemoryScope>()
 
   try {
+    assertStillEnabled()
+
     if (opts.includeContacts) {
       const contacts = await listContacts(opts.contactsDir)
       onProgress({ running: true, stage: 'contacts', processed: 0, total: contacts.length })
       for (let i = 0; i < contacts.length; i++) {
+        assertStillEnabled()
         for (const candidate of contactToCandidates(contacts[i])) {
           await consolidateNewCandidate(db, candidate)
           touchedScopes.add(candidate.scope)
@@ -124,6 +147,7 @@ export async function runBackfill(
       const deals = await listDeals(opts.dealsDir)
       onProgress({ running: true, stage: 'deals', processed: 0, total: deals.length })
       for (let i = 0; i < deals.length; i++) {
+        assertStillEnabled()
         for (const candidate of dealToCandidates(deals[i])) {
           await consolidateNewCandidate(db, candidate)
           touchedScopes.add(candidate.scope)
@@ -137,9 +161,13 @@ export async function runBackfill(
       const withTranscripts = calls.filter((c) => c.hasSummary || c.hasCoaching || c.durationMs > 0)
       onProgress({ running: true, stage: 'calls', processed: 0, total: withTranscripts.length })
       for (let i = 0; i < withTranscripts.length; i++) {
+        assertStillEnabled()
         try {
           const full = await getCall(opts.callsDir, withTranscripts[i].id)
-          if (full?.segments?.length) {
+          // Fresh per-call read, same as memory-hooks.ts's runMemoryExtractionForCall —
+          // a rep who marked this call "don't learn from this" must be honoured here too,
+          // not just on the live-call path.
+          if (full?.segments?.length && !full.salesBrainExcluded) {
             const candidates = await extractMemoriesFromCall(full.segments, full.id, full.contactId ?? null)
             for (const candidate of candidates) {
               await consolidateNewCandidate(db, candidate)
