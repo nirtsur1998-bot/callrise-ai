@@ -615,7 +615,10 @@ export async function coachCall(
    *  likewise resolved by the caller (calls.ts has the call-history access
    *  memory/personal-benchmarks.ts's pure functions need); coach.ts just
    *  threads it through to computeSkillScores() unchanged. */
-  context?: { callType?: CallType; commitments?: Commitment[]; personalBenchmarks?: PersonalBenchmarks }
+  context?: { callType?: CallType; commitments?: Commitment[]; personalBenchmarks?: PersonalBenchmarks },
+  /** BUG-060 — threaded into completeWithFallback so this job's Cancel button
+   *  is real rather than cosmetic. Optional so non-job callers are unchanged. */
+  opts?: { signal?: AbortSignal }
 ): Promise<CoachResult> {
   if (!segments.length) {
     return { ok: false, error: 'failed', message: 'This call has no transcript to coach.' }
@@ -646,7 +649,8 @@ export async function coachCall(
           role: 'user',
           content: `${PROMPT}${knowledgeSection(knowledge)}${personalizationSection(personalization)}${salesBrain}${coach2Settings.enabled ? methodologySection(methodology) : ''}\n\n--- TRANSCRIPT ---\n${transcript}`
         }
-      ]
+      ],
+      signal: opts?.signal
     })
 
     const report = assembleReport(result.toolInput ?? {}, segments, durationMs, result.model, {

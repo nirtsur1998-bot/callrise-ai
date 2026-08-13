@@ -726,9 +726,11 @@ export function registerCalls(): void {
     lane: 'INTERACTIVE',
     titleFor: () => 'Coaching call',
     targetRefFor: (i) => i.callId,
+    // BUG-060 — earned: handle.signal is threaded into coachCall below.
+    cancellable: true,
     executor: {
       kind: 'inline-async',
-      run: async (input) => {
+      run: async (input, handle) => {
         const call = await getCall(callsDir(), input.callId)
         if (!call) throw new Error('Call not found.')
         if (!call.segments?.length) throw new Error('This call has no transcript to coach.')
@@ -750,11 +752,12 @@ export function registerCalls(): void {
         const personalBenchmarks = isSalesBrainEnabled()
           ? await computePersonalBenchmarksForCallType(callType)
           : undefined
-        const result = await coachCall(speechSegments(call.segments), call.durationMs, {
-          callType,
-          commitments: call.commitments,
-          personalBenchmarks
-        })
+        const result = await coachCall(
+          speechSegments(call.segments),
+          call.durationMs,
+          { callType, commitments: call.commitments, personalBenchmarks },
+          { signal: handle.signal }
+        )
         if (!result.ok) {
           throw Object.assign(new Error(result.message ?? 'Could not coach this call.'), {
             code: result.error
