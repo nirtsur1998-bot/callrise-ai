@@ -826,12 +826,14 @@ export function registerCalls(): void {
     lane: 'INTERACTIVE',
     titleFor: () => 'Finding commitments',
     targetRefFor: (i) => i.callId,
+    // BUG-060 — earned: handle.signal is threaded into extractCommitments.
+    cancellable: true,
     executor: {
       kind: 'inline-async',
-      run: async (input) => {
+      run: async (input, handle) => {
         const call = await getCall(callsDir(), input.callId)
         if (!call) throw new Error('Call not found.')
-        const result = await extractCommitments(speechSegments(call.segments))
+        const result = await extractCommitments(speechSegments(call.segments), { signal: handle.signal })
         if (!result.ok) {
           throw Object.assign(
             new Error(result.message ?? 'Could not find commitments on this call.'),

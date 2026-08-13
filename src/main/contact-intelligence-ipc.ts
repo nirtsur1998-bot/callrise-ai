@@ -90,7 +90,10 @@ export interface DetectNameResult {
   message?: string
 }
 
-async function detectAndSaveIdentity(callId: string): Promise<DetectNameResult> {
+async function detectAndSaveIdentity(
+  callId: string,
+  opts?: { signal?: AbortSignal }
+): Promise<DetectNameResult> {
   if (getContactIntelligenceMode() === 'off') {
     return { ok: false, message: 'Contact Intelligence is off — turn it on in Settings → CRM.' }
   }
@@ -125,7 +128,8 @@ async function detectAndSaveIdentity(callId: string): Promise<DetectNameResult> 
     cleanSegments,
     other.speaker,
     other.repSpeaker,
-    multichannel
+    multichannel,
+    { signal: opts?.signal }
   )
   if (!name) return { ok: true }
 
@@ -292,10 +296,13 @@ export function registerContactIntelligence(): void {
     // job would produce TWO OS notifications for one auto-attach — the
     // feature's, plus a generic "Detecting who this was — done".
     silent: true,
+    // BUG-060 — earned: handle.signal is threaded through
+    // detectAndSaveIdentity -> detectOtherPartyName -> completeWithFallback.
+    cancellable: true,
     executor: {
       kind: 'inline-async',
-      run: async (input) => {
-        const result = await detectAndSaveIdentity(input.callId)
+      run: async (input, handle) => {
+        const result = await detectAndSaveIdentity(input.callId, { signal: handle.signal })
         if (result.ok && result.name) {
           await maybeAutoCreateContact(input.callId).catch(() => {})
         }

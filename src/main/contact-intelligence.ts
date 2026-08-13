@@ -191,11 +191,14 @@ export function verifyDetectedName(
  *  detected name this run (the rep can always name them manually). See
  *  verifyDetectedName() for the two checks a claimed name must pass before
  *  it's trusted. */
+/** BUG-060 — `opts.signal` is what makes this job's Cancel button real.
+ *  Optional so non-job callers are unchanged. */
 export async function detectOtherPartyName(
   segments: CallSegment[],
   otherSpeaker: number,
   repSpeaker: number,
-  multichannel: boolean
+  multichannel: boolean,
+  opts?: { signal?: AbortSignal }
 ): Promise<string | null> {
   // Same regime-only scoping as otherPartyKey() — a raw speaker number can
   // mean two different real people either side of a mid-call mono<->
@@ -223,7 +226,8 @@ export async function detectOtherPartyName(
           role: 'user',
           content: `${detectPrompt(repSpeaker, otherSpeaker)}\n\n--- TRANSCRIPT ---\n${transcript}`
         }
-      ]
+      ],
+      signal: opts?.signal
     })
     const rawName = typeof result.toolInput?.name === 'string' ? result.toolInput.name : ''
     const rawQuote = typeof result.toolInput?.quote === 'string' ? result.toolInput.quote : ''

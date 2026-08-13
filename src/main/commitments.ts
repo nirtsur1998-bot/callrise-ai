@@ -127,7 +127,12 @@ export function byOwner(commitments: Commitment[]): Record<CommitmentOwner, Comm
   }
 }
 
-export async function extractCommitments(segments: CallSegment[]): Promise<CommitmentResult> {
+/** BUG-060 — `opts.signal` is what makes this job's Cancel button real.
+ *  Optional so non-job callers are unchanged. */
+export async function extractCommitments(
+  segments: CallSegment[],
+  opts?: { signal?: AbortSignal }
+): Promise<CommitmentResult> {
   const transcript = segments.map((s) => `Speaker ${s.speaker + 1}: ${s.text}`).join('\n')
   if (transcript.trim().split(/\s+/).filter(Boolean).length < 25) {
     return { ok: false, error: 'empty-call' }
@@ -143,7 +148,8 @@ export async function extractCommitments(segments: CallSegment[]): Promise<Commi
           role: 'user',
           content: `${PROMPT}\n\n--- TRANSCRIPT ---\n${transcript.slice(0, MAX_TEXT_CHARS)}`
         }
-      ]
+      ],
+      signal: opts?.signal
     })
     return { ok: true, commitments: sanitizeCommitments(result.toolInput?.commitments) }
   } catch (err) {
