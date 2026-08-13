@@ -106,8 +106,21 @@ function installMockApi(): {
       generateTitle: vi.fn(async () => ({ ok: true })),
       postCallBrief: vi.fn(async () => ({ ok: true, copied: false }))
     },
+    // M26 Phase 4.5.2 — dealIntelligence.enabled/liveCues.enabled now come
+    // from here (main's AppSettings) rather than localStorage; both
+    // useDealIntelligenceSettings() and useCueSettings() call this on mount.
     settings: {
-      get: vi.fn(async () => ({ allowOtherPartyRecording: true, alwaysRecordOtherParty: false })),
+      get: vi.fn(async () => ({
+        allowOtherPartyRecording: true,
+        alwaysRecordOtherParty: false,
+        dealIntelligence: {
+          enabled: true, // Deal Intelligence must be on for the engine to instantiate at all
+          sensitivity: 'balanced',
+          enabledTypes: { risk: true, opportunity: true, tactical: true },
+          frequency: 'balanced'
+        },
+        liveCues: { enabled: true, sensitivity: 'low' }
+      })),
       onChange: vi.fn(() => () => {})
     },
     app: { getActiveApp: vi.fn(async () => null) },
@@ -140,9 +153,10 @@ describe('useDealIntelligence — the §3 replay bug, through the real Provider 
   let root: Root
 
   beforeEach(() => {
-    // Deal Intelligence defaults OFF — this feature must be on for the
-    // engine to instantiate at all.
-    localStorage.setItem('salesos.dealIntelligence.enabled', 'true')
+    // Deal Intelligence defaults OFF — the mocked settings.get() above forces
+    // it on, since this feature must be on for the engine to instantiate at
+    // all (M26 4.5.2 — this used to be a localStorage.setItem, now the
+    // source of truth is main's AppSettings, mocked via window.api).
     container = document.createElement('div')
     document.body.appendChild(container)
   })
@@ -161,6 +175,10 @@ describe('useDealIntelligence — the §3 replay bug, through the real Provider 
     act(() => {
       root.render(createElement(LiveCallProvider, null, createElement(InnerConsumer, { onApi: (a) => (api = a) })))
     })
+    // Let useDealIntelligenceSettings()/useCueSettings() resolve their
+    // settings.get() call before the call starts, so `enabled` has already
+    // flipped from its default (false) to the mocked true.
+    await flushMicrotasks()
 
     await act(async () => {
       await api.start()
@@ -220,6 +238,7 @@ describe('useDealIntelligence — the §3 replay bug, through the real Provider 
     act(() => {
       root.render(createElement(LiveCallProvider, null, createElement(InnerConsumer, { onApi: (a) => (api = a) })))
     })
+    await flushMicrotasks()
 
     await act(async () => {
       await api.start()
@@ -253,6 +272,7 @@ describe('useDealIntelligence — the §3 replay bug, through the real Provider 
     act(() => {
       root.render(createElement(LiveCallProvider, null, createElement(InnerConsumer, { onApi: (a) => (api = a) })))
     })
+    await flushMicrotasks()
 
     await act(async () => {
       await api.start()

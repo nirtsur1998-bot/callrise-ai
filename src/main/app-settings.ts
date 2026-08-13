@@ -75,6 +75,150 @@ function mergeCoach2(current: Coach2Settings, patch: unknown): Coach2Settings {
 }
 
 /**
+ * M26 Phase 4.5.2 — Deal Intelligence (M24 beta) and live coaching cues
+ * (M9) enable/sensitivity/etc. settings, moved out of renderer-only
+ * localStorage (useDealIntelligenceSettings.ts / useCueSettings.ts) so main
+ * can read them once the engines themselves move into main (4.5.3/4.5.4) —
+ * main cannot gate its own AI-call cadence on a value that only ever
+ * existed inside a React hook. The renderer Settings UI is unchanged; it
+ * now reads/writes through this file's existing settings:get/update IPC
+ * instead of localStorage directly. Defaults below match the two hooks'
+ * previous localStorage defaults exactly, so an existing install sees no
+ * behavior change from this migration alone.
+ */
+export type DealIntelligenceSensitivity = 'quiet' | 'balanced' | 'aggressive'
+export type AnalysisFrequency = 'frequent' | 'balanced' | 'infrequent'
+
+export interface EnabledNudgeTypes {
+  risk: boolean
+  opportunity: boolean
+  tactical: boolean
+}
+
+export interface DealIntelligenceSettings {
+  enabled: boolean
+  sensitivity: DealIntelligenceSensitivity
+  enabledTypes: EnabledNudgeTypes
+  frequency: AnalysisFrequency
+}
+
+const EMPTY_ENABLED_TYPES: EnabledNudgeTypes = { risk: true, opportunity: true, tactical: true }
+
+const EMPTY_DEAL_INTELLIGENCE: DealIntelligenceSettings = {
+  enabled: false, // Beta — off by default, same as the hook it replaces
+  sensitivity: 'balanced',
+  enabledTypes: EMPTY_ENABLED_TYPES,
+  frequency: 'balanced'
+}
+
+const DEAL_INTELLIGENCE_SENSITIVITIES: DealIntelligenceSensitivity[] = [
+  'quiet',
+  'balanced',
+  'aggressive'
+]
+const ANALYSIS_FREQUENCIES: AnalysisFrequency[] = ['frequent', 'balanced', 'infrequent']
+
+function sanitizeDealIntelligenceSensitivity(value: unknown): DealIntelligenceSensitivity {
+  return DEAL_INTELLIGENCE_SENSITIVITIES.includes(value as DealIntelligenceSensitivity)
+    ? (value as DealIntelligenceSensitivity)
+    : 'balanced'
+}
+
+function sanitizeAnalysisFrequency(value: unknown): AnalysisFrequency {
+  return ANALYSIS_FREQUENCIES.includes(value as AnalysisFrequency)
+    ? (value as AnalysisFrequency)
+    : 'balanced'
+}
+
+function sanitizeEnabledTypes(value: unknown): EnabledNudgeTypes {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return {
+    risk: typeof v.risk === 'boolean' ? v.risk : true,
+    opportunity: typeof v.opportunity === 'boolean' ? v.opportunity : true,
+    tactical: typeof v.tactical === 'boolean' ? v.tactical : true
+  }
+}
+
+function sanitizeDealIntelligence(value: unknown): DealIntelligenceSettings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return {
+    enabled: v.enabled === true,
+    sensitivity: sanitizeDealIntelligenceSensitivity(v.sensitivity),
+    enabledTypes: sanitizeEnabledTypes(v.enabledTypes),
+    frequency: sanitizeAnalysisFrequency(v.frequency)
+  }
+}
+
+/** Mirrors useDealIntelligenceSettings.ts's setTypeEnabled guard: never let
+ *  a patch disable every nudge type at once — that's functionally the same
+ *  as the master `enabled` switch, but silently, from a control that
+ *  doesn't say "off." A patch that would leave all three false is rejected
+ *  wholesale rather than partially applied. */
+function mergeEnabledTypes(current: EnabledNudgeTypes, patch: unknown): EnabledNudgeTypes {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  const next: EnabledNudgeTypes = {
+    risk: 'risk' in p ? p.risk === true : current.risk,
+    opportunity: 'opportunity' in p ? p.opportunity === true : current.opportunity,
+    tactical: 'tactical' in p ? p.tactical === true : current.tactical
+  }
+  if (!next.risk && !next.opportunity && !next.tactical) return current
+  return next
+}
+
+function mergeDealIntelligence(
+  current: DealIntelligenceSettings,
+  patch: unknown
+): DealIntelligenceSettings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return {
+    enabled: 'enabled' in p ? p.enabled === true : current.enabled,
+    sensitivity:
+      'sensitivity' in p
+        ? sanitizeDealIntelligenceSensitivity(p.sensitivity)
+        : current.sensitivity,
+    enabledTypes: mergeEnabledTypes(current.enabledTypes, p.enabledTypes),
+    frequency: 'frequency' in p ? sanitizeAnalysisFrequency(p.frequency) : current.frequency
+  }
+}
+
+export type CueSensitivity = 'low' | 'medium' | 'high'
+
+export interface LiveCueSettings {
+  enabled: boolean
+  sensitivity: CueSensitivity
+}
+
+const EMPTY_LIVE_CUES: LiveCueSettings = {
+  enabled: true, // default ON — same as the hook it replaces
+  sensitivity: 'low'
+}
+
+const CUE_SENSITIVITIES: CueSensitivity[] = ['low', 'medium', 'high']
+
+function sanitizeCueSensitivity(value: unknown): CueSensitivity {
+  return CUE_SENSITIVITIES.includes(value as CueSensitivity) ? (value as CueSensitivity) : 'low'
+}
+
+function sanitizeLiveCues(value: unknown): LiveCueSettings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return {
+    enabled: typeof v.enabled === 'boolean' ? v.enabled : EMPTY_LIVE_CUES.enabled,
+    sensitivity: sanitizeCueSensitivity(v.sensitivity)
+  }
+}
+
+function mergeLiveCues(current: LiveCueSettings, patch: unknown): LiveCueSettings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return {
+    enabled: 'enabled' in p ? p.enabled === true : current.enabled,
+    sensitivity: 'sensitivity' in p ? sanitizeCueSensitivity(p.sensitivity) : current.sensitivity
+  }
+}
+
+/**
  * M23 Workstream D — Contact Intelligence. One dial controlling how
  * proactively the app surfaces/creates contacts from a call using whatever
  * identity signal is available (calendar match, resolved speaker identity,
@@ -460,6 +604,12 @@ export interface AppSettings {
   /** M25 — Sales Brain (Beta) master switch. Off by default; see
    *  SalesBrainSettings for what this gates. */
   salesBrain: SalesBrainSettings
+  /** M26 Phase 4.5.2 — Deal Intelligence (M24 beta) enable/sensitivity/
+   *  per-type/frequency. Off by default; see DealIntelligenceSettings. */
+  dealIntelligence: DealIntelligenceSettings
+  /** M26 Phase 4.5.2 — live coaching cues (M9) enable/sensitivity. On by
+   *  default; see LiveCueSettings. */
+  liveCues: LiveCueSettings
 }
 
 // AIProviderId is re-exported here (not re-declared) so existing importers
@@ -503,7 +653,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoUpdateEnabled: false,
   coach2: EMPTY_COACH2,
   contactIntelligence: EMPTY_CONTACT_INTELLIGENCE,
-  salesBrain: EMPTY_SALES_BRAIN
+  salesBrain: EMPTY_SALES_BRAIN,
+  dealIntelligence: EMPTY_DEAL_INTELLIGENCE,
+  liveCues: EMPTY_LIVE_CUES
 }
 
 function settingsPath(): string {
@@ -576,7 +728,9 @@ export function loadAppSettings(): AppSettings {
       autoUpdateEnabled: parsed.autoUpdateEnabled === true,
       coach2: sanitizeCoach2(parsed.coach2),
       contactIntelligence: sanitizeContactIntelligence(parsed.contactIntelligence),
-      salesBrain: sanitizeSalesBrain(parsed.salesBrain)
+      salesBrain: sanitizeSalesBrain(parsed.salesBrain),
+      dealIntelligence: sanitizeDealIntelligence(parsed.dealIntelligence),
+      liveCues: sanitizeLiveCues(parsed.liveCues)
     }
   } catch {
     return {
@@ -589,7 +743,9 @@ export function loadAppSettings(): AppSettings {
       aiModelAssignments: { ...DEFAULT_MODEL_ASSIGNMENTS },
       coach2: { ...EMPTY_COACH2 },
       contactIntelligence: { ...EMPTY_CONTACT_INTELLIGENCE },
-      salesBrain: { ...EMPTY_SALES_BRAIN }
+      salesBrain: { ...EMPTY_SALES_BRAIN },
+      dealIntelligence: { ...EMPTY_DEAL_INTELLIGENCE, enabledTypes: { ...EMPTY_ENABLED_TYPES } },
+      liveCues: { ...EMPTY_LIVE_CUES }
     }
   }
 }
@@ -628,7 +784,9 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
       'autoUpdateEnabled' in p ? p.autoUpdateEnabled === true : current.autoUpdateEnabled,
     coach2: mergeCoach2(current.coach2, p.coach2),
     contactIntelligence: mergeContactIntelligence(current.contactIntelligence, p.contactIntelligence),
-    salesBrain: mergeSalesBrain(current.salesBrain, p.salesBrain)
+    salesBrain: mergeSalesBrain(current.salesBrain, p.salesBrain),
+    dealIntelligence: mergeDealIntelligence(current.dealIntelligence, p.dealIntelligence),
+    liveCues: mergeLiveCues(current.liveCues, p.liveCues)
   }
 }
 
@@ -813,6 +971,23 @@ export function getContactIntelligenceMode(): ContactIntelligenceMode {
  *  the cost of the DB file existing. */
 export function isSalesBrainEnabled(): boolean {
   return loadAppSettings().salesBrain.enabled
+}
+
+/** M26 Phase 4.5.2 — the single source of truth the main-owned Deal
+ *  Intelligence engine (4.5.3) reads its enable/sensitivity/enabledTypes/
+ *  frequency settings from, replacing the renderer-local
+ *  useDealIntelligenceSettings.ts hook. Read fresh on every call, same
+ *  discipline as every other settings gate in this file — a rep who just
+ *  disabled the feature must not have a stale main-side copy keep acting on
+ *  the old value. */
+export function getDealIntelligenceSettings(): DealIntelligenceSettings {
+  return loadAppSettings().dealIntelligence
+}
+
+/** M26 Phase 4.5.2 — same role as getDealIntelligenceSettings(), for the
+ *  main-owned cue engine (4.5.4), replacing useCueSettings.ts. */
+export function getLiveCueSettings(): LiveCueSettings {
+  return loadAppSettings().liveCues
 }
 
 let registered = false

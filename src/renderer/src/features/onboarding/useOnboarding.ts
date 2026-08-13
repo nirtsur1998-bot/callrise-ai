@@ -7,18 +7,12 @@ import { markOnboardingComplete } from './prefs'
 
 type Pronoun = AppSettings['personalization']['pronoun']
 
-// The cue prefs live in localStorage under these keys (see live/useCueSettings.ts).
-// Onboarding writes them directly so it doesn't need to mount the live-call hook.
-const CUES_ENABLED_KEY = 'salesos.cues.enabled'
-const CUES_SENS_KEY = 'salesos.cues.sensitivity'
-
-function writeLocal(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value)
-  } catch {
-    /* best-effort: preferences are non-critical */
-  }
-}
+// M26 Phase 4.5.2 — the cue prefs used to live in renderer-only localStorage
+// (see live/useCueSettings.ts's history); onboarding wrote them directly so
+// it didn't need to mount the live-call hook. Now that main owns them
+// (app-settings.ts's liveCues field), onboarding persists them the same way
+// it already persists personalization/recording — through this same
+// useAppSettings() `update()` call, in the same persist() batch below.
 
 export type StepId =
   | 'welcome'
@@ -124,11 +118,10 @@ export function useOnboarding(): OnboardingState {
   const persist = async (): Promise<void> => {
     await update({
       personalization: { name: name.trim(), role: role.trim(), pronoun, about: about.trim() },
-      allowOtherPartyRecording: recordBothSides
+      allowOtherPartyRecording: recordBothSides,
+      liveCues: { enabled: cuesEnabled, sensitivity }
     })
     if (recordBothSides) saveDefaultJurisdiction(jurisdiction)
-    writeLocal(CUES_ENABLED_KEY, String(cuesEnabled))
-    writeLocal(CUES_SENS_KEY, sensitivity)
   }
 
   const finish = async (): Promise<void> => {

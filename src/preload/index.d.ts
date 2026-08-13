@@ -1799,6 +1799,39 @@ export interface AppSettings {
   contactIntelligence: ContactIntelligenceSettings
   /** M25 — Sales Brain (Beta) master switch. Off by default. */
   salesBrain: SalesBrainSettings
+  /** M26 Phase 4.5.2 — Deal Intelligence (M24 beta) enable/sensitivity/
+   *  per-type/frequency. Off by default; see main/app-settings.ts's
+   *  DealIntelligenceSettings for the exact shape and defaults. */
+  dealIntelligence: DealIntelligenceSettings
+  /** M26 Phase 4.5.2 — live coaching cues (M9) enable/sensitivity. On by
+   *  default; see main/app-settings.ts's LiveCueSettings. */
+  liveCues: LiveCueSettings
+}
+
+/** M26 Phase 4.5.2 — see main/app-settings.ts's DealIntelligenceSettings
+ *  for the exact behavior of each field. */
+export type DealIntelligenceSensitivity = 'quiet' | 'balanced' | 'aggressive'
+export type AnalysisFrequency = 'frequent' | 'balanced' | 'infrequent'
+
+export interface EnabledNudgeTypes {
+  risk: boolean
+  opportunity: boolean
+  tactical: boolean
+}
+
+export interface DealIntelligenceSettings {
+  enabled: boolean
+  sensitivity: DealIntelligenceSensitivity
+  enabledTypes: EnabledNudgeTypes
+  frequency: AnalysisFrequency
+}
+
+/** M26 Phase 4.5.2 — see main/app-settings.ts's LiveCueSettings. */
+export type CueSensitivity = 'low' | 'medium' | 'high'
+
+export interface LiveCueSettings {
+  enabled: boolean
+  sensitivity: CueSensitivity
 }
 
 /** M23 — see main/app-settings.ts's Coach2Settings for the exact behavior. */
@@ -1860,6 +1893,18 @@ export interface AppSettingsPatch {
   contactIntelligence?: Partial<ContactIntelligenceSettings>
   /** Partial — only the keys present are changed; others are left as-is. */
   salesBrain?: Partial<SalesBrainSettings>
+  /** Partial — only the keys present are changed; others are left as-is.
+   *  `enabledTypes` merges key-by-key, and a patch that would leave all
+   *  three nudge types disabled is rejected wholesale (use the master
+   *  `enabled` switch to actually turn the feature off). */
+  dealIntelligence?: {
+    enabled?: boolean
+    sensitivity?: DealIntelligenceSensitivity
+    enabledTypes?: Partial<EnabledNudgeTypes>
+    frequency?: AnalysisFrequency
+  }
+  /** Partial — only the keys present are changed; others are left as-is. */
+  liveCues?: Partial<LiveCueSettings>
 }
 
 export interface AppSettingsApi {
