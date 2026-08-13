@@ -147,7 +147,15 @@ export type AIProviderErrorCode =
 export class AIProviderError extends Error {
   constructor(
     readonly code: AIProviderErrorCode,
-    message: string
+    message: string,
+    /** BUG-058 — how long the provider explicitly asked us to wait, in ms,
+     *  when it told us at all (Retry-After header on OpenAI-compatible
+     *  providers; RetryInfo.retryDelay in Gemini's error body). Free tiers
+     *  rate-limit aggressively but recover in seconds, and this is the
+     *  difference between waiting the ~20s they asked for and burning every
+     *  other provider's quota in the meantime. Undefined when the provider
+     *  gave no hint — callers fall back to their own default. */
+    readonly retryAfterMs?: number
   ) {
     super(message)
     this.name = 'AIProviderError'

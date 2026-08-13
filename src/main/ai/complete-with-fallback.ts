@@ -14,6 +14,7 @@ import { getActiveAIProvider } from './index'
 import { loadAppSettings } from '../app-settings'
 import { catalogEntry, type CatalogEntry } from './model-catalog'
 import { logFallbackEvent } from './fallback-log'
+import { clearCooldown, isCoolingDown, markRateLimited, soonestExpiry } from './model-cooldown'
 import {
   AIProviderError,
   CHAIN_BUDGET,
@@ -299,10 +300,34 @@ function detailFrom(err: unknown): string | undefined {
  *  callers pass their existing AICompletionRequest unchanged. */
 export async function completeWithFallback(req: AICompletionRequest): Promise<AICompletionResult> {
   const purpose = req.purpose
-  const chain = resolveChain(purpose)
+  const resolved = resolveChain(purpose)
+
+  if (resolved.length === 0) {
+    throw new AIProviderError('no-key', 'No AI provider is configured for this yet.')
+  }
+
+  // BUG-058 — skip models that just rate-limited us. Filtered HERE rather
+  // than inside resolveChain, so resolution stays a pure function of settings
+  // + keys, and so the "everything is cooling down" case below can tell the
+  // difference between "you have no keys" and "your keys need a minute".
+  const startedNow = Date.now()
+  const chain = resolved.filter((s) => !isCoolingDown(s.catalogId, startedNow))
 
   if (chain.length === 0) {
-    throw new AIProviderError('no-key', 'No AI provider is configured for this yet.')
+    // Every model is in cooldown. Refusing here is the POINT: walking the
+    // chain anyway spends a doomed request on each one and pushes their
+    // limits out further, which is the spiral this fix exists to break.
+    // Reported as a wait, with a number, rather than a generic failure.
+    const until = soonestExpiry(
+      resolved.map((s) => s.catalogId),
+      startedNow
+    )
+    const secs = until ? Math.max(1, Math.ceil((until - startedNow) / 1000)) : 60
+    throw new AIProviderError(
+      'rate-limit',
+      `Every model set up for this is rate-limited right now. Try again in about ${secs}s.`,
+      until ? until - startedNow : undefined
+    )
   }
 
   const budget = CHAIN_BUDGET[purpose]
@@ -355,11 +380,23 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
         model: step.modelId || undefined, // '' for a legacy step - let the provider use its own default
         signal: attemptSignal
       })
+      // Proof the limit lifted — trust that over any earlier estimate.
+      clearCooldown(step.catalogId)
       return result
     } catch (err) {
       const reason = classifyReason(err)
       const detail = detailFrom(err)
       if (reason === 'auth') deadProviders.add(step.providerId)
+      // BUG-058 — honour the provider's own "come back in N seconds" so the
+      // next call skips this model instead of re-burning it. Without this,
+      // every subsequent call restarted at position 1 and hit the same 429.
+      if (reason === 'rate-limit') {
+        markRateLimited(
+          step.catalogId,
+          err instanceof AIProviderError ? err.retryAfterMs : undefined,
+          Date.now()
+        )
+      }
       attempts.push({ catalogId: step.catalogId, reason: detail ? `${reason}: ${detail}` : reason })
       const nextStep = chain[i + 1] ?? null
       void logFallbackEvent({
@@ -409,7 +446,11 @@ export interface StreamWithFallbackResult extends AsyncIterable<{ delta: string 
  */
 export function streamWithFallback(req: AICompletionRequest): StreamWithFallbackResult {
   const purpose = req.purpose
-  const chain = resolveChain(purpose)
+  // BUG-058 — same cooldown filter as completeWithFallback: a model that just
+  // 429'd must not be re-burned here either. coaching-chat is the only
+  // consumer, and it is interactive, so spending its first attempt on a model
+  // we already know is limited is the most visible possible version of this.
+  const chain = resolveChain(purpose).filter((s) => !isCoolingDown(s.catalogId, Date.now()))
 
   let resolveFinal!: (v: { text: string; model: string; usage: AICompletionResult['usage'] }) => void
   let rejectFinal!: (e: unknown) => void
@@ -449,12 +490,20 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           yield chunk
         }
         const usage = await streamResult.usage
+        clearCooldown(step.catalogId)
         resolveFinal({ text: fullText, model: step.modelId || `${step.providerId} (default)`, usage })
         return
       } catch (err) {
         lastErr = err
         const reason = classifyReason(err)
         const detail = detailFrom(err)
+        if (reason === 'rate-limit') {
+          markRateLimited(
+            step.catalogId,
+            err instanceof AIProviderError ? err.retryAfterMs : undefined,
+            Date.now()
+          )
+        }
         attempts.push({ catalogId: step.catalogId, reason: detail ? `${reason}: ${detail}` : reason })
         const nextStep = chain[i + 1] ?? null
         void logFallbackEvent({

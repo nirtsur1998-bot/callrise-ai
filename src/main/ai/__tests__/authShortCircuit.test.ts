@@ -54,6 +54,7 @@ const { loadAppSettings } = await import('../../app-settings')
 const { completeWithFallback, resolveChain, AllModelsExhaustedError } = await import(
   '../complete-with-fallback'
 )
+const { resetCooldownsForTests } = await import('../model-cooldown')
 
 const PURPOSES = [
   'coaching-cue', 'summary', 'scorecard', 'tasks', 'other', 'prep-brief',
@@ -72,6 +73,10 @@ const ORIGINAL_ENV = { ...process.env }
 beforeEach(() => {
   built.length = 0
   behavior.throwCode = 'auth'
+  // BUG-058's cooldown map is module-level (a rate-limited model is limited
+  // for every purpose, so that is correct at runtime) — which means one
+  // test's 429s would otherwise silently suppress the next test's attempts.
+  resetCooldownsForTests()
   activeProviderId.current = 'groq'
   vi.mocked(loadAppSettings).mockReturnValue(allEmpty())
   process.env.GROQ_API_KEY = 'g'

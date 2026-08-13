@@ -9,7 +9,8 @@
 // existed and was thrown away before it could reach anyone.
 import { describe, expect, it } from 'vitest'
 import OpenAI from 'openai'
-import { toProviderError } from '../providers/openai-compatible'
+import { retryAfterMsFrom, toProviderError } from '../providers/openai-compatible'
+import { parseGeminiRetryDelayMs } from '../providers/gemini'
 
 function apiError(status: number, message: string): OpenAI.APIError {
   // The SDK populates .message from the provider's response body.
@@ -53,5 +54,48 @@ describe('toProviderError keeps the provider\'s own message', () => {
     expect(toProviderError('Groq', apiError(400, 'You are out of credits')).message).toContain(
       'quota/credits'
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+describe('BUG-058 — providers\' own "come back in N seconds" is now read', () => {
+  it('reads retry-after-ms in preference to retry-after', () => {
+    const err = Object.assign(new Error('limited'), {
+      headers: { 'retry-after-ms': '2500', 'retry-after': '99' }
+    })
+    expect(retryAfterMsFrom(err)).toBe(2500)
+  })
+
+  it('reads retry-after in seconds', () => {
+    expect(retryAfterMsFrom(Object.assign(new Error('x'), { headers: { 'retry-after': '20' } }))).toBe(20_000)
+  })
+
+  it('is undefined when the provider said nothing — callers use their own default', () => {
+    expect(retryAfterMsFrom(Object.assign(new Error('x'), { headers: {} }))).toBeUndefined()
+    expect(retryAfterMsFrom(new Error('x'))).toBeUndefined()
+  })
+
+  it('parses Gemini\'s RetryInfo.retryDelay, which lives in the BODY not a header', () => {
+    // Gemini is the first entry in the quality chain and had zero backoff of
+    // any kind, so this hint mattered more here than anywhere else.
+    const body = {
+      error: {
+        code: 429,
+        status: 'RESOURCE_EXHAUSTED',
+        details: [
+          { '@type': 'type.googleapis.com/google.rpc.QuotaFailure' },
+          { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '23s' }
+        ]
+      }
+    }
+    expect(parseGeminiRetryDelayMs(body)).toBe(23_000)
+  })
+
+  it('handles fractional Gemini delays and ignores malformed ones', () => {
+    expect(parseGeminiRetryDelayMs({ error: { details: [{ retryDelay: '1.5s' }] } })).toBe(1500)
+    expect(parseGeminiRetryDelayMs({ error: { details: [{ retryDelay: 'soon' }] } })).toBeUndefined()
+    expect(parseGeminiRetryDelayMs({ error: {} })).toBeUndefined()
+    expect(parseGeminiRetryDelayMs(null)).toBeUndefined()
   })
 })

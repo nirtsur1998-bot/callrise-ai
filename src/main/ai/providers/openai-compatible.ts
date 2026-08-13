@@ -145,6 +145,45 @@ function usageFrom(inputTokens: number, outputTokens: number): AIUsage {
   return { inputTokens, outputTokens, estimatedCostUsd: 0 }
 }
 
+/**
+ * BUG-058 — the provider's own "come back in N seconds", in ms.
+ *
+ * Reads `retry-after-ms` (OpenAI/Groq send it, and it is the precise one)
+ * before `retry-after` (seconds, or an HTTP-date). Without this the app has
+ * no idea whether a 429 clears in 2 seconds or 2 hours, so it treated both as
+ * "this model is dead, move on" and burned the whole chain.
+ *
+ * Exported for direct unit testing, same reasoning as resolveMaxTokensField.
+ */
+export function retryAfterMsFrom(err: unknown): number | undefined {
+  const headers = (err as { headers?: unknown })?.headers
+  if (!headers) return undefined
+  const get = (name: string): string | null => {
+    if (typeof (headers as Headers).get === 'function') return (headers as Headers).get(name)
+    const rec = headers as Record<string, string | undefined>
+    return rec[name] ?? rec[name.toLowerCase()] ?? null
+  }
+
+  const ms = get('retry-after-ms')
+  if (ms) {
+    const n = Number(ms)
+    if (Number.isFinite(n) && n > 0) return n
+  }
+
+  const secs = get('retry-after')
+  if (secs) {
+    const n = Number(secs)
+    if (Number.isFinite(n) && n > 0) return n * 1000
+    // RFC-permitted HTTP-date form.
+    const at = Date.parse(secs)
+    if (!Number.isNaN(at)) {
+      const delta = at - Date.now()
+      if (delta > 0) return delta
+    }
+  }
+  return undefined
+}
+
 /** Exported for direct unit testing, same reasoning as resolveMaxTokensField
  *  below — asserting on error mapping shouldn't require standing up a real
  *  OpenAI client. */
@@ -153,7 +192,11 @@ export function toProviderError(displayName: string, err: unknown): AIProviderEr
     return new AIProviderError('auth', `Your ${displayName} API key was rejected.`)
   }
   if (err instanceof OpenAI.RateLimitError) {
-    return new AIProviderError('rate-limit', `${displayName} is rate-limiting requests right now.`)
+    return new AIProviderError(
+      'rate-limit',
+      `${displayName} is rate-limiting requests right now.`,
+      retryAfterMsFrom(err)
+    )
   }
   if (err instanceof OpenAI.NotFoundError) {
     return new AIProviderError('model-not-found', `${displayName} does not recognize this model.`)
@@ -177,7 +220,11 @@ export function toProviderError(displayName: string, err: unknown): AIProviderEr
       return new AIProviderError('failed', `Your ${displayName} account is out of quota/credits.`)
     }
     if (err.status === 429) {
-      return new AIProviderError('rate-limit', `${displayName} is rate-limiting requests right now.`)
+      return new AIProviderError(
+        'rate-limit',
+        `${displayName} is rate-limiting requests right now.`,
+        retryAfterMsFrom(err)
+      )
     }
     if (err.status === 404) {
       return new AIProviderError('model-not-found', `${displayName} does not recognize this model.`)
