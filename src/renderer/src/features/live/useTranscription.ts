@@ -200,7 +200,8 @@ export function useTranscription(
     }
   }, [])
 
-  // Arm a save (used by both Stop and mic-unplug, so they can't drift).
+  // Arm a save (used by Stop, mic-unplug, and the unmount cleanup below, so
+  // they can't drift).
   //
   // BUG-053 — this latch records INTENT ONLY: "a save has been requested".
   // It used to also decide, right here, whether there was anything worth
@@ -836,13 +837,24 @@ export function useTranscription(
 
   useEffect(() => {
     return () => {
+      // BUG-046: this cleanup also runs when the rep merely navigates to a
+      // different screen mid-call (LiveView unmounts on every nav change,
+      // not just on a real hangup) — not only on an actual Stop click. A
+      // live recorder here means the call was never stopped, so the
+      // transcript captured so far would otherwise be silently discarded:
+      // arm the save exactly as the Stop button does before anything is
+      // torn down. An idle/errored/already-stopped call has no recorder
+      // left (stop()/onError/captureLost/mic-unplug all null it), so this
+      // can never re-arm — and therefore never duplicate-save — a call that
+      // already finished saving.
+      if (recorderRef.current) armSave()
       // Save a stopped-but-not-yet-flushed call before tearing down.
       flushPendingSave()
       recorderRef.current?.stop()
       recorderRef.current = null
       void window.api.transcription.stop()
     }
-  }, [flushPendingSave])
+  }, [armSave, flushPendingSave])
 
   const status: LiveStatus =
     paused && (phase === 'listening' || phase === 'reconnecting') ? 'paused' : phase

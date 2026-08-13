@@ -90,6 +90,31 @@ jobs:
         shell: bash
         run: npx electron-vite build > vite-build.log 2>&1
 
+      - name: Ensure GitHub release exists
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then TAG="${{ inputs.version }}"; fi
+          TAG="v$TAG"
+          # electron-builder packages TWO Windows targets (nsis + portable) in
+          # one invocation. Each target's publisher independently checks
+          # "does the release exist yet?" and, finding no, races to create
+          # it - discovered live shipping v1.1.9/v1.1.10: one target wins,
+          # the other's create call 422s with "already_exists", and
+          # electron-builder treats that as a hard failure, aborting the
+          # whole publish after only the first target's assets (sometimes
+          # only a partial upload) landed. Pre-creating the release here
+          # removes the race entirely - by the time electron-builder runs,
+          # both targets find an existing release and only ever upload
+          # assets to it, never attempt to create it.
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists - reusing it."
+          else
+            gh release create "$TAG" --title "$TAG" --notes "Automated release $TAG." --repo "${{ github.repository }}"
+          fi
+
       - name: Package + publish (electron-builder)
         shell: bash
         env:

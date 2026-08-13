@@ -135,6 +135,18 @@ Every phase before this one built the *engine*. Phase 5 is the part you actually
 
 Everything in this milestone lives behind one setting: Settings → **Sales Brain (Beta)**, off by default. When it's off, nothing in this whole module runs — no database file gets created, no AI calls happen, nothing. As of Phase 4, this is a real, working toggle you can click yourself — not just a setting that exists in the code with no way to reach it.
 
+## Post-ship incident: v1.1.9 briefly locked users out of login (fixed in v1.1.10)
+
+Worth documenting plainly, since it was a real production incident, not a hypothetical risk this doc was hedging against.
+
+**What happened:** `initSalesBrain()` was originally awaited right at the very top of app startup, before `registerAuth()` (and every other feature) had registered its IPC handlers. On a machine where Sales Brain's local embeddings model hadn't been downloaded yet, that first-use download could take long enough that the already-loaded login screen asked for auth status before the handler existed to answer it. The renderer's fallback for "no answer yet" happened to render identically to "Supabase isn't configured" — so affected users saw a false "Accounts aren't set up" screen and were genuinely locked out, even though their account and Supabase itself were completely fine.
+
+**How it was found:** a real user reported being locked out on their main machine, then confirmed it independently on a second, unrelated machine — ruling out a one-off local glitch. Backend health was verified directly (Supabase's auth endpoints responded correctly, including a real token-grant request), which pointed the investigation away from the server and toward app startup ordering. Reproduced live by launching the actual published v1.1.9 build and watching one launch stall for ~48 seconds between "app ready" and "registrations done" in the startup log.
+
+**The fix (v1.1.10):** `initSalesBrain()` now only blocks the three Sales-Brain-specific IPC handlers that genuinely need the database ready first (onboarding, backfill, Memory Center) — it runs *after* `registerAuth()` and everything else, not before. It's also wrapped in a 15-second timeout and a real try/catch, since the existing "never throws" doc comment on that function wasn't actually enforced in code.
+
+**Why this matters beyond the one bug:** it's a reminder that "must run before X" ordering comments need to say *before which specific things*, not just "before registerX() calls" as a blanket statement — the original comment was accurate about the original narrow risk (memory data reachable mid-migration) but got read, in practice, as license to block the entire startup sequence on it.
+
 ## Known gaps, being upfront about them
 
 - **Mac has not been verified.** This milestone was built and tested entirely on Windows — there's no Mac available in this environment. The code doesn't do anything platform-specific (no native modules beyond the same `better-sqlite3`/`sqlite-vec` stack that already gets built for both platforms elsewhere in this app), but "should work" is not the same as "confirmed," so treat Mac as untested until someone actually runs it there.

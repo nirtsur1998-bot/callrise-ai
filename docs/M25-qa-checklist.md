@@ -20,6 +20,14 @@ off each item; anything that fails goes back with the exact repro.
       folder even after using the app normally (making calls, opening chat) —
       the master flag must keep the whole module completely inert.
 
+## 0.5. Startup never blocks login (regression check — see the post-ship incident in M25-sales-brain.md)
+
+v1.1.9 briefly locked real users out of login because Sales Brain's init could stall startup before auth's IPC handler registered. v1.1.10 fixed the ordering. Test the exact failure mode directly, not just "does it work normally":
+
+- [ ] On a profile with Sales Brain **ON** and the local embeddings model **not yet cached** (delete `<userData>/memory-model-cache` first, or use a genuinely fresh profile), launch the packaged app and confirm the login screen becomes usable immediately — it must never show "Accounts aren't set up" while Sales Brain is still initializing in the background.
+- [ ] While that first-ever embeddings download is still in progress (check the app's startup/error log, or just time it), confirm you can still log in, view calls, and use every non-Sales-Brain feature normally.
+- [ ] Force a Sales Brain init failure (e.g., temporarily rename `memory.db` to something invalid mid-migration, or block network access before the embeddings model has ever been downloaded) and confirm the rest of the app — login very much included — still starts up normally, with Sales Brain simply staying inert for that session.
+
 ## 1. Turning it on + onboarding interview
 
 - [ ] Toggling Sales Brain on for the first time launches the onboarding
