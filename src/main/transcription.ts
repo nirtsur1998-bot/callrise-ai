@@ -305,14 +305,17 @@ function endLiveCallUnsaved(): void {
 
 // --- Session robustness (M26 4.4) -------------------------------------------
 //
-// Three hot paths had zero try/catch: the 1Hz health tick, audio ingest, and
-// the socket message handler (only its JSON.parse was ever guarded). Before
-// 4.1 that was survivable — main held no transcript, so a throw here cost
-// nothing durable. Once main OWNS the transcript, the same throw is a
-// total-loss event: the process-wide uncaughtException handler only logs (and
-// suppresses Electron's own crash dialog), a throwing setInterval keeps
-// firing every tick regardless, and the session slot is never cleared, so it
-// sits there wedged, doing nothing, forever.
+// Four hot paths had zero try/catch: the 1Hz health tick, audio ingest, the
+// socket message handler (only its JSON.parse was ever guarded), and drain —
+// the last one closed slightly later than the other three, on the reasoning
+// that a documented gap in a mechanism whose whole purpose is not having gaps
+// is just a gap with a note attached. Before 4.1 this was survivable — main
+// held no transcript, so a throw here cost nothing durable. Once main OWNS
+// the transcript, the same throw is a total-loss event: the process-wide
+// uncaughtException handler only logs (and suppresses Electron's own crash
+// dialog), a throwing setInterval keeps firing every tick regardless, and the
+// session slot is never cleared, so it sits there wedged, doing nothing,
+// forever.
 export const FAULT_WINDOW_MS = 5000
 export const FAULT_THRESHOLD = 3
 
@@ -419,7 +422,21 @@ function flushPendingShed(s: Session): void {
  * minutes of audio would pile up invisibly and then flood Deepgram on
  * recovery, where a 1.25x ingest cap turns it into lag that never recovers.
  */
+// M26 4.4b — the fourth entry point, closed alongside the other three rather
+// than left as a documented gap. Wrapping drainBody itself (rather than each
+// of its four call sites individually — ws.on('open'), the audio-ingest
+// path, the drain timer, and transcription:stop's final flush) protects all
+// of them uniformly with one guard, including the timer and ws.on('open')
+// sites that had no guard of any kind before this.
 function drain(s: Session): void {
+  try {
+    drainBody(s)
+  } catch (err) {
+    reportFault(s, 'drain', err)
+  }
+}
+
+function drainBody(s: Session): void {
   const ws = s.ws
   if (!ws || ws.readyState !== WebSocket.OPEN) return
   const limit = highWaterBytes(s)
