@@ -364,12 +364,13 @@ is. A `saveInFlight` latch closes a race that trigger introduces: a main-initiat
 successfully-saved call's journal without its `.done` marker, offering it for recovery and
 minting a duplicate `Call` record.
 
-**Known gap, named rather than silently bundled:** `drain()` has its own unguarded
-`setInterval` and `ws.on('open')` call site, separate from `ingestAudio` (wrapping
-`ingestAudio`'s body only covers a throw reached *via* `ingestAudio`, not drain's other two
-entry points). Not one of the three explicitly-named paths, so left unwrapped for this
-step — a fault there still only reaches today's status quo (the process-wide
-`uncaughtException` logger), not a regression, just an inconsistency worth closing later.
+**4.4b — `drain()`'s own fault-tolerance gap, closed (commit `ecd3f3a`).** Initially left
+open on the grounds that it wasn't one of the three explicitly-named paths and a fault there
+only reached today's status quo. Founder's call: close it anyway, same shape as the other
+three, in its own small commit — "a documented gap in a mechanism whose entire purpose is
+not having gaps is just a gap with a note attached." `drain()` has four call sites
+(`ws.on('open')`, the audio-ingest path, its own drain timer, `transcription:stop`'s final
+flush); wrapping the shared function itself, once, covers all four uniformly.
 
 **4.5 — Move the live engines.** Deal Intelligence `LiveCallState` and the cue turn buffer into
 the session; write the Radar Report from main rather than from a renderer callback.
