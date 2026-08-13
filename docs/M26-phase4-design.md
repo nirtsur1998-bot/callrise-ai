@@ -323,11 +323,23 @@ everything else depends on. *Verifiable: transcripts identical before and after.
 promoted to a real Call record at end of call, with orphan recovery at next launch. *This is
 the step that actually fixes force-quit and crash.*
 
-**4.3 — Detach ≠ stop.** `transcription:detach`, the `attaching` view state, snapshot-on-attach,
-`producerId` survival across remount, and Recorder ownership hoisted above the navigation
-boundary. *This is the step that fixes navigation.*
+**4.3 — Main owns the transcript; the renderer mirrors it.** The `attaching` view state,
+snapshot-on-attach, the splice-from patch protocol, `producerId` survival across remount, and
+the save reading main's copy rather than the renderer's payload.
 
-**4.4 — Session robustness.** try/catch at every main entry point, `render-process-gone`
+**SPLIT DURING IMPLEMENTATION.** This step originally also carried detach. It cannot: detach
+means removing `void window.api.transcription.stop()` from the unmount cleanup, which leaves
+the BUG-046 hotfix's `armSave()` + `flushPendingSave()` running on nav-away — saving a call
+that is still in progress. `saveCall` mints a fresh `randomUUID()` per invocation with no
+idempotency key, so the real end of that call writes a SECOND record: two calls in the list
+for one conversation. Keeping the hotfix live until 4.7 is the stronger commitment, so detach
+moved to 4.4 where its replacement lands in the same commit as its removal.
+
+**4.3b / 4.4 — Detach ≠ stop.** `transcription:detach`, Recorder ownership hoisted above the
+navigation boundary, and main gaining its own end-of-call trigger so the hotfix's job is
+genuinely done rather than merely duplicated. *This is the step that fixes navigation.*
+
+**4.4b — Session robustness.** try/catch at every main entry point, `render-process-gone`
 handling, disconnect-without-failure, and giving main its own end-of-call triggers (today
 `transcription:stop` is called *only* by the renderer — five sites — so a call whose renderer
 vanished can never end itself).
