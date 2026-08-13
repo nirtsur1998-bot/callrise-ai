@@ -161,7 +161,7 @@ export class OpenAIProvider implements AIProvider {
           tools: toTools(req),
           tool_choice: toToolChoice(req)
         },
-        // BUG-058/BUG-059 — always 0, never policy.maxRetries. The SDK's own
+        // BUG-058/BUG-059 — always the literal 0, never a variable. The SDK's own
         // internal retry sleep is an unabortable, uncapped setTimeout driven
         // by the provider's own Retry-After header — see openai-compatible.ts's
         // identical comment for the verified source. Our own walker owns every
@@ -206,7 +206,7 @@ export class OpenAIProvider implements AIProvider {
             stream: true,
             stream_options: { include_usage: true }
           },
-          // BUG-058/BUG-059 — always 0, never policy.maxRetries. The SDK's own
+          // BUG-058/BUG-059 — always the literal 0, never a variable. The SDK's own
         // internal retry sleep is an unabortable, uncapped setTimeout driven
         // by the provider's own Retry-After header — see openai-compatible.ts's
         // identical comment for the verified source. Our own walker owns every

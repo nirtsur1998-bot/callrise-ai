@@ -166,47 +166,99 @@ export class AIProviderError extends Error {
  *  maxRetries:0 on the Anthropic client; this makes that non-negotiable and
  *  applies identically to whichever provider is active. NEVER let a retry
  *  loop reintroduce itself on the coaching-cue path — a test asserts this
- *  (see __tests__/latencyPolicy.test.ts). */
+ *  (see __tests__/latencyPolicy.test.ts).
+ *
+ *  BUG-058/BUG-059 — `maxRetries` USED TO live on this interface and
+ *  configured the provider SDK's own internal retry. It was removed, not
+ *  renamed: the SDK's retry slept on an uncapped, unabortable wait driven by
+ *  the provider's own header (see providers/*.ts's own comments), and every
+ *  SDK call site now hardcodes `maxRetries: 0` — the SDK never retries
+ *  again. Retry budget is now SAME_MODEL_RETRY_LIMIT below, spent by
+ *  completeWithFallback's own abortable loop. Leaving a `maxRetries` field
+ *  here that nothing read would have been exactly the kind of lie BUG-060's
+ *  own inverted default exists to prevent — a number that looks load-bearing
+ *  and isn't. */
 export interface LatencyPolicyEntry {
-  maxRetries: number
   timeoutMs: number
 }
 
 export const LATENCY_POLICY: Record<AIPurpose, LatencyPolicyEntry> = {
-  'coaching-cue': { maxRetries: 0, timeoutMs: 6_000 },
-  summary: { maxRetries: 2, timeoutMs: 60_000 },
-  scorecard: { maxRetries: 2, timeoutMs: 60_000 },
-  tasks: { maxRetries: 2, timeoutMs: 30_000 },
-  other: { maxRetries: 1, timeoutMs: 30_000 },
+  'coaching-cue': { timeoutMs: 6_000 },
+  summary: { timeoutMs: 60_000 },
+  scorecard: { timeoutMs: 60_000 },
+  tasks: { timeoutMs: 30_000 },
+  other: { timeoutMs: 30_000 },
   // No consumer yet (M19 Task 3B not built) - same shape as 'other' until a
   // real call site exists to tell us its actual latency needs.
-  'prep-brief': { maxRetries: 1, timeoutMs: 30_000 },
+  'prep-brief': { timeoutMs: 30_000 },
   // M24's own acceptance criterion is "trigger to visible cue in <=4s" for
   // the WHOLE round trip (Tier 0 detection + this call + Nudge Engine
   // gating, all effectively instant except this). 0 retries for the same
   // reason as coaching-cue - a late deal-risk nudge is worse than a missed
   // one, since the moment it was actually relevant has usually passed.
-  'deal-tier1': { maxRetries: 0, timeoutMs: 4_000 },
+  'deal-tier1': { timeoutMs: 4_000 },
   // Runs every 2-3 minutes, not per-turn - not latency-critical the same way
   // deal-tier1 is, so it gets the same tier as summary/scorecard.
-  'deal-tier2': { maxRetries: 2, timeoutMs: 60_000 },
+  'deal-tier2': { timeoutMs: 60_000 },
   // Interactive but not real-time the way coaching-cue is — the rep is
   // watching a stream fill in, not waiting on one blocking round-trip, so a
   // slightly shorter timeout than summary/scorecard (still generous) plus
   // one retry is the right shape. streamWithFallback() only ever retries
-  // BEFORE any token has reached the renderer (see its own doc comment) —
-  // maxRetries here governs the SDK's own retry-before-first-byte behavior.
-  'coaching-chat': { maxRetries: 1, timeoutMs: 45_000 },
+  // BEFORE any token has reached the renderer (see its own doc comment).
+  'coaching-chat': { timeoutMs: 45_000 },
   // Post-call/post-chat background job, never blocks a UI the user is
   // watching — generous timeout is fine, but capped (not summary/scorecard's
   // full 60s) since extraction is a small, fixed-shape allowlist pull, not
   // deep reasoning.
-  'memory-extract': { maxRetries: 1, timeoutMs: 20_000 },
+  'memory-extract': { timeoutMs: 20_000 },
   // Nightly/background judgment work, same tier as summary/scorecard — a
   // real conversation-quality decision (is this a duplicate? a
   // contradiction? a genuine cross-memory pattern?), never watched live.
-  'memory-consolidate': { maxRetries: 2, timeoutMs: 60_000 },
-  'memory-reflect': { maxRetries: 2, timeoutMs: 60_000 }
+  'memory-consolidate': { timeoutMs: 60_000 },
+  'memory-reflect': { timeoutMs: 60_000 }
+}
+
+/**
+ * BUG-058/BUG-059 — how many times completeWithFallback's own loop retries
+ * the SAME model, for a network/timeout failure, before moving on. Replaces
+ * the old per-purpose `LATENCY_POLICY.maxRetries`, deliberately NOT by
+ * reusing those numbers unexamined — they were tuned for a different
+ * mechanism (the SDK's own broader default retry predicate, with its own,
+ * often header-driven, backoff) and were never checked against
+ * HARD_CEILING_MS, the thing that now actually bounds a step's total time.
+ *
+ * Checked, not assumed: `(1 + oldMaxRetries) * timeoutMs` against
+ * HARD_CEILING_MS for every purpose. For summary/scorecard/deal-tier2/
+ * memory-consolidate/memory-reflect it came out to EXACTLY the ceiling
+ * (180s worst-case single-step against a 180s ceiling) — meaning one
+ * model's own retries could consume the entire ceiling budget, leaving
+ * ZERO room for the cross-model fallback this whole milestone exists to
+ * provide. A uniform cap of 1 leaves 30–120s of margin for every purpose
+ * (computed against the SAME ceiling table) — a second same-model retry is
+ * low value anyway: if a model timed out AND timed out again, a third
+ * attempt at the identical model is a worse use of the remaining budget
+ * than trying a genuinely different one, which the chain already offers.
+ *
+ * 0 for coaching-cue/deal-tier1 — unchanged from before, and provably
+ * zero-risk: LEGACY_TAIL_MAX is also 0 for both (BUG-057), so these two
+ * purposes are single-attempt by design end to end, matching the
+ * <=4s/<=6s live-latency criteria M9/M24 fixed. Exhaustive Record, not
+ * Partial, for the same reason LEGACY_TAIL_MAX/HARD_CEILING_MS are — a
+ * 13th purpose must force a decision here, not inherit one silently.
+ */
+export const SAME_MODEL_RETRY_LIMIT: Record<AIPurpose, number> = {
+  'coaching-cue': 0,
+  'deal-tier1': 0,
+  summary: 1,
+  scorecard: 1,
+  tasks: 1,
+  other: 1,
+  'prep-brief': 1,
+  'deal-tier2': 1,
+  'coaching-chat': 1,
+  'memory-extract': 1,
+  'memory-consolidate': 1,
+  'memory-reflect': 1
 }
 
 /** Total wall-clock budget for a whole completeWithFallback() chain on this

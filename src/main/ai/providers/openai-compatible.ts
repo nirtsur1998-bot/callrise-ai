@@ -294,7 +294,7 @@ class OpenAICompatibleProvider implements AIProvider {
             tools: toTools(req),
             tool_choice: toToolChoice(req)
           },
-          // BUG-058/BUG-059 — maxRetries is ALWAYS 0 here, never policy.maxRetries.
+          // BUG-058/BUG-059 — maxRetries is ALWAYS the literal 0, never a variable.
           // The SDK's own internal retry sleep (internal/utils/sleep.js) is a bare
           // `setTimeout(ms)` that never accepts a signal, and `ms` is taken directly
           // from the provider's Retry-After header with NO CAP (client.js's
@@ -345,7 +345,7 @@ class OpenAICompatibleProvider implements AIProvider {
             stream: true,
             stream_options: { include_usage: true }
           },
-          // BUG-058/BUG-059 — maxRetries is ALWAYS 0 here, never policy.maxRetries.
+          // BUG-058/BUG-059 — maxRetries is ALWAYS the literal 0, never a variable.
           // The SDK's own internal retry sleep (internal/utils/sleep.js) is a bare
           // `setTimeout(ms)` that never accepts a signal, and `ms` is taken directly
           // from the provider's Retry-After header with NO CAP (client.js's

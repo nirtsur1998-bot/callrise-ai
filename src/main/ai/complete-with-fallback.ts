@@ -20,6 +20,7 @@ import {
   CHAIN_BUDGET,
   HARD_CEILING_MS,
   LATENCY_POLICY,
+  SAME_MODEL_RETRY_LIMIT,
   type AICompletionRequest,
   type AICompletionResult,
   type AIProviderId,
@@ -343,10 +344,14 @@ function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
  * NEVER 'failed' — a 400/tool-schema rejection fails identically every
  * time (BUG-057's own finding); retrying it is pure waste.
  *
- * Bounded by LATENCY_POLICY[purpose].maxRetries — the SAME count the SDK
- * used to be configured with, so per-purpose request cost doesn't silently
- * change. `signal` gates both the retry wait and is passed into every
- * attempt, so this is fully abortable where the SDK's own loop was not.
+ * Bounded by SAME_MODEL_RETRY_LIMIT[purpose] (types.ts) — deliberately NOT
+ * the old LATENCY_POLICY.maxRetries count reused unexamined: those numbers
+ * were tuned for the SDK's own broader retry predicate and were never
+ * checked against HARD_CEILING_MS, the thing that actually bounds a step's
+ * total time now. See that constant's own doc comment for the computed
+ * worst-case-vs-ceiling numbers that justify the smaller cap. `signal`
+ * gates both the retry wait and every attempt, so this is fully abortable
+ * where the SDK's own loop was not.
  */
 async function completeWithSameModelRetry(
   provider: { complete: (req: AICompletionRequest) => Promise<AICompletionResult> },
@@ -355,7 +360,7 @@ async function completeWithSameModelRetry(
   signal: AbortSignal,
   purpose: AIPurpose
 ): Promise<AICompletionResult> {
-  const maxAttempts = 1 + LATENCY_POLICY[purpose].maxRetries
+  const maxAttempts = 1 + SAME_MODEL_RETRY_LIMIT[purpose]
   let lastErr: unknown
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (signal.aborted) throw lastErr ?? new AIProviderError('timeout', 'Aborted.')
@@ -591,7 +596,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       // retry of the SAME model; once streaming has started, this loop
       // exits immediately on the next line's check and the existing
       // never-retry-mid-stream behavior below is unchanged.
-      const maxAttempts = 1 + LATENCY_POLICY[purpose].maxRetries
+      const maxAttempts = 1 + SAME_MODEL_RETRY_LIMIT[purpose]
       let stepErr: unknown = null
       let stepStartedStreaming = false
 

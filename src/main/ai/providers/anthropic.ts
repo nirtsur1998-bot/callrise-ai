@@ -144,7 +144,7 @@ export class AnthropicProvider implements AIProvider {
           tools: this.tools(req),
           tool_choice: this.toolChoice(req)
         },
-        // BUG-058/BUG-059 — always 0, never policy.maxRetries. Anthropic's own
+        // BUG-058/BUG-059 — always the literal 0, never a variable. Anthropic's own
         // sleep() DOES accept a signal (unlike OpenAI's), but the retry call
         // site never passes one through — verified in the vendored source — so
         // it is unabortable in practice either way, on a wait taken uncapped
@@ -195,7 +195,7 @@ export class AnthropicProvider implements AIProvider {
             tools,
             tool_choice: toolChoice
           },
-          // BUG-058/BUG-059 — always 0, never policy.maxRetries. Anthropic's own
+          // BUG-058/BUG-059 — always the literal 0, never a variable. Anthropic's own
         // sleep() DOES accept a signal (unlike OpenAI's), but the retry call
         // site never passes one through — verified in the vendored source — so
         // it is unabortable in practice either way, on a wait taken uncapped
