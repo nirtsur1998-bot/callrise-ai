@@ -51,7 +51,7 @@ vi.mock('../registry', () => {
 })
 
 const { loadAppSettings } = await import('../../app-settings')
-const { completeWithFallback, resolveChain, AllModelsExhaustedError } = await import(
+const { completeWithFallback, resolveConfiguredChain, AllModelsExhaustedError } = await import(
   '../complete-with-fallback'
 )
 const { resetCooldownsForTests } = await import('../model-cooldown')
@@ -94,7 +94,7 @@ describe('auth failures skip the rest of that provider', () => {
     // Single-key user, bad key. resolveChain legitimately offers 2 steps
     // (legacy + one same-provider retry); the auth result must collapse that
     // to a single actual request.
-    expect(resolveChain('memory-extract').length).toBe(2)
+    expect(resolveConfiguredChain('memory-extract').length).toBe(2)
 
     await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeInstanceOf(
       AllModelsExhaustedError

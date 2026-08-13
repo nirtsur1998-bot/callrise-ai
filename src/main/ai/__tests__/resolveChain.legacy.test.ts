@@ -19,7 +19,7 @@ vi.mock('../index', () => ({
 }))
 
 const { loadAppSettings } = await import('../../app-settings')
-const { resolveChain } = await import('../complete-with-fallback')
+const { resolveConfiguredChain } = await import('../complete-with-fallback')
 const { PROVIDER_REGISTRY } = await import('../registry')
 
 const ALL_PURPOSES: AIPurpose[] = [
@@ -64,20 +64,20 @@ afterEach(() => {
 
 describe('resolveChain — a default provider no longer means "no fallback"', () => {
   it('appends a fallback tail behind the legacy step', () => {
-    const steps = resolveChain('memory-extract')
+    const steps = resolveConfiguredChain('memory-extract')
     // The bug: this was exactly 1.
     expect(steps.length).toBeGreaterThan(1)
   })
 
   it('the legacy step is still FIRST — an existing install\'s first attempt is unchanged', () => {
-    const steps = resolveChain('memory-extract')
+    const steps = resolveConfiguredChain('memory-extract')
     expect(steps[0].catalogId).toBe('legacy:groq')
     expect(steps[0].modelId).toBe('') // '' => provider uses its own default, exactly as before
     expect(steps[0].fromImplicitTail).toBeFalsy()
   })
 
   it('the first fallback is a DIFFERENT provider — the one most likely to actually work', () => {
-    const steps = resolveChain('memory-extract')
+    const steps = resolveConfiguredChain('memory-extract')
     expect(steps[1].providerId).not.toBe('groq')
   })
 
@@ -87,7 +87,7 @@ describe('resolveChain — a default provider no longer means "no fallback"', ()
     // user's attempt 1 and a later "fallback" are literally the same request.
     const legacyModel = PROVIDER_REGISTRY.groq.defaultModelId
     expect(legacyModel).toBe('llama-3.3-70b-versatile') // pin the premise
-    const steps = resolveChain('memory-extract')
+    const steps = resolveConfiguredChain('memory-extract')
     expect(steps.slice(1).map((s) => s.modelId)).not.toContain(legacyModel)
   })
 
@@ -99,7 +99,7 @@ describe('resolveChain — a default provider no longer means "no fallback"', ()
     delete process.env.GOOGLE_AI_API_KEY
     delete process.env.OPENROUTER_API_KEY
 
-    const steps = resolveChain('memory-extract')
+    const steps = resolveConfiguredChain('memory-extract')
     const tail = steps.slice(1)
 
     expect(tail.length).toBe(1)
@@ -110,18 +110,18 @@ describe('resolveChain — a default provider no longer means "no fallback"', ()
   it('only providers with a key configured are ever in the tail', () => {
     delete process.env.GOOGLE_AI_API_KEY
     delete process.env.OPENROUTER_API_KEY
-    const steps = resolveChain('memory-extract')
+    const steps = resolveConfiguredChain('memory-extract')
     expect(steps.every((s) => s.providerId === 'groq')).toBe(true)
   })
 
   it('never puts a knownStale model in the tail', () => {
-    const ids = resolveChain('memory-extract').map((s) => s.catalogId)
+    const ids = resolveConfiguredChain('memory-extract').map((s) => s.catalogId)
     expect(ids).not.toContain('groq-llama-4-scout')
     expect(ids).not.toContain('groq-qwen3-32b')
   })
 
   it('tail entries are flagged fromImplicitTail — models the user never chose', () => {
-    const steps = resolveChain('memory-extract')
+    const steps = resolveConfiguredChain('memory-extract')
     // Assert the tail EXISTS before asserting things about it: `[].every()`
     // is vacuously true, so without this line the test passed even with the
     // whole fix reverted, proving nothing.
@@ -133,13 +133,13 @@ describe('resolveChain — a default provider no longer means "no fallback"', ()
 describe('resolveChain — the caps', () => {
   it('background purposes get at most 3 extra attempts (4 total)', () => {
     for (const p of ['summary', 'scorecard', 'memory-extract', 'deal-tier2'] as AIPurpose[]) {
-      expect(resolveChain(p).length).toBeLessThanOrEqual(4)
+      expect(resolveConfiguredChain(p).length).toBeLessThanOrEqual(4)
     }
   })
 
   it('interactive purposes where a human is waiting get exactly one extra', () => {
     for (const p of ['other', 'coaching-chat'] as AIPurpose[]) {
-      expect(resolveChain(p).length).toBeLessThanOrEqual(2)
+      expect(resolveConfiguredChain(p).length).toBeLessThanOrEqual(2)
     }
   })
 
@@ -148,9 +148,9 @@ describe('resolveChain — the caps', () => {
     // the per-attempt budget split in completeWithFallback is bit-identical
     // to today. This is what makes P1 provably zero-risk for M9's dead-air
     // fix and M24's <=4s criterion.
-    expect(resolveChain('coaching-cue')).toHaveLength(1)
-    expect(resolveChain('deal-tier1')).toHaveLength(1)
-    expect(resolveChain('coaching-cue')[0].catalogId).toBe('legacy:groq')
+    expect(resolveConfiguredChain('coaching-cue')).toHaveLength(1)
+    expect(resolveConfiguredChain('deal-tier1')).toHaveLength(1)
+    expect(resolveConfiguredChain('coaching-cue')[0].catalogId).toBe('legacy:groq')
   })
 })
 
@@ -159,7 +159,7 @@ describe('resolveChain — what must NOT change', () => {
     vi.mocked(loadAppSettings).mockReturnValue(
       allEmpty({ summary: ['groq-gpt-oss-120b', 'google-gemini-flash'] })
     )
-    const steps = resolveChain('summary')
+    const steps = resolveConfiguredChain('summary')
     expect(steps.map((s) => s.catalogId)).toEqual(['groq-gpt-oss-120b', 'google-gemini-flash'])
     // The user authored this ordering — falling back within it is the system
     // doing what they asked, not an implicit substitution.
@@ -168,7 +168,7 @@ describe('resolveChain — what must NOT change', () => {
 
   it('with no legacy provider at all, the bundled-only branch is unchanged', () => {
     activeProviderId.current = null
-    const steps = resolveChain('summary')
+    const steps = resolveConfiguredChain('summary')
     expect(steps.length).toBeGreaterThan(0)
     expect(steps.every((s) => !s.fromImplicitTail)).toBe(true)
     expect(steps.every((s) => s.catalogId.startsWith('legacy:') === false)).toBe(true)
@@ -180,7 +180,7 @@ describe('memory-extract is no longer single-lane', () => {
     // Without widening past SPEED_CHAIN (groq+cerebras only), the entire
     // "fallback" for this purpose was more requests to the same 429 — the fix
     // would pass a unit test and still fail live on the founder's machine.
-    const steps = resolveChain('memory-extract')
+    const steps = resolveConfiguredChain('memory-extract')
     const providers = new Set(steps.map((s) => s.providerId))
     expect(providers.size).toBeGreaterThanOrEqual(2)
   })

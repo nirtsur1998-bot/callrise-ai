@@ -59,6 +59,20 @@ export interface CatalogEntry {
    *  re-checks this live once a real key is configured, which can clear
    *  (or confirm) this flag. */
   knownStale?: string
+  /** BUG-057 Phase 6 — hand-verified against provider docs, same convention
+   *  as knownStale, but UNLIKE knownStale (whose staleness resolveCatalog()
+   *  re-checks live every ~10 min) there is no live signal to build a real
+   *  check from: listModels() returns ID strings only, no capability data.
+   *  `false` = verified NOT to support forced tool calls, dated in the
+   *  entry's own comment where set. Undefined = "assumed to support it,
+   *  unverified" — a newly added entry without this field is never silently
+   *  excluded. KNOWN STALENESS RISK, not solved: if a provider ships
+   *  tool-calling support later, a `false` entry stays silently excluded
+   *  with no error and no log line until someone manually revisits it —
+   *  worse than a wasted attempt, which at least surfaces in
+   *  fallback-log.ts. No automatic re-check exists; treat any `false` entry
+   *  as needing the same periodic-audit attention as a `knownStale` one. */
+  supportsToolCalling?: false
 }
 
 export const MODEL_CATALOG: CatalogEntry[] = [

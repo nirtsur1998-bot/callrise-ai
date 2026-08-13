@@ -259,11 +259,28 @@ function bundledSteps(purpose: AIPurpose): ResolvedStep[] {
   return steps
 }
 
-// Exported for direct unit testing (mocking loadAppSettings + process.env is
+/** BUG-057 Phase 6 — every step whose provider has a configured key,
+ *  unfiltered by tool-calling capability; and `capable`, the same list
+ *  further filtered when the caller needs one. Equal to `configured` when
+ *  `needsTool` is false/omitted. Kept as two separate counts (not one
+ *  collapsed empty-array case) so a caller can tell "no keys configured at
+ *  all" apart from "keys exist but none of the assigned models support
+ *  tools" — the first pass's version filtered internally and then re-ran
+ *  the same idempotent filter on the already-filtered result, a check that
+ *  could never fire; only the caller has both counts, since this is where
+ *  the filtering actually happens. */
+export interface ResolvedChain {
+  configured: ResolvedStep[]
+  capable: ResolvedStep[]
+}
+
+// The pre-Phase-6 resolution logic, verbatim — still exported under its old
+// name for direct unit testing (mocking loadAppSettings + process.env is
 // simpler and faster than driving the whole completeWithFallback path).
-export function resolveChain(purpose: AIPurpose): ResolvedStep[] {
-  const configured = loadAppSettings().aiModelAssignments[purpose].chain
-  const candidateIds = configured.length > 0 ? configured : null
+// resolveChain() below wraps this with the capability filter.
+export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
+  const configuredIds = loadAppSettings().aiModelAssignments[purpose].chain
+  const candidateIds = configuredIds.length > 0 ? configuredIds : null
 
   if (candidateIds) {
     const steps: ResolvedStep[] = []
@@ -339,6 +356,18 @@ export function resolveChain(purpose: AIPurpose): ResolvedStep[] {
     .slice(0, tailMax)
     .map((s) => ({ ...s, fromImplicitTail: true }))
   return [legacy, ...tail]
+}
+
+/** BUG-057 Phase 6 — resolveConfiguredChain() unchanged, plus an optional
+ *  tool-calling capability filter. `capable` equals `configured` when
+ *  `needsTool` is false/omitted, so every existing caller that never passes
+ *  `opts` sees identical behavior to before this phase. */
+export function resolveChain(purpose: AIPurpose, opts?: { needsTool?: boolean }): ResolvedChain {
+  const configured = resolveConfiguredChain(purpose)
+  const capable = opts?.needsTool
+    ? configured.filter((s) => catalogEntry(s.catalogId)?.supportsToolCalling !== false)
+    : configured
+  return { configured, capable }
 }
 
 function classifyReason(err: unknown): string {
@@ -444,14 +473,27 @@ async function completeWithSameModelRetry(
  *  callers pass their existing AICompletionRequest unchanged. */
 export async function completeWithFallback(req: AICompletionRequest): Promise<AICompletionResult> {
   const purpose = req.purpose
-  const resolved = resolveChain(purpose)
+  const { configured, capable } = resolveChain(purpose, { needsTool: Boolean(req.tool) })
   // BUG-057 Phase 5 — CHAIN_BUDGET is exactly the two live, latency-critical
   // purposes (coaching-cue, deal-tier1); everything else is 'durable'. See
   // model-cooldown.ts's CooldownTier doc comment for what this drives.
   const tier: CooldownTier = purpose in CHAIN_BUDGET ? 'live' : 'durable'
 
-  if (resolved.length === 0) {
+  if (configured.length === 0) {
     throw new AIProviderError('no-key', 'No AI provider is configured for this yet.')
+  }
+  if (capable.length === 0) {
+    // BUG-057 Phase 6 — configured.length > 0 here by construction: real
+    // keys ARE configured, none of them are verified to support forced tool
+    // calls. Distinct from the no-key case above (and from the cooldown
+    // case below) — a different problem with a different fix (reassign a
+    // model in Settings, not add/wait for a key).
+    throw new AIProviderError(
+      'failed',
+      "Every model configured for this can't run this request (tool-calling not supported by any of them) — reassign a model in Settings.",
+      undefined,
+      'structural'
+    )
   }
 
   // BUG-058 — skip models that just rate-limited us. Filtered HERE rather
@@ -459,7 +501,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   // + keys, and so the "everything is cooling down" case below can tell the
   // difference between "you have no keys" and "your keys need a minute".
   const startedNow = Date.now()
-  const chain = resolved.filter((s) => isUsableFor(s.catalogId, startedNow, tier))
+  const chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier))
 
   if (chain.length === 0) {
     // Every model is in cooldown. Refusing here is the POINT: walking the
@@ -467,7 +509,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     // limits out further, which is the spiral this fix exists to break.
     // Reported as a wait, with a number, rather than a generic failure.
     const until = soonestExpiry(
-      resolved.map((s) => s.catalogId),
+      capable.map((s) => s.catalogId),
       startedNow,
       tier
     )
@@ -642,7 +684,7 @@ export interface StreamWithFallbackResult extends AsyncIterable<{ delta: string 
  */
 export function streamWithFallback(req: AICompletionRequest): StreamWithFallbackResult {
   const purpose = req.purpose
-  const resolved = resolveChain(purpose)
+  const { configured, capable } = resolveChain(purpose, { needsTool: Boolean(req.tool) })
   // BUG-057 Phase 5 — coaching-chat (the only consumer today) isn't in
   // CHAIN_BUDGET, so this is always 'durable' currently; computed the same
   // way as completeWithFallback rather than hardcoded, so a future live
@@ -653,7 +695,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
   // consumer, and it is interactive, so spending its first attempt on a model
   // we already know is limited is the most visible possible version of this.
   const startedNow = Date.now()
-  const chain = resolved.filter((s) => isUsableFor(s.catalogId, startedNow, tier))
+  const chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier))
 
   let resolveFinal!: (v: { text: string; model: string; usage: AICompletionResult['usage'] }) => void
   let rejectFinal!: (e: unknown) => void
@@ -665,20 +707,34 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
   )
 
   async function* generator(): AsyncGenerator<{ delta: string }> {
-    if (resolved.length === 0) {
+    if (configured.length === 0) {
       const err = new AIProviderError('no-key', 'No AI provider is configured for this yet.')
       rejectFinal(err)
       throw err
     }
+    if (capable.length === 0) {
+      // BUG-057 Phase 6 — configured.length > 0 here by construction: real
+      // keys ARE configured, none of them are verified to support forced
+      // tool calls. Distinct from the no-key case above and the cooldown
+      // case below — same three-way split as completeWithFallback.
+      const err = new AIProviderError(
+        'failed',
+        "Every model configured for this can't run this request (tool-calling not supported by any of them) — reassign a model in Settings.",
+        undefined,
+        'structural'
+      )
+      rejectFinal(err)
+      throw err
+    }
     if (chain.length === 0) {
-      // BUG-057 Phase 2 — resolved.length > 0 here by construction: real
+      // BUG-057 Phase 2 — configured.length > 0 here by construction: real
       // keys ARE configured, every entry is just cooling down right now.
       // Before this, this case hit the SAME branch as genuinely-no-keys
       // above, telling a user with valid keys "No AI provider is configured
       // for this yet" — see complete-with-fallback.ts's own identical
       // pattern (the non-streaming path already got this right).
       const until = soonestExpiry(
-        resolved.map((s) => s.catalogId),
+        capable.map((s) => s.catalogId),
         startedNow,
         tier
       )
