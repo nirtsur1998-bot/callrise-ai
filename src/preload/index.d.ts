@@ -1537,6 +1537,19 @@ export interface AiFallbackApi {
   recentEvents: () => Promise<AiFallbackEventView[]>
 }
 
+/** BUG-057 Part 3 — per-purpose AI health, already classified into what to
+ *  show (severity + message) and where a "fix this" click should go, so the
+ *  renderer never needs its own copy of purpose-health.ts's severity logic. */
+export interface PurposeHealthView {
+  severity: 'ok' | 'not-configured' | 'substituting' | 'failing'
+  message: string
+  actionPageId: 'ai-setup' | 'ai-models' | null
+}
+
+export interface PurposeHealthApi {
+  getAll: () => Promise<Record<AiPurpose, PurposeHealthView>>
+}
+
 export interface VirtualMicApi {
   /** Current driver/helper/denoise status. */
   getStatus: () => Promise<VirtualMicStatus>
@@ -2367,6 +2380,7 @@ declare global {
       aiKeys: AiKeysApi
       aiCatalog: AiCatalogApi
       aiFallback: AiFallbackApi
+      purposeHealth: PurposeHealthApi
       detection: DetectionApi
       alerts: AlertsApi
       prepBrief: PrepBriefApi

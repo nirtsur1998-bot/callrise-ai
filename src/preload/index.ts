@@ -442,6 +442,9 @@ const api = {
   aiFallback: {
     recentEvents: () => ipcRenderer.invoke('aiFallback:recentEvents')
   },
+  purposeHealth: {
+    getAll: () => ipcRenderer.invoke('purposeHealth:getAll')
+  },
   virtualmic: {
     // App-managed noise cancellation: detect + start/stop the denoiser helper.
     getStatus: () => ipcRenderer.invoke('virtualmic:getStatus'),

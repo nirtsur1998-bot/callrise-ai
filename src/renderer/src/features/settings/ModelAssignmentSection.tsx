@@ -8,6 +8,7 @@ import { useAppSettings } from './useAppSettings'
 type AiResolvedCatalogEntry = Awaited<ReturnType<typeof window.api.aiCatalog.resolve>>[number]
 type AiPurpose = Parameters<typeof window.api.aiCatalog.assignPrimaryModel>[0]
 type AiFallbackEventView = Awaited<ReturnType<typeof window.api.aiFallback.recentEvents>>[number]
+type PurposeHealthView = Awaited<ReturnType<typeof window.api.purposeHealth.getAll>>[AiPurpose]
 
 interface JobConfig {
   purpose: AiPurpose
@@ -171,16 +172,43 @@ function AutomaticRow({
   )
 }
 
+/** BUG-057 Parts 2-3 — makes two previously-invisible states visible right
+ *  where a worried user actually looks: "substituting" (running on a
+ *  provider other than the one you chose, quietly, since Part 1 added that
+ *  fallback) and "failing" (every attempt for this job has failed, for
+ *  long enough and often enough that it isn't a blip — see
+ *  purpose-health.ts's own severityOf() for the exact thresholds). 'ok'
+ *  and 'not-configured' render nothing here — 'not-configured' is already
+ *  covered by the existing "No key" status dot on each catalog row. */
+function PurposeHealthNotice({ health }: { health: PurposeHealthView | undefined }): React.JSX.Element | null {
+  if (!health || health.severity === 'ok' || health.severity === 'not-configured') return null
+  const isFailing = health.severity === 'failing'
+  return (
+    <p
+      className={cn(
+        'mb-2.5 rounded-lg border px-2.5 py-2 text-[12px]',
+        isFailing
+          ? 'border-danger/40 bg-danger/10 text-danger'
+          : 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+      )}
+    >
+      {health.message}
+    </p>
+  )
+}
+
 function JobCard({
   job,
   catalog,
   primaryId,
+  health,
   onAssign,
   onReset
 }: {
   job: JobConfig
   catalog: AiResolvedCatalogEntry[]
   primaryId: string | null
+  health: PurposeHealthView | undefined
   onAssign: (catalogId: string) => Promise<void>
   onReset: () => Promise<void>
 }): React.JSX.Element {
@@ -224,6 +252,7 @@ function JobCard({
         </button>
       </div>
       <p className="mb-2.5 text-[13px] text-muted">{job.blurb}</p>
+      <PurposeHealthNotice health={health} />
 
       <div className="rounded-lg border border-line-soft">
         {primary ? <CatalogRow entry={primary} /> : <AutomaticRow selected />}
@@ -294,6 +323,26 @@ export function ModelAssignmentSection(): React.JSX.Element {
   const { settings } = useAppSettings()
   const [catalog, setCatalog] = useState<AiResolvedCatalogEntry[] | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  // BUG-057 Parts 2-3 — polled rather than pushed: this page is exactly
+  // where a worried user comes to look, not somewhere a live push needs to
+  // interrupt. A stale-by-a-minute severity here costs nothing a manual
+  // reopen of Settings doesn't already fix.
+  const [health, setHealth] = useState<Partial<Record<AiPurpose, PurposeHealthView>>>({})
+
+  useEffect(() => {
+    let cancelled = false
+    const poll = (): void => {
+      void window.api.purposeHealth.getAll().then((v) => {
+        if (!cancelled) setHealth(v)
+      })
+    }
+    poll()
+    const id = window.setInterval(poll, 60_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [])
   // Seeded from useAppSettings on first paint, then updated directly from
   // assignPrimaryModel()'s own return value — NOT by calling the generic
   // settings.update() with a no-op patch, which would still bump
@@ -368,6 +417,7 @@ export function ModelAssignmentSection(): React.JSX.Element {
           job={job}
           catalog={catalog}
           primaryId={assignments[job.purpose].chain[0] ?? null}
+          health={health[job.purpose]}
           onAssign={(catalogId) => assign(job.purpose, catalogId)}
           onReset={() => reset(job.purpose)}
         />

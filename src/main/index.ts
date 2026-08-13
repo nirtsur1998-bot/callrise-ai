@@ -171,6 +171,7 @@ import { disposeTray } from './detection-tray'
 import { registerCoachPdf } from './coach-pdf'
 import { registerAiKeys, loadStoredAiKeysIntoEnv } from './ai-keys'
 import { registerFallbackLog } from './ai/fallback-log'
+import { registerPurposeHealthStore } from './ai/purpose-health-store'
 import { registerModelCatalog } from './ai/catalog-ipc'
 import { initSalesBrain, maybeRunNightlyConsolidation } from './memory/memory-runtime'
 import { registerOnboarding } from './memory/onboarding-ipc'
@@ -325,6 +326,7 @@ app.whenReady().then(async () => {
   registerAiKeys()
   registerModelCatalog()
   registerFallbackLog()
+  registerPurposeHealthStore()
 
   // Any consent record still on disk belongs to a call that is already over —
   // this process has not started one. A crash mid-call must never leave behind

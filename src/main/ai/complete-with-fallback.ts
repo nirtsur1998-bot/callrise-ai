@@ -14,6 +14,7 @@ import { getActiveAIProvider } from './index'
 import { loadAppSettings } from '../app-settings'
 import { catalogEntry, type CatalogEntry } from './model-catalog'
 import { logFallbackEvent } from './fallback-log'
+import { recordAiFailure, recordAiSuccess } from './purpose-health-store'
 import {
   clearCooldown,
   isUsableFor,
@@ -33,6 +34,7 @@ import {
   type AICompletionRequest,
   type AICompletionResult,
   type AIFailureClass,
+  type AIProviderErrorCode,
   type AIProviderId,
   type AIPurpose
 } from './types'
@@ -480,6 +482,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   const tier: CooldownTier = purpose in CHAIN_BUDGET ? 'live' : 'durable'
 
   if (configured.length === 0) {
+    void recordAiFailure(purpose, { reason: 'no-key', providerId: null })
     throw new AIProviderError('no-key', 'No AI provider is configured for this yet.')
   }
   if (capable.length === 0) {
@@ -488,6 +491,11 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     // calls. Distinct from the no-key case above (and from the cooldown
     // case below) — a different problem with a different fix (reassign a
     // model in Settings, not add/wait for a key).
+    void recordAiFailure(purpose, {
+      reason: 'failed',
+      providerId: null,
+      detail: 'no configured model verified to support tool calling'
+    })
     throw new AIProviderError(
       'failed',
       "Every model configured for this can't run this request (tool-calling not supported by any of them) — reassign a model in Settings.",
@@ -514,6 +522,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
       tier
     )
     const secs = until ? Math.max(1, Math.ceil((until - startedNow) / 1000)) : 60
+    void recordAiFailure(purpose, { reason: 'rate-limit', providerId: null })
     throw new AIProviderError(
       'rate-limit',
       `Every model set up for this is rate-limited right now. Try again in about ${secs}s.`,
@@ -524,6 +533,15 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   const budget = CHAIN_BUDGET[purpose]
   let remainingBudgetMs = budget?.totalBudgetMs ?? 0
   const attempts: { catalogId: string; reason: string; failureClass?: AIFailureClass }[] = []
+  // BUG-057 Part 3 — the LAST attempt's classified info, for whichever
+  // exhaustion throw ends this call. purpose-health.ts's own doc comment is
+  // explicit that a failure record is per-CALL, not per-step (`attempts`
+  // above already carries every step for the log/message; this is only the
+  // final one, the same "N in a row" unit the rest of that module counts
+  // in), so this is tracked here rather than recorded inside the per-step
+  // catch block below.
+  let lastAttempt: { reason: AIProviderErrorCode; providerId: AIProviderId; detail?: string } | null =
+    null
   const attempted = new Set<string>() // defense-in-depth: chain is already deduped by construction
   // BUG-057 — an invalid or revoked key fails IDENTICALLY on every model that
   // provider offers, so once one step returns 'auth', every remaining step on
@@ -582,11 +600,13 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
       const result = await completeWithSameModelRetry(provider, req, step.modelId, attemptSignal, purpose)
       // Proof the limit lifted — trust that over any earlier estimate.
       clearCooldown(step.catalogId)
+      void recordAiSuccess(purpose, { providerId: step.providerId, fromImplicitTail: !!step.fromImplicitTail })
       return result
     } catch (err) {
       const reason = classifyReason(err)
       const detail = detailFrom(err)
       const failureClass = err instanceof AIProviderError ? effectiveFailureClass(err) : 'transient'
+      lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail }
       if (reason === 'auth') deadProviders.add(step.providerId)
       // BUG-058 — honour the provider's own "come back in N seconds" so the
       // next call skips this model instead of re-burning it. Without this,
@@ -651,12 +671,22 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     // user actions, and collapsing them is how the 27-minute path stayed
     // invisible. Surfaced as an AIProviderError so the existing
     // friendlyError() handlers pass the real message through to the user.
+    void recordAiFailure(purpose, {
+      reason: 'timeout',
+      providerId: lastAttempt?.providerId ?? null,
+      detail: lastAttempt?.detail
+    })
     throw new AIProviderError(
       'timeout',
       `This took too long and was stopped after ${Math.round(HARD_CEILING_MS[purpose] / 1000)}s. Your AI provider may be rate-limiting or slow right now — try again shortly.`
     )
   }
 
+  void recordAiFailure(purpose, {
+    reason: lastAttempt?.reason ?? 'failed',
+    providerId: lastAttempt?.providerId ?? null,
+    detail: lastAttempt?.detail
+  })
   throw new AllModelsExhaustedError(purpose, attempts)
 }
 
@@ -708,6 +738,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
 
   async function* generator(): AsyncGenerator<{ delta: string }> {
     if (configured.length === 0) {
+      void recordAiFailure(purpose, { reason: 'no-key', providerId: null })
       const err = new AIProviderError('no-key', 'No AI provider is configured for this yet.')
       rejectFinal(err)
       throw err
@@ -717,6 +748,11 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       // keys ARE configured, none of them are verified to support forced
       // tool calls. Distinct from the no-key case above and the cooldown
       // case below — same three-way split as completeWithFallback.
+      void recordAiFailure(purpose, {
+        reason: 'failed',
+        providerId: null,
+        detail: 'no configured model verified to support tool calling'
+      })
       const err = new AIProviderError(
         'failed',
         "Every model configured for this can't run this request (tool-calling not supported by any of them) — reassign a model in Settings.",
@@ -739,6 +775,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         tier
       )
       const secs = until ? Math.max(1, Math.ceil((until - startedNow) / 1000)) : 60
+      void recordAiFailure(purpose, { reason: 'rate-limit', providerId: null })
       const err = new AIProviderError(
         'rate-limit',
         `Every model set up for this is rate-limited right now. Try again in about ${secs}s.`,
@@ -751,6 +788,11 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     let fullText = ''
     let startedStreaming = false
     let lastErr: unknown = null
+    // BUG-057 Part 3 — same per-CALL (not per-step) tracking as
+    // completeWithFallback's lastAttempt; see that function's identical
+    // field for the full reasoning.
+    let lastAttempt: { reason: AIProviderErrorCode; providerId: AIProviderId; detail?: string } | null =
+      null
     const attempts: { catalogId: string; reason: string; failureClass?: AIFailureClass }[] = []
 
     for (let i = 0; i < chain.length; i++) {
@@ -786,6 +828,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           }
           const usage = await streamResult.usage
           clearCooldown(step.catalogId)
+          void recordAiSuccess(purpose, { providerId: step.providerId, fromImplicitTail: !!step.fromImplicitTail })
           resolveFinal({ text: fullText, model: step.modelId || `${step.providerId} (default)`, usage })
           return
         } catch (err) {
@@ -806,6 +849,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         lastErr = err
         const reason = classifyReason(err)
         const detail = detailFrom(err)
+        lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail }
         const failureClass = err instanceof AIProviderError ? effectiveFailureClass(err) : 'transient'
         if (reason === 'rate-limit' && failureClass === 'period-exhausted') {
           markPeriodExhausted(
@@ -839,6 +883,13 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           detail
         })
         if (startedStreaming) {
+          // BUG-057 Part 3 — recorded as a failure even though the caller
+          // did receive some real output: purpose-health's severity model
+          // is binary (this call either completed cleanly or it didn't),
+          // and a mid-stream cutoff genuinely isn't "it worked" from the
+          // rep's point of view — a simplification, not a fully-reasoned
+          // partial-success case, noted rather than silently assumed.
+          void recordAiFailure(purpose, { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail })
           const streamErr =
             err instanceof AIProviderError
               ? err
@@ -856,6 +907,11 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     // error the last entry happened to throw (lastErr is already captured
     // per-attempt in `attempts` for diagnostics).
     void lastErr
+    void recordAiFailure(purpose, {
+      reason: lastAttempt?.reason ?? 'failed',
+      providerId: lastAttempt?.providerId ?? null,
+      detail: lastAttempt?.detail
+    })
     const finalErr = new AllModelsExhaustedError(purpose, attempts)
     rejectFinal(finalErr)
     throw finalErr
