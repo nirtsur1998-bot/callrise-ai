@@ -11,6 +11,7 @@ import { ErrorBoundary } from '@renderer/components/ErrorBoundary'
 import { ActivityCenter } from '@renderer/features/jobs/ActivityCenter'
 import { InterruptedCallPrompt } from '@renderer/features/live/InterruptedCallPrompt'
 import { LiveCallProvider } from '@renderer/features/live/LiveCallProvider'
+import { LiveCallPill } from '@renderer/features/live/LiveCallPill'
 import { MainApp } from './MainApp'
 
 /** A brief splash while we check whether someone is already signed in. */
@@ -75,6 +76,12 @@ function App(): React.JSX.Element {
               not be unmounted by a navigation the rep happens to make while
               deciding. */}
           <InterruptedCallPrompt />
+          {/* M26 Phase 4.6 — same reason again: a rep who navigates to
+              Settings (or anywhere else) mid-call should still be able to see
+              the call is running and get back to it, not just discover it's
+              still going when they eventually return. See LiveCallPill.tsx's
+              own doc comment. */}
+          <LiveCallPill />
         </LiveCallProvider>
       )}
     </ToastProvider>

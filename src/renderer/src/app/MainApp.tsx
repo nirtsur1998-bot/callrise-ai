@@ -15,6 +15,7 @@ import { getAutoOpenMeetingPage } from '@renderer/features/settings/prefs'
 import { useAutoTranscribeCalls } from '@renderer/features/settings/useAutoTranscribeCalls'
 import { CallDetectedBanner } from '@renderer/features/live/components/CallDetectedBanner'
 import { MemoryReviewModal } from '@renderer/features/settings/MemoryReviewModal'
+import { setGoToLiveCallsListener } from '@renderer/features/live/liveCallNav'
 
 // Exactly one of these renders at a time (see the `active === ...` switch
 // below, itself remounted via `key={active}` on every switch) — so eagerly
@@ -91,6 +92,17 @@ export function MainApp({
       }
     })
   }, [autoTranscribeCalls])
+
+  // M26 Phase 4.6 — the live-call pill (App.tsx) lives outside this
+  // component's tree (same reason as ActivityCenter/InterruptedCallPrompt:
+  // it must survive the swap to Settings' wholly separate tree) and has no
+  // other way to bring MainApp back to Live Calls on click. Same
+  // subscribe-in-an-effect shape as onCallDetected just above, minus the IPC
+  // hop — both ends already live in this renderer process.
+  useEffect(() => {
+    setGoToLiveCallsListener(() => setActive('live-calls'))
+    return () => setGoToLiveCallsListener(null)
+  }, [])
 
   // Ambient call detection (M15) - feature-flagged off by default
   // (app-settings.ts's detection.enabled), so this never fires until that's
