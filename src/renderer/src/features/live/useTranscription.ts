@@ -201,11 +201,26 @@ export function useTranscription(
   }, [])
 
   // Arm a save (used by both Stop and mic-unplug, so they can't drift).
+  //
+  // BUG-053 — this latch records INTENT ONLY: "a save has been requested".
+  // It used to also decide, right here, whether there was anything worth
+  // saving (`= segmentsRef.current.length > 0`), and that check was made at
+  // the wrong moment. Stopping a call sends Deepgram a Finalize and keeps
+  // the socket open ~1.5s specifically so the last words still arrive
+  // (main/transcription.ts's STOP_FLUSH_MS) — so on a SHORT call, where
+  // everything spoken was still interim at the moment Stop was pressed,
+  // this latched false, the final words then landed in segmentsRef, and
+  // flushPendingSave bailed on a call that did have content. The rep did
+  // exactly the right thing and lost the call through the primary button.
+  //
+  // "Is there anything to save?" is answered where it belongs — in
+  // flushPendingSave, against segmentsRef AT FLUSH TIME, after the final
+  // words have arrived. A genuinely wordless call still writes nothing.
   const armSave = useCallback(() => {
     durationMsRef.current = startMsRef.current
       ? Math.round(performance.now() - startMsRef.current)
       : 0
-    savePendingRef.current = segmentsRef.current.length > 0
+    savePendingRef.current = true
   }, [])
 
   // Persist the call exactly once. Called when the session closes, but also on
