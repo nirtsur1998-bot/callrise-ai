@@ -94,7 +94,25 @@ export function registerBackfill(): void {
         if (progressHolder.last !== null && progressHolder.last.stage === 'error') {
           throw new Error(progressHolder.last.lastError ?? 'The import failed.')
         }
-        return 'Import complete.'
+
+        // BUG-057 — a run where the calls stage attempted extractions and not
+        // ONE succeeded is a failed run, and must surface as one: red, with
+        // the reason and a Retry, instead of a green check over an import that
+        // learned nothing. This is the case that hid two days of total AI
+        // failure behind a hardcoded "Import complete." — twice in one morning,
+        // 99 doomed requests each time.
+        //
+        // Partial success is deliberately NOT failure: if contacts and deals
+        // imported fine and only the calls stage struggled, the job succeeds
+        // and the summary names the failures instead.
+        if (progressHolder.last?.callsTotalFailure === true) {
+          throw new Error(
+            progressHolder.last.summary ??
+              'Every attempt to read your past calls failed — nothing was imported from them.'
+          )
+        }
+
+        return progressHolder.last?.summary ?? 'Import complete.'
       }
     }
   })

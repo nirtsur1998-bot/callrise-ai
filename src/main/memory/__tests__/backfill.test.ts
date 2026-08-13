@@ -29,7 +29,10 @@ vi.mock('../../calls-fs', () => ({
 }))
 
 const extractMemoriesFromCall = vi.fn(
-  async (_segments: any[], _callId: string, _contactId: string | null): Promise<any[]> => []
+  async (_segments: any[], _callId: string, _contactId: string | null): Promise<any> => ({
+    candidates: [],
+    aiFailed: false
+  })
 )
 vi.mock('../extraction', () => ({
   extractMemoriesFromCall: (segments: any[], callId: string, contactId: string | null) =>

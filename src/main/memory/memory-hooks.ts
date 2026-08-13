@@ -108,7 +108,7 @@ export async function runMemoryExtractionForCall(
   // extraction.ts) — the post-save pass passes null unconditionally, never
   // reading the call's actual contactId at all.
   const contactId = pass.pass === 'post-save' ? null : pass.contactIdAtTrigger
-  const candidates = await extractMemoriesFromCall(call.segments, callId, contactId)
+  const { candidates } = await extractMemoriesFromCall(call.segments, callId, contactId)
   const touchedScopes = new Set<MemoryScope>()
   let newCount = 0
   for (const candidate of candidates) {
@@ -138,7 +138,7 @@ export async function runMemoryExtractionForChatMessage(
   const call = await getCall(callsDir(), callId)
   if (!call || call.salesBrainExcluded) return
 
-  const candidates = await extractMemoriesFromChatMessage(
+  const { candidates } = await extractMemoriesFromChatMessage(
     message,
     callId,
     chatMessageId,

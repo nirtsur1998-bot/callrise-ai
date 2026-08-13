@@ -57,9 +57,9 @@ vi.mock('../extraction', () => ({
     contactId: string | null
   ) => {
     state.extractCalls.push({ contactId })
-    return []
+    return { candidates: [], aiFailed: false }
   },
-  extractMemoriesFromChatMessage: async () => []
+  extractMemoriesFromChatMessage: async () => ({ candidates: [], aiFailed: false })
 }))
 
 vi.mock('../consolidation', () => ({

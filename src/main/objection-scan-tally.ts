@@ -51,7 +51,21 @@ export interface ScanTally {
   summary: () => string
 }
 
-export function createScanTally(): ScanTally {
+/** The two nouns the summary sentence needs. Defaulted to the objection
+ *  scan's own wording so its call site (calls.ts) stays unchanged — BUG-057
+ *  reused this module for the Sales Brain backfill rather than cloning it,
+ *  since the accounting rule (skips aren't failures, 3 consecutive failures
+ *  trip the breaker) is identical and worth having in exactly one place. */
+export interface ScanTallyOptions {
+  /** What one unit of yield is called: 'suggestion', 'new thing'. */
+  noun?: string
+  /** Why an item was passed over without being a failure. */
+  skippedLabel?: string
+}
+
+export function createScanTally(opts: ScanTallyOptions = {}): ScanTally {
+  const noun = opts.noun ?? 'suggestion'
+  const skippedLabel = opts.skippedLabel ?? 'already being mined'
   let scanned = 0
   let candidatesAdded = 0
   let failed = 0
@@ -93,11 +107,11 @@ export function createScanTally(): ScanTally {
     },
     summary() {
       const parts = [`Scanned ${scanned} call${scanned === 1 ? '' : 's'}`]
-      parts.push(`found ${candidatesAdded} suggestion${candidatesAdded === 1 ? '' : 's'}`)
+      parts.push(`found ${candidatesAdded} ${noun}${candidatesAdded === 1 ? '' : 's'}`)
       if (failed > 0) parts.push(`${failed} failed`)
       // Named honestly rather than hidden: these calls WERE mined, just by
       // the other trigger, so the totals adding up needs explaining.
-      if (skipped > 0) parts.push(`${skipped} already being mined`)
+      if (skipped > 0) parts.push(`${skipped} ${skippedLabel}`)
       if (stopped === 'errors') parts.push('stopped after repeated errors')
       else if (stopped === 'disabled') parts.push('stopped — toggle turned off')
       return parts.join(', ')

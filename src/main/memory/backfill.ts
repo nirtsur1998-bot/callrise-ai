@@ -24,7 +24,31 @@ import { extractMemoriesFromCall } from './extraction'
 import { consolidateNewCandidate, runLightConsolidation } from './consolidation'
 import { clientScope, type MemoryCandidate, type MemoryEvidence, type MemoryScope } from './types'
 import { isSalesBrainEnabled } from '../app-settings'
+import { createScanTally, type ScanTally } from '../objection-scan-tally'
 import type Database from 'better-sqlite3'
+
+/** BUG-057 — "every AI call failed" must not be able to render as success.
+ *  Only true when the calls stage actually ran, attempted at least one
+ *  extraction, and not one of them succeeded. A run with zero eligible calls
+ *  (all skipped) is not a failure, and neither is a run that succeeded
+ *  everywhere and simply found nothing worth keeping. */
+function isTotalCallsFailure(tally: ScanTally | null): boolean {
+  if (!tally) return false
+  const s = tally.state()
+  return s.failed > 0 && s.scanned === 0
+}
+
+function buildSummary(tally: ScanTally | null, failureReason: string | undefined): string {
+  // No calls stage requested — the contacts/deals passes are structured-data
+  // mapping with no AI call at all, so there is nothing that can silently fail.
+  if (!tally) return 'Import complete.'
+  const s = tally.state()
+  const base = tally.summary()
+  if (s.failed === 0) return base
+  // The provider's own words, once, appended to the count — "why" and "how
+  // much" belong in the same sentence, per the reason this bug existed.
+  return failureReason ? `${base} (${failureReason})` : base
+}
 
 /** BUG-046 — backfill can run long enough that a rep turns Sales Brain off,
  *  or excludes a specific call, WHILE it's still going. backfill-ipc.ts's own
@@ -48,6 +72,18 @@ export interface BackfillProgress {
   processed: number
   total: number
   lastError?: string
+  /** BUG-057 — the honest one-line account of what the run actually did,
+   *  carried on the final 'done' payload. Before this, the job reported a
+   *  hardcoded "Import complete." whether it learned 37 things or failed
+   *  every single AI call, which is exactly how two days of total failure
+   *  looked identical to success. */
+  summary?: string
+  /** True when the calls stage ran and NOT ONE AI call succeeded. The caller
+   *  (backfill-ipc.ts) turns this into a genuinely failed job, so it surfaces
+   *  red with a Retry instead of a green check. Deliberately NOT "zero
+   *  memories created" — a healthy run over calls with nothing worth
+   *  extracting legitimately creates zero and must not read as failure. */
+  callsTotalFailure?: boolean
 }
 
 function fieldFact(contactId: string, label: string, value: string | number | undefined): MemoryCandidate | null {
@@ -126,6 +162,11 @@ export async function runBackfill(
   onProgress: (p: BackfillProgress) => void
 ): Promise<void> {
   const touchedScopes = new Set<MemoryScope>()
+  // Null until the calls stage actually runs — which is what lets the summary
+  // distinguish "no calls stage was requested" from "the calls stage found
+  // nothing", two things a bare zero cannot tell apart.
+  let tally: ScanTally | null = null
+  let firstFailureReason: string | undefined
 
   try {
     assertStillEnabled()
@@ -160,24 +201,47 @@ export async function runBackfill(
       const calls = await listCalls(opts.callsDir)
       const withTranscripts = calls.filter((c) => c.hasSummary || c.hasCoaching || c.durationMs > 0)
       onProgress({ running: true, stage: 'calls', processed: 0, total: withTranscripts.length })
+      // BUG-057 — the same tally the objection scan uses, for the same reason:
+      // it already encodes "a skip is not a failure" and "3 consecutive
+      // failures means the API is down, stop burning a doomed request per
+      // remaining call." Without the breaker, one rate-limited provider cost
+      // 99 doomed requests per run, twice in one morning, and still reported
+      // "Import complete."
+      tally = createScanTally({
+        noun: 'new thing',
+        skippedLabel: 'skipped (no transcript, or excluded from Sales Brain)'
+      })
       for (let i = 0; i < withTranscripts.length; i++) {
         assertStillEnabled()
+        let verdict: 'continue' | 'stop' = 'continue'
         try {
           const full = await getCall(opts.callsDir, withTranscripts[i].id)
           // Fresh per-call read, same as memory-hooks.ts's runMemoryExtractionForCall —
           // a rep who marked this call "don't learn from this" must be honoured here too,
           // not just on the live-call path.
-          if (full?.segments?.length && !full.salesBrainExcluded) {
-            const candidates = await extractMemoriesFromCall(full.segments, full.id, full.contactId ?? null)
-            for (const candidate of candidates) {
-              await consolidateNewCandidate(db, candidate)
-              touchedScopes.add(candidate.scope)
+          if (!full?.segments?.length || full.salesBrainExcluded) {
+            verdict = tally.record({ kind: 'skipped' })
+          } else {
+            const outcome = await extractMemoriesFromCall(full.segments, full.id, full.contactId ?? null)
+            if (outcome.aiFailed) {
+              if (!firstFailureReason) firstFailureReason = outcome.failureReason
+              verdict = tally.record({ kind: 'failed' })
+            } else {
+              for (const candidate of outcome.candidates) {
+                await consolidateNewCandidate(db, candidate)
+                touchedScopes.add(candidate.scope)
+              }
+              verdict = tally.record({ kind: 'ok', added: outcome.candidates.length })
             }
           }
         } catch {
-          /* one call's extraction failing must never abort the whole backfill */
+          /* one call's I/O or consolidation failing must never abort the whole
+             backfill — but it IS a failure, not a silent no-op, so it counts
+             toward the breaker like any other. */
+          verdict = tally.record({ kind: 'failed' })
         }
         onProgress({ running: true, stage: 'calls', processed: i + 1, total: withTranscripts.length })
+        if (verdict === 'stop') break
       }
     }
 
@@ -185,7 +249,14 @@ export async function runBackfill(
       await runLightConsolidation(db, scope)
     }
 
-    onProgress({ running: false, stage: 'done', processed: 0, total: 0 })
+    onProgress({
+      running: false,
+      stage: 'done',
+      processed: 0,
+      total: 0,
+      summary: buildSummary(tally, firstFailureReason),
+      callsTotalFailure: isTotalCallsFailure(tally)
+    })
   } catch (e) {
     onProgress({
       running: false,

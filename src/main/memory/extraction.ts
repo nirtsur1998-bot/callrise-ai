@@ -161,21 +161,48 @@ export function verifyAndBuild(
   }
 }
 
+/**
+ * BUG-057 — the result of ONE extraction attempt, with "the AI call failed"
+ * kept distinct from "the AI call worked and there was nothing worth keeping."
+ *
+ * Those two used to be the same value: a bare `[]`. That is precisely how 205
+ * failed extractions read as healthy "nothing to learn" runs for two days —
+ * including to the code that was supposed to notice. The backfill counted
+ * them, reported "Import complete.", and showed a green check, because from
+ * where it stood a failed call and an uneventful call were byte-identical.
+ *
+ * `aiFailed` is deliberately about the AI CALL, not about the outcome: an
+ * empty transcript returns `aiFailed: false` (nothing was attempted and
+ * nothing was wrong), and a successful call that yields zero candidates does
+ * too. Only a thrown/exhausted completion sets it true.
+ */
+export interface ExtractionOutcome {
+  candidates: MemoryCandidate[]
+  aiFailed: boolean
+  /** The provider's own message, for the run summary. Never shown alone —
+   *  always alongside a count, so "why" and "how much" arrive together. */
+  failureReason?: string
+}
+
 /** Extracts candidate memories from a full call transcript, after the call.
  *  `contactId` is null for a call with no linked contact — in that case any
  *  'client' candidates are dropped (see verifyAndBuild), not stored under a
- *  fabricated scope. */
+ *  fabricated scope.
+ *
+ *  Still never throws — the fire-and-forget contract every caller relies on is
+ *  unchanged. What changed (BUG-057) is that the failure is now REPORTED in
+ *  the return value instead of being erased into an empty array. */
 export async function extractMemoriesFromCall(
   segments: CallSegment[],
   callId: string,
   contactId: string | null
-): Promise<MemoryCandidate[]> {
+): Promise<ExtractionOutcome> {
   const speechOnly = speechSegments(segments)
   const transcript = speechOnly
     .map((s) => `Speaker ${s.speaker}: ${s.text}`)
     .join('\n')
     .slice(0, MAX_TRANSCRIPT_CHARS)
-  if (!transcript.trim()) return []
+  if (!transcript.trim()) return { candidates: [], aiFailed: false }
 
   try {
     const result = await completeWithFallback({
@@ -187,12 +214,19 @@ export async function extractMemoriesFromCall(
       ]
     })
     const raw = Array.isArray(result.toolInput?.candidates) ? (result.toolInput.candidates as RawCandidate[]) : []
-    return raw
+    const candidates = raw
       .map((c) => verifyAndBuild(c, transcript, contactId))
       .filter((c): c is MemoryCandidate => c !== null)
       .map((c) => ({ ...c, evidence: c.evidence.map((e) => ({ ...e, callId })) }))
-  } catch {
-    return [] // best-effort, same as every other extraction module — never throw into the fire-and-forget caller
+    return { candidates, aiFailed: false }
+  } catch (err) {
+    // best-effort, same as every other extraction module — never throw into
+    // the fire-and-forget caller. But no longer SILENT: see ExtractionOutcome.
+    return {
+      candidates: [],
+      aiFailed: true,
+      failureReason: err instanceof Error ? err.message : String(err)
+    }
   }
 }
 
@@ -205,8 +239,8 @@ export async function extractMemoriesFromChatMessage(
   callId: string,
   chatMessageId: string,
   contactId: string | null
-): Promise<MemoryCandidate[]> {
-  if (!message.trim()) return []
+): Promise<ExtractionOutcome> {
+  if (!message.trim()) return { candidates: [], aiFailed: false }
 
   try {
     const result = await completeWithFallback({
@@ -218,11 +252,16 @@ export async function extractMemoriesFromChatMessage(
       ]
     })
     const raw = Array.isArray(result.toolInput?.candidates) ? (result.toolInput.candidates as RawCandidate[]) : []
-    return raw
+    const candidates = raw
       .map((c) => verifyAndBuild(c, message, contactId))
       .filter((c): c is MemoryCandidate => c !== null)
       .map((c) => ({ ...c, evidence: c.evidence.map((e) => ({ ...e, callId, chatMessageId })) }))
-  } catch {
-    return []
+    return { candidates, aiFailed: false }
+  } catch (err) {
+    return {
+      candidates: [],
+      aiFailed: true,
+      failureReason: err instanceof Error ? err.message : String(err)
+    }
   }
 }
