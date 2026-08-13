@@ -8,13 +8,15 @@ import { join } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import type Database from 'better-sqlite3'
 import { memoryDbPath, openMemoryDb, migrate, type MigrateResult } from './db'
-import { configureEmbeddingsCacheDir } from './embeddings'
+import { configureEmbeddingsCacheDir, warmUpEmbeddings } from './embeddings'
 import { isSalesBrainEnabled } from '../app-settings'
 import { writeJsonAtomic } from '../atomic-write'
 import { runNightlyConsolidation } from './consolidation'
 import {
   enqueueNightlyConsolidation,
-  registerNightlyConsolidationJob
+  enqueueWarmUpEmbeddings,
+  registerNightlyConsolidationJob,
+  registerWarmUpEmbeddingsJob
 } from './nightly-consolidation-job'
 
 let db: Database.Database | null = null
@@ -123,6 +125,21 @@ export async function initSalesBrain(): Promise<{ ok: boolean; detail: string }>
       ? `migrated ${result.fromVersion} -> ${result.toVersion}`
       : 'already current'
   }
+
+  // M26 Batch 5 — pull the ~23MB embedding model down now, as a visible
+  // background job, instead of letting it ambush whatever feature happens to
+  // need the first embedding (Phase 0 row 37: a real ~48s production stall
+  // with no explanation anywhere).
+  //
+  // Only reached when Sales Brain is ON and its DB opened successfully — the
+  // early return at the top of this function means a user who never opts in
+  // never downloads anything. Deliberately NOT awaited: startup must never
+  // wait on a download, and the app stays fully usable while it runs. An
+  // embedText() arriving mid-download awaits the same memoised promise, so it
+  // waits exactly as long as it would have anyway.
+  registerWarmUpEmbeddingsJob(warmUpEmbeddings)
+  enqueueWarmUpEmbeddings()
+
   return lastInitResult
 }
 

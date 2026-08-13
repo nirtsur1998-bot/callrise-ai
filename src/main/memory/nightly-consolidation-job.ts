@@ -1,4 +1,5 @@
-// M26 Batch 5 — the nightly Sales Brain consolidation as a background job.
+// M26 Batch 5 — Sales Brain's two background housekeeping jobs: the nightly
+// consolidation, and the one-time embedding-model warm-up.
 //
 // Phase 0 row 36 described it as "completely invisible, no 'is it running'
 // indicator anywhere", and it is the longest recurring AI operation in the
@@ -53,5 +54,52 @@ export function enqueueNightlyConsolidation(): void {
     getJobManager().enqueue(NIGHTLY_CONSOLIDATION_JOB_TYPE, {})
   } catch (err) {
     console.error('[sales-brain] could not enqueue nightly consolidation:', err)
+  }
+}
+
+export const WARM_UP_EMBEDDINGS_JOB_TYPE = 'salesBrain:warmUpEmbeddings'
+
+let warmUpRegistered = false
+
+/**
+ * The first-run embedding-model download (Phase 0 row 37), pulled out of the
+ * lazy path it used to hide in.
+ *
+ * NOT silent, unlike the other housekeeping jobs — this one is the whole
+ * point. A ~23MB download that used to ambush an unrelated feature for ~48s
+ * with no explanation now says "Setting up on-device search" in the Activity
+ * Center while it happens. It is the one piece of background work here the
+ * rep genuinely benefits from being able to see.
+ *
+ * Runs once (the underlying promise is memoised, so a second run is a no-op),
+ * and never blocks anything: it is an ordinary MAINTENANCE job, so the app is
+ * fully usable throughout, and an embedding-dependent action that arrives
+ * mid-download simply awaits the same download it would have started itself.
+ */
+export function registerWarmUpEmbeddingsJob(run: () => Promise<void>): void {
+  if (warmUpRegistered) return
+  warmUpRegistered = true
+
+  getJobManager().registerType<Record<string, never>, string>({
+    type: WARM_UP_EMBEDDINGS_JOB_TYPE,
+    lane: 'MAINTENANCE',
+    titleFor: () => 'Setting up on-device search',
+    cancellable: false,
+    executor: {
+      kind: 'inline-async',
+      run: async () => {
+        await run()
+        return 'Ready.'
+      }
+    }
+  })
+}
+
+/** Queue the warm-up. Never throws — same startup-safety reason as above. */
+export function enqueueWarmUpEmbeddings(): void {
+  try {
+    getJobManager().enqueue(WARM_UP_EMBEDDINGS_JOB_TYPE, {})
+  } catch (err) {
+    console.error('[sales-brain] could not enqueue the embedding warm-up:', err)
   }
 }

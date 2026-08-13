@@ -985,6 +985,30 @@ export function registerCalls(): void {
   // deliberately happens in MAIN (see post-call-brief.ts): this fires the
   // moment a call ends, when the rep is still looking at Zoom, so the renderer
   // is exactly not focused and navigator.clipboard would refuse.
+  //
+  // ==========================================================================
+  // M26 — DELIBERATELY NOT A JOB. Do not "complete the set" by migrating it.
+  // ==========================================================================
+  // Every other post-call operation became a BATCH job in Batch 5, so this is
+  // conspicuously the odd one out. That is the point, and the reason is the
+  // word INSTANT above: this feature's entire value is that the brief is on
+  // the rep's clipboard before they look up from the call. BATCH runs one job
+  // at a time, and right after a call ends is precisely when that lane is
+  // busiest — objection mining, contact resolution and the CRM note are all
+  // queued at that exact moment. Migrating this would put a minute of latency
+  // in front of a feature whose whole promise is immediacy: it would break the
+  // feature to gain visibility on something that resolves in seconds.
+  //
+  // A high `priority` does not rescue it either. Priority only decides the
+  // ORDER of jobs still waiting; it cannot preempt one already running, and
+  // "one is already running" is the normal state in the seconds after a call.
+  //
+  // Same judgment already applied to the per-event calendar push (see
+  // schedulePush in events.ts) and the 10-minute cloud-sync heartbeat (see
+  // backup.ts): not everything benefits from being a job. Fast, immediate
+  // work with no progress to report and no decision attached is better left
+  // alone. Founder decision, 2026-08-13.
+  // ==========================================================================
   ipcMain.handle(
     'calls:postCallBrief',
     async (_event, callId: string): Promise<PostCallBriefResult> => {
