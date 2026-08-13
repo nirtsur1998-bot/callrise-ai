@@ -28,7 +28,11 @@ const API_BASE = 'https://generativelanguage.googleapis.com/v1beta'
 // catalog.ts) resolves the REAL "latest Flash" id from listModels() at
 // runtime for the catalog entry - this is only the validate-key/default
 // fallback, never the catalog's source of truth for the Gemini Flash entry.
-const DEFAULT_MODEL = 'gemini-flash-latest'
+// Exported for registry.ts's `defaultModelId` (BUG-057): a legacy chain step
+// sets no explicit model, so THIS is the concrete model it actually resolves
+// to, and resolveChain() needs it to avoid appending a catalog entry that
+// would re-issue the identical request as a later "fallback".
+export const DEFAULT_MODEL = 'gemini-flash-latest'
 
 interface GeminiPart {
   text?: string

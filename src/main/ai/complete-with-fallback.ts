@@ -20,6 +20,7 @@ import {
   LATENCY_POLICY,
   type AICompletionRequest,
   type AICompletionResult,
+  type AIProviderId,
   type AIPurpose
 } from './types'
 
@@ -96,7 +97,15 @@ export const DEFAULT_CATALOG_CHAIN: Record<AIPurpose, string[]> = {
   // M25 - fast/cheap-lane by design (spec: "fast model for extraction"),
   // same speed chain as coaching-cue/deal-tier1, but no CHAIN_BUDGET entry
   // since this isn't a live-latency path — the full chain is available.
-  'memory-extract': SPEED_CHAIN,
+  //
+  // BUG-057 — speed lane FIRST (extraction is fixed-shape allowlist pulling,
+  // not judgment work), but no longer speed lane ONLY. SPEED_CHAIN is
+  // groq+cerebras exclusively, so on a machine with a groq key and a
+  // rate-limited groq account, every "fallback" was another request to the
+  // same 429. This purpose has no CHAIN_BUDGET and blocks nothing anyone is
+  // watching, so a slower quality-lane model is strictly better than learning
+  // nothing from the call at all.
+  'memory-extract': [...new Set([...SPEED_CHAIN, ...QUALITY_CHAIN])],
   // Judgment work, quality-lane precedent same as summary/scorecard.
   'memory-consolidate': QUALITY_CHAIN,
   'memory-reflect': QUALITY_CHAIN
@@ -106,6 +115,15 @@ interface ResolvedStep {
   catalogId: string
   providerId: CatalogEntry['providerId']
   modelId: string
+  /** BUG-057 — true only for the bundled entries appended BEHIND a legacy
+   *  step: models the user never chose for this job. False for a configured
+   *  chain's entries (the user authored that ordering, so falling back within
+   *  it is the system doing exactly what they asked) and for the bundled-only
+   *  branch (there is no "primary" there to have substituted for). Part 2 of
+   *  the design uses this to keep the "running on a substitute" notice rare
+   *  and truthful — `chainIndex > 0` would also fire on a chain the user
+   *  wrote themselves. */
+  fromImplicitTail?: boolean
 }
 
 function legacyStep(): ResolvedStep | null {
@@ -116,6 +134,66 @@ function legacyStep(): ResolvedStep | null {
   // logging only, req.model stays unset so the provider uses its own
   // internal default, exactly like every M16-era call site today.
   return { catalogId: `legacy:${provider.id}`, providerId: provider.id, modelId: '' }
+}
+
+/**
+ * BUG-057 — how many BUNDLED fallback entries may sit behind the legacy step.
+ *
+ * Exhaustive Record, not Partial, and deliberately NOT derived from
+ * CHAIN_BUDGET: a 13th purpose must force a decision here rather than
+ * silently inheriting a number nobody chose for it — the same convention
+ * LATENCY_POLICY and DEFAULT_CATALOG_CHAIN already use.
+ *
+ * 0 for the two live paths. Their whole budget is the point (see CHAIN_BUDGET
+ * in types.ts — M9 already fixed one multi-second dead-air regression on this
+ * exact path), and they are the only two purposes whose exhaustion is ALREADY
+ * visible to the rep via LiveView's "coaching cues temporarily unavailable"
+ * banner. Silence was never their failure mode, so they are not what BUG-057
+ * is for. Setting 0 makes this change provably zero-risk on live latency:
+ * chain.length stays 1, so the per-attempt budget arithmetic is bit-identical.
+ *
+ * 1 where a human is watching a spinner: 'other' carries askCoach() (mid-call,
+ * the rep is blocked on it) and 'coaching-chat' is the only streamWithFallback
+ * consumer. One retry on a DIFFERENT provider is worth the wait; a third and
+ * fourth are not.
+ *
+ * 3 elsewhere: enough to cross two or three providers on a typical key set,
+ * bounded enough that a doomed call costs 4 requests instead of 9. If four
+ * models across every provider you hold a key for fail within seconds of each
+ * other, what is broken is the account, the network, or the request shape —
+ * not the model.
+ */
+const LEGACY_TAIL_MAX: Record<AIPurpose, number> = {
+  'coaching-cue': 0,
+  'deal-tier1': 0,
+  other: 1,
+  'coaching-chat': 1,
+  summary: 3,
+  scorecard: 3,
+  tasks: 3,
+  'prep-brief': 3,
+  'deal-tier2': 3,
+  'memory-extract': 3,
+  'memory-consolidate': 3,
+  'memory-reflect': 3
+}
+
+/** The bundled-chain resolution, extracted verbatim from resolveChain's own
+ *  tail so the legacy branch can REACH it instead of short-circuiting past
+ *  it. Unchanged logic: catalog-known, not knownStale, provider key present.
+ *  The key check must stay read-fresh from process.env on every resolution —
+ *  ai-keys.ts sets and deletes those vars mid-session. */
+function bundledSteps(purpose: AIPurpose): ResolvedStep[] {
+  const steps: ResolvedStep[] = []
+  for (const id of DEFAULT_CATALOG_CHAIN[purpose]) {
+    const entry = catalogEntry(id)
+    if (!entry) continue
+    if (entry.knownStale) continue
+    const keyEnvName = PROVIDER_REGISTRY[entry.providerId].keyEnvName
+    if (!process.env[keyEnvName]?.trim()) continue
+    steps.push({ catalogId: entry.id, providerId: entry.providerId, modelId: entry.modelId })
+  }
+  return steps
 }
 
 // Exported for direct unit testing (mocking loadAppSettings + process.env is
@@ -152,19 +230,52 @@ export function resolveChain(purpose: AIPurpose): ResolvedStep[] {
     // to the legacy/default path rather than a guaranteed failure.
   }
 
+  // BUG-057 — this used to be `if (legacy) return [legacy]`: the legacy step
+  // was the WHOLE chain. One attempt, zero fallback, for every purpose with
+  // an empty chain — which on a FRESH INSTALL is all twelve (see
+  // DEFAULT_MODEL_ASSIGNMENTS, empty for every purpose, plus an aiProvider
+  // that maybeAutoSelectProvider sets on the first key saved), and on an
+  // established install is every purpose the Settings picker cannot reach.
+  // Against a rate-limited provider that is a feature which fails every
+  // single time and says nothing: two days of Sales Brain learning nothing
+  // from any call, with every surface in the product reporting success.
+  //
+  // The legacy step still goes FIRST, so an existing M16 install's first
+  // attempt is byte-identical to before — the promise this file's header
+  // makes. Only what happens AFTER it fails is new.
   const legacy = legacyStep()
-  if (legacy) return [legacy]
+  if (!legacy) return bundledSteps(purpose)
 
-  const steps: ResolvedStep[] = []
-  for (const id of DEFAULT_CATALOG_CHAIN[purpose]) {
-    const entry = catalogEntry(id)
-    if (!entry) continue
-    if (entry.knownStale) continue
-    const keyEnvName = PROVIDER_REGISTRY[entry.providerId].keyEnvName
-    if (!process.env[keyEnvName]?.trim()) continue
-    steps.push({ catalogId: entry.id, providerId: entry.providerId, modelId: entry.modelId })
-  }
-  return steps
+  const tailMax = LEGACY_TAIL_MAX[purpose]
+  // Computed before bundledSteps() so the live paths do no extra work at all:
+  // coaching-cue re-resolves this every few seconds mid-call.
+  if (tailMax === 0) return [legacy]
+
+  // Never re-issue the identical request as a later "fallback". The dedupe in
+  // completeWithFallback works on catalogId, and a synthetic `legacy:<id>` can
+  // never match a real catalog id — so without this, a single-key user's
+  // attempt 1 and attempt 3 were literally the same call (six of eight
+  // providers' default model IS a catalog entry's modelId — see
+  // ProviderRegistryEntry.defaultModelId).
+  const legacyModelId = PROVIDER_REGISTRY[legacy.providerId].defaultModelId
+  const usable = bundledSteps(purpose).filter(
+    (s) => legacyModelId === undefined || s.modelId !== legacyModelId
+  )
+
+  // Different providers FIRST, then at most ONE same-provider model.
+  // Dropping same-provider entries entirely would leave memory-extract
+  // (whose bundled chain is groq+cerebras only) with nothing behind a groq
+  // legacy step; leaving them in order would make the first "fallback" behind
+  // a google legacy step be google-gemini-flash — the account that just 429'd.
+  // One is kept because Groq and Gemini rate-limit PER-MODEL, so a different
+  // model on the same key genuinely can succeed; only one, because if two
+  // models on that key fail, the account is the problem, not the model.
+  const others = usable.filter((s) => s.providerId !== legacy.providerId)
+  const same = usable.filter((s) => s.providerId === legacy.providerId).slice(0, 1)
+  const tail = [...others, ...same]
+    .slice(0, tailMax)
+    .map((s) => ({ ...s, fromImplicitTail: true }))
+  return [legacy, ...tail]
 }
 
 function classifyReason(err: unknown): string {
@@ -198,11 +309,20 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   let remainingBudgetMs = budget?.totalBudgetMs ?? 0
   const attempts: { catalogId: string; reason: string }[] = []
   const attempted = new Set<string>() // defense-in-depth: chain is already deduped by construction
+  // BUG-057 — an invalid or revoked key fails IDENTICALLY on every model that
+  // provider offers, so once one step returns 'auth', every remaining step on
+  // the same provider is a guaranteed-doomed request. Skipping them is what
+  // keeps the new fallback tail from being "just slower failure" for a
+  // single-key user with a bad key. Deliberately NOT extended to
+  // 'rate-limit': Groq and Gemini rate-limit per-MODEL, so a different model
+  // on the same key really can succeed.
+  const deadProviders = new Set<AIProviderId>()
 
   for (let i = 0; i < chain.length; i++) {
     const step = chain[i]
     if (attempted.has(step.catalogId)) continue
     attempted.add(step.catalogId)
+    if (deadProviders.has(step.providerId)) continue
 
     const key = process.env[PROVIDER_REGISTRY[step.providerId].keyEnvName]?.trim()
     if (!key) continue // resolved eagerly above, but env could change mid-loop in theory
@@ -217,11 +337,12 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     // timeout (handled inside the provider itself).
     let attemptSignal = req.signal
     let budgetController: AbortController | null = null
+    let budgetTimer: ReturnType<typeof setTimeout> | null = null
     if (budget) {
       const remainingEntries = chain.length - i
       const perAttemptMs = Math.max(500, Math.floor(remainingBudgetMs / remainingEntries))
       budgetController = new AbortController()
-      setTimeout(() => budgetController?.abort(), perAttemptMs)
+      budgetTimer = setTimeout(() => budgetController?.abort(), perAttemptMs)
       attemptSignal = req.signal
         ? AbortSignal.any([req.signal, budgetController.signal])
         : budgetController.signal
@@ -238,6 +359,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     } catch (err) {
       const reason = classifyReason(err)
       const detail = detailFrom(err)
+      if (reason === 'auth') deadProviders.add(step.providerId)
       attempts.push({ catalogId: step.catalogId, reason: detail ? `${reason}: ${detail}` : reason })
       const nextStep = chain[i + 1] ?? null
       void logFallbackEvent({
@@ -249,6 +371,11 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
         detail
       })
     } finally {
+      // Left dangling before BUG-057: the abort fired after a SUCCESSFUL
+      // return too, on an AbortController nothing was listening to any more.
+      // Harmless in practice, but it kept a timer alive past the call for as
+      // long as the budget allowed.
+      if (budgetTimer) clearTimeout(budgetTimer)
       if (budget) {
         remainingBudgetMs = Math.max(0, remainingBudgetMs - (Date.now() - startedAt))
       }
