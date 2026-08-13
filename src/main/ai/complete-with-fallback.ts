@@ -296,6 +296,84 @@ function detailFrom(err: unknown): string | undefined {
   return undefined
 }
 
+/**
+ * BUG-058/BUG-059 — resolves EARLY when `signal` aborts, and never rejects.
+ * Abort means "wake up now", not a failure; a caller that needs to unwind
+ * checks the signal itself. Mirrors the (unused-in-practice — see
+ * providers/anthropic.ts) pattern the Anthropic SDK's own sleep() uses.
+ * `signal` is optional so this also serves streamWithFallback, which has no
+ * combined ceiling/budget signal to offer — only whatever req.signal a
+ * caller happened to pass, if any.
+ */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve()
+      return
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      resolve()
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/**
+ * BUG-058/BUG-059 — the ONLY retries a single step gets now. Every SDK call
+ * site sets `maxRetries: 0` (see providers/*.ts) because the SDKs' own retry
+ * sleep is unabortable and uncapped, driven by whatever the provider's
+ * Retry-After header says — a 429 with a large hint made a "retry" sleep for
+ * however long the header said, bypassing HARD_CEILING_MS entirely and
+ * bypassing model-cooldown.ts's markRateLimited() (which can't fire until
+ * the call returns). Verified by reading the vendored SDK source.
+ *
+ * Deliberately scoped to 'network'/'timeout' ONLY — the two failure modes
+ * that are unambiguously connection-level blips, the exact thing the SDKs'
+ * own default retry used to silently absorb. Removing the SDK's retry
+ * without an equivalent here would trade one bug (uncapped, unabortable
+ * waits) for another (every transient blip immediately burns a chain entry
+ * instead of a quick retry). NEVER 'rate-limit' — model-cooldown.ts already
+ * replaces "retry the same model" with "back off this model, try a
+ * different one", and retrying immediately would just repeat the 429.
+ * NEVER 'failed' — a 400/tool-schema rejection fails identically every
+ * time (BUG-057's own finding); retrying it is pure waste.
+ *
+ * Bounded by LATENCY_POLICY[purpose].maxRetries — the SAME count the SDK
+ * used to be configured with, so per-purpose request cost doesn't silently
+ * change. `signal` gates both the retry wait and is passed into every
+ * attempt, so this is fully abortable where the SDK's own loop was not.
+ */
+async function completeWithSameModelRetry(
+  provider: { complete: (req: AICompletionRequest) => Promise<AICompletionResult> },
+  req: AICompletionRequest,
+  modelId: string,
+  signal: AbortSignal,
+  purpose: AIPurpose
+): Promise<AICompletionResult> {
+  const maxAttempts = 1 + LATENCY_POLICY[purpose].maxRetries
+  let lastErr: unknown
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (signal.aborted) throw lastErr ?? new AIProviderError('timeout', 'Aborted.')
+    try {
+      return await provider.complete({ ...req, model: modelId || undefined, signal })
+    } catch (err) {
+      lastErr = err
+      const reason = classifyReason(err)
+      const retryable = reason === 'network' || reason === 'timeout'
+      if (!retryable || attempt === maxAttempts - 1) throw err
+      // Short, bounded backoff — this is a connection blip, not a rate
+      // limit; there is no provider-stated wait to honour here.
+      await abortableSleep(Math.min(200 * 2 ** attempt, 2_000), signal)
+    }
+  }
+  throw lastErr
+}
+
 /** The single entry point for every M20-aware call site. `req.purpose` is
  *  read from `req` itself (same field every provider already reads), so
  *  callers pass their existing AICompletionRequest unchanged. */
@@ -388,11 +466,8 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
 
     const startedAt = Date.now()
     try {
-      const result = await provider.complete({
-        ...req,
-        model: step.modelId || undefined, // '' for a legacy step - let the provider use its own default
-        signal: attemptSignal
-      })
+      // '' modelId is a legacy step - let the provider use its own default.
+      const result = await completeWithSameModelRetry(provider, req, step.modelId, attemptSignal, purpose)
       // Proof the limit lifted — trust that over any earlier estimate.
       clearCooldown(step.catalogId)
       return result
@@ -507,21 +582,50 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       if (!key) continue
       const provider = PROVIDER_REGISTRY[step.providerId].build(key)
 
-      try {
-        const streamResult = provider.stream({
-          ...req,
-          model: step.modelId || undefined
-        })
-        for await (const chunk of streamResult) {
-          startedStreaming = true
-          fullText += chunk.delta
-          yield chunk
+      // BUG-058/BUG-059 — the SDK's own retry is now always off (maxRetries:
+      // 0, see providers/*.ts's stream()): its sleep was unabortable and
+      // uncapped, driven by whatever the provider's own header said. This
+      // sub-loop is the replacement, scoped to the SAME pre-first-delta
+      // window the file's own fallback logic already respects — a network/
+      // timeout blip before any token has reached the caller gets ONE quick
+      // retry of the SAME model; once streaming has started, this loop
+      // exits immediately on the next line's check and the existing
+      // never-retry-mid-stream behavior below is unchanged.
+      const maxAttempts = 1 + LATENCY_POLICY[purpose].maxRetries
+      let stepErr: unknown = null
+      let stepStartedStreaming = false
+
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          const streamResult = provider.stream({
+            ...req,
+            model: step.modelId || undefined
+          })
+          for await (const chunk of streamResult) {
+            startedStreaming = true
+            stepStartedStreaming = true
+            fullText += chunk.delta
+            yield chunk
+          }
+          const usage = await streamResult.usage
+          clearCooldown(step.catalogId)
+          resolveFinal({ text: fullText, model: step.modelId || `${step.providerId} (default)`, usage })
+          return
+        } catch (err) {
+          stepErr = err
+          if (stepStartedStreaming) break // tokens already shipped — never retried, handled below
+          const reason = classifyReason(err)
+          const retryable = reason === 'network' || reason === 'timeout'
+          if (retryable && attempt < maxAttempts - 1) {
+            await abortableSleep(Math.min(200 * 2 ** attempt, 2_000), req.signal)
+            continue
+          }
+          break
         }
-        const usage = await streamResult.usage
-        clearCooldown(step.catalogId)
-        resolveFinal({ text: fullText, model: step.modelId || `${step.providerId} (default)`, usage })
-        return
-      } catch (err) {
+      }
+
+      {
+        const err = stepErr
         lastErr = err
         const reason = classifyReason(err)
         const detail = detailFrom(err)

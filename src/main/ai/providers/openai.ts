@@ -161,7 +161,12 @@ export class OpenAIProvider implements AIProvider {
           tools: toTools(req),
           tool_choice: toToolChoice(req)
         },
-        { timeout: policy.timeoutMs, maxRetries: policy.maxRetries, signal: req.signal }
+        // BUG-058/BUG-059 — always 0, never policy.maxRetries. The SDK's own
+        // internal retry sleep is an unabortable, uncapped setTimeout driven
+        // by the provider's own Retry-After header — see openai-compatible.ts's
+        // identical comment for the verified source. Our own walker owns every
+        // retry decision now.
+        { timeout: policy.timeoutMs, maxRetries: 0, signal: req.signal }
       )
       const message = response.choices[0]?.message
       const usage = usageFrom(
@@ -201,7 +206,12 @@ export class OpenAIProvider implements AIProvider {
             stream: true,
             stream_options: { include_usage: true }
           },
-          { timeout: policy.timeoutMs, maxRetries: policy.maxRetries, signal: req.signal }
+          // BUG-058/BUG-059 — always 0, never policy.maxRetries. The SDK's own
+        // internal retry sleep is an unabortable, uncapped setTimeout driven
+        // by the provider's own Retry-After header — see openai-compatible.ts's
+        // identical comment for the verified source. Our own walker owns every
+        // retry decision now.
+        { timeout: policy.timeoutMs, maxRetries: 0, signal: req.signal }
         )
         let inputTokens = 0
         let outputTokens = 0

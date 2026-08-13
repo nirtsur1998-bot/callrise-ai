@@ -294,7 +294,18 @@ class OpenAICompatibleProvider implements AIProvider {
             tools: toTools(req),
             tool_choice: toToolChoice(req)
           },
-          { timeout: policy.timeoutMs, maxRetries: policy.maxRetries, signal: req.signal }
+          // BUG-058/BUG-059 — maxRetries is ALWAYS 0 here, never policy.maxRetries.
+          // The SDK's own internal retry sleep (internal/utils/sleep.js) is a bare
+          // `setTimeout(ms)` that never accepts a signal, and `ms` is taken directly
+          // from the provider's Retry-After header with NO CAP (client.js's
+          // calculateRetryTimeoutMs). A 429 with a large hint made the SDK sleep,
+          // uninterruptibly, for however long the header said — bypassing
+          // HARD_CEILING_MS entirely AND bypassing model-cooldown.ts's
+          // markRateLimited(), since that can't fire until this call returns. Verified
+          // by reading the vendored source, not assumed. completeWithFallback's own
+          // walker now owns every retry decision (see its RETRYABLE_REASONS), fully
+          // abortable and cooldown-aware, which the SDK's internal loop was neither.
+          { timeout: policy.timeoutMs, maxRetries: 0, signal: req.signal }
         )
         .withResponse()
       captureRateLimitHeaders(this.id, rawResponse.headers)
@@ -334,7 +345,18 @@ class OpenAICompatibleProvider implements AIProvider {
             stream: true,
             stream_options: { include_usage: true }
           },
-          { timeout: policy.timeoutMs, maxRetries: policy.maxRetries, signal: req.signal }
+          // BUG-058/BUG-059 — maxRetries is ALWAYS 0 here, never policy.maxRetries.
+          // The SDK's own internal retry sleep (internal/utils/sleep.js) is a bare
+          // `setTimeout(ms)` that never accepts a signal, and `ms` is taken directly
+          // from the provider's Retry-After header with NO CAP (client.js's
+          // calculateRetryTimeoutMs). A 429 with a large hint made the SDK sleep,
+          // uninterruptibly, for however long the header said — bypassing
+          // HARD_CEILING_MS entirely AND bypassing model-cooldown.ts's
+          // markRateLimited(), since that can't fire until this call returns. Verified
+          // by reading the vendored source, not assumed. completeWithFallback's own
+          // walker now owns every retry decision (see its RETRYABLE_REASONS), fully
+          // abortable and cooldown-aware, which the SDK's internal loop was neither.
+          { timeout: policy.timeoutMs, maxRetries: 0, signal: req.signal }
         )
         let inputTokens = 0
         let outputTokens = 0

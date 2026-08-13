@@ -144,7 +144,13 @@ export class AnthropicProvider implements AIProvider {
           tools: this.tools(req),
           tool_choice: this.toolChoice(req)
         },
-        { timeout: policy.timeoutMs, maxRetries: policy.maxRetries, signal: req.signal }
+        // BUG-058/BUG-059 — always 0, never policy.maxRetries. Anthropic's own
+        // sleep() DOES accept a signal (unlike OpenAI's), but the retry call
+        // site never passes one through — verified in the vendored source — so
+        // it is unabortable in practice either way, on a wait taken uncapped
+        // from the provider's own header. Our own walker owns every retry
+        // decision now.
+        { timeout: policy.timeoutMs, maxRetries: 0, signal: req.signal }
       )
       const usage = usageFrom(model, response.usage.input_tokens, response.usage.output_tokens)
       if (req.tool) {
@@ -189,7 +195,13 @@ export class AnthropicProvider implements AIProvider {
             tools,
             tool_choice: toolChoice
           },
-          { timeout: policy.timeoutMs, maxRetries: policy.maxRetries, signal: req.signal }
+          // BUG-058/BUG-059 — always 0, never policy.maxRetries. Anthropic's own
+        // sleep() DOES accept a signal (unlike OpenAI's), but the retry call
+        // site never passes one through — verified in the vendored source — so
+        // it is unabortable in practice either way, on a wait taken uncapped
+        // from the provider's own header. Our own walker owns every retry
+        // decision now.
+        { timeout: policy.timeoutMs, maxRetries: 0, signal: req.signal }
         )
         for await (const event of stream) {
           if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
