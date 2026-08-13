@@ -145,7 +145,10 @@ function usageFrom(inputTokens: number, outputTokens: number): AIUsage {
   return { inputTokens, outputTokens, estimatedCostUsd: 0 }
 }
 
-function toProviderError(displayName: string, err: unknown): AIProviderError {
+/** Exported for direct unit testing, same reasoning as resolveMaxTokensField
+ *  below — asserting on error mapping shouldn't require standing up a real
+ *  OpenAI client. */
+export function toProviderError(displayName: string, err: unknown): AIProviderError {
   if (err instanceof OpenAI.AuthenticationError) {
     return new AIProviderError('auth', `Your ${displayName} API key was rejected.`)
   }
@@ -179,7 +182,25 @@ function toProviderError(displayName: string, err: unknown): AIProviderError {
     if (err.status === 404) {
       return new AIProviderError('model-not-found', `${displayName} does not recognize this model.`)
     }
-    return new AIProviderError('failed', `${displayName} returned an error (${err.status ?? 'unknown'}).`)
+    // BUG-057 — KEEP the provider's own message. This used to return only
+    // "<provider> returned an error (400)." and throw err.message away, which
+    // is why two days of chain-exhaustion logs could not answer the only
+    // question that mattered: WHY. A 400 is the provider telling us the
+    // request was rejected and usually saying exactly what was wrong with it
+    // (Groq, for instance, returns 400 with code `tool_use_failed` when a
+    // model cannot produce a valid function call — indistinguishable from a
+    // malformed-schema 400 unless the text survives).
+    //
+    // Same reasoning as this file's own Mistral `max_tokens` and Gemini
+    // schema-field bugs: both were structural 400s on every single request,
+    // and both were found only once someone read the real error text.
+    const detail = typeof err.message === 'string' ? err.message.trim() : ''
+    return new AIProviderError(
+      'failed',
+      detail
+        ? `${displayName} returned an error (${err.status ?? 'unknown'}): ${detail.slice(0, 300)}`
+        : `${displayName} returned an error (${err.status ?? 'unknown'}).`
+    )
   }
   return new AIProviderError('failed', `Something went wrong calling ${displayName}. Please try again.`)
 }
