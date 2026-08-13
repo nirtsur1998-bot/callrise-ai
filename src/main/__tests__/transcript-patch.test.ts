@@ -17,6 +17,7 @@ const { diffFrom, applyPatch } = await import('../live/transcript-patch')
 const { setCallJournalsDirForTests } = await import('../live/call-journal')
 const {
   beginCall,
+  endCall,
   recordResult,
   recordGap,
   recordRepIdentified,
@@ -26,6 +27,7 @@ const {
   liveCallInfo,
   resetLiveTranscriptForTests
 } = await import('../live/live-transcript')
+const { recordInterim, latestInterim } = await import('../live/live-interim')
 
 import type { TranscriptPatch } from '../live/transcript-patch'
 import type { AccumulatedSegment } from '../live/transcript-accumulator'
@@ -280,6 +282,61 @@ describe('M26 4.5.0 — subscribeTranscript is an additive tap alongside the ren
     beginCall({ restart: false })
     recordResult(result([{ speaker: 0, text: 'after reset' }]))
     expect(seen).toHaveLength(0)
+  })
+})
+
+describe('M26 4.5.1 — the interim buffer is cleared only at real call boundaries', () => {
+  it('a hangup (endCall) clears whatever interim was buffered mid-call', () => {
+    beginCall({ restart: false })
+    recordInterim({
+      transcript: 'partial',
+      words: [],
+      isFinal: false,
+      speechFinal: false,
+      speakerEpoch: 0,
+      speakerCertain: true,
+      minConfidence: null,
+      multichannel: false
+    })
+    expect(latestInterim()).not.toBeNull()
+    endCall({ saved: false })
+    expect(latestInterim()).toBeNull()
+  })
+
+  it('a new call (beginCall) clears any interim left over from the previous one', () => {
+    beginCall({ restart: false })
+    recordInterim({
+      transcript: 'from the first call',
+      words: [],
+      isFinal: false,
+      speechFinal: false,
+      speakerEpoch: 0,
+      speakerCertain: true,
+      minConfidence: null,
+      multichannel: false
+    })
+    beginCall({ restart: false }) // a new call, not a restart of this one
+    expect(latestInterim()).toBeNull()
+  })
+
+  it('a restart (mono<->multichannel) does NOT count as a call boundary for the interim buffer', () => {
+    // Mirrors the transcript's own rule: a restart is the same call from the
+    // rep's point of view. The very next Results message overwrites this
+    // anyway, so nothing here is load-bearing either way, but the semantics
+    // should still match beginCall's own restart/new-call distinction.
+    beginCall({ restart: false })
+    recordInterim({
+      transcript: 'before the restart',
+      words: [],
+      isFinal: false,
+      speechFinal: false,
+      speakerEpoch: 0,
+      speakerCertain: true,
+      minConfidence: null,
+      multichannel: false
+    })
+    beginCall({ restart: true })
+    expect(latestInterim()?.result.transcript).toBe('before the restart')
   })
 })
 

@@ -29,6 +29,7 @@ import {
   recordResult,
   setTranscriptListener
 } from './live/live-transcript'
+import { recordInterim } from './live/live-interim'
 import type { AttachSnapshot } from './live/transcript-patch'
 
 const DEEPGRAM_LISTEN_URL = 'wss://api.deepgram.com/v1/listen'
@@ -826,6 +827,24 @@ function connect(s: Session): void {
           transcript,
           words,
           isFinal: msg.is_final === true,
+          speakerEpoch: s.speakerEpoch,
+          speakerCertain,
+          minConfidence,
+          multichannel: s.multichannel
+        })
+
+        // M26 Phase 4.5.1 — a second, main-owned record of this SAME result,
+        // finals and interims alike, for the cue engine's fast tier
+        // (battlecard matching) once it moves into main in 4.5.4. A plain
+        // buffer write, same posture as recordResult() just above: cannot
+        // throw, cannot block, and — unlike recordResult() — kept even for
+        // isFinal:false, because that's exactly what recordResult()
+        // deliberately drops and what the cue engine's fast tier needs.
+        recordInterim({
+          transcript,
+          words,
+          isFinal: msg.is_final === true,
+          speechFinal: msg.speech_final === true,
           speakerEpoch: s.speakerEpoch,
           speakerCertain,
           minConfidence,

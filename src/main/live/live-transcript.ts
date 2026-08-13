@@ -34,6 +34,7 @@ import {
 } from './transcript-accumulator'
 import { diffFrom, type TranscriptPatch } from './transcript-patch'
 import type { ConsentRecord } from '../calls-fs'
+import { resetInterim } from './live-interim'
 
 interface LiveCall {
   id: string
@@ -299,6 +300,11 @@ export function endCall(opts: { saved: boolean }): void {
   if (!opts.saved && saveInFlight) return
   const call = current
   current = null
+  // M26 4.5.1 — real call-end is the one lifecycle point this and
+  // beginCall's implicit endCall({saved:false}) both funnel through, so
+  // this is the single place a poller's interim buffer must be cleared:
+  // never on a renderer attach/detach, only here.
+  resetInterim()
   if (!call) return
   try {
     if (opts.saved) call.journal?.complete()
@@ -348,4 +354,5 @@ export function resetLiveTranscriptForTests(): void {
   listener = null
   subscribers.clear()
   saveInFlight = false
+  resetInterim()
 }
