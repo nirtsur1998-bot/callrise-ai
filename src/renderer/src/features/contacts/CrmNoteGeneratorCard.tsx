@@ -1,17 +1,20 @@
-import { useEffect, useRef, useState } from 'react'
-import { Sparkles, Check, X, Loader2, AlertCircle } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Sparkles, Check, X, Loader2, AlertCircle, ChevronDown } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { Button } from '@renderer/components/Button'
 import { SegmentedControl } from '@renderer/components/SegmentedControl'
+import { useJobByTarget } from '@renderer/features/jobs/useJobByTarget'
+import type { CrmNoteJobResult, KycFact } from '../../../../preload/index.d'
 
 type CrmNoteLength = 'short' | 'medium' | 'detailed'
 
-interface KycFact {
-  id: string
-  field: string
-  text: string
-  confidence: 'high' | 'medium'
-}
+// M26 Phase 3 — this card used to hold the drafted note and every harvested
+// suggestion in its own React state, so navigating off the Contact page
+// permanently discarded whatever hadn't been dealt with yet, already paid
+// for on the rep's own API key. Now the JOB owns both, plus the rep's
+// decisions about them, so a reopen (even after an app restart) resumes
+// exactly where they left off without re-running either AI call.
+const GENERATE_JOB_TYPE = 'crmNote:generate'
 
 const LENGTH_OPTIONS: { id: CrmNoteLength; label: string }[] = [
   { id: 'short', label: 'Short' },
@@ -19,7 +22,11 @@ const LENGTH_OPTIONS: { id: CrmNoteLength; label: string }[] = [
   { id: 'detailed', label: 'Detailed' }
 ]
 
-const LENGTH_LABEL: Record<CrmNoteLength, string> = { short: 'Short', medium: 'Medium', detailed: 'Detailed' }
+const LENGTH_LABEL: Record<CrmNoteLength, string> = {
+  short: 'Short',
+  medium: 'Medium',
+  detailed: 'Detailed'
+}
 
 const KYC_FIELD_LABEL: Record<string, string> = {
   company: 'Company',
@@ -52,6 +59,13 @@ interface CrmNoteGeneratorCardProps {
   onContactUpdated?: () => void
 }
 
+function resultOf(resultData: unknown): CrmNoteJobResult | null {
+  if (!resultData || typeof resultData !== 'object') return null
+  const v = resultData as Record<string, unknown>
+  if (typeof v.note !== 'string' || !Array.isArray(v.facts)) return null
+  return v as unknown as CrmNoteJobResult
+}
+
 /** M23 Workstream C — standalone CRM Note Generator, on the Contact page
  *  (gated by Settings → CRM → "CRM Note Generator"). Drafts a note from the
  *  contact's most recent call at a chosen length, plus a best-effort KYC
@@ -62,23 +76,13 @@ export function CrmNoteGeneratorCard({
   onContactUpdated
 }: CrmNoteGeneratorCardProps): React.JSX.Element {
   const [length, setLength] = useState<CrmNoteLength>('medium')
-  const [generating, setGenerating] = useState(false)
-  const [note, setNote] = useState<string | null>(null)
-  // The length `note` was actually drafted at — lets the UI flag when the
-  // segmented control has since been changed and the shown note no longer
-  // matches the selected length.
-  const [noteLength, setNoteLength] = useState<CrmNoteLength | null>(null)
-  const [facts, setFacts] = useState<KycFact[]>([])
-  const [appliedFactIds, setAppliedFactIds] = useState<Set<string>>(new Set())
-  const [skippedFactIds, setSkippedFactIds] = useState<Set<string>>(new Set())
-  // Which single fact's accept request is currently in flight — gates BOTH
-  // of that fact's own buttons, so a Skip click can't race an in-flight
-  // Update for the same fact (the write would land after the rep believed
-  // they'd dismissed it).
-  const [applyingFactId, setApplyingFactId] = useState<string | null>(null)
+  // The length the CURRENT draft was generated at — read off the job's own
+  // input so it survives a reopen, rather than a separate piece of state
+  // that would reset to null and hide the "length changed" hint.
   const [error, setError] = useState<string | null>(null)
+  const [applyingFactId, setApplyingFactId] = useState<string | null>(null)
   const [savingNote, setSavingNote] = useState(false)
-  const [noteSaved, setNoteSaved] = useState(false)
+  const [showSkipped, setShowSkipped] = useState(false)
   const mountedRef = useRef(true)
 
   useEffect(() => {
@@ -88,46 +92,56 @@ export function CrmNoteGeneratorCard({
     }
   }, [])
 
-  const generate = async (): Promise<void> => {
-    const requestedLength = length
-    setGenerating(true)
-    setError(null)
-    setNote(null)
-    setNoteLength(null)
-    setFacts([])
-    setAppliedFactIds(new Set())
-    setSkippedFactIds(new Set())
-    setNoteSaved(false)
-    try {
-      const res = await window.api.crmNoteGenerator.generate(contactId, requestedLength)
-      if (!mountedRef.current) return
-      if (res.ok) {
-        setNote(res.note ?? null)
-        setNoteLength(requestedLength)
-        setFacts(res.facts ?? [])
-      } else {
-        setError(res.message ?? 'Could not draft a note. Please try again.')
+  // Adopts an already-SUCCEEDED job too, not just running/queued — that IS
+  // the fix: a draft the rep hasn't finished reviewing must be recoverable
+  // by coming back to this contact, not only by watching it generate live.
+  const [job, startJob] = useJobByTarget(GENERATE_JOB_TYPE, contactId, {
+    adoptStates: ['running', 'queued', 'succeeded'],
+    onFailed: (failed) =>
+      setError(failed.error?.message ?? 'Could not draft a note. Please try again.')
+  })
+
+  const generating = job?.state === 'running' || job?.state === 'queued'
+  const result = job?.state === 'succeeded' ? resultOf(job.resultData) : null
+  const generatedLength = (job?.input as GenerateInput | undefined)?.length
+  const noteHandled = !!result?.review?.noteHandled
+  const note = result && !noteHandled ? result.note : null
+
+  const acceptedIds = new Set(result?.review?.accepted ?? [])
+  const skippedIds = new Set(result?.review?.skipped ?? [])
+  const pendingFacts = (result?.facts ?? []).filter(
+    (f) => !acceptedIds.has(f.id) && !skippedIds.has(f.id)
+  )
+  const skippedFacts = (result?.facts ?? []).filter((f) => skippedIds.has(f.id))
+
+  const generate = useCallback(
+    async (opts?: { force?: boolean }): Promise<void> => {
+      setError(null)
+      try {
+        const res = await window.api.crmNoteGenerator.generate(contactId, length, opts)
+        if (!mountedRef.current) return
+        if (res.ok && res.jobId) {
+          const fresh = await window.api.jobs.get(res.jobId)
+          if (mountedRef.current && fresh) startJob(fresh)
+        } else {
+          setError(res.message ?? 'Could not draft a note. Please try again.')
+        }
+      } catch {
+        if (mountedRef.current) setError('Could not draft a note. Please try again.')
       }
-    } catch {
-      if (mountedRef.current) setError('Could not draft a note. Please try again.')
-    } finally {
-      if (mountedRef.current) setGenerating(false)
-    }
-  }
+    },
+    [contactId, length, startJob]
+  )
 
   const saveNote = async (): Promise<void> => {
-    if (!note) return
+    if (!note || !job) return
     setSavingNote(true)
     setError(null)
     try {
-      const res = await window.api.crmNoteGenerator.save(contactId, note)
+      const res = await window.api.crmNoteGenerator.save(contactId, note, job.id)
       if (!mountedRef.current) return
-      if (res.ok) {
-        setNoteSaved(true)
-        onContactUpdated?.()
-      } else {
-        setError('Could not save that note. Please try again.')
-      }
+      if (res.ok) onContactUpdated?.()
+      else setError('Could not save that note. Please try again.')
     } catch {
       if (mountedRef.current) setError('Could not save that note. Please try again.')
     } finally {
@@ -135,21 +149,34 @@ export function CrmNoteGeneratorCard({
     }
   }
 
+  const discardNote = async (): Promise<void> => {
+    if (!job) return
+    await window.api.crmNoteGenerator.discardNote(job.id).catch(() => {})
+  }
+
   const decideFact = async (fact: KycFact, accept: boolean): Promise<void> => {
+    if (!job) return
     if (!accept) {
-      setSkippedFactIds((prev) => new Set(prev).add(fact.id))
+      // Permanent by design — see crm-note-review.ts. Still listed under
+      // "skipped" below so a mis-click leaves a trace.
+      await window.api.crmNoteGenerator.skipFact(job.id, fact.id).catch(() => {})
       return
     }
     setApplyingFactId(fact.id)
     setError(null)
     try {
-      const res = await window.api.crmNoteGenerator.applyFact(contactId, fact.field, fact.text)
+      const res = await window.api.crmNoteGenerator.applyFact(
+        contactId,
+        fact.field,
+        fact.text,
+        job.id,
+        fact.id
+      )
       if (!mountedRef.current) return
       if (!res.ok) {
         setError('Could not save that update. Please try again.')
         return
       }
-      setAppliedFactIds((prev) => new Set(prev).add(fact.id))
       onContactUpdated?.()
     } catch {
       if (mountedRef.current) setError('Could not save that update. Please try again.')
@@ -158,8 +185,7 @@ export function CrmNoteGeneratorCard({
     }
   }
 
-  const visibleFacts = facts.filter((f) => !skippedFactIds.has(f.id))
-  const lengthChanged = note !== null && noteLength !== null && noteLength !== length
+  const lengthChanged = note !== null && generatedLength !== undefined && generatedLength !== length
 
   return (
     <Card className="mb-4">
@@ -168,17 +194,22 @@ export function CrmNoteGeneratorCard({
           <Sparkles className="h-4 w-4 text-accent" />
           <h3 className="text-sm font-semibold">Generate CRM note</h3>
         </div>
-        <SegmentedControl options={LENGTH_OPTIONS} value={length} onChange={setLength} disabled={generating} />
+        <SegmentedControl
+          options={LENGTH_OPTIONS}
+          value={length}
+          onChange={setLength}
+          disabled={generating}
+        />
       </div>
 
       <Button
         size="sm"
         icon={generating ? Loader2 : Sparkles}
-        onClick={() => void generate()}
+        onClick={() => void generate(result ? { force: true } : undefined)}
         disabled={generating || savingNote}
         className={generating ? '[&_svg]:animate-spin' : ''}
       >
-        {generating ? 'Drafting…' : note ? 'Regenerate' : 'Generate from most recent call'}
+        {generating ? 'Drafting…' : result ? 'Regenerate' : 'Generate from most recent call'}
       </Button>
 
       {error && <p className="mt-2.5 text-[12px] text-danger">{error}</p>}
@@ -188,40 +219,47 @@ export function CrmNoteGeneratorCard({
           {lengthChanged && (
             <p className="mb-2 flex items-center gap-1.5 text-[11px] text-warning">
               <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-              This note was drafted at {noteLength ? LENGTH_LABEL[noteLength] : ''} length — click Regenerate
-              to redraft it at {LENGTH_LABEL[length]}.
+              This note was drafted at {generatedLength ? LENGTH_LABEL[generatedLength] : ''} length
+              — click Regenerate to redraft it at {LENGTH_LABEL[length]}.
             </p>
           )}
           <p className="whitespace-pre-wrap text-[13px] text-ink">{note}</p>
-          {noteSaved ? (
-            <p className="mt-2.5 flex items-center justify-end gap-1 text-[12px] font-medium text-positive">
-              <Check className="h-3.5 w-3.5" /> Saved to contact
-            </p>
-          ) : (
-            <div className="mt-2.5 flex justify-end gap-1.5">
-              <Button size="sm" variant="secondary" icon={X} onClick={() => setNote(null)} disabled={savingNote}>
-                Discard
-              </Button>
-              <Button
-                size="sm"
-                icon={savingNote ? Loader2 : Check}
-                onClick={() => void saveNote()}
-                disabled={savingNote}
-                className={savingNote ? '[&_svg]:animate-spin' : ''}
-              >
-                Save to contact
-              </Button>
-            </div>
-          )}
+          <div className="mt-2.5 flex justify-end gap-1.5">
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={X}
+              onClick={() => void discardNote()}
+              disabled={savingNote}
+            >
+              Discard
+            </Button>
+            <Button
+              size="sm"
+              icon={savingNote ? Loader2 : Check}
+              onClick={() => void saveNote()}
+              disabled={savingNote}
+              className={savingNote ? '[&_svg]:animate-spin' : ''}
+            >
+              Save to contact
+            </Button>
+          </div>
         </div>
       )}
 
-      {visibleFacts.length > 0 && (
+      {noteHandled && result && (
+        <p className="mt-2.5 flex items-center gap-1 text-[12px] font-medium text-positive">
+          <Check className="h-3.5 w-3.5" /> Note handled
+        </p>
+      )}
+
+      {pendingFacts.length > 0 && (
         <div className="mt-3">
-          <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-faint">Suggested updates</p>
+          <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-faint">
+            Suggested updates
+          </p>
           <div className="flex flex-col gap-2">
-            {visibleFacts.map((fact) => {
-              const applied = appliedFactIds.has(fact.id)
+            {pendingFacts.map((fact) => {
               const applying = applyingFactId === fact.id
               return (
                 <div
@@ -239,38 +277,76 @@ export function CrmNoteGeneratorCard({
                     </p>
                     <p className="text-[13px] text-ink">{fact.text}</p>
                   </div>
-                  {applied ? (
-                    <span className="flex shrink-0 items-center gap-1 text-[12px] font-medium text-positive">
-                      <Check className="h-3.5 w-3.5" /> Updated
-                    </span>
-                  ) : (
-                    <div className="flex shrink-0 gap-1.5">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        icon={X}
-                        onClick={() => void decideFact(fact, false)}
-                        disabled={applying}
-                      >
-                        Skip
-                      </Button>
-                      <Button
-                        size="sm"
-                        icon={applying ? Loader2 : Check}
-                        onClick={() => void decideFact(fact, true)}
-                        disabled={applying}
-                        className={applying ? '[&_svg]:animate-spin' : ''}
-                      >
-                        Update
-                      </Button>
-                    </div>
-                  )}
+                  <div className="flex shrink-0 gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon={X}
+                      onClick={() => void decideFact(fact, false)}
+                      disabled={applying}
+                    >
+                      Skip
+                    </Button>
+                    <Button
+                      size="sm"
+                      icon={applying ? Loader2 : Check}
+                      onClick={() => void decideFact(fact, true)}
+                      disabled={applying}
+                      className={applying ? '[&_svg]:animate-spin' : ''}
+                    >
+                      Update
+                    </Button>
+                  </div>
                 </div>
               )
             })}
           </div>
         </div>
       )}
+
+      {/* Skipping is permanent (a suggestion the rep already judged must not
+          come back and re-ask). That makes a mis-click destructive in a way
+          the old all-or-nothing loss never was, so skipped suggestions stay
+          visible — collapsed, out of the way, but never silently gone. */}
+      {skippedFacts.length > 0 && (
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => setShowSkipped((v) => !v)}
+            className="flex items-center gap-1 text-[11px] text-faint transition hover:text-muted"
+            aria-expanded={showSkipped}
+          >
+            <ChevronDown
+              className={`h-3.5 w-3.5 transition-transform ${showSkipped ? '' : '-rotate-90'}`}
+            />
+            {skippedFacts.length} suggestion{skippedFacts.length === 1 ? '' : 's'} skipped
+          </button>
+          {showSkipped && (
+            <div className="mt-2 flex flex-col gap-1.5">
+              {skippedFacts.map((fact) => (
+                <div
+                  key={fact.id}
+                  className="rounded-lg border border-line-soft bg-canvas px-3 py-2 opacity-70"
+                >
+                  <p className="text-[11px] font-medium text-faint">
+                    {KYC_FIELD_LABEL[fact.field] ?? fact.field}
+                  </p>
+                  <p className="text-[12px] text-muted line-through">{fact.text}</p>
+                </div>
+              ))}
+              <p className="text-[11px] text-faint">
+                Skipped suggestions aren&apos;t applied and won&apos;t be suggested again.
+                Regenerate to take a fresh look.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
     </Card>
   )
+}
+
+interface GenerateInput {
+  contactId: string
+  length: CrmNoteLength
 }

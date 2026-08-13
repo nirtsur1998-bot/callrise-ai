@@ -21,6 +21,8 @@ import { app, ipcMain } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { githubRepoFromFeed, isTrustedFeed, validateUpdate } from './policy'
 import { isAutoUpdateEnabled, setAutoUpdateEnabledChangedListener } from '../app-settings'
+import { getJobManager } from '../jobs/instance'
+import type { Job } from '../jobs/types'
 
 // How often the background check runs when auto-update is on. Not too eager
 // (this is a network request against GitHub's API on every user's machine)
@@ -42,6 +44,29 @@ export type UpdateStatus =
 
 let status: UpdateStatus = { state: 'disabled', reason: 'not initialised' }
 let enabled = false
+
+/** M26 Batch 5 — the update download's job type. */
+const DOWNLOAD_JOB_TYPE = 'updater:download'
+
+/** Start a download job unless one is already queued or running. Both the
+ *  manual button and auto-mode's own trigger come through here, so they can
+ *  never race into two concurrent downloads sharing one
+ *  'download-progress' event stream. Never throws into its caller — a
+ *  failed enqueue must not break an update check. */
+function startDownloadJob(): void {
+  try {
+    const manager = getJobManager()
+    const already = manager
+      .list()
+      .find(
+        (j: Job) => j.type === DOWNLOAD_JOB_TYPE && (j.state === 'running' || j.state === 'queued')
+      )
+    if (already) return
+    manager.enqueue(DOWNLOAD_JOB_TYPE, {})
+  } catch (err) {
+    console.error('[updater] could not start the download job:', err)
+  }
+}
 
 export function updateStatus(): UpdateStatus {
   return status
@@ -121,18 +146,73 @@ export function registerUpdater(): void {
       return
     }
     status = { state: 'available', version: String(info.version) }
-    if (isAutoUpdateEnabled()) {
-      autoUpdater.downloadUpdate().catch((err) => {
-        status = {
-          state: 'error',
-          message: err instanceof Error ? err.message : 'update download failed'
-        }
-      })
-    }
+    // Auto mode downloads without a further click — now through the same
+    // job as the manual button, so a background download is visible in the
+    // Activity Center and on the taskbar instead of happening invisibly.
+    if (isAutoUpdateEnabled()) startDownloadJob()
   })
 
   autoUpdater.on('update-not-available', () => {
     status = { state: 'idle' }
+  })
+
+  // M26 Batch 5 — the download as a MAINTENANCE-lane job reporting a REAL
+  // percentage. electron-updater has always emitted 'download-progress'
+  // with an exact percent; nothing in the app ever listened, so the UI
+  // showed a fake indeterminate spinner for what is often the longest
+  // single operation in the product. This is the whole "free win" the
+  // Phase 0 inventory flagged: the number already existed, it just had
+  // nowhere to go.
+  //
+  // Not cancellable: electron-updater exposes no way to abort a download
+  // in flight, and pretending otherwise would give the rep a Cancel button
+  // that silently does nothing.
+  getJobManager().registerType<Record<string, never>, string>({
+    type: DOWNLOAD_JOB_TYPE,
+    lane: 'MAINTENANCE',
+    titleFor: () => 'Downloading update',
+    cancellable: false,
+    executor: {
+      kind: 'inline-async',
+      run: async (_input, handle) => {
+        handle.reportProgress({
+          mode: 'determinate',
+          itemsDone: 0,
+          itemsTotal: 100,
+          unit: 'percent'
+        })
+        // 'download-progress' is a singleton event on autoUpdater, not
+        // scoped to one call — safe here only because MAINTENANCE runs one
+        // at a time AND the enqueue path below refuses a second concurrent
+        // download. Removed in `finally` so a later download never reports
+        // into this job's handle.
+        const onProgress = (p: { percent?: number }): void => {
+          const percent = Math.max(0, Math.min(100, Math.round(p?.percent ?? 0)))
+          handle.reportProgress({
+            mode: 'determinate',
+            itemsDone: percent,
+            itemsTotal: 100,
+            unit: 'percent'
+          })
+        }
+        autoUpdater.on('download-progress', onProgress)
+        try {
+          await autoUpdater.downloadUpdate()
+          return status.state === 'downloaded' ? status.version : ''
+        } catch (err) {
+          // Keep the module-level status authoritative for the Settings
+          // card, which reads it directly, then rethrow so the job itself
+          // records the failure too.
+          status = {
+            state: 'error',
+            message: err instanceof Error ? err.message : 'update download failed'
+          }
+          throw err
+        } finally {
+          autoUpdater.off('download-progress', onProgress)
+        }
+      }
+    }
   })
 
   autoUpdater.on('update-downloaded', (info) => {
@@ -168,14 +248,10 @@ export function registerUpdater(): void {
     // Only from a state our own gate has already accepted. Re-checked here
     // rather than trusted from the renderer, which could ask at any time.
     if (!enabled || status.state !== 'available') return status
-    try {
-      await autoUpdater.downloadUpdate()
-    } catch (err) {
-      status = {
-        state: 'error',
-        message: err instanceof Error ? err.message : 'update download failed'
-      }
-    }
+    // Returns immediately now: the download runs as a job, and the Settings
+    // card keeps reading `status` exactly as before. The real percentage
+    // shows in the Activity Center and on the taskbar.
+    startDownloadJob()
     return status
   })
 

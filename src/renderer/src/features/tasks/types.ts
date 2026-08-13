@@ -35,6 +35,3 @@ export interface ProposedTask {
   clientName?: string
   note?: string
 }
-
-export type GenerateTasksResult =
-  { ok: true; tasks: ProposedTask[] } | { ok: false; error: 'no-key' | 'failed'; message?: string }

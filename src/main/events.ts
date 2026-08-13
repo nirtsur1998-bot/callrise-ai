@@ -19,6 +19,8 @@ import {
   dropCachedEvent
 } from './calendar-sync'
 import { scheduleBackup } from './backup'
+import { getJobManager } from './jobs/instance'
+import type { Job } from './jobs/types'
 
 function eventsDir(): string {
   return join(app.getPath('userData'), 'events')
@@ -175,7 +177,20 @@ async function syncPush(id: string): Promise<boolean> {
   }
 }
 
-/** Queue a push for one event and refresh the calendar if the outcome changed. */
+/** M26 Batch 5 — the reconcile drain's job type. */
+const RECONCILE_JOB_TYPE = 'calendar:reconcile'
+
+/** Queue a push for one event and refresh the calendar if the outcome changed.
+ *
+ *  M26 Batch 5 — DELIBERATELY NOT a job, unlike the reconcile drain below.
+ *  Three reasons, all specific to this one: it takes ~0.1–2s (there is no
+ *  progress to report), it already survives navigation (it has always run in
+ *  main), and a failure already surfaces ON THE EVENT ITSELF in the Calendar
+ *  UI via sync.state — which is a far better place for it than a generic
+ *  Activity Center row. Migrating it would add one job entry per calendar
+ *  edit in exchange for nothing, and would replace this per-EVENT
+ *  serialization chain with a single global one, needlessly serializing
+ *  unrelated events during a bulk edit. */
 function schedulePush(id: string): void {
   void enqueuePush(id, () => syncPush(id)).then((changed) => {
     if (changed) notifyEventsChanged()
@@ -313,5 +328,46 @@ export function registerEvents(): void {
     scheduleBackup()
     return { ok: true }
   })
-  ipcMain.handle('events:reconcile', () => reconcile())
+  // M26 Batch 5 — the reconcile drain as a MAINTENANCE job. Unlike a single
+  // event push (see the note on schedulePush), this is a BATCH-shaped
+  // operation: it walks every event and re-pushes each one whose earlier
+  // push failed, so after a spell offline it can take a genuinely long time
+  // and does real work the rep would otherwise have no way to see.
+  //
+  // Silent: it is self-healing retry machinery with no decision attached,
+  // and a per-event failure already surfaces on the event itself in the
+  // Calendar UI, which is a better place for it than a generic toast.
+  //
+  // reconcile()'s own `reconciling` single-flight flag still guards it, so
+  // overlapping triggers collapse exactly as before.
+  getJobManager().registerType<Record<string, never>, string>({
+    type: RECONCILE_JOB_TYPE,
+    lane: 'MAINTENANCE',
+    titleFor: () => 'Catching up calendar changes',
+    cancellable: false,
+    silent: true,
+    executor: {
+      kind: 'inline-async',
+      run: async () => {
+        await reconcile()
+        return 'Calendar caught up.'
+      }
+    }
+  })
+
+  ipcMain.handle('events:reconcile', () => {
+    try {
+      const manager = getJobManager()
+      const already = manager
+        .list()
+        .find(
+          (j: Job) =>
+            j.type === RECONCILE_JOB_TYPE && (j.state === 'running' || j.state === 'queued')
+        )
+      if (!already) manager.enqueue(RECONCILE_JOB_TYPE, {})
+    } catch (err) {
+      // Never break a calendar sync because the job system refused.
+      console.error('[events] could not enqueue reconcile:', err)
+    }
+  })
 }

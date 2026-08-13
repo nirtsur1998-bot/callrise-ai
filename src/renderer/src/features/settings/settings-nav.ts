@@ -19,6 +19,7 @@ import {
   Activity,
   GraduationCap,
   Brain,
+  ListTodo,
   type LucideIcon
 } from 'lucide-react'
 
@@ -44,6 +45,7 @@ export type SettingsPageId =
   | 'app'
   | 'appearance'
   | 'privacy-data'
+  | 'jobs-inspector'
 
 export interface SettingsPageItem {
   id: SettingsPageId
@@ -176,7 +178,8 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         id: 'sales-brain-memories',
         label: 'Sales Brain — Memories',
         icon: Brain,
-        description: 'Browse, edit, pin, or delete anything Sales Brain has learned. Full history, nothing hidden.'
+        description:
+          'Browse, edit, pin, or delete anything Sales Brain has learned. Full history, nothing hidden.'
       }
     ]
   },
@@ -242,7 +245,26 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         description: 'What stays on this device, and what backs up to your account.'
       }
     ]
-  }
+  },
+  // M26 Phase 1 — dev builds only. Never appears in a packaged build: the
+  // whole group is omitted rather than the page just being unreachable, so
+  // there's nothing here for a real user to even notice.
+  ...(import.meta.env.DEV
+    ? [
+        {
+          label: 'Developer',
+          items: [
+            {
+              id: 'jobs-inspector' as const,
+              label: 'Job Inspector',
+              icon: ListTodo,
+              description:
+                'The background job queue — lanes, cancellation, resume — with fake jobs to exercise it without touching any real feature.'
+            }
+          ]
+        }
+      ]
+    : [])
 ]
 
 export const ALL_SETTINGS_PAGES: SettingsPageItem[] = SETTINGS_GROUPS.flatMap((g) => g.items)

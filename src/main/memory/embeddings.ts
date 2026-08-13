@@ -39,6 +39,38 @@ function getExtractor(): Promise<FeatureExtractionPipeline> {
   return extractorPromise
 }
 
+/**
+ * M26 Batch 5 — pull the ~23MB model down ahead of time, so the first
+ * feature that needs an embedding isn't the one that pays for it.
+ *
+ * Phase 0 row 37 found this had already caused a real production slowdown:
+ * the download is lazy, so it ambushes whatever unrelated feature happens to
+ * trigger the first embedding and stalls it for up to ~48s with no
+ * explanation anywhere. Warming up at launch trades an invisible random
+ * stall for a visible, expected one, at the moment people are most tolerant
+ * of setup work.
+ *
+ * Safe to call at any time and any number of times: getExtractor() memoises
+ * its promise, so a real embedText() racing this one awaits the SAME
+ * download rather than starting a second. NOTHING is ever blocked on this —
+ * it runs fire-and-forget from a background job, and an embedText() arriving
+ * mid-download waits exactly as long as it would have anyway, never longer.
+ *
+ * Resolves rather than rejects on failure: a model that can't be fetched
+ * (offline, blocked) must leave the app entirely usable, and the next real
+ * embedText() surfaces the problem to whoever actually needed it.
+ */
+export async function warmUpEmbeddings(): Promise<void> {
+  try {
+    await getExtractor()
+  } catch {
+    // Deliberately swallowed — see above. The memoised REJECTED promise is
+    // cleared so a later embedText() genuinely retries rather than
+    // inheriting this failure for the rest of the session.
+    extractorPromise = null
+  }
+}
+
 /** Embeds one short statement (a single memory's `statement` text — the
  *  spec is explicit this runs at the individual-fact level, "well within
  *  the model's input limits", never a whole transcript). Returns a plain

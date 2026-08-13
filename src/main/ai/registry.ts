@@ -13,14 +13,73 @@ import type { AIProvider, AIProviderId } from './types'
 import { AnthropicProvider } from './providers/anthropic'
 import { OpenAIProvider } from './providers/openai'
 import { createOpenAICompatibleProvider } from './providers/openai-compatible'
-import { createGeminiProvider } from './providers/gemini'
+import { createGeminiProvider, DEFAULT_MODEL as GEMINI_DEFAULT_MODEL } from './providers/gemini'
 
 export interface ProviderRegistryEntry {
   displayName: string
   /** Which AiKeyName (ai-keys.ts) backs this provider. */
   keyEnvName: string
+  /**
+   * BUG-057 — the concrete model a chain step with no explicit `req.model`
+   * actually resolves to. Used for exactly one thing: stopping the legacy
+   * step and a bundled catalog entry from being the SAME request twice.
+   *
+   * This matters because six of the eight defaults below are byte-identical
+   * to a catalog entry's `modelId` (groq/google/openrouter/nvidia/cerebras/
+   * mistral), while resolveChain's dedupe works on `catalogId` — and a legacy
+   * step's synthetic `legacy:<provider>` id can never match a real catalog
+   * id. For a single-key user, that made attempt 1 and a later "fallback"
+   * literally the same call.
+   *
+   * Undefined for anthropic/openai: they pick per-purpose via MODEL_BY_PURPOSE
+   * and have no catalog entries at all, so a collision is impossible there.
+   */
+  defaultModelId?: string
   build: (apiKey: string) => AIProvider
 }
+
+// Hoisted so `build` and `defaultModelId` read the SAME literal — a second
+// copy of these strings that could drift from the first is exactly the kind
+// of duplication that makes the dedupe above silently stop working.
+const GROQ_CONFIG = {
+  id: 'groq',
+  displayName: 'Groq',
+  baseURL: 'https://api.groq.com/openai/v1',
+  defaultModel: 'llama-3.3-70b-versatile',
+  testModel: 'llama-3.1-8b-instant'
+} as const
+
+const OPENROUTER_CONFIG = {
+  id: 'openrouter',
+  displayName: 'OpenRouter',
+  baseURL: 'https://openrouter.ai/api/v1',
+  defaultModel: 'openrouter/free'
+} as const
+
+const NVIDIA_CONFIG = {
+  id: 'nvidia',
+  displayName: 'NVIDIA NIM',
+  baseURL: 'https://integrate.api.nvidia.com/v1',
+  defaultModel: 'deepseek-ai/deepseek-v3.2'
+} as const
+
+const CEREBRAS_CONFIG = {
+  id: 'cerebras',
+  displayName: 'Cerebras',
+  baseURL: 'https://api.cerebras.ai/v1',
+  defaultModel: 'openai/gpt-oss-120b'
+} as const
+
+const MISTRAL_CONFIG = {
+  id: 'mistral',
+  displayName: 'Mistral',
+  baseURL: 'https://api.mistral.ai/v1',
+  defaultModel: 'mistral-small-latest',
+  // Mistral's Chat Completions endpoint only accepts `max_tokens` —
+  // sending the (OpenAI-current) `max_completion_tokens` 422s the
+  // whole request. See OpenAICompatibleConfig.maxTokensParam.
+  maxTokensParam: 'max_tokens'
+} as const
 
 export const PROVIDER_REGISTRY: Record<AIProviderId, ProviderRegistryEntry> = {
   anthropic: {
@@ -36,81 +95,37 @@ export const PROVIDER_REGISTRY: Record<AIProviderId, ProviderRegistryEntry> = {
   groq: {
     displayName: 'Groq',
     keyEnvName: 'GROQ_API_KEY',
-    build: (key) =>
-      createOpenAICompatibleProvider(
-        {
-          id: 'groq',
-          displayName: 'Groq',
-          baseURL: 'https://api.groq.com/openai/v1',
-          defaultModel: 'llama-3.3-70b-versatile',
-          testModel: 'llama-3.1-8b-instant'
-        },
-        key
-      )
+    defaultModelId: GROQ_CONFIG.defaultModel,
+    build: (key) => createOpenAICompatibleProvider(GROQ_CONFIG, key)
   },
   openrouter: {
     displayName: 'OpenRouter',
     keyEnvName: 'OPENROUTER_API_KEY',
-    build: (key) =>
-      createOpenAICompatibleProvider(
-        {
-          id: 'openrouter',
-          displayName: 'OpenRouter',
-          baseURL: 'https://openrouter.ai/api/v1',
-          defaultModel: 'openrouter/free'
-        },
-        key
-      )
+    defaultModelId: OPENROUTER_CONFIG.defaultModel,
+    build: (key) => createOpenAICompatibleProvider(OPENROUTER_CONFIG, key)
   },
   google: {
     displayName: 'Gemini',
     keyEnvName: 'GOOGLE_AI_API_KEY',
+    defaultModelId: GEMINI_DEFAULT_MODEL,
     build: (key) => createGeminiProvider(key)
   },
   nvidia: {
     displayName: 'NVIDIA NIM',
     keyEnvName: 'NVIDIA_API_KEY',
-    build: (key) =>
-      createOpenAICompatibleProvider(
-        {
-          id: 'nvidia',
-          displayName: 'NVIDIA NIM',
-          baseURL: 'https://integrate.api.nvidia.com/v1',
-          defaultModel: 'deepseek-ai/deepseek-v3.2'
-        },
-        key
-      )
+    defaultModelId: NVIDIA_CONFIG.defaultModel,
+    build: (key) => createOpenAICompatibleProvider(NVIDIA_CONFIG, key)
   },
   cerebras: {
     displayName: 'Cerebras',
     keyEnvName: 'CEREBRAS_API_KEY',
-    build: (key) =>
-      createOpenAICompatibleProvider(
-        {
-          id: 'cerebras',
-          displayName: 'Cerebras',
-          baseURL: 'https://api.cerebras.ai/v1',
-          defaultModel: 'openai/gpt-oss-120b'
-        },
-        key
-      )
+    defaultModelId: CEREBRAS_CONFIG.defaultModel,
+    build: (key) => createOpenAICompatibleProvider(CEREBRAS_CONFIG, key)
   },
   mistral: {
     displayName: 'Mistral',
     keyEnvName: 'MISTRAL_API_KEY',
-    build: (key) =>
-      createOpenAICompatibleProvider(
-        {
-          id: 'mistral',
-          displayName: 'Mistral',
-          baseURL: 'https://api.mistral.ai/v1',
-          defaultModel: 'mistral-small-latest',
-          // Mistral's Chat Completions endpoint only accepts `max_tokens` —
-          // sending the (OpenAI-current) `max_completion_tokens` 422s the
-          // whole request. See OpenAICompatibleConfig.maxTokensParam.
-          maxTokensParam: 'max_tokens'
-        },
-        key
-      )
+    defaultModelId: MISTRAL_CONFIG.defaultModel,
+    build: (key) => createOpenAICompatibleProvider(MISTRAL_CONFIG, key)
   }
 }

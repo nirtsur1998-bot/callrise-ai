@@ -51,6 +51,43 @@ type Handlers = {
   onState?: (p: { state: string }) => void
   onTranscript?: (p: Record<string, unknown>) => void
   onClosed?: () => void
+  /** M26 4.3 — the transcript itself now arrives from main as deltas. */
+  onSegments?: (p: {
+    callId: string
+    seq: number
+    from: number
+    segments: Array<{ speaker: number; text: string }>
+  }) => void
+}
+
+/**
+ * M26 4.3 — one spoken, finalized turn, as the real pipeline delivers it.
+ *
+ * Main sends TWO things for every final: the raw result (which still drives
+ * interim text and the latency meter) and a transcript patch (which is the
+ * transcript). Firing both keeps this test honest about the actual event flow
+ * rather than about whichever half happens to be enough to pass.
+ */
+function makeSpeaker(handlers: Handlers): (text: string) => void {
+  const spoken: Array<{ speaker: number; text: string }> = []
+  let seq = -1
+  return (text: string): void => {
+    handlers.onTranscript?.({
+      transcript: text,
+      words: [],
+      isFinal: true,
+      speechFinal: true,
+      lagMs: 40,
+      speakerEpoch: 0,
+      speakerCertain: true,
+      minConfidence: 0.95,
+      multichannel: false
+    })
+    const from = spoken.length
+    spoken.push({ speaker: 0, text })
+    seq += 1
+    handlers.onSegments?.({ callId: 'call-1', seq, from, segments: spoken.slice(from) })
+  }
 }
 
 function installMockApi(): { handlers: Handlers; save: ReturnType<typeof vi.fn> } {
@@ -64,13 +101,20 @@ function installMockApi(): { handlers: Handlers; save: ReturnType<typeof vi.fn> 
       sendAudio: vi.fn(),
       requestAudioPort: vi.fn(),
       reportAudioDropped: vi.fn(),
-      stop: vi.fn(async () => ({ ok: true })),
+      stop: vi.fn(async () => ({ ok: true, session: null })),
       onState: vi.fn((cb: Handlers['onState']) => {
         handlers.onState = cb
         return () => {}
       }),
       onTranscript: vi.fn((cb: Handlers['onTranscript']) => {
         handlers.onTranscript = cb
+        return () => {}
+      }),
+      // M26 4.3 — no call in progress when this view mounts, said
+      // affirmatively. The hook refuses to show idle on anything weaker.
+      attach: vi.fn(async () => ({ session: null, call: null })),
+      onSegments: vi.fn((cb: Handlers['onSegments']) => {
+        handlers.onSegments = cb
         return () => {}
       }),
       onError: vi.fn(() => () => {}),
@@ -145,19 +189,7 @@ describe('useTranscription — BUG-046 (unmount mid-call must not lose the trans
       await api.start()
     })
     act(() => handlers.onState?.({ state: 'listening' }))
-    act(() =>
-      handlers.onTranscript?.({
-        transcript: 'The buyer just agreed to a demo next Tuesday',
-        words: [],
-        isFinal: true,
-        speechFinal: true,
-        lagMs: 40,
-        speakerEpoch: 0,
-        speakerCertain: true,
-        minConfidence: 0.95,
-        multichannel: false
-      })
-    )
+    act(() => makeSpeaker(handlers)('The buyer just agreed to a demo next Tuesday'))
 
     expect(save).not.toHaveBeenCalled() // sanity: nothing saved yet, same as today
 
@@ -202,19 +234,7 @@ describe('useTranscription — BUG-046 (unmount mid-call must not lose the trans
       await api.start()
     })
     act(() => handlers.onState?.({ state: 'listening' }))
-    act(() =>
-      handlers.onTranscript?.({
-        transcript: 'Thanks for your time today',
-        words: [],
-        isFinal: true,
-        speechFinal: true,
-        lagMs: 40,
-        speakerEpoch: 0,
-        speakerCertain: true,
-        minConfidence: 0.9,
-        multichannel: false
-      })
-    )
+    act(() => makeSpeaker(handlers)('Thanks for your time today'))
 
     // The rep actually clicks Stop, and main confirms the session closed —
     // the normal, already-working save path.

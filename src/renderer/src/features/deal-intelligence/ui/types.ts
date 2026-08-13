@@ -25,7 +25,14 @@ export interface Nudge {
   createdAtMs: number
 }
 
-export type DealIntelligenceStatus = 'idle' | 'active' | 'paused'
+/** BUG-057 Phase 2 — 'timed-out' added, distinct from 'paused'. A
+ *  HARD_CEILING_MS timeout is a live, responding provider that was just too
+ *  slow; 'paused' means every configured model is unreachable or
+ *  rate-limited. Kept as separate union members (not folded into 'paused')
+ *  because every Record<DealIntelligenceStatus, ...> lookup below is
+ *  exhaustive — the compiler forces every consumer to decide what this
+ *  status looks like rather than silently inheriting 'paused''s copy. */
+export type DealIntelligenceStatus = 'idle' | 'active' | 'paused' | 'timed-out'
 
 // Tier 2's output shape — a slower (every 2-3 minutes), whole-call read that
 // sits alongside the Tier 1 nudges above rather than replacing them. Mirrored

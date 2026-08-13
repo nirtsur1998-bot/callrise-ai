@@ -13,7 +13,7 @@ vi.mock('../fallback-log', () => ({ logFallbackEvent: vi.fn() }))
 vi.mock('../index', () => ({ getActiveAIProvider: () => null }))
 
 const { loadAppSettings } = await import('../../app-settings')
-const { resolveChain } = await import('../complete-with-fallback')
+const { resolveConfiguredChain } = await import('../complete-with-fallback')
 
 function assignments(purpose: string, chain: string[]): ReturnType<typeof loadAppSettings> {
   return {
@@ -45,7 +45,7 @@ describe('resolveChain — known-stale catalog entries', () => {
     vi.mocked(loadAppSettings).mockReturnValue(
       assignments('summary', ['groq-llama-4-scout', 'groq-gpt-oss-120b'])
     )
-    const steps = resolveChain('summary')
+    const steps = resolveConfiguredChain('summary')
     expect(steps.map((s) => s.catalogId)).not.toContain('groq-llama-4-scout')
   })
 
@@ -59,13 +59,13 @@ describe('resolveChain — known-stale catalog entries', () => {
     // assertion is narrowly "never resolves the stale entry itself", not
     // "resolves nothing at all".
     vi.mocked(loadAppSettings).mockReturnValue(assignments('summary', ['groq-qwen3-32b']))
-    const steps = resolveChain('summary')
+    const steps = resolveConfiguredChain('summary')
     expect(steps.map((s) => s.catalogId)).not.toContain('groq-qwen3-32b')
   })
 
   it('still resolves a normal, non-stale entry with a key configured', () => {
     vi.mocked(loadAppSettings).mockReturnValue(assignments('summary', ['groq-gpt-oss-120b']))
-    const steps = resolveChain('summary')
+    const steps = resolveConfiguredChain('summary')
     expect(steps.map((s) => s.catalogId)).toEqual(['groq-gpt-oss-120b'])
   })
 })

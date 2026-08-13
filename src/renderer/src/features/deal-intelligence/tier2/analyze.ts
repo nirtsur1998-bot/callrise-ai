@@ -10,16 +10,20 @@ export interface Tier2AnalyzeInput {
   compactState: string
   dealContext?: string
   triggerReason?: string
+  sessionId?: number
+  includesBuyerContent?: boolean
 }
 
 export type Tier2AnalyzeOutcome =
   | { ok: true; score: number; factors: HealthFactors; topRecommendation: string }
-  | { ok: false; pausedReason?: 'all-models-unavailable' }
+  | { ok: false; pausedReason?: 'all-models-unavailable' | 'timed-out'; blockedReason?: 'consent' }
 
 export async function analyzeTier2(input: Tier2AnalyzeInput): Promise<Tier2AnalyzeOutcome> {
   try {
     const result = await window.api.dealIntelligence.analyzeTier2(input)
-    if (!result.ok) return { ok: false, pausedReason: result.pausedReason }
+    if (!result.ok) {
+      return { ok: false, pausedReason: result.pausedReason, blockedReason: result.blockedReason }
+    }
     return {
       ok: true,
       score: result.result.score,

@@ -1,6 +1,11 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type { DetectedCall, DetectorEvent, DetectorState } from '../main/detection/types'
 import type { UpdateStatus } from '../main/updater'
+// M26 4.3 — the live-transcript wire format, defined once in main and re-exported
+// so the renderer describes the protocol with the same types that produce it.
+import type { AttachSnapshot, TranscriptPatch } from '../main/live/transcript-patch'
+
+export type { AttachSnapshot, TranscriptPatch }
 
 export type MicAccessStatus = 'granted' | 'denied' | 'restricted' | 'not-determined'
 
@@ -119,7 +124,17 @@ export interface TranscriptionApi {
   sendAudio: (chunk: ArrayBuffer, producerId?: number) => void
   requestAudioPort: () => void
   reportAudioDropped: (frames: number, producerId?: number) => void
-  stop: () => Promise<{ ok: boolean }>
+  /** `session: null` is the ONLY affirmative "there is no call in progress"
+   *  answer in the system. Nothing else may conclude that — not a timeout,
+   *  not a default. */
+  stop: () => Promise<{ ok: boolean; session: null }>
+  /** M26 4.3 — what main knows about the call in progress, asked on mount. */
+  attach: () => Promise<AttachSnapshot>
+  /** M26 4.4 — "the view went away", never "the call ended". A pure signal;
+   *  main does not stop, pause, or otherwise react to the session on it. */
+  detach: () => Promise<{ ok: true }>
+  /** M26 4.3 — transcript deltas from main, which owns the transcript. */
+  onSegments: (cb: (payload: TranscriptPatch) => void) => () => void
   onState: (cb: (payload: TranscriptionStateEvent) => void) => () => void
   onTranscript: (cb: (payload: TranscriptResultEvent) => void) => () => void
   onError: (cb: (payload: TranscriptionErrorEvent) => void) => () => void
@@ -156,7 +171,12 @@ export interface TranscriptionApi {
   /** Conversation-aware live cue from a speaker-labeled transcript window. */
   liveCue: (
     transcript: string,
-    repSpeaker: number | null
+    repSpeaker: number | null,
+    /** M26 4.5 (BUG-055) — see main/live-cue.ts's own doc comment: lets main
+     *  check fresh consent before a pass that may include buyer-attributed
+     *  content ever reaches an AI prompt. */
+    sessionId?: number,
+    includesBuyerContent?: boolean
   ) => Promise<
     | {
         ok: true
@@ -174,7 +194,9 @@ export interface TranscriptionApi {
          *  and every entry failed this cycle (not on "not enough transcript
          *  yet"). Renderer shows a small non-blocking "coaching paused"
          *  indicator, never a modal — see LiveView.tsx. */
-        pausedReason?: 'all-models-unavailable'
+        pausedReason?: 'all-models-unavailable' | 'timed-out'
+        /** M26 4.5 (BUG-055) — never read as "paused"; see main/live-cue.ts. */
+        blockedReason?: 'consent'
       }
   >
 }
@@ -214,7 +236,13 @@ export interface DealSignal {
 }
 
 export type DealTier1Result =
-  { ok: true; signals: DealSignal[] } | { ok: false; pausedReason?: 'all-models-unavailable' }
+  | { ok: true; signals: DealSignal[] }
+  | {
+      ok: false
+      pausedReason?: 'all-models-unavailable' | 'timed-out'
+      /** M26 4.5 (BUG-055) — never read as "paused"; see main/deal-tier1.ts. */
+      blockedReason?: 'consent'
+    }
 
 /** M24 §4 — Tier 2 strategic analysis output. Trajectory is NOT part of this
  *  shape — see deal-intelligence/healthScore.ts's computeTrajectory(), which
@@ -234,7 +262,12 @@ export interface DealHealthResult {
 }
 
 export type DealTier2Result =
-  { ok: true; result: DealHealthResult } | { ok: false; pausedReason?: 'all-models-unavailable' }
+  | { ok: true; result: DealHealthResult }
+  | {
+      ok: false
+      pausedReason?: 'all-models-unavailable' | 'timed-out'
+      blockedReason?: 'consent'
+    }
 
 export interface DealIntelligenceApi {
   analyzeTier1: (input: {
@@ -242,12 +275,17 @@ export interface DealIntelligenceApi {
     compactState: string
     dealContext?: string
     triggerReason?: string
+    /** M26 4.5 (BUG-055) — see main/deal-tier1.ts's own doc comment. */
+    sessionId?: number
+    includesBuyerContent?: boolean
   }) => Promise<DealTier1Result>
   analyzeTier2: (input: {
     transcriptDelta: string
     compactState: string
     dealContext?: string
     triggerReason?: string
+    sessionId?: number
+    includesBuyerContent?: boolean
   }) => Promise<DealTier2Result>
   /** M24 §8 — the feedback loop. */
   recordFeedback: (input: {
@@ -512,9 +550,6 @@ export interface FocusSkillAtCoaching {
   microBehavior: string
 }
 
-export type CoachResult =
-  { ok: true; report: CoachingReport } | { ok: false; error: 'no-key' | 'failed'; message?: string }
-
 export type CommitmentOwner = 'rep' | 'prospect'
 
 export interface Commitment {
@@ -522,10 +557,6 @@ export interface Commitment {
   text: string
   dueDate?: string
 }
-
-export type CommitmentResult =
-  | { ok: true; commitments: Commitment[] }
-  | { ok: false; error: 'no-key' | 'failed' | 'empty-call'; message?: string }
 
 // M24 §8 — the post-call "Radar Report" source data. Mirrors main/calls-fs.ts's
 // same-named types verbatim (that file is the sanitizing authority).
@@ -718,9 +749,6 @@ export interface TaskUpdateInput {
   note?: string | null
 }
 
-export type GenerateTasksResult =
-  { ok: true; tasks: ProposedTask[] } | { ok: false; error: 'no-key' | 'failed'; message?: string }
-
 // --- Objection Library (mining step) ----------------------------------------
 
 export type MinedObjectionType = 'price' | 'timing' | 'competitor' | 'approval' | 'trust' | 'other'
@@ -790,11 +818,11 @@ export interface CallsApi {
     file: { name: string; ext: string; data: ArrayBuffer }
   ) => Promise<AddAttachmentResult>
   removeAttachment: (callId: string, attachmentId: string) => Promise<{ ok: boolean }>
-  summarizeCall: (callId: string) => Promise<SummaryResult>
+  summarizeCall: (callId: string) => Promise<{ ok: boolean; jobId?: string }>
   summarizeAttachment: (callId: string, attachmentId: string) => Promise<SummaryResult>
-  coachCall: (callId: string) => Promise<CoachResult>
+  coachCall: (callId: string) => Promise<{ ok: boolean; jobId?: string }>
   /** Who promised what on this call, split rep vs. prospect (§4.7). */
-  extractCommitments: (callId: string) => Promise<CommitmentResult>
+  extractCommitments: (callId: string) => Promise<{ ok: boolean; jobId?: string }>
   /** M24 §8 — persist the Radar Report source data onto an already-saved
    *  call. No AI call; the renderer already has the full history. */
   saveDealIntelligence: (callId: string, record: DealIntelligenceRecord) => Promise<{ ok: boolean }>
@@ -809,18 +837,15 @@ export interface CallsApi {
   /** How many past calls have a transcript but haven't been mined yet — shown
    *  before the user confirms the manual "scan past calls" batch run. */
   objectionScanEstimate: () => Promise<{ eligibleCount: number }>
-  /** Mine every not-yet-mined call with a transcript, one at a time. Gated on
-   *  the toggle; only ever run when the user explicitly clicks the button. */
-  scanPastCallsForObjections: () => Promise<{
-    ok: boolean
-    scanned: number
-    candidatesAdded: number
-    /** Calls that errored (rate limit, network) — still eligible for a retry. */
-    failed: number
-    /** Set when the scan stopped early: the toggle was turned off mid-scan,
-     *  or repeated API errors made continuing pointless. */
-    stopped?: 'disabled' | 'errors'
-  }>
+  /** M26 Phase 3 — enqueues a BATCH-lane job (mines every not-yet-mined call
+   *  with a transcript, one at a time) and returns immediately; it survives
+   *  navigating away from the Objection Library screen. Track it via
+   *  window.api.jobs (list/onChanged), filtering for
+   *  type === 'objections:scanPastCalls' — same job the Activity Center
+   *  already shows. Gated on the toggle; only ever run when the user
+   *  explicitly clicks the button. If a scan is already running/queued,
+   *  hands back that job's id instead of starting a second one. */
+  scanPastCallsForObjections: () => Promise<{ ok: boolean; jobId?: string }>
   /** AI Note Taker's auto-title feature: generate + save a title in one step. */
   generateTitle: (callId: string) => Promise<{ ok: true; title: string } | { ok: false }>
   /** §4.6 — brief + next steps + follow-up email, written straight to the
@@ -865,7 +890,14 @@ export interface TasksApi {
   create: (input: TaskCreateInput) => Promise<Task>
   update: (id: string, patch: TaskUpdateInput) => Promise<Task | null>
   delete: (id: string) => Promise<{ ok: boolean }>
-  generateFromCall: (callId: string) => Promise<GenerateTasksResult>
+  generateFromCall: (
+    callId: string,
+    opts?: { force?: boolean }
+  ) => Promise<{ ok: boolean; jobId?: string }>
+  /** The proposals have been saved, so the job holding them can be cleared.
+   *  Purpose-built rather than the generic jobs.dismiss, which cannot mark
+   *  a job consumed — see JobsApi.dismiss. */
+  markGenerationConsumed: (jobId: string) => Promise<{ ok: boolean }>
 }
 
 /** A comment left on a contact — either the rep's own note, or an AI-drafted
@@ -1011,20 +1043,47 @@ export interface KycFact {
   confidence: 'high' | 'medium'
 }
 
-export interface CrmNoteGeneratorResult {
-  ok: boolean
-  note?: string
-  facts?: KycFact[]
-  message?: string
+/** The rep's decisions about one generated draft. Mirrors main's
+ *  crm-note-review.ts. */
+export interface CrmNoteReview {
+  noteHandled?: boolean
+  accepted?: string[]
+  /** Permanent by design — a skipped suggestion never re-asks. Still shown
+   *  (collapsed) so a mis-click leaves a trace. */
+  skipped?: string[]
+}
+
+/** What a `crmNote:generate` job carries in Job.resultData. */
+export interface CrmNoteJobResult {
+  note: string
+  facts: KycFact[]
+  review?: CrmNoteReview
 }
 
 /** M23 Workstream C — the standalone "Generate CRM note" card on the
  *  Contact page. Contact-scoped, not call-scoped: `generate` finds that
- *  contact's own most recent linked call itself. */
+ *  contact's own most recent linked call itself.
+ *
+ *  M26 Phase 3: `generate` enqueues a job and returns its id; the drafted
+ *  note and harvested suggestions live in that job's resultData, so
+ *  navigating away mid-review no longer discards them. The save/apply/skip
+ *  calls take the jobId so each decision is recorded back onto the job. */
 export interface CrmNoteGeneratorApi {
-  generate: (contactId: string, length: CrmNoteLength) => Promise<CrmNoteGeneratorResult>
-  save: (contactId: string, note: string) => Promise<{ ok: boolean }>
-  applyFact: (contactId: string, field: string, text: string) => Promise<{ ok: boolean }>
+  generate: (
+    contactId: string,
+    length: CrmNoteLength,
+    opts?: { force?: boolean }
+  ) => Promise<{ ok: boolean; jobId?: string; message?: string }>
+  save: (contactId: string, note: string, jobId?: string) => Promise<{ ok: boolean }>
+  applyFact: (
+    contactId: string,
+    field: string,
+    text: string,
+    jobId?: string,
+    factId?: string
+  ) => Promise<{ ok: boolean }>
+  skipFact: (jobId: string, factId: string) => Promise<{ ok: boolean }>
+  discardNote: (jobId: string) => Promise<{ ok: boolean }>
 }
 
 export interface DetectNameResult {
@@ -1039,7 +1098,11 @@ export interface DetectNameResult {
  *  Detail page. Scoped to one call, no callId->contactId mapping needed
  *  since it only writes a speakerIdentities entry, not a contact. */
 export interface ContactIntelligenceApi {
-  detectName: (callId: string) => Promise<DetectNameResult>
+  /** M26 Phase 3: enqueues a job and returns its id. The full
+   *  DetectNameResult comes back as that job's resultData, so the button's
+   *  three distinct outcomes (found / ran-clean-found-nothing / refused
+   *  with a reason) all survive. */
+  detectName: (callId: string) => Promise<{ ok: boolean; jobId?: string }>
 }
 
 export type DealStageKind = 'open' | 'won' | 'lost'
@@ -1070,10 +1133,6 @@ export interface DealRiskAssessment {
   model: string
   createdAt: string
 }
-
-export type AssessDealRiskResult =
-  | { ok: true; assessment: DealRiskAssessment }
-  | { ok: false; error: 'no-key' | 'failed'; message?: string }
 
 export interface Deal {
   id: string
@@ -1113,8 +1172,11 @@ export interface DealsApi {
   create: (input: DealCreateInput) => Promise<Deal | null>
   update: (id: string, patch: DealUpdateInput) => Promise<Deal | null>
   delete: (id: string) => Promise<{ ok: boolean }>
-  /** Manual, per-deal AI risk assessment (Phase 5 Step 1) — never automatic. */
-  assessRisk: (id: string) => Promise<AssessDealRiskResult>
+  /** Manual, per-deal AI risk assessment (Phase 5 Step 1) — never automatic.
+   *  M26 Phase 3: enqueues a job and returns immediately; the assessment
+   *  itself is saved onto the deal by main, so the renderer refetches the
+   *  deal once the job succeeds rather than reading a result from here. */
+  assessRisk: (id: string) => Promise<{ ok: boolean; jobId?: string }>
 }
 
 export interface DealStagesApi {
@@ -1353,8 +1415,10 @@ export interface BackupStatus {
 export interface BackupApi {
   /** Force a backup now (the "Back up now" button). */
   pushNow: () => Promise<BackupPushResult>
-  /** Full sync: restore (pull + reconcile) then push. */
-  syncNow: () => Promise<{ pull: BackupRestoreResult; push: BackupPushResult }>
+  /** Full sync: restore (pull + reconcile) then push. M26 Phase 3: enqueues
+   *  a MAINTENANCE-lane job and returns its id immediately; track progress
+   *  (including WHICH half is running) via window.api.jobs. */
+  syncNow: () => Promise<{ ok: boolean; jobId?: string }>
   /** Last-backed-up time / last error, for the trust UI. */
   getStatus: () => Promise<BackupStatus>
   /** Reveal the first `<id>.conflict` file in Finder (they're plain JSON —
@@ -1471,6 +1535,19 @@ export interface AiFallbackEventView {
 export interface AiFallbackApi {
   /** Most-recent-first, last ~20 - for the "recent fallback activity" list. */
   recentEvents: () => Promise<AiFallbackEventView[]>
+}
+
+/** BUG-057 Part 3 — per-purpose AI health, already classified into what to
+ *  show (severity + message) and where a "fix this" click should go, so the
+ *  renderer never needs its own copy of purpose-health.ts's severity logic. */
+export interface PurposeHealthView {
+  severity: 'ok' | 'not-configured' | 'substituting' | 'failing'
+  message: string
+  actionPageId: 'ai-setup' | 'ai-models' | null
+}
+
+export interface PurposeHealthApi {
+  getAll: () => Promise<Record<AiPurpose, PurposeHealthView>>
 }
 
 export interface VirtualMicApi {
@@ -1722,6 +1799,58 @@ export interface AppSettings {
   contactIntelligence: ContactIntelligenceSettings
   /** M25 — Sales Brain (Beta) master switch. Off by default. */
   salesBrain: SalesBrainSettings
+  /** M26 Phase 4.5.2 — Deal Intelligence (M24 beta) enable/sensitivity/
+   *  per-type/frequency. Off by default; see main/app-settings.ts's
+   *  DealIntelligenceSettings for the exact shape and defaults. */
+  dealIntelligence: DealIntelligenceSettings
+  /** M26 Phase 4.5.2 — live coaching cues (M9) enable/sensitivity. On by
+   *  default; see main/app-settings.ts's LiveCueSettings. */
+  liveCues: LiveCueSettings
+  /** M26 Phase 5 — per-lane job concurrency override (LIVE excluded —
+   *  always unbounded). See main/app-settings.ts's JobConcurrencySettings. */
+  jobConcurrency: JobConcurrencySettings
+  /** M26 Phase 5 — job-completion notification preferences. On by default;
+   *  see main/app-settings.ts's JobNotificationSettings. */
+  jobNotifications: JobNotificationSettings
+}
+
+/** M26 Phase 5 — see main/app-settings.ts's JobConcurrencySettings for the
+ *  exact behavior (clamped 1-10, LIVE never included). */
+export interface JobConcurrencySettings {
+  interactive: number
+  batch: number
+  maintenance: number
+}
+
+/** M26 Phase 5 — see main/app-settings.ts's JobNotificationSettings. */
+export interface JobNotificationSettings {
+  nativeEnabled: boolean
+}
+
+/** M26 Phase 4.5.2 — see main/app-settings.ts's DealIntelligenceSettings
+ *  for the exact behavior of each field. */
+export type DealIntelligenceSensitivity = 'quiet' | 'balanced' | 'aggressive'
+export type AnalysisFrequency = 'frequent' | 'balanced' | 'infrequent'
+
+export interface EnabledNudgeTypes {
+  risk: boolean
+  opportunity: boolean
+  tactical: boolean
+}
+
+export interface DealIntelligenceSettings {
+  enabled: boolean
+  sensitivity: DealIntelligenceSensitivity
+  enabledTypes: EnabledNudgeTypes
+  frequency: AnalysisFrequency
+}
+
+/** M26 Phase 4.5.2 — see main/app-settings.ts's LiveCueSettings. */
+export type CueSensitivity = 'low' | 'medium' | 'high'
+
+export interface LiveCueSettings {
+  enabled: boolean
+  sensitivity: CueSensitivity
 }
 
 /** M23 — see main/app-settings.ts's Coach2Settings for the exact behavior. */
@@ -1783,6 +1912,23 @@ export interface AppSettingsPatch {
   contactIntelligence?: Partial<ContactIntelligenceSettings>
   /** Partial — only the keys present are changed; others are left as-is. */
   salesBrain?: Partial<SalesBrainSettings>
+  /** Partial — only the keys present are changed; others are left as-is.
+   *  `enabledTypes` merges key-by-key, and a patch that would leave all
+   *  three nudge types disabled is rejected wholesale (use the master
+   *  `enabled` switch to actually turn the feature off). */
+  dealIntelligence?: {
+    enabled?: boolean
+    sensitivity?: DealIntelligenceSensitivity
+    enabledTypes?: Partial<EnabledNudgeTypes>
+    frequency?: AnalysisFrequency
+  }
+  /** Partial — only the keys present are changed; others are left as-is. */
+  liveCues?: Partial<LiveCueSettings>
+  /** Partial — only the keys present are changed; others are left as-is.
+   *  Each value clamped to [1, 10]. */
+  jobConcurrency?: Partial<JobConcurrencySettings>
+  /** Partial — only the keys present are changed; others are left as-is. */
+  jobNotifications?: Partial<JobNotificationSettings>
 }
 
 export interface AppSettingsApi {
@@ -1877,6 +2023,111 @@ export interface UpdaterApi {
   /** Quits and installs — only succeeds from a 'downloaded' state; main
    *  re-verifies this itself rather than trusting the renderer's call. */
   install: () => Promise<{ ok: boolean }>
+}
+
+// --- M26 job queue -----------------------------------------------------
+// Mirrors src/main/jobs/types.ts — re-declared here rather than imported,
+// same convention as every other main-process event shape in this file
+// (TranscriptionStateEvent etc. above), since preload/renderer code never
+// imports directly from src/main/**.
+
+export type JobLane = 'LIVE' | 'INTERACTIVE' | 'BATCH' | 'MAINTENANCE'
+export type JobState = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
+
+export type JobProgress =
+  | {
+      mode: 'determinate'
+      itemsDone: number
+      itemsTotal: number
+      /** 'percent' means itemsDone IS the percentage (itemsTotal 100),
+       *  rendered "45%" — for work with no meaningful item count, like a
+       *  download. Omitted means countable things, "12 / 50". */
+      unit?: 'percent'
+    }
+  | { mode: 'stages'; stageLabel: string }
+  | { mode: 'indeterminate' }
+
+export interface JobErrorInfo {
+  message: string
+  code?: string
+}
+
+export interface Job {
+  id: string
+  type: string
+  title: string
+  targetRef?: string
+  state: JobState
+  progress: JobProgress
+  lane: JobLane
+  priority: number
+  createdAt: number
+  startedAt?: number
+  endedAt?: number
+  error?: JobErrorInfo
+  resultRef?: string
+  /** The executor's full resolved result, for job types whose output is
+   *  more than a single deep-link string (see main/jobs/types.ts's Job for
+   *  the full doc). */
+  resultData?: unknown
+  cancellable: boolean
+  /** This job produces no toast/OS notification of its own — the feature
+   *  behind it ships a better-worded one. Still shown in the Activity
+   *  Center. */
+  silent?: boolean
+  /** While succeeded, this job's resultData may be the only copy of AI
+   *  output the rep hasn't reviewed. It is exempt from automatic history
+   *  pruning and cannot be cleared from generic history UI — see
+   *  holdsUnreviewedOutput() and JobsApi.dismiss (BUG-052). */
+  retainUntilConsumed?: boolean
+  input: unknown
+  checkpoint?: unknown
+}
+
+/** Mirrors src/main/jobs/activity.ts's ActivityEvent. */
+export type JobActivityEvent =
+  | { kind: 'started'; job: Job; message: string }
+  | { kind: 'succeeded' | 'failed'; job: Job; message: string }
+  | { kind: 'digest'; jobs: Job[]; message: string }
+
+export interface JobsApi {
+  list: () => Promise<Job[]>
+  get: (id: string) => Promise<Job | null>
+  cancel: (id: string) => Promise<{ ok: boolean }>
+  retry: (id: string) => Promise<Job | null>
+  resume: (id: string) => Promise<Job | null>
+  /** Clear a finished job from history. Refuses (ok:false) on a job still
+   *  running/queued, AND on one still holding unreviewed AI output — that
+   *  can only be cleared by the feature's own "you've dealt with it" path,
+   *  never from generic history UI (BUG-052). Use holdsUnreviewedOutput()
+   *  to avoid offering a dismiss that would be refused. */
+  dismiss: (id: string) => Promise<{ ok: boolean }>
+  /** Full current snapshot, pushed at most ~4/sec. */
+  onChanged: (cb: (payload: Job[]) => void) => () => void
+  /** One event per start/completion, already call-aware-DND-filtered. */
+  onNotify: (cb: (payload: JobActivityEvent) => void) => () => void
+  /** Clicked an OS-native job notification — undefined jobId means a digest
+   *  (open the Activity panel generally, not one specific job). */
+  onOpenRequested: (cb: (jobId: string | undefined) => void) => () => void
+  /** Dev builds only (see main/index.ts's is.dev guard) — rejects in a
+   *  packaged build since main never registers the handler. */
+  dev: {
+    startFake: (
+      req:
+        | {
+            kind: 'batch'
+            input: { title: string; itemsTotal: number; msPerItem: number; failAtItem?: number }
+          }
+        | {
+            kind: 'staged'
+            input: { title: string; stages: string[]; msPerStage: number; failAtStage?: number }
+          }
+        | {
+            kind: 'cpu'
+            input: { title: string; itemsTotal: number; msBudget: number; failAtItem?: number }
+          }
+    ) => Promise<Job>
+  }
 }
 
 // --- Scheduled alerts (M19 Task 1) ------------------------------------------
@@ -2104,21 +2355,12 @@ export interface MemoryChangelogEntry {
   at: string
 }
 
-export interface SalesBrainBackfillProgress {
-  running: boolean
-  stage: 'idle' | 'contacts' | 'deals' | 'calls' | 'done' | 'error'
-  processed: number
-  total: number
-  lastError?: string
-}
-
 export interface SalesBrainBackfillApi {
   start: (opts: {
     includeContacts?: boolean
     includeDeals?: boolean
     includeCalls?: boolean
-  }) => Promise<{ ok: boolean; message?: string }>
-  status: () => Promise<SalesBrainBackfillProgress>
+  }) => Promise<{ ok: boolean; message?: string; jobId?: string }>
 }
 
 export interface SalesBrainMemoriesApi {
@@ -2144,6 +2386,33 @@ export interface SalesBrainApi {
   /** Fired when a Sales Brain post-call review notification is clicked —
    *  the caller opens that call's review screen. */
   onReviewRequested: (callback: (callId: string) => void) => () => void
+}
+
+/** M26 Phase 4.2 — a call that was interrupted before it could be saved, found
+ *  by sweeping the on-disk journals at launch. */
+export interface RecoverableCall {
+  id: string
+  startedAt: string
+  durationMs: number
+  segmentCount: number
+  /** First ~200 characters, so a rep with two interrupted calls can tell them
+   *  apart without opening either. */
+  preview: string
+  /** The journal's last line was torn by the crash. The call is recoverable;
+   *  its final utterance may be missing. Shown rather than hidden. */
+  truncated: boolean
+}
+
+export interface LiveApi {
+  /** Fire-and-forget: tells main which speaker is the rep, so its journaled
+   *  copy carries the same attribution the on-screen one does. */
+  repIdentified: (epoch: number, speaker: number) => void
+  /** Interrupted calls awaiting a decision. Never acts on them. */
+  listRecoverable: () => Promise<RecoverableCall[]>
+  /** Turn one into a real saved call, on the rep's explicit say-so. */
+  recoverCall: (id: string) => Promise<{ ok: boolean; call?: CallSummary }>
+  /** Throw one away, on the rep's explicit say-so. */
+  discardRecoverable: (id: string) => Promise<{ ok: boolean }>
 }
 
 declare global {
@@ -2180,11 +2449,14 @@ declare global {
       aiKeys: AiKeysApi
       aiCatalog: AiCatalogApi
       aiFallback: AiFallbackApi
+      purposeHealth: PurposeHealthApi
       detection: DetectionApi
       alerts: AlertsApi
       prepBrief: PrepBriefApi
       salesBrain: SalesBrainApi
       updater: UpdaterApi
+      jobs: JobsApi
+      live: LiveApi
     }
   }
 }

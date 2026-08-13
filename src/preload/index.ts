@@ -42,6 +42,16 @@ const api = {
     reportAudioDropped: (frames: number, producerId?: number) =>
       ipcRenderer.send('transcription:audioDropped', frames, producerId),
     stop: () => ipcRenderer.invoke('transcription:stop'),
+    // M26 4.3 — "is there a call in progress, and what is it?". Asked on every
+    // mount, because the renderer no longer holds the transcript and cannot
+    // answer that from its own state.
+    attach: () => ipcRenderer.invoke('transcription:attach'),
+    // M26 4.4 — "the view went away", distinct from "the call ended" (that
+    // conflation was BUG-046). Fired from LiveView's own unmount, never from
+    // the Recorder/session's own lifecycle, which now lives in
+    // LiveCallProvider and outlives any one screen.
+    detach: () => ipcRenderer.invoke('transcription:detach'),
+    onSegments: (cb: (payload: unknown) => void) => subscribe('transcription:segments', cb),
     onState: (cb: (payload: unknown) => void) => subscribe('transcription:state', cb),
     onTranscript: (cb: (payload: unknown) => void) => subscribe('transcription:transcript', cb),
     onError: (cb: (payload: unknown) => void) => subscribe('transcription:error', cb),
@@ -61,8 +71,15 @@ const api = {
     suggestQuestion: (text: string) => ipcRenderer.invoke('live:suggestQuestion', text),
     askCoach: (transcript: string, question: string) =>
       ipcRenderer.invoke('live:askCoach', { transcript, question }),
-    liveCue: (transcript: string, repSpeaker: number | null) =>
-      ipcRenderer.invoke('live:cue', { transcript, repSpeaker })
+    // M26 4.5 (BUG-055) — sessionId + includesBuyerContent let main check
+    // fresh consent before a pass that may include buyer-attributed content
+    // ever reaches an AI prompt. See main/live-cue.ts's own doc comment.
+    liveCue: (
+      transcript: string,
+      repSpeaker: number | null,
+      sessionId?: number,
+      includesBuyerContent?: boolean
+    ) => ipcRenderer.invoke('live:cue', { transcript, repSpeaker, sessionId, includesBuyerContent })
   },
   trackers: {
     /** Turn a rep's plain-English request into a candidate tracker (§4.8).
@@ -81,6 +98,9 @@ const api = {
       compactState: string
       dealContext?: string
       triggerReason?: string
+      /** M26 4.5 (BUG-055) — see main/deal-tier1.ts's own doc comment. */
+      sessionId?: number
+      includesBuyerContent?: boolean
     }) => ipcRenderer.invoke('dealIntelligence:analyzeTier1', input),
     /** M24 §4 — Tier 2 strategic analysis: a wider transcript delta +
      *  compact call state + deal context in, a Deal Health Score out. See
@@ -90,6 +110,8 @@ const api = {
       compactState: string
       dealContext?: string
       triggerReason?: string
+      sessionId?: number
+      includesBuyerContent?: boolean
     }) => ipcRenderer.invoke('dealIntelligence:analyzeTier2', input),
     /** M24 §8 — the feedback loop. recordFeedback fires immediately per
      *  rating (so it accumulates across calls); getFeedbackSummary is read
@@ -153,21 +175,28 @@ const api = {
       ipcRenderer.invoke('coachChat:send', callId, message, mode, startFreshPractice),
     applySuggestion: (callId: string, suggestion: unknown) =>
       ipcRenderer.invoke('coachChat:applySuggestion', callId, suggestion),
-    draftFollowUpEmail: (callId: string) => ipcRenderer.invoke('coachChat:draftFollowUpEmail', callId),
+    draftFollowUpEmail: (callId: string) =>
+      ipcRenderer.invoke('coachChat:draftFollowUpEmail', callId),
     proposeTask: (callId: string) => ipcRenderer.invoke('coachChat:proposeTask', callId),
     confirmTask: (callId: string, proposal: unknown) =>
       ipcRenderer.invoke('coachChat:confirmTask', callId, proposal),
-    regenerateCrmNote: (callId: string) => ipcRenderer.invoke('coachChat:regenerateCrmNote', callId),
-    saveCrmNote: (callId: string, note: string) => ipcRenderer.invoke('coachChat:saveCrmNote', callId, note),
+    regenerateCrmNote: (callId: string) =>
+      ipcRenderer.invoke('coachChat:regenerateCrmNote', callId),
+    saveCrmNote: (callId: string, note: string) =>
+      ipcRenderer.invoke('coachChat:saveCrmNote', callId, note),
     onDelta: (cb: (payload: unknown) => void) => subscribe('coachChat:delta', cb),
     onError: (cb: (payload: unknown) => void) => subscribe('coachChat:error', cb)
   },
   crmNoteGenerator: {
-    generate: (contactId: string, length: string) =>
-      ipcRenderer.invoke('crmNoteGenerator:generate', contactId, length),
-    save: (contactId: string, note: string) => ipcRenderer.invoke('crmNoteGenerator:save', contactId, note),
-    applyFact: (contactId: string, field: string, text: string) =>
-      ipcRenderer.invoke('crmNoteGenerator:applyFact', contactId, field, text)
+    generate: (contactId: string, length: string, opts?: { force?: boolean }) =>
+      ipcRenderer.invoke('crmNoteGenerator:generate', contactId, length, opts),
+    save: (contactId: string, note: string, jobId?: string) =>
+      ipcRenderer.invoke('crmNoteGenerator:save', contactId, note, jobId),
+    applyFact: (contactId: string, field: string, text: string, jobId?: string, factId?: string) =>
+      ipcRenderer.invoke('crmNoteGenerator:applyFact', contactId, field, text, jobId, factId),
+    skipFact: (jobId: string, factId: string) =>
+      ipcRenderer.invoke('crmNoteGenerator:skipFact', jobId, factId),
+    discardNote: (jobId: string) => ipcRenderer.invoke('crmNoteGenerator:discardNote', jobId)
   },
   contactIntelligence: {
     detectName: (callId: string) => ipcRenderer.invoke('contactIntelligence:detectName', callId)
@@ -177,7 +206,10 @@ const api = {
     create: (input: unknown) => ipcRenderer.invoke('tasks:create', input),
     update: (id: string, patch: unknown) => ipcRenderer.invoke('tasks:update', id, patch),
     delete: (id: string) => ipcRenderer.invoke('tasks:delete', id),
-    generateFromCall: (callId: string) => ipcRenderer.invoke('tasks:generateFromCall', callId)
+    generateFromCall: (callId: string, opts?: { force?: boolean }) =>
+      ipcRenderer.invoke('tasks:generateFromCall', callId, opts),
+    markGenerationConsumed: (jobId: string) =>
+      ipcRenderer.invoke('tasks:markGenerationConsumed', jobId)
   },
   contacts: {
     list: () => ipcRenderer.invoke('contacts:list'),
@@ -227,20 +259,25 @@ const api = {
       status: () => ipcRenderer.invoke('salesBrain:onboarding:status'),
       submitAnswer: (topicId: string, answer: string) =>
         ipcRenderer.invoke('salesBrain:onboarding:submitAnswer', topicId, answer),
-      skipTopic: (topicId: string) => ipcRenderer.invoke('salesBrain:onboarding:skipTopic', topicId),
+      skipTopic: (topicId: string) =>
+        ipcRenderer.invoke('salesBrain:onboarding:skipTopic', topicId),
       skipAll: () => ipcRenderer.invoke('salesBrain:onboarding:skipAll'),
       restart: () => ipcRenderer.invoke('salesBrain:onboarding:restart')
     },
     backfill: {
-      start: (opts: { includeContacts?: boolean; includeDeals?: boolean; includeCalls?: boolean }) =>
-        ipcRenderer.invoke('salesBrain:backfill:start', opts),
-      status: () => ipcRenderer.invoke('salesBrain:backfill:status')
+      start: (opts: {
+        includeContacts?: boolean
+        includeDeals?: boolean
+        includeCalls?: boolean
+      }) => ipcRenderer.invoke('salesBrain:backfill:start', opts)
     },
     memories: {
-      list: (opts?: { scope?: string; status?: string }) => ipcRenderer.invoke('salesBrain:memories:list', opts),
+      list: (opts?: { scope?: string; status?: string }) =>
+        ipcRenderer.invoke('salesBrain:memories:list', opts),
       update: (id: string, newStatement: string) =>
         ipcRenderer.invoke('salesBrain:memories:update', id, newStatement),
-      setPinned: (id: string, pinned: boolean) => ipcRenderer.invoke('salesBrain:memories:setPinned', id, pinned),
+      setPinned: (id: string, pinned: boolean) =>
+        ipcRenderer.invoke('salesBrain:memories:setPinned', id, pinned),
       delete: (id: string) => ipcRenderer.invoke('salesBrain:memories:delete', id),
       forgetEverything: () => ipcRenderer.invoke('salesBrain:memories:forgetEverything'),
       changelog: (scope?: string) => ipcRenderer.invoke('salesBrain:memories:changelog', scope),
@@ -251,7 +288,8 @@ const api = {
         ipcRenderer.invoke('salesBrain:calls:setExcluded', callId, excluded),
       getExcluded: (callId: string) => ipcRenderer.invoke('salesBrain:calls:getExcluded', callId)
     },
-    onReviewRequested: (cb: (callId: string) => void) => subscribe<string>('salesBrain:reviewRequested', cb)
+    onReviewRequested: (cb: (callId: string) => void) =>
+      subscribe<string>('salesBrain:reviewRequested', cb)
   },
   deals: {
     list: () => ipcRenderer.invoke('deals:list'),
@@ -404,6 +442,9 @@ const api = {
   aiFallback: {
     recentEvents: () => ipcRenderer.invoke('aiFallback:recentEvents')
   },
+  purposeHealth: {
+    getAll: () => ipcRenderer.invoke('purposeHealth:getAll')
+  },
   virtualmic: {
     // App-managed noise cancellation: detect + start/stop the denoiser helper.
     getStatus: () => ipcRenderer.invoke('virtualmic:getStatus'),
@@ -485,6 +526,47 @@ const api = {
     /** Quits and installs — only succeeds from a 'downloaded' state; main
      *  re-verifies this itself rather than trusting the renderer's call. */
     install: () => ipcRenderer.invoke('updater:install')
+  },
+  // M26 Phase 4.2 — main's own journaled copy of the call in progress, plus
+  // the recovery surface for calls that never reached a save.
+  live: {
+    // `send`, not `invoke` — nothing waits on this, and nothing about it may
+    // ever be able to affect a live call.
+    repIdentified: (epoch: number, speaker: number) =>
+      ipcRenderer.send('live:repIdentified', epoch, speaker),
+    listRecoverable: () => ipcRenderer.invoke('live:listRecoverable'),
+    recoverCall: (id: string) => ipcRenderer.invoke('live:recoverCall', id),
+    discardRecoverable: (id: string) => ipcRenderer.invoke('live:discardRecoverable', id)
+  },
+  // M26 — read-only + control surface over the job queue. No generic
+  // enqueue here on purpose (see jobs/ipc.ts's file header): only a real
+  // feature's own IPC handler, running in main, may start a job.
+  jobs: {
+    list: () => ipcRenderer.invoke('jobs:list'),
+    get: (id: string) => ipcRenderer.invoke('jobs:get', id),
+    cancel: (id: string) => ipcRenderer.invoke('jobs:cancel', id),
+    retry: (id: string) => ipcRenderer.invoke('jobs:retry', id),
+    resume: (id: string) => ipcRenderer.invoke('jobs:resume', id),
+    dismiss: (id: string) => ipcRenderer.invoke('jobs:dismiss', id),
+    /** Full current snapshot, pushed at most ~4/sec (see jobs/ipc.ts). */
+    onChanged: (cb: (payload: unknown) => void) => subscribe('jobs:changed', cb),
+    /** One event per start/completion (never for a merely-queued or
+     *  cancelled/interrupted transition — see jobs/activity.ts), already
+     *  call-aware-DND-filtered by main: never fires while a live call is
+     *  active, delivered as a digest instead once it ends. */
+    onNotify: (cb: (payload: unknown) => void) => subscribe('jobs:notify', cb),
+    /** Fired when the rep clicks an OS-native job notification — id is the
+     *  job to open, or undefined for a digest (open the Activity panel). */
+    onOpenRequested: (cb: (jobId: string | undefined) => void) =>
+      subscribe('jobs:openRequested', cb),
+    // Dev builds only — see the is.dev guard in main/index.ts and
+    // jobs/ipc.ts. Present on the bridge either way so the renderer's Job
+    // Inspector doesn't need its own separate is-dev branch to call it;
+    // main simply never registers the handler outside a dev build, so the
+    // invoke rejects instead.
+    dev: {
+      startFake: (req: unknown) => ipcRenderer.invoke('jobs:dev:startFake', req)
+    }
   }
 }
 

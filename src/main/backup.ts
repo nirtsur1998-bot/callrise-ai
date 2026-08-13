@@ -45,6 +45,32 @@ import {
   toDeviceIso,
   type CloudRow
 } from './backup-core'
+import { getJobManager } from './jobs/instance'
+import type { Job } from './jobs/types'
+
+/** M26 Phase 3 — the visible sync job. Registered from registerBackup(),
+ *  which runs after main creates the shared JobManager. */
+const SYNC_JOB_TYPE = 'backup:sync'
+
+/** Start a visible sync job unless one is already queued or running, and
+ *  return its id. Shared by the manual "Sync now" button and the sign-in
+ *  restore, so the two can never race into overlapping jobs.
+ *
+ *  Returns null only if the job system refuses — never throws: a failed
+ *  enqueue must not take down a sign-in. */
+function startSyncJob(): string | null {
+  try {
+    const manager = getJobManager()
+    const already = manager
+      .list()
+      .find((j: Job) => j.type === SYNC_JOB_TYPE && (j.state === 'running' || j.state === 'queued'))
+    if (already) return already.id
+    return manager.enqueue(SYNC_JOB_TYPE, {}).id
+  } catch (err) {
+    console.error('[backup] could not start the sync job:', err)
+    return null
+  }
+}
 
 function tasksDir(): string {
   return join(app.getPath('userData'), 'tasks')
@@ -967,13 +993,27 @@ function enqueue<T>(fn: () => Promise<T>): Promise<T> {
   return p
 }
 
+/** Which half of a sync is currently running. A "sync" is really two very
+ *  different operations back to back — pulling other devices' changes DOWN,
+ *  then pushing this device's changes UP — and the Settings card used to show
+ *  one undifferentiated "Syncing…" for both, so a rep watching a slow
+ *  first-run restore couldn't tell it apart from a routine backup. */
+export type SyncStage = 'restoring' | 'backing-up'
+
 /** Full sync: pull + reconcile, then push. The lastSyncAt cursor (used for
  *  concurrent-edit conflict detection) only advances when BOTH succeeded, and
  *  is stamped with a time captured BEFORE the pull — a conservative cursor can
- *  only produce an extra .conflict copy, never a missed one. */
-export async function syncNow(): Promise<{ pull: RestoreResult; push: BackupResult }> {
+ *  only produce an extra .conflict copy, never a missed one.
+ *
+ *  `onStage` is observation only — it changes no behaviour and every
+ *  automatic trigger omits it. */
+export async function syncNow(
+  onStage?: (stage: SyncStage) => void
+): Promise<{ pull: RestoreResult; push: BackupResult }> {
   const startedAt = new Date().toISOString()
+  onStage?.('restoring')
   const pull = await pullAll()
+  onStage?.('backing-up')
   const push = await pushAll()
   if (pull.ok && push.ok) await writeState({ lastSyncAt: startedAt })
   return { pull, push }
@@ -1000,9 +1040,69 @@ export function registerBackup(): void {
   // category (drained at the start of the next push, retried until done).
   setSyncScopeDisabledListener(queuePendingScrubs)
 
+  // M26 Phase 3 — the MANUAL "Sync now" button is a MAINTENANCE-lane job so
+  // its progress is visible (and survives leaving Settings). Deliberately
+  // NOT migrated: the three automatic syncNow triggers below (launch,
+  // sign-in, every 10 minutes) and scheduleBackup()'s debounced push. Two
+  // reasons — (a) they'd each mint a job entry on a timer and job history
+  // is never pruned today, so a long-running app would accumulate them
+  // forever; (b) they're already invisible-by-design background work, and
+  // making them visible is Batch 5's "visibility for automatic operations"
+  // question, not this adapter's.
+  //
+  // The executor still goes through enqueue(), the SAME single promise
+  // chain every automatic trigger uses — that chain is what guarantees a
+  // pull can never interleave with a push. Bypassing it here to "run the
+  // job directly" would silently remove that guarantee for every automatic
+  // trigger too, which is exactly the class of breakage the shared-code-
+  // path audit exists to catch.
+  getJobManager().registerType<Record<string, never>, string>({
+    type: SYNC_JOB_TYPE,
+    lane: 'MAINTENANCE',
+    titleFor: () => 'Syncing with the cloud',
+    // syncNow has no AbortSignal support, and adding one would mean
+    // rewriting the push/pull internals — out of scope for an adapter.
+    cancellable: false,
+    executor: {
+      kind: 'inline-async',
+      run: async (_input, handle) => {
+        // Honest about the wait: the chain may already be busy with an
+        // automatic sync, and "Restoring…" would be a lie until it isn't.
+        handle.reportProgress({
+          mode: 'stages',
+          stageLabel: 'Waiting for background sync to finish…'
+        })
+        const { pull, push } = await enqueue(() =>
+          syncNow((stage) =>
+            handle.reportProgress({
+              mode: 'stages',
+              stageLabel:
+                stage === 'restoring'
+                  ? 'Restoring changes from the cloud…'
+                  : 'Backing up to the cloud…'
+            })
+          )
+        )
+        // Report WHICH half failed rather than a generic "sync failed" —
+        // a broken restore (changes from another device missing) and a
+        // broken backup (this device's changes not saved) mean completely
+        // different things to the rep.
+        if (!pull.ok) {
+          throw Object.assign(new Error(`Restore failed: ${pull.error}`), { code: pull.error })
+        }
+        if (!push.ok) {
+          throw Object.assign(new Error(`Backup failed: ${push.error}`), { code: push.error })
+        }
+        return 'Restored and backed up.'
+      }
+    }
+  })
+
   // Manual triggers (the settings UI in a later step calls these).
   ipcMain.handle('backup:pushNow', () => enqueue(pushAll))
-  ipcMain.handle('backup:syncNow', () => enqueue(syncNow))
+  ipcMain.handle('backup:syncNow', async (): Promise<{ ok: boolean; jobId?: string }> => {
+    return { ok: true, jobId: startSyncJob() ?? undefined }
+  })
   ipcMain.handle('backup:getStatus', async () => {
     const state = await readState()
     return {
@@ -1036,10 +1136,30 @@ export function registerBackup(): void {
     const uid = session?.user?.id
     // A fresh SIGN-IN is the restore moment (first run on a new machine pulls
     // everything back). Session restores are covered by the launch sync below.
-    if (event === 'SIGNED_IN' && uid) void enqueue(syncNow)
+    //
+    // M26 Batch 5 — the ONE automatic sync that runs as a visible job. It is
+    // rare (once per sign-in) and it is the slow one: on a new machine this
+    // pulls down everything, and without visible progress it looks like the
+    // app has hung. Exactly the case BUG-051's restore-vs-backup wording was
+    // written for.
+    if (event === 'SIGNED_IN' && uid) startSyncJob()
   })
 
   // Full sync shortly after launch (restore first, then push), then periodic.
-  setTimeout(() => void enqueue(syncNow), 3_000)
-  setInterval(() => void enqueue(syncNow), 10 * 60_000)
+  //
+  // DELIBERATELY NOT JOBS, and not for the Batch 4 reason (unbounded history
+  // — retention.ts's 500-job cap fixed that). The remaining objection is
+  // noise: the 10-minute timer alone is ~144 jobs/day, which inside a
+  // 500-entry cap would bury every genuinely interesting entry — a failed
+  // coaching run, an interrupted import — under a wall of identical
+  // "Syncing with the cloud" rows within a couple of days. These two are
+  // routine heartbeats with no user decision attached, and "when did it last
+  // sync / did it fail" is already answered directly by the Settings card
+  // (lastSyncAt + the separate push/pull errors). Visibility here would cost
+  // more than it delivers.
+  //
+  // They still share the SAME enqueue() chain as the job's executor, so a
+  // heartbeat and a visible sync can never overlap.
+  setTimeout(() => void enqueue(() => syncNow()), 3_000)
+  setInterval(() => void enqueue(() => syncNow()), 10 * 60_000)
 }

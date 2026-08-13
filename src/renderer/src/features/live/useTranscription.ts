@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { startRecorder, type Recorder } from './audio/recorder'
-import { groupWords, mergeSegments } from './segments'
 import { supportsOtherPartyCapture } from '@renderer/lib/platform'
 import type { LiveStatus } from './types'
-import type { CallSegment, ConsentRecord, SpeakerRole } from '@renderer/features/calls/types'
-import type { TranscriptionHealthEvent } from '../../../../preload/index.d'
+import type { CallSegment, ConsentRecord } from '@renderer/features/calls/types'
+import type {
+  AttachSnapshot,
+  TranscriptPatch,
+  TranscriptionHealthEvent
+} from '../../../../preload/index.d'
 import {
   getAutoSummarize,
   getAutoGenerateTitle,
@@ -66,6 +69,15 @@ interface UseTranscription {
    *  plain value) so callers always read the freshest ref, regardless of
    *  whether a re-render has happened since the last change. */
   getSessionId: () => number | null
+  /** M26 4.5 — the CALL id (`live-transcript.ts`'s journal id), distinct from
+   *  the session id above: a mono<->multichannel restart mints a new session
+   *  id but is the SAME call (see `beginCall({restart: true})`), while this
+   *  stays stable across it. Exists so other engines hoisted alongside this
+   *  one (cue/deal-intelligence) can tell "this is genuinely a new call,
+   *  reset" apart from "the same call's status merely blipped" — the
+   *  distinction `status`/`active` alone cannot make. A function for the same
+   *  reason as getSessionId: always the freshest value, not a stale render. */
+  getCallId: () => string | null
   stop: () => Promise<void>
   togglePause: () => void
   /** Begin capturing the other party (call from a user gesture — opens
@@ -97,7 +109,10 @@ export function useTranscription(
     onSavedRef.current = onSaved
   }, [onSaved])
 
-  const [phase, setPhase] = useState<LivePhase>('idle')
+  // M26 4.3 — 'attaching', never 'idle'. Main owns the transcript now, so a
+  // freshly mounted Live view does not know whether a call is running until it
+  // asks. Starting at 'idle' would flash "Start a call" during a real call.
+  const [phase, setPhase] = useState<LivePhase>('attaching')
   const [paused, setPaused] = useState(false)
   const [segments, setSegments] = useState<CallSegment[]>([])
   const [interimText, setInterimText] = useState('')
@@ -145,68 +160,77 @@ export function useTranscription(
   const disablingOtherPartyRef = useRef(false)
   const latencySamples = useRef<number[]>([])
   // Synchronous mirror of `segments` so the save (on close) sees the latest.
+  //
+  // M26 4.3 — this is now a MIRROR of main's transcript rather than the
+  // original. Nothing in the renderer appends to it; it is rebuilt from the
+  // patches main sends. It is still what `flushPendingSave` inspects to decide
+  // WHETHER anything was said worth saving (BUG-053's gate), but main
+  // substitutes its own copy for the bytes that actually get written.
   const segmentsRef = useRef<CallSegment[]>([])
+  /** Which call the mirror currently holds, so a patch for a different call is
+   *  recognisable rather than spliced into the wrong transcript. */
+  const mirrorCallIdRef = useRef<string | null>(null)
+  /** The last patch sequence applied. A gap means one was missed, which is the
+   *  one failure that would otherwise diverge the two copies silently. */
+  const seqRef = useRef<number>(-1)
+  /** Patches that arrived before attach resolved. Subscribing first and
+   *  buffering is what closes the window where a patch would be dropped
+   *  because the snapshot had not come back yet. */
+  const pendingPatchesRef = useRef<TranscriptPatch[]>([])
+  const attachedRef = useRef(false)
   const startedAtRef = useRef<string>('')
   const startMsRef = useRef<number>(0)
   const durationMsRef = useRef<number>(0)
   const savePendingRef = useRef(false)
-  // Set at a mono<->multichannel swap so the next transcript starts a fresh
-  // segment — speaker ids mean different things across the swap (diarize vs
-  // channel), so merging across it would mislabel/collide turns.
-  // Largely superseded by the per-result speakerEpoch (which also covers
-  // reconnects, where this ref was never set), kept as belt-and-braces.
-  const speakerBoundaryRef = useRef(false)
   // Which speaker label is the REP, per label namespace. Multichannel fills
   // this in immediately (channel 0 is the rep by construction); under
   // diarization it stays empty until the coaching engine identifies them, and
   // turns recorded before that are honestly marked 'unknown' rather than
   // guessed. Keyed by epoch so a reconnect can't carry a stale answer over.
   const repByEpochRef = useRef<Map<number, number>>(new Map())
-  /** Decide who said a turn AT THE MOMENT IT IS RECORDED. Never consulted
-   *  again afterwards — that late re-read is what let one `repSpeaker` change
-   *  retroactively relabel an entire call. */
-  const resolveRole = useCallback(
-    (speaker: number, epoch: number, certain: boolean): SpeakerRole => {
-      if (!certain) return 'unknown'
-      const rep = repByEpochRef.current.get(epoch)
-      if (rep === undefined) return 'unknown'
-      return speaker === rep ? 'rep' : 'other'
-    },
-    []
-  )
-
   /**
    * Called once the coaching engine identifies the rep under diarization.
-   * Back-fills ONLY turns still marked 'unknown' in that same epoch — already
-   * decided turns are immutable, and other epochs belong to other namespaces
-   * (so a speaker joining mid-call can't retro-relabel earlier segments).
+   *
+   * M26 4.3 — this now only REPORTS. Main owns the transcript, so main does
+   * the back-fill (only turns still 'unknown' in that same epoch, never ones
+   * Deepgram left unlabelled) and sends the relabelled turns back as a patch.
+   * The map kept here exists purely to avoid re-sending an answer main
+   * already has.
    */
   const identifyRep = useCallback((epoch: number, speaker: number) => {
     if (repByEpochRef.current.get(epoch) === speaker) return
     repByEpochRef.current.set(epoch, speaker)
-    let changed = false
-    const next = segmentsRef.current.map((s) => {
-      if (s.epoch !== epoch || s.role !== 'unknown') return s
-      // Unknown for the OTHER reason: Deepgram never labelled these words, so
-      // s.speaker is a fabricated 0. Naming the rep 0 (the usual answer) would
-      // silently assert every such turn as the rep. Leave them unattributed.
-      if (s.unlabelled) return s
-      changed = true
-      return { ...s, role: s.speaker === speaker ? ('rep' as const) : ('other' as const) }
-    })
-    if (changed) {
-      segmentsRef.current = next
-      setSegments(next)
-    }
+    // M26 Phase 4.2 — tell main, which keeps its own journaled copy of this
+    // call. Who the rep is comes back from the coaching engine and is known
+    // only here, so main cannot derive it (unlike gaps and speaker
+    // boundaries, which it can and does). Without this a recovered transcript
+    // is still complete, but every turn reads 'unknown' instead of rep/other.
+    // Fire-and-forget on purpose: a failure here must never affect the call.
+    window.api.live.repIdentified(epoch, speaker)
   }, [])
 
   // Arm a save (used by Stop, mic-unplug, and the unmount cleanup below, so
   // they can't drift).
+  //
+  // BUG-053 — this latch records INTENT ONLY: "a save has been requested".
+  // It used to also decide, right here, whether there was anything worth
+  // saving (`= segmentsRef.current.length > 0`), and that check was made at
+  // the wrong moment. Stopping a call sends Deepgram a Finalize and keeps
+  // the socket open ~1.5s specifically so the last words still arrive
+  // (main/transcription.ts's STOP_FLUSH_MS) — so on a SHORT call, where
+  // everything spoken was still interim at the moment Stop was pressed,
+  // this latched false, the final words then landed in segmentsRef, and
+  // flushPendingSave bailed on a call that did have content. The rep did
+  // exactly the right thing and lost the call through the primary button.
+  //
+  // "Is there anything to save?" is answered where it belongs — in
+  // flushPendingSave, against segmentsRef AT FLUSH TIME, after the final
+  // words have arrived. A genuinely wordless call still writes nothing.
   const armSave = useCallback(() => {
     durationMsRef.current = startMsRef.current
       ? Math.round(performance.now() - startMsRef.current)
       : 0
-    savePendingRef.current = segmentsRef.current.length > 0
+    savePendingRef.current = true
   }, [])
 
   // Persist the call exactly once. Called when the session closes, but also on
@@ -252,11 +276,129 @@ export function useTranscription(
       })
   }, [consentRef, buyerIdentityRef])
 
+  /**
+   * M26 4.3 — find out whether a call is already in progress, and mirror it.
+   *
+   * THE RULE THIS EXISTS TO ENFORCE: the idle screen may only appear once main
+   * has affirmatively said there is no session. Never on a timeout, never as a
+   * default, never because an answer is slow. A rep who navigates back into a
+   * live call and sees "Start a call" reads it as "my call died" — so the
+   * failure path here is `error`, and the pending path is `attaching`, and
+   * neither is ever `idle`.
+   */
+  const hydrate = useCallback((snapshot: AttachSnapshot): void => {
+    if (snapshot.call) {
+      const segs = snapshot.call.segments as CallSegment[]
+      segmentsRef.current = segs
+      mirrorCallIdRef.current = snapshot.call.callId
+      seqRef.current = snapshot.call.seq
+      setSegments(segs)
+      startedAtRef.current = snapshot.call.startedAt
+      // Rebase the local clock onto main's start, so a view that attached
+      // 30 minutes into a call reports 30 minutes rather than zero.
+      startMsRef.current = performance.now() - (Date.now() - snapshot.call.startedAtMs)
+    } else {
+      segmentsRef.current = []
+      mirrorCallIdRef.current = null
+      seqRef.current = -1
+      setSegments([])
+    }
+    if (snapshot.session) {
+      sessionIdRef.current = snapshot.session.id
+      producerIdRef.current = snapshot.session.producerId
+      setPhase(snapshot.session.state === 'idle' ? 'idle' : snapshot.session.state)
+    } else {
+      // The single affirmative "there is no call" answer in the whole system.
+      setPhase('idle')
+    }
+  }, [])
+
+  const reattach = useCallback(async (): Promise<void> => {
+    try {
+      hydrate(await window.api.transcription.attach())
+    } catch {
+      setErrorMessage('Lost track of the call in progress. Reopen this screen to try again.')
+      setPhase('error')
+    }
+  }, [hydrate])
+
+  const applyPatch = useCallback((patch: TranscriptPatch): void => {
+    // A patch for a call this mirror is not holding is only safe to accept if
+    // it is a call-start reset; anything else means we missed a boundary.
+    if (patch.callId !== mirrorCallIdRef.current) {
+      if (patch.seq !== 0 || patch.from !== 0) {
+        void reattach()
+        return
+      }
+      mirrorCallIdRef.current = patch.callId
+      seqRef.current = -1
+    }
+    if (patch.seq !== seqRef.current + 1) {
+      // A missed or reordered patch. Re-ask for the whole thing rather than
+      // splice into a transcript we can no longer prove is correct — a wrong
+      // transcript that looks fine is far worse than one extra round-trip.
+      void reattach()
+      return
+    }
+    const next = [...segmentsRef.current.slice(0, patch.from), ...patch.segments] as CallSegment[]
+    segmentsRef.current = next
+    seqRef.current = patch.seq
+    setSegments(next)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    // Subscribe BEFORE asking, so a patch produced while the snapshot is in
+    // flight is buffered rather than lost.
+    const off = window.api.transcription.onSegments((patch) => {
+      if (cancelled) return
+      if (!attachedRef.current) {
+        pendingPatchesRef.current.push(patch)
+        return
+      }
+      applyPatch(patch)
+    })
+
+    void (async () => {
+      let snapshot: AttachSnapshot
+      try {
+        snapshot = await window.api.transcription.attach()
+      } catch {
+        if (cancelled) return
+        // NOT idle. We do not know whether a call is running, and saying
+        // "no call" when we cannot tell is the exact lie this guards against.
+        setErrorMessage('Could not check for a call in progress.')
+        setPhase('error')
+        attachedRef.current = true
+        return
+      }
+      if (cancelled) return
+      hydrate(snapshot)
+      attachedRef.current = true
+      const buffered = pendingPatchesRef.current
+      pendingPatchesRef.current = []
+      for (const patch of buffered) {
+        // Anything already contained in the snapshot is a duplicate.
+        if (patch.callId === mirrorCallIdRef.current && patch.seq <= seqRef.current) continue
+        applyPatch(patch)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      attachedRef.current = false
+      off()
+    }
+  }, [applyPatch, hydrate])
+
   useEffect(() => {
     const offState = window.api.transcription.onState((payload) => {
       if (payload.state === 'listening') setPhase('listening')
       else if (payload.state === 'connecting') setPhase('connecting')
       else if (payload.state === 'reconnecting') setPhase('reconnecting')
+      // M26 4.3 — main says the call is over. Previously dropped on the floor,
+      // which meant the renderer could only reach idle by assuming it.
+      else if (payload.state === 'idle') setPhase('idle')
       else if (payload.state === 'error') {
         setPhase('error')
         setPaused(false)
@@ -270,54 +412,15 @@ export function useTranscription(
     const offTranscript = window.api.transcription.onTranscript((payload) => {
       const text = payload.transcript.trim()
       if (payload.isFinal) {
-        const epoch = payload.speakerEpoch
-        // Multichannel: the label IS the channel, so the rep is channel 0 by
-        // construction. Record it for this namespace before resolving roles.
-        if (payload.multichannel && !repByEpochRef.current.has(epoch)) {
-          repByEpochRef.current.set(epoch, 0)
-        }
-        const meta = {
-          epoch,
-          role: (speaker: number): SpeakerRole =>
-            resolveRole(speaker, epoch, payload.speakerCertain),
-          ...(payload.minConfidence !== null ? { confidence: payload.minConfidence } : {}),
-          // Deepgram gave no speaker labels, so this turn's number is a
-          // fabricated 0 and must never be back-filled from it later.
-          unlabelled: !payload.speakerCertain
-        }
-        let runs: CallSegment[] = []
-        if (payload.words.length > 0) {
-          runs = groupWords(payload.words, meta)
-        } else if (text) {
-          // Rare: a final with no per-word data. Attribute it to the current
-          // speaker rather than defaulting to Speaker 1 — but only within the
-          // same epoch; across one, the previous label means someone else.
-          const last = segmentsRef.current.at(-1)
-          const lastSpeaker = last?.epoch === epoch ? last.speaker : 0
-          const sameEpoch = last?.epoch === epoch
-          runs = [
-            {
-              speaker: lastSpeaker,
-              text,
-              epoch,
-              // Carrying over a speaker across an epoch boundary is a guess, so
-              // it is recorded as one rather than asserted.
-              role: sameEpoch ? resolveRole(lastSpeaker, epoch, payload.speakerCertain) : 'unknown',
-              ...(payload.minConfidence !== null ? { confidence: payload.minConfidence } : {})
-            }
-          ]
-        }
-        if (runs.length > 0) {
-          if (speakerBoundaryRef.current) {
-            // Hard boundary across a mono<->multichannel swap: append fresh
-            // rather than merge into the previous regime's segments.
-            speakerBoundaryRef.current = false
-            segmentsRef.current = [...segmentsRef.current, ...runs]
-          } else {
-            segmentsRef.current = mergeSegments(segmentsRef.current, runs)
-          }
-          setSegments(segmentsRef.current)
-        }
+        // M26 4.3 — the transcript is NOT built here any more. Main
+        // accumulates it and sends back deltas (see the attach effect above).
+        // What is left in this subscription is only what is genuinely
+        // renderer-local: the faint in-progress line and the latency meter.
+        //
+        // Interim results still arrive here and still matter — battlecards
+        // match against the rolling partial, long before anything finalizes —
+        // which is why this channel stays alongside the patch channel rather
+        // than being collapsed into it.
         setInterimText('')
       } else {
         // Interim words carry speaker labels too, but we intentionally show the
@@ -345,21 +448,6 @@ export function useTranscription(
       recorderRef.current?.stop()
       recorderRef.current = null
       setAnalyser(null)
-    })
-
-    // Audio that will never be transcribed. Recorded inline so the transcript
-    // never silently splices two moments that are minutes apart — an honest
-    // hole is far more useful than a seamless-looking lie.
-    const offGap = window.api.transcription.onGap((payload) => {
-      // Speaker 0 rather than a sentinel: the main-process sanitizer clamps
-      // speaker ids to >= 0, so a sentinel would not survive a save anyway.
-      // Everything that matters keys off `kind`, never the id.
-      const marker: CallSegment = { speaker: 0, text: payload.marker, kind: 'gap' }
-      segmentsRef.current = [...segmentsRef.current, marker]
-      setSegments(segmentsRef.current)
-      // Whatever comes next is a fresh turn, not a continuation of what the
-      // gap interrupted.
-      speakerBoundaryRef.current = true
     })
 
     const offHealth = window.api.transcription.onHealth((payload) => {
@@ -408,7 +496,6 @@ export function useTranscription(
       offState()
       offTranscript()
       offError()
-      offGap()
       offHealth()
       offBuyerSilent()
       offCrossTalk()
@@ -618,6 +705,7 @@ export function useTranscription(
   }, [beginSession])
 
   const getSessionId = useCallback(() => sessionIdRef.current, [])
+  const getCallId = useCallback(() => mirrorCallIdRef.current, [])
 
   const stop = useCallback(async () => {
     armSave()
@@ -636,9 +724,12 @@ export function useTranscription(
     setOtherPartyError(null)
     setBuyerSilentWarning(false)
     setCrossTalkWarning(false)
-    await window.api.transcription.stop()
+    const res = await window.api.transcription.stop()
     setInterimText('')
-    setPhase('idle')
+    // M26 4.3 — idle only because main SAID there is no session, never merely
+    // because we asked it to stop. Same rule as attach: this screen does not
+    // get to assume a call has ended.
+    if (res?.session === null) setPhase('idle')
     // segments stay on screen after stopping; save fires on 'closed'.
   }, [armSave])
 
@@ -674,7 +765,6 @@ export function useTranscription(
       setBuyerSilentWarning(false)
       setCrossTalkWarning(false)
       recorder.detachLoopback() // stop capturing the buyer immediately
-      speakerBoundaryRef.current = true
       // Switch the socket back to mono FIRST, then flip the worklet layout — so
       // the worklet never emits mono into the still-open multichannel socket.
       // expectedSessionId makes this a no-op in main if it lands after a newer
@@ -797,7 +887,6 @@ export function useTranscription(
         setCrossTalkWarning(false)
         return
       }
-      speakerBoundaryRef.current = true
       recorder.setStereo(true)
       setOtherPartyLive(true)
     } finally {
@@ -866,6 +955,7 @@ export function useTranscription(
     dismissMultichannelFallbackNotice: useCallback(() => setMultichannelFallbackNotice(false), []),
     start,
     getSessionId,
+    getCallId,
     stop,
     togglePause,
     enableOtherParty,

@@ -25,6 +25,7 @@ import { AlertsSection } from '@renderer/features/alerts/AlertsSection'
 import { AppSection } from './AppSection'
 import { AppearanceSection } from './AppearanceSection'
 import { PrivacyDataPage } from './PrivacyDataPage'
+import { JobInspectorSection } from './JobInspectorSection'
 
 const PAGE_CONTENT: Record<SettingsPageId, React.ComponentType> = {
   account: AccountSection,
@@ -47,7 +48,8 @@ const PAGE_CONTENT: Record<SettingsPageId, React.ComponentType> = {
   alerts: AlertsSection,
   app: AppSection,
   appearance: AppearanceSection,
-  'privacy-data': PrivacyDataPage
+  'privacy-data': PrivacyDataPage,
+  'jobs-inspector': JobInspectorSection
 }
 
 interface SettingsShellProps {

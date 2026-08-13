@@ -59,7 +59,16 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoUpdateEnabled: false,
   coach2: { enabled: false, methodology: 'blended' },
   contactIntelligence: { mode: 'off' },
-  salesBrain: { enabled: false }
+  salesBrain: { enabled: false },
+  dealIntelligence: {
+    enabled: false,
+    sensitivity: 'balanced',
+    enabledTypes: { risk: true, opportunity: true, tactical: true },
+    frequency: 'balanced'
+  },
+  liveCues: { enabled: true, sensitivity: 'low' },
+  jobConcurrency: { interactive: 2, batch: 1, maintenance: 1 },
+  jobNotifications: { nativeEnabled: true }
 }
 
 export interface UseAppSettings {

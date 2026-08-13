@@ -104,6 +104,13 @@ interface Turn {
   speaker: number
   text: string
   t: number
+  /** M26 4.5 (BUG-055) — present only for a multichannel/buyer-capture turn
+   *  (mirrors TranscriptWord.channel). Precise, per-turn knowledge of
+   *  whether THIS turn is genuinely buyer-attributed, the same way
+   *  useDealIntelligence.ts's LiveTurn.role already is — not a per-call
+   *  guess, since a diarized mono turn is never a genuine "other party"
+   *  signal (BUG-002) and must never gate on this. */
+  channel?: number
 }
 
 function countWords(text: string): number {
@@ -211,6 +218,9 @@ export interface UseLiveCues {
    *  just means AI cues are temporarily unavailable. Clears itself the
    *  moment a call succeeds again. */
   coachingPaused: boolean
+  /** BUG-057 Phase 2 — WHY coachingPaused is true, for copy only. undefined
+   *  whenever coachingPaused is false. */
+  coachingPausedReason: 'all-models-unavailable' | 'timed-out' | undefined
 }
 
 /**
@@ -224,6 +234,18 @@ export interface UseLiveCues {
 export function useLiveCues(
   active: boolean,
   enabled: boolean,
+  /** M26 4.5 (BUG-055) — the CALL id, from useTranscription's getCallId().
+   *  See useDealIntelligence.ts's identical parameter for the full rationale:
+   *  `active` blips false during an ordinary mono<->multichannel restart, and
+   *  resetting on that blip (rather than on a genuine new call) is what let a
+   *  navigate-away-and-back — or, mid-call, a buyer-capture toggle — silently
+   *  wipe the interrupt channel's cooldown/dedupe state. */
+  getCallId: () => string | null,
+  /** M26 4.5 (BUG-055) — from useTranscription's getSessionId(). Passed with
+   *  every liveCue() call so main can check FRESH consent (never a
+   *  renderer-held snapshot) before any buyer-attributed content in the
+   *  window reaches an AI prompt. */
+  getSessionId: () => number | null,
   sensitivity: Sensitivity,
   knownRepSpeaker: number | null = null,
   /** Told to the transcript the moment the rep is identified, so already-
@@ -243,12 +265,26 @@ export function useLiveCues(
   // Non-blocking: transcription keeps running, this just says AI cues are
   // temporarily unavailable. Cleared the moment a call succeeds again.
   const [coachingPaused, setCoachingPaused] = useState(false)
+  // BUG-057 Phase 2 — the WHY behind coachingPaused, for copy only. Kept as a
+  // separate field rather than folded into the boolean: LiveView's banner
+  // text needs to say something true ("taking too long" vs "unreachable or
+  // rate-limited"), but nothing else in this hook needs to branch on it —
+  // every other consumer only ever needed "is coaching paused right now."
+  const [coachingPausedReason, setCoachingPausedReason] = useState<
+    'all-models-unavailable' | 'timed-out' | undefined
+  >(undefined)
   const monologueRef = useRef(new MonologueTracker())
 
   const cfgRef = useRef<Thresholds>(SENSITIVITY_THRESHOLDS[sensitivity])
   useEffect(() => {
     cfgRef.current = SENSITIVITY_THRESHOLDS[sensitivity]
   }, [sensitivity])
+
+  // M26 4.5 (BUG-055) — see the effect below. Tracks what the last reset
+  // decision was based on, so a genuine call boundary can be told apart from
+  // `active` merely blipping mid-call.
+  const lastCallIdRef = useRef<string | null>(null)
+  const wasEnabledRef = useRef(enabled)
 
   const cueRef = useRef<LiveCue | null>(null)
   const idRef = useRef(0)
@@ -354,7 +390,29 @@ export function useLiveCues(
   }, [])
 
   useEffect(() => {
+    // M26 4.5 (BUG-055) — `active` (`status === 'listening'`) is not a proxy
+    // for "the call ended." It also blips false during an ordinary
+    // mono<->multichannel restart mid-call (main emits `state:'connecting'`
+    // for that too), and — before this hook was hoisted into
+    // LiveCallProvider — on every screen navigation, since the whole hook
+    // instance was torn down and rebuilt. Wiping the interrupt channel's
+    // one-slot gate and cooldown clock (cueRef/lastCueAtRef) on that blip is
+    // exactly what let an already-suppressed cue fire again the moment the
+    // blip passed. Only a genuinely NEW call (a different callId than last
+    // observed) or the rep explicitly disabling the feature may wipe this
+    // state; `active` itself only decides whether to (re)subscribe below.
+    const currentCallId = getCallId()
+    const isGenuineNewCall =
+      currentCallId !== null &&
+      lastCallIdRef.current !== null &&
+      currentCallId !== lastCallIdRef.current
+    const justDisabled = wasEnabledRef.current && !enabled
+    lastCallIdRef.current = currentCallId
+    wasEnabledRef.current = enabled
+    const shouldReset = isGenuineNewCall || justDisabled
+
     if (!active || !enabled) {
+      if (!shouldReset) return
       generationRef.current++
       turnsRef.current = []
       lastSpeakerRef.current = null
@@ -363,7 +421,7 @@ export function useLiveCues(
       lastCallAtRef.current = 0
       inFlightRef.current = false
       if (debounceRef.current) clearTimeout(debounceRef.current)
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- clear a visible cue when cues mute / the call stops
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clear a visible cue when cues mute / the call ends, but only on a genuine call boundary — see the comment above
       clearCue()
       setSuggestions([])
       latencyRef.current.reset()
@@ -380,19 +438,27 @@ export function useLiveCues(
       return
     }
 
-    // Fresh start for this listening session.
-    generationRef.current++
-    turnsRef.current = []
-    lastSpeakerRef.current = null
-    repSpeakerRef.current = knownRepRef.current
-    inFlightRef.current = false
-    lastCallAtRef.current = 0
-    lastTurnEndAtRef.current = null
-    battlecardsRef.current.reset()
-    setRepSpeaker(knownRepRef.current)
-    setEngagementScore(null)
-    monologueRef.current.reset()
-    setMonologue(null)
+    // Fresh start for this listening session — but ONLY on a genuine call
+    // boundary (see the comment above the effect). Reaching this point with
+    // `shouldReset` false means `active` just came back from an ordinary
+    // blip (a restart) on the SAME call: turnsRef, the rep lock, and
+    // everything else this block would otherwise wipe are exactly what
+    // should survive it. Subscriptions below still re-wire either way — that
+    // part was never the bug.
+    if (shouldReset) {
+      generationRef.current++
+      turnsRef.current = []
+      lastSpeakerRef.current = null
+      repSpeakerRef.current = knownRepRef.current
+      inFlightRef.current = false
+      lastCallAtRef.current = 0
+      lastTurnEndAtRef.current = null
+      battlecardsRef.current.reset()
+      setRepSpeaker(knownRepRef.current)
+      setEngagementScore(null)
+      monologueRef.current.reset()
+      setMonologue(null)
+    }
 
     // Record turn-end → rendered for whichever tier just delivered (§1.7).
     const noteLatency = (tier: 'deterministic' | 'model'): void => {
@@ -495,15 +561,30 @@ export function useLiveCues(
       const startedAt = now
       const generation = generationRef.current // discard the response if the session resets
       trace(`[live-cue] → request (${turnsRef.current.length} turns buffered)`)
+      // M26 4.5 (BUG-055) — precise, per-turn check over the SAME window
+      // windowText() just built: a channel-tagged turn that isn't the rep's
+      // own channel is genuine buyer-attributed content (never a diarized
+      // mono guess — see Turn.channel's own doc comment). Main re-checks
+      // consent fresh before including any of it in a prompt.
+      const includesBuyerContent = turnsRef.current
+        .slice(-WINDOW_TURNS)
+        .some((t) => t.channel !== undefined && t.channel !== knownRepRef.current)
       void window.api.transcription
-        .liveCue(transcript, repSpeakerRef.current)
+        .liveCue(transcript, repSpeakerRef.current, getSessionId() ?? undefined, includesBuyerContent)
         .then((res) => {
           if (!mountedRef.current || generation !== generationRef.current) return
           if (!res.ok) {
-            setCoachingPaused(res.pausedReason === 'all-models-unavailable')
+            // BUG-057 Phase 2 — any pausedReason means paused, full stop.
+            // The old strict-equality check silently read a 'timed-out'
+            // result as NOT paused (since it only ever matched the single
+            // literal 'all-models-unavailable') — this is the exact bug
+            // that made a real, ongoing failure invisible to the rep.
+            setCoachingPaused(res.pausedReason !== undefined)
+            setCoachingPausedReason(res.pausedReason)
             return
           }
           setCoachingPaused(false)
+          setCoachingPausedReason(undefined)
           if (repSpeakerRef.current === null && res.repSpeaker !== null) {
             // Same guard as coach.ts's batch path (speakers.has(repSpeaker)):
             // never lock onto a speaker id that hasn't actually appeared in
@@ -624,7 +705,7 @@ export function useLiveCues(
             last.text += ` ${w.text}`
             last.t = now
           } else {
-            turnsRef.current.push({ speaker: w.speaker, text: w.text, t: now })
+            turnsRef.current.push({ speaker: w.speaker, text: w.text, t: now, channel: w.channel })
           }
         }
         lastSpeakerRef.current = payload.words[payload.words.length - 1].speaker
@@ -657,7 +738,7 @@ export function useLiveCues(
       offUtteranceEnd()
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [active, enabled, clearCue])
+  }, [active, enabled, clearCue, getCallId, getSessionId])
 
   return {
     cue,
@@ -670,6 +751,7 @@ export function useLiveCues(
     monologue,
     buyerName,
     buyerIdentityKey,
-    coachingPaused
+    coachingPaused,
+    coachingPausedReason
   }
 }

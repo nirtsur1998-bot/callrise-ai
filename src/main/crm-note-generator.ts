@@ -112,7 +112,13 @@ function harvestKnownFieldsNotInContactContext(c: Contact): string {
 /** Best-effort, non-blocking — a failure here never surfaces as an error to
  *  the rep, it just means no harvested facts this round (the drafted note
  *  itself, generated separately, is unaffected). */
-export async function harvestKycFacts(content: string, contact: Contact): Promise<KycFact[]> {
+/** BUG-060 — `opts.signal` is what makes this job's Cancel button real.
+ *  Optional so non-job callers are unchanged. */
+export async function harvestKycFacts(
+  content: string,
+  contact: Contact,
+  opts?: { signal?: AbortSignal }
+): Promise<KycFact[]> {
   const text = content.trim()
   if (!text) return []
   try {
@@ -128,7 +134,8 @@ export async function harvestKycFacts(content: string, contact: Contact): Promis
           role: 'user',
           content: `${harvestPrompt(alreadyOnFile)}\n\n--- CALL CONTENT ---\n${text.slice(0, MAX_SOURCE_CHARS)}`
         }
-      ]
+      ],
+      signal: opts?.signal
     })
     const raw = Array.isArray(result.toolInput?.facts) ? result.toolInput.facts : []
     const out: KycFact[] = []

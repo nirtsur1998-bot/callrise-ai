@@ -4,6 +4,7 @@ import { Modal } from '@renderer/components/Modal'
 import { Button } from '@renderer/components/Button'
 import { IconButton } from '@renderer/components/IconButton'
 import { Skeleton } from '@renderer/components/Skeleton'
+import { useJobByTarget } from '@renderer/features/jobs/useJobByTarget'
 import { TaskEditor } from './TaskEditor'
 import type { TaskDraft } from './draft'
 import type { ProposedTask } from './types'
@@ -22,6 +23,15 @@ interface DraftRow {
 
 type DialogError = { kind: 'no-key' } | { kind: 'failed'; message: string }
 
+// M26 Phase 3 — the actual bug fix here (not just an architecture move):
+// this job type's resultData holds the AI's proposed tasks the instant the
+// call finishes, so the JOB — not this dialog's own React state — is the
+// source of truth. Closing the dialog before Save can no longer discard
+// already-paid-for AI output: reopening "Generate tasks" for the same call
+// (even after a full app restart) re-adopts the same finished job and
+// shows the same proposals, never re-running the AI call.
+const GENERATE_TASKS_JOB_TYPE = 'tasks:generateFromCall'
+
 function toDraft(p: ProposedTask): TaskDraft {
   return {
     title: p.title,
@@ -33,14 +43,18 @@ function toDraft(p: ProposedTask): TaskDraft {
   }
 }
 
+function tasksFromResultData(resultData: unknown): ProposedTask[] {
+  const tasks = (resultData as { tasks?: unknown } | undefined)?.tasks
+  return Array.isArray(tasks) ? (tasks as ProposedTask[]) : []
+}
+
 export function GenerateTasksDialog({
   callId,
   callTitle,
   onClose,
   onSaved
 }: GenerateTasksDialogProps): React.JSX.Element {
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<DialogError | null>(null)
+  const [dialogError, setDialogError] = useState<DialogError | null>(null)
   const [rows, setRows] = useState<DraftRow[]>([])
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -55,40 +69,65 @@ export function GenerateTasksDialog({
     }
   }, [])
 
-  // The fetch itself sets no state until after the await, so it's safe to call
-  // straight from an effect (no synchronous render churn).
-  const load = useCallback(async () => {
-    try {
-      const res = await window.api.tasks.generateFromCall(callId)
-      if (!mountedRef.current) return
-      if (res.ok) {
-        setRows(res.tasks.map((t) => ({ key: `t${keyCounter.current++}`, draft: toDraft(t) })))
-      } else if (res.error === 'no-key') {
-        setError({ kind: 'no-key' })
-      } else {
-        setError({ kind: 'failed', message: res.message ?? 'Could not generate tasks.' })
+  // Also adopts an already-SUCCEEDED job (not just running/queued) — the
+  // one difference from every other Phase 3 job-tracking screen, and the
+  // whole point of this fix: a not-yet-reviewed result must be recoverable
+  // by reopening, not just by watching a still-in-flight job finish.
+  const [job, start] = useJobByTarget(GENERATE_TASKS_JOB_TYPE, callId, {
+    adoptStates: ['running', 'queued', 'succeeded'],
+    onSucceeded: (finished) => {
+      const tasks = tasksFromResultData(finished.resultData)
+      setRows(tasks.map((t) => ({ key: `t${keyCounter.current++}`, draft: toDraft(t) })))
+    },
+    onFailed: (failed) => {
+      if (failed.error?.code === 'no-key') setDialogError({ kind: 'no-key' })
+      else {
+        setDialogError({
+          kind: 'failed',
+          message: failed.error?.message ?? 'Could not generate tasks.'
+        })
       }
-    } catch {
-      if (mountedRef.current) {
-        setError({ kind: 'failed', message: 'Could not generate tasks. Please try again.' })
-      }
-    } finally {
-      if (mountedRef.current) setLoading(false)
     }
-  }, [callId])
+  })
+  const loading = !job || job.state === 'running' || job.state === 'queued'
 
-  // Used by the Regenerate / Try again buttons: reset to a clean loading state.
-  const reload = useCallback(() => {
-    setLoading(true)
-    setError(null)
-    setSaveError(null)
-    setRows([])
-    void load()
-  }, [load])
+  // The fetch itself sets no state until after the await, so it's safe to call
+  // straight from an effect (no synchronous render churn). `force` bypasses
+  // adopting an existing succeeded job — Regenerate/Try again always want a
+  // genuinely fresh attempt, not the one just shown.
+  const startGeneration = useCallback(
+    async (opts?: { force?: boolean }): Promise<void> => {
+      try {
+        const res = await window.api.tasks.generateFromCall(callId, opts)
+        if (!mountedRef.current) return
+        if (res.ok && res.jobId) {
+          const fresh = await window.api.jobs.get(res.jobId)
+          if (mountedRef.current && fresh) start(fresh)
+        } else {
+          setDialogError({ kind: 'failed', message: 'Could not generate tasks. Please try again.' })
+        }
+      } catch {
+        if (mountedRef.current) {
+          setDialogError({ kind: 'failed', message: 'Could not generate tasks. Please try again.' })
+        }
+      }
+    },
+    [callId, start]
+  )
 
   useEffect(() => {
-    void load()
-  }, [load])
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- startGeneration only sets state after an await, same as every other adapter's mount-time start
+    void startGeneration()
+  }, [startGeneration])
+
+  // Used by the Regenerate / Try again buttons: reset to a clean loading
+  // state and force a genuinely new job.
+  const reload = useCallback(() => {
+    setDialogError(null)
+    setSaveError(null)
+    setRows([])
+    void startGeneration({ force: true })
+  }, [startGeneration])
 
   const updateRow = (key: string, draft: TaskDraft): void =>
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, draft } : r)))
@@ -129,6 +168,13 @@ export function GenerateTasksDialog({
         if (!mountedRef.current) return
         setRows(remaining)
       }
+      // The proposals are consumed now — clear the job so reopening
+      // "Generate tasks" for this call later doesn't resurface an
+      // already-saved batch (best-effort: a failure just leaves it in
+      // Activity Center history, harmless). Goes through a purpose-built
+      // channel, not the generic jobs.dismiss, which deliberately cannot
+      // clear a job still holding unreviewed output (BUG-052).
+      if (job) void window.api.tasks.markGenerationConsumed(job.id).catch(() => {})
       onSaved(totalToSave) // parent unmounts the dialog
     } catch {
       if (mountedRef.current) {
@@ -167,8 +213,8 @@ export function GenerateTasksDialog({
       <div className="flex-1 overflow-y-auto px-6 py-5">
         {loading ? (
           <GeneratingState />
-        ) : error ? (
-          <ErrorState error={error} onRetry={reload} />
+        ) : dialogError ? (
+          <ErrorState error={dialogError} onRetry={reload} />
         ) : rows.length === 0 ? (
           <EmptyState onRetry={reload} />
         ) : (
@@ -203,7 +249,7 @@ export function GenerateTasksDialog({
       </div>
 
       {/* Footer (only meaningful when there are tasks to save) */}
-      {!loading && !error && rows.length > 0 && (
+      {!loading && !dialogError && rows.length > 0 && (
         <div className="flex items-center justify-between gap-4 border-t border-line-soft px-6 py-4">
           <p className="text-[13px] text-danger">{saveError}</p>
           <div className="flex items-center gap-2">

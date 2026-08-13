@@ -5,6 +5,7 @@
 // Responses" reasoning, which applies identically here) — this file exists
 // so a 6th OpenAI-compatible provider is a config object, not a new file.
 import OpenAI from 'openai'
+import { classifyFailureClass } from '../failure-class'
 import {
   AIProviderError,
   LATENCY_POLICY,
@@ -145,15 +146,68 @@ function usageFrom(inputTokens: number, outputTokens: number): AIUsage {
   return { inputTokens, outputTokens, estimatedCostUsd: 0 }
 }
 
-function toProviderError(displayName: string, err: unknown): AIProviderError {
+/**
+ * BUG-058 — the provider's own "come back in N seconds", in ms.
+ *
+ * Reads `retry-after-ms` (OpenAI/Groq send it, and it is the precise one)
+ * before `retry-after` (seconds, or an HTTP-date). Without this the app has
+ * no idea whether a 429 clears in 2 seconds or 2 hours, so it treated both as
+ * "this model is dead, move on" and burned the whole chain.
+ *
+ * Exported for direct unit testing, same reasoning as resolveMaxTokensField.
+ */
+export function retryAfterMsFrom(err: unknown): number | undefined {
+  const headers = (err as { headers?: unknown })?.headers
+  if (!headers) return undefined
+  const get = (name: string): string | null => {
+    if (typeof (headers as Headers).get === 'function') return (headers as Headers).get(name)
+    const rec = headers as Record<string, string | undefined>
+    return rec[name] ?? rec[name.toLowerCase()] ?? null
+  }
+
+  const ms = get('retry-after-ms')
+  if (ms) {
+    const n = Number(ms)
+    if (Number.isFinite(n) && n > 0) return n
+  }
+
+  const secs = get('retry-after')
+  if (secs) {
+    const n = Number(secs)
+    if (Number.isFinite(n) && n > 0) return n * 1000
+    // RFC-permitted HTTP-date form.
+    const at = Date.parse(secs)
+    if (!Number.isNaN(at)) {
+      const delta = at - Date.now()
+      if (delta > 0) return delta
+    }
+  }
+  return undefined
+}
+
+/** Exported for direct unit testing, same reasoning as resolveMaxTokensField
+ *  below — asserting on error mapping shouldn't require standing up a real
+ *  OpenAI client. */
+export function toProviderError(displayName: string, err: unknown): AIProviderError {
   if (err instanceof OpenAI.AuthenticationError) {
-    return new AIProviderError('auth', `Your ${displayName} API key was rejected.`)
+    return new AIProviderError('auth', `Your ${displayName} API key was rejected.`, undefined, 'structural')
   }
   if (err instanceof OpenAI.RateLimitError) {
-    return new AIProviderError('rate-limit', `${displayName} is rate-limiting requests right now.`)
+    const msg = typeof err.message === 'string' ? err.message : ''
+    return new AIProviderError(
+      'rate-limit',
+      `${displayName} is rate-limiting requests right now.`,
+      retryAfterMsFrom(err),
+      classifyFailureClass('rate-limit', { message: msg, status: err.status ?? undefined })
+    )
   }
   if (err instanceof OpenAI.NotFoundError) {
-    return new AIProviderError('model-not-found', `${displayName} does not recognize this model.`)
+    return new AIProviderError(
+      'model-not-found',
+      `${displayName} does not recognize this model.`,
+      undefined,
+      'structural'
+    )
   }
   if (err instanceof OpenAI.APIConnectionTimeoutError || err instanceof OpenAI.APIUserAbortError) {
     // APIUserAbortError fires when an AbortSignal we passed in aborts - in
@@ -171,15 +225,50 @@ function toProviderError(displayName: string, err: unknown): AIProviderError {
   if (err instanceof OpenAI.APIError) {
     const msg = typeof err.message === 'string' ? err.message.toLowerCase() : ''
     if (msg.includes('quota') || msg.includes('billing') || msg.includes('credit')) {
-      return new AIProviderError('failed', `Your ${displayName} account is out of quota/credits.`)
+      return new AIProviderError(
+        'failed',
+        `Your ${displayName} account is out of quota/credits.`,
+        undefined,
+        'period-exhausted'
+      )
     }
     if (err.status === 429) {
-      return new AIProviderError('rate-limit', `${displayName} is rate-limiting requests right now.`)
+      return new AIProviderError(
+        'rate-limit',
+        `${displayName} is rate-limiting requests right now.`,
+        retryAfterMsFrom(err),
+        classifyFailureClass('rate-limit', { message: msg, status: err.status ?? undefined })
+      )
     }
     if (err.status === 404) {
-      return new AIProviderError('model-not-found', `${displayName} does not recognize this model.`)
+      return new AIProviderError(
+        'model-not-found',
+        `${displayName} does not recognize this model.`,
+        undefined,
+        'structural'
+      )
     }
-    return new AIProviderError('failed', `${displayName} returned an error (${err.status ?? 'unknown'}).`)
+    // BUG-057 — KEEP the provider's own message. This used to return only
+    // "<provider> returned an error (400)." and throw err.message away, which
+    // is why two days of chain-exhaustion logs could not answer the only
+    // question that mattered: WHY. A 400 is the provider telling us the
+    // request was rejected and usually saying exactly what was wrong with it
+    // (Groq, for instance, returns 400 with code `tool_use_failed` when a
+    // model cannot produce a valid function call — indistinguishable from a
+    // malformed-schema 400 unless the text survives).
+    //
+    // Same reasoning as this file's own Mistral `max_tokens` and Gemini
+    // schema-field bugs: both were structural 400s on every single request,
+    // and both were found only once someone read the real error text.
+    const detail = typeof err.message === 'string' ? err.message.trim() : ''
+    return new AIProviderError(
+      'failed',
+      detail
+        ? `${displayName} returned an error (${err.status ?? 'unknown'}): ${detail.slice(0, 300)}`
+        : `${displayName} returned an error (${err.status ?? 'unknown'}).`,
+      undefined,
+      classifyFailureClass('failed', { message: msg, status: err.status ?? undefined })
+    )
   }
   return new AIProviderError('failed', `Something went wrong calling ${displayName}. Please try again.`)
 }
@@ -226,7 +315,18 @@ class OpenAICompatibleProvider implements AIProvider {
             tools: toTools(req),
             tool_choice: toToolChoice(req)
           },
-          { timeout: policy.timeoutMs, maxRetries: policy.maxRetries, signal: req.signal }
+          // BUG-058/BUG-059 — maxRetries is ALWAYS the literal 0, never a variable.
+          // The SDK's own internal retry sleep (internal/utils/sleep.js) is a bare
+          // `setTimeout(ms)` that never accepts a signal, and `ms` is taken directly
+          // from the provider's Retry-After header with NO CAP (client.js's
+          // calculateRetryTimeoutMs). A 429 with a large hint made the SDK sleep,
+          // uninterruptibly, for however long the header said — bypassing
+          // HARD_CEILING_MS entirely AND bypassing model-cooldown.ts's
+          // markRateLimited(), since that can't fire until this call returns. Verified
+          // by reading the vendored source, not assumed. completeWithFallback's own
+          // walker now owns every retry decision (see its RETRYABLE_REASONS), fully
+          // abortable and cooldown-aware, which the SDK's internal loop was neither.
+          { timeout: policy.timeoutMs, maxRetries: 0, signal: req.signal }
         )
         .withResponse()
       captureRateLimitHeaders(this.id, rawResponse.headers)
@@ -266,7 +366,18 @@ class OpenAICompatibleProvider implements AIProvider {
             stream: true,
             stream_options: { include_usage: true }
           },
-          { timeout: policy.timeoutMs, maxRetries: policy.maxRetries, signal: req.signal }
+          // BUG-058/BUG-059 — maxRetries is ALWAYS the literal 0, never a variable.
+          // The SDK's own internal retry sleep (internal/utils/sleep.js) is a bare
+          // `setTimeout(ms)` that never accepts a signal, and `ms` is taken directly
+          // from the provider's Retry-After header with NO CAP (client.js's
+          // calculateRetryTimeoutMs). A 429 with a large hint made the SDK sleep,
+          // uninterruptibly, for however long the header said — bypassing
+          // HARD_CEILING_MS entirely AND bypassing model-cooldown.ts's
+          // markRateLimited(), since that can't fire until this call returns. Verified
+          // by reading the vendored source, not assumed. completeWithFallback's own
+          // walker now owns every retry decision (see its RETRYABLE_REASONS), fully
+          // abortable and cooldown-aware, which the SDK's internal loop was neither.
+          { timeout: policy.timeoutMs, maxRetries: 0, signal: req.signal }
         )
         let inputTokens = 0
         let outputTokens = 0

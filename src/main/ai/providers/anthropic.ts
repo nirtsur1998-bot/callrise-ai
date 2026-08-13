@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { classifyFailureClass } from '../failure-class'
 import {
   AIProviderError,
   LATENCY_POLICY,
@@ -53,10 +54,16 @@ function usageFrom(model: string, inputTokens: number, outputTokens: number): AI
 
 function toProviderError(err: unknown): AIProviderError {
   if (err instanceof Anthropic.AuthenticationError) {
-    return new AIProviderError('auth', 'Your Anthropic API key was rejected.')
+    return new AIProviderError('auth', 'Your Anthropic API key was rejected.', undefined, 'structural')
   }
   if (err instanceof Anthropic.RateLimitError) {
-    return new AIProviderError('rate-limit', 'Anthropic is rate-limiting requests right now.')
+    const msg = typeof err.message === 'string' ? err.message : ''
+    return new AIProviderError(
+      'rate-limit',
+      'Anthropic is rate-limiting requests right now.',
+      undefined,
+      classifyFailureClass('rate-limit', { message: msg, status: err.status ?? undefined })
+    )
   }
   if (err instanceof Anthropic.APIConnectionError) {
     return new AIProviderError(
@@ -73,12 +80,16 @@ function toProviderError(err: unknown): AIProviderError {
     ) {
       return new AIProviderError(
         'failed',
-        'Your Anthropic account is out of credits. Add credits at console.anthropic.com.'
+        'Your Anthropic account is out of credits. Add credits at console.anthropic.com.',
+        undefined,
+        'period-exhausted'
       )
     }
     return new AIProviderError(
       'failed',
-      `Anthropic returned an error (${err.status ?? 'unknown'}).`
+      `Anthropic returned an error (${err.status ?? 'unknown'}).`,
+      undefined,
+      classifyFailureClass('failed', { message: msg, status: err.status ?? undefined })
     )
   }
   return new AIProviderError('failed', 'Something went wrong calling Anthropic. Please try again.')
@@ -144,7 +155,13 @@ export class AnthropicProvider implements AIProvider {
           tools: this.tools(req),
           tool_choice: this.toolChoice(req)
         },
-        { timeout: policy.timeoutMs, maxRetries: policy.maxRetries, signal: req.signal }
+        // BUG-058/BUG-059 — always the literal 0, never a variable. Anthropic's own
+        // sleep() DOES accept a signal (unlike OpenAI's), but the retry call
+        // site never passes one through — verified in the vendored source — so
+        // it is unabortable in practice either way, on a wait taken uncapped
+        // from the provider's own header. Our own walker owns every retry
+        // decision now.
+        { timeout: policy.timeoutMs, maxRetries: 0, signal: req.signal }
       )
       const usage = usageFrom(model, response.usage.input_tokens, response.usage.output_tokens)
       if (req.tool) {
@@ -189,7 +206,13 @@ export class AnthropicProvider implements AIProvider {
             tools,
             tool_choice: toolChoice
           },
-          { timeout: policy.timeoutMs, maxRetries: policy.maxRetries, signal: req.signal }
+          // BUG-058/BUG-059 — always the literal 0, never a variable. Anthropic's own
+        // sleep() DOES accept a signal (unlike OpenAI's), but the retry call
+        // site never passes one through — verified in the vendored source — so
+        // it is unabortable in practice either way, on a wait taken uncapped
+        // from the provider's own header. Our own walker owns every retry
+        // decision now.
+        { timeout: policy.timeoutMs, maxRetries: 0, signal: req.signal }
         )
         for await (const event of stream) {
           if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {

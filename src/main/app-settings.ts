@@ -75,6 +75,233 @@ function mergeCoach2(current: Coach2Settings, patch: unknown): Coach2Settings {
 }
 
 /**
+ * M26 Phase 4.5.2 — Deal Intelligence (M24 beta) and live coaching cues
+ * (M9) enable/sensitivity/etc. settings, moved out of renderer-only
+ * localStorage (useDealIntelligenceSettings.ts / useCueSettings.ts) so main
+ * can read them once the engines themselves move into main (4.5.3/4.5.4) —
+ * main cannot gate its own AI-call cadence on a value that only ever
+ * existed inside a React hook. The renderer Settings UI is unchanged; it
+ * now reads/writes through this file's existing settings:get/update IPC
+ * instead of localStorage directly. Defaults below match the two hooks'
+ * previous localStorage defaults exactly, so an existing install sees no
+ * behavior change from this migration alone.
+ */
+export type DealIntelligenceSensitivity = 'quiet' | 'balanced' | 'aggressive'
+export type AnalysisFrequency = 'frequent' | 'balanced' | 'infrequent'
+
+export interface EnabledNudgeTypes {
+  risk: boolean
+  opportunity: boolean
+  tactical: boolean
+}
+
+export interface DealIntelligenceSettings {
+  enabled: boolean
+  sensitivity: DealIntelligenceSensitivity
+  enabledTypes: EnabledNudgeTypes
+  frequency: AnalysisFrequency
+}
+
+const EMPTY_ENABLED_TYPES: EnabledNudgeTypes = { risk: true, opportunity: true, tactical: true }
+
+const EMPTY_DEAL_INTELLIGENCE: DealIntelligenceSettings = {
+  enabled: false, // Beta — off by default, same as the hook it replaces
+  sensitivity: 'balanced',
+  enabledTypes: EMPTY_ENABLED_TYPES,
+  frequency: 'balanced'
+}
+
+const DEAL_INTELLIGENCE_SENSITIVITIES: DealIntelligenceSensitivity[] = [
+  'quiet',
+  'balanced',
+  'aggressive'
+]
+const ANALYSIS_FREQUENCIES: AnalysisFrequency[] = ['frequent', 'balanced', 'infrequent']
+
+function sanitizeDealIntelligenceSensitivity(value: unknown): DealIntelligenceSensitivity {
+  return DEAL_INTELLIGENCE_SENSITIVITIES.includes(value as DealIntelligenceSensitivity)
+    ? (value as DealIntelligenceSensitivity)
+    : 'balanced'
+}
+
+function sanitizeAnalysisFrequency(value: unknown): AnalysisFrequency {
+  return ANALYSIS_FREQUENCIES.includes(value as AnalysisFrequency)
+    ? (value as AnalysisFrequency)
+    : 'balanced'
+}
+
+function sanitizeEnabledTypes(value: unknown): EnabledNudgeTypes {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return {
+    risk: typeof v.risk === 'boolean' ? v.risk : true,
+    opportunity: typeof v.opportunity === 'boolean' ? v.opportunity : true,
+    tactical: typeof v.tactical === 'boolean' ? v.tactical : true
+  }
+}
+
+function sanitizeDealIntelligence(value: unknown): DealIntelligenceSettings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return {
+    enabled: v.enabled === true,
+    sensitivity: sanitizeDealIntelligenceSensitivity(v.sensitivity),
+    enabledTypes: sanitizeEnabledTypes(v.enabledTypes),
+    frequency: sanitizeAnalysisFrequency(v.frequency)
+  }
+}
+
+/** Mirrors useDealIntelligenceSettings.ts's setTypeEnabled guard: never let
+ *  a patch disable every nudge type at once — that's functionally the same
+ *  as the master `enabled` switch, but silently, from a control that
+ *  doesn't say "off." A patch that would leave all three false is rejected
+ *  wholesale rather than partially applied. */
+function mergeEnabledTypes(current: EnabledNudgeTypes, patch: unknown): EnabledNudgeTypes {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  const next: EnabledNudgeTypes = {
+    risk: 'risk' in p ? p.risk === true : current.risk,
+    opportunity: 'opportunity' in p ? p.opportunity === true : current.opportunity,
+    tactical: 'tactical' in p ? p.tactical === true : current.tactical
+  }
+  if (!next.risk && !next.opportunity && !next.tactical) return current
+  return next
+}
+
+function mergeDealIntelligence(
+  current: DealIntelligenceSettings,
+  patch: unknown
+): DealIntelligenceSettings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return {
+    enabled: 'enabled' in p ? p.enabled === true : current.enabled,
+    sensitivity:
+      'sensitivity' in p
+        ? sanitizeDealIntelligenceSensitivity(p.sensitivity)
+        : current.sensitivity,
+    enabledTypes: mergeEnabledTypes(current.enabledTypes, p.enabledTypes),
+    frequency: 'frequency' in p ? sanitizeAnalysisFrequency(p.frequency) : current.frequency
+  }
+}
+
+export type CueSensitivity = 'low' | 'medium' | 'high'
+
+export interface LiveCueSettings {
+  enabled: boolean
+  sensitivity: CueSensitivity
+}
+
+const EMPTY_LIVE_CUES: LiveCueSettings = {
+  enabled: true, // default ON — same as the hook it replaces
+  sensitivity: 'low'
+}
+
+const CUE_SENSITIVITIES: CueSensitivity[] = ['low', 'medium', 'high']
+
+function sanitizeCueSensitivity(value: unknown): CueSensitivity {
+  return CUE_SENSITIVITIES.includes(value as CueSensitivity) ? (value as CueSensitivity) : 'low'
+}
+
+function sanitizeLiveCues(value: unknown): LiveCueSettings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return {
+    enabled: typeof v.enabled === 'boolean' ? v.enabled : EMPTY_LIVE_CUES.enabled,
+    sensitivity: sanitizeCueSensitivity(v.sensitivity)
+  }
+}
+
+function mergeLiveCues(current: LiveCueSettings, patch: unknown): LiveCueSettings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return {
+    enabled: 'enabled' in p ? p.enabled === true : current.enabled,
+    sensitivity: 'sensitivity' in p ? sanitizeCueSensitivity(p.sensitivity) : current.sensitivity
+  }
+}
+
+/**
+ * M26 Phase 5 — per-lane job concurrency, user-adjustable. JobManager's own
+ * DEFAULT_LANE_CONFIG (jobs/types.ts) hardcodes INTERACTIVE:2/BATCH:1/
+ * MAINTENANCE:1 (LIVE stays fixed at unbounded — never exposed here, since
+ * a live call must never wait behind anything, by the milestone's own
+ * design). This is just the persisted override JobManager.configureLanes()
+ * already accepts; nothing here duplicates the queueing logic itself.
+ * Clamped to [1, 10] on every read — 0 would deadlock that lane forever
+ * (nothing could ever start), and an absurd value is more likely a typo
+ * than a deliberate choice.
+ */
+export interface JobConcurrencySettings {
+  interactive: number
+  batch: number
+  maintenance: number
+}
+
+const EMPTY_JOB_CONCURRENCY: JobConcurrencySettings = { interactive: 2, batch: 1, maintenance: 1 }
+
+function clampConcurrency(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(1, Math.min(10, Math.round(value)))
+    : fallback
+}
+
+function sanitizeJobConcurrency(value: unknown): JobConcurrencySettings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return {
+    interactive: clampConcurrency(v.interactive, EMPTY_JOB_CONCURRENCY.interactive),
+    batch: clampConcurrency(v.batch, EMPTY_JOB_CONCURRENCY.batch),
+    maintenance: clampConcurrency(v.maintenance, EMPTY_JOB_CONCURRENCY.maintenance)
+  }
+}
+
+function mergeJobConcurrency(
+  current: JobConcurrencySettings,
+  patch: unknown
+): JobConcurrencySettings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return {
+    interactive: 'interactive' in p ? clampConcurrency(p.interactive, current.interactive) : current.interactive,
+    batch: 'batch' in p ? clampConcurrency(p.batch, current.batch) : current.batch,
+    maintenance: 'maintenance' in p ? clampConcurrency(p.maintenance, current.maintenance) : current.maintenance
+  }
+}
+
+/**
+ * M26 Phase 5 — job-completion notification preferences. The in-app toast +
+ * Activity Center badge (ActivityCenter.tsx) stay on unconditionally — that
+ * IS the "persistent indicator in the app chrome" CLAUDE.md's spec actually
+ * requires, and it's zero-friction (a rep who never looks never sees it).
+ * This one dial controls only the OS-level popup (jobs/activity.ts's
+ * showNativeNotification call, already gated to completions-only and
+ * window-unfocused-only) — the layer that can genuinely interrupt whatever
+ * ELSE the rep is doing on their machine. On by default, matching today's
+ * unconditional behavior; this is the first time it's been optional at all.
+ */
+export interface JobNotificationSettings {
+  nativeEnabled: boolean
+}
+
+const EMPTY_JOB_NOTIFICATIONS: JobNotificationSettings = { nativeEnabled: true }
+
+function sanitizeJobNotifications(value: unknown): JobNotificationSettings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return {
+    nativeEnabled:
+      typeof v.nativeEnabled === 'boolean' ? v.nativeEnabled : EMPTY_JOB_NOTIFICATIONS.nativeEnabled
+  }
+}
+
+function mergeJobNotifications(
+  current: JobNotificationSettings,
+  patch: unknown
+): JobNotificationSettings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return {
+    nativeEnabled: 'nativeEnabled' in p ? p.nativeEnabled === true : current.nativeEnabled
+  }
+}
+
+/**
  * M23 Workstream D — Contact Intelligence. One dial controlling how
  * proactively the app surfaces/creates contacts from a call using whatever
  * identity signal is available (calendar match, resolved speaker identity,
@@ -460,6 +687,18 @@ export interface AppSettings {
   /** M25 — Sales Brain (Beta) master switch. Off by default; see
    *  SalesBrainSettings for what this gates. */
   salesBrain: SalesBrainSettings
+  /** M26 Phase 4.5.2 — Deal Intelligence (M24 beta) enable/sensitivity/
+   *  per-type/frequency. Off by default; see DealIntelligenceSettings. */
+  dealIntelligence: DealIntelligenceSettings
+  /** M26 Phase 4.5.2 — live coaching cues (M9) enable/sensitivity. On by
+   *  default; see LiveCueSettings. */
+  liveCues: LiveCueSettings
+  /** M26 Phase 5 — per-lane job concurrency override. See
+   *  JobConcurrencySettings for defaults/bounds. */
+  jobConcurrency: JobConcurrencySettings
+  /** M26 Phase 5 — job-completion notification preferences. On by default;
+   *  see JobNotificationSettings for exactly what this gates. */
+  jobNotifications: JobNotificationSettings
 }
 
 // AIProviderId is re-exported here (not re-declared) so existing importers
@@ -503,7 +742,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoUpdateEnabled: false,
   coach2: EMPTY_COACH2,
   contactIntelligence: EMPTY_CONTACT_INTELLIGENCE,
-  salesBrain: EMPTY_SALES_BRAIN
+  salesBrain: EMPTY_SALES_BRAIN,
+  dealIntelligence: EMPTY_DEAL_INTELLIGENCE,
+  liveCues: EMPTY_LIVE_CUES,
+  jobConcurrency: EMPTY_JOB_CONCURRENCY,
+  jobNotifications: EMPTY_JOB_NOTIFICATIONS
 }
 
 function settingsPath(): string {
@@ -576,7 +819,11 @@ export function loadAppSettings(): AppSettings {
       autoUpdateEnabled: parsed.autoUpdateEnabled === true,
       coach2: sanitizeCoach2(parsed.coach2),
       contactIntelligence: sanitizeContactIntelligence(parsed.contactIntelligence),
-      salesBrain: sanitizeSalesBrain(parsed.salesBrain)
+      salesBrain: sanitizeSalesBrain(parsed.salesBrain),
+      dealIntelligence: sanitizeDealIntelligence(parsed.dealIntelligence),
+      liveCues: sanitizeLiveCues(parsed.liveCues),
+      jobConcurrency: sanitizeJobConcurrency(parsed.jobConcurrency),
+      jobNotifications: sanitizeJobNotifications(parsed.jobNotifications)
     }
   } catch {
     return {
@@ -589,7 +836,11 @@ export function loadAppSettings(): AppSettings {
       aiModelAssignments: { ...DEFAULT_MODEL_ASSIGNMENTS },
       coach2: { ...EMPTY_COACH2 },
       contactIntelligence: { ...EMPTY_CONTACT_INTELLIGENCE },
-      salesBrain: { ...EMPTY_SALES_BRAIN }
+      salesBrain: { ...EMPTY_SALES_BRAIN },
+      dealIntelligence: { ...EMPTY_DEAL_INTELLIGENCE, enabledTypes: { ...EMPTY_ENABLED_TYPES } },
+      liveCues: { ...EMPTY_LIVE_CUES },
+      jobConcurrency: { ...EMPTY_JOB_CONCURRENCY },
+      jobNotifications: { ...EMPTY_JOB_NOTIFICATIONS }
     }
   }
 }
@@ -628,7 +879,11 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
       'autoUpdateEnabled' in p ? p.autoUpdateEnabled === true : current.autoUpdateEnabled,
     coach2: mergeCoach2(current.coach2, p.coach2),
     contactIntelligence: mergeContactIntelligence(current.contactIntelligence, p.contactIntelligence),
-    salesBrain: mergeSalesBrain(current.salesBrain, p.salesBrain)
+    salesBrain: mergeSalesBrain(current.salesBrain, p.salesBrain),
+    dealIntelligence: mergeDealIntelligence(current.dealIntelligence, p.dealIntelligence),
+    liveCues: mergeLiveCues(current.liveCues, p.liveCues),
+    jobConcurrency: mergeJobConcurrency(current.jobConcurrency, p.jobConcurrency),
+    jobNotifications: mergeJobNotifications(current.jobNotifications, p.jobNotifications)
   }
 }
 
@@ -675,6 +930,20 @@ export function setAutoUpdateEnabledChangedListener(fn: () => void): void {
   onAutoUpdateEnabledChanged = fn
 }
 
+/**
+ * M26 Phase 5 — called whenever a save changes `jobConcurrency`, so a
+ * mid-session Settings edit calls JobManager.configureLanes() immediately
+ * instead of only taking effect on next launch. Registered from index.ts
+ * (not a dedicated service module — JobManager is constructed and owned
+ * directly in index.ts, unlike detection/updater which have their own
+ * registerXxx() files). Same callback-registration shape as
+ * onDetectionEnabledChanged.
+ */
+let onJobConcurrencyChanged: (() => void) | null = null
+export function setJobConcurrencyChangedListener(fn: () => void): void {
+  onJobConcurrencyChanged = fn
+}
+
 export function saveAppSettings(patch: unknown): AppSettings {
   const current = loadAppSettings()
   const next = mergeSettings(current, patch)
@@ -700,6 +969,16 @@ export function saveAppSettings(patch: unknown): AppSettings {
   if (current.autoUpdateEnabled !== next.autoUpdateEnabled && onAutoUpdateEnabledChanged) {
     try {
       onAutoUpdateEnabledChanged()
+    } catch {
+      /* never fail the settings save over this */
+    }
+  }
+  if (
+    JSON.stringify(current.jobConcurrency) !== JSON.stringify(next.jobConcurrency) &&
+    onJobConcurrencyChanged
+  ) {
+    try {
+      onJobConcurrencyChanged()
     } catch {
       /* never fail the settings save over this */
     }
@@ -743,6 +1022,16 @@ export function applyPulledSettings(payload: unknown, cloudUpdatedAt: string): A
   if (current.autoUpdateEnabled !== next.autoUpdateEnabled && onAutoUpdateEnabledChanged) {
     try {
       onAutoUpdateEnabledChanged()
+    } catch {
+      /* never fail the pull over this */
+    }
+  }
+  if (
+    JSON.stringify(current.jobConcurrency) !== JSON.stringify(next.jobConcurrency) &&
+    onJobConcurrencyChanged
+  ) {
+    try {
+      onJobConcurrencyChanged()
     } catch {
       /* never fail the pull over this */
     }
@@ -813,6 +1102,38 @@ export function getContactIntelligenceMode(): ContactIntelligenceMode {
  *  the cost of the DB file existing. */
 export function isSalesBrainEnabled(): boolean {
   return loadAppSettings().salesBrain.enabled
+}
+
+/** M26 Phase 4.5.2 — the single source of truth the main-owned Deal
+ *  Intelligence engine (4.5.3) reads its enable/sensitivity/enabledTypes/
+ *  frequency settings from, replacing the renderer-local
+ *  useDealIntelligenceSettings.ts hook. Read fresh on every call, same
+ *  discipline as every other settings gate in this file — a rep who just
+ *  disabled the feature must not have a stale main-side copy keep acting on
+ *  the old value. */
+export function getDealIntelligenceSettings(): DealIntelligenceSettings {
+  return loadAppSettings().dealIntelligence
+}
+
+/** M26 Phase 4.5.2 — same role as getDealIntelligenceSettings(), for the
+ *  main-owned cue engine (4.5.4), replacing useCueSettings.ts. */
+export function getLiveCueSettings(): LiveCueSettings {
+  return loadAppSettings().liveCues
+}
+
+/** M26 Phase 5 — the gate index.ts reads at startup (applied via
+ *  JobManager.configureLanes()) and again on every live change via
+ *  setJobConcurrencyChangedListener. */
+export function getJobConcurrencySettings(): JobConcurrencySettings {
+  return loadAppSettings().jobConcurrency
+}
+
+/** M26 Phase 5 — the gate jobs/activity.ts checks before showing an OS-level
+ *  notification for a finished job. Read fresh on every event, not cached
+ *  at wiring time, so a mid-session toggle takes effect on the very next
+ *  completion rather than needing a restart. */
+export function isJobNativeNotificationsEnabled(): boolean {
+  return loadAppSettings().jobNotifications.nativeEnabled
 }
 
 let registered = false

@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react'
-import { Mic, Settings as SettingsIcon } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Loader2, Mic, Settings as SettingsIcon } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { isMac } from '@renderer/lib/platform'
 import { Button } from '@renderer/components/Button'
@@ -59,6 +59,31 @@ interface CenteredStateProps {
 }
 
 /** Generic centered status card (errors, no-device, requesting, …). */
+/**
+ * M26 4.3 — shown while main has not yet said whether a call is in progress.
+ *
+ * Renders NOTHING for the first moment, because attach normally resolves in
+ * single-digit milliseconds and a spinner that appears and vanishes that fast
+ * is worse than no spinner at all. Note what is being delayed: the appearance
+ * of a SPINNER. A delay that resolved to the idle screen would be exactly the
+ * forbidden thing — deciding there is no call because an answer was slow.
+ */
+export function AttachingState(): React.JSX.Element | null {
+  const [visible, setVisible] = useState(false)
+  useEffect(() => {
+    const t = setTimeout(() => setVisible(true), 200)
+    return () => clearTimeout(t)
+  }, [])
+  if (!visible) return null
+  return (
+    <CenteredState
+      icon={<Loader2 className="h-6 w-6 animate-spin text-muted" />}
+      title="Checking for a call in progress…"
+      subtitle="One moment."
+    />
+  )
+}
+
 export function CenteredState({
   icon,
   title,
@@ -144,7 +169,11 @@ export function StatusBadge({ status }: { status: LiveStatus }): React.JSX.Eleme
       dot: 'bg-warning animate-pulse',
       text: 'text-warning'
     },
-    connecting: { label: 'Connecting', dot: 'bg-accent animate-pulse', text: 'text-muted' }
+    connecting: { label: 'Connecting', dot: 'bg-accent animate-pulse', text: 'text-muted' },
+    // M26 4.3 — without this the ?? fallback below renders "Stopped" while we
+    // are still asking main whether a call is running: the same lie the
+    // attaching state exists to prevent, in miniature.
+    attaching: { label: 'Checking', dot: 'bg-accent animate-pulse', text: 'text-muted' }
   }
   const s = map[status] ?? { label: 'Stopped', dot: 'bg-faint', text: 'text-faint' }
   return (

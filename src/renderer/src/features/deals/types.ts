@@ -30,10 +30,6 @@ export interface DealRiskAssessment {
   createdAt: string
 }
 
-export type AssessDealRiskResult =
-  | { ok: true; assessment: DealRiskAssessment }
-  | { ok: false; error: 'no-key' | 'failed'; message?: string }
-
 export interface DealStageChange {
   stageId: string
   changedAt: string

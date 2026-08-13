@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Brain, RotateCcw, Download } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
@@ -6,7 +6,9 @@ import { Button } from '@renderer/components/Button'
 import { useAppSettings } from './useAppSettings'
 import { SettingRow } from './SettingRow'
 import { OnboardingInterviewModal } from './OnboardingInterviewModal'
-import type { OnboardingStatusResult, SalesBrainBackfillProgress } from '../../../../preload/index.d'
+import type { Job, OnboardingStatusResult } from '../../../../preload/index.d'
+
+const BACKFILL_JOB_TYPE = 'salesBrain:backfill'
 
 /**
  * M25 — the master switch for the whole Sales Brain milestone. Off by
@@ -22,9 +24,9 @@ export function SalesBrainSection(): React.JSX.Element {
   const [showInterview, setShowInterview] = useState(false)
   const [status, setStatus] = useState<OnboardingStatusResult | null>(null)
   const [includeCalls, setIncludeCalls] = useState(false)
-  const [backfill, setBackfill] = useState<SalesBrainBackfillProgress | null>(null)
+  const [backfillJob, setBackfillJob] = useState<Job | null>(null)
   const [startError, setStartError] = useState<string | null>(null)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const mountedRef = useRef(true)
 
   const refreshStatus = (): void => {
     if (!enabled) return
@@ -50,41 +52,46 @@ export function SalesBrainSection(): React.JSX.Element {
   }
 
   useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  // M26 Phase 3 — adopt an already-running/queued import on mount (the rep
+  // started it, left Settings, and came back), and keep tracking whichever
+  // import job is current from then on. This IS the fix for "navigating
+  // away loses the visible progress" — the import itself never needed
+  // rescuing, only this screen's view of it (same pattern as the objection
+  // scan card's job tracking).
+  useEffect(() => {
     if (!enabled) return
-    void window.api.salesBrain.backfill.status().then(setBackfill)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch once when this section becomes relevant
+    void window.api.jobs.list().then((jobs) => {
+      if (!mountedRef.current) return
+      const active = jobs.find(
+        (j) => j.type === BACKFILL_JOB_TYPE && (j.state === 'running' || j.state === 'queued')
+      )
+      if (active) setBackfillJob(active)
+    })
+    return window.api.jobs.onChanged((jobs) => {
+      setBackfillJob((current) => {
+        if (!current) return current
+        return jobs.find((j) => j.id === current.id) ?? current
+      })
+    })
   }, [enabled])
 
-  useEffect(() => {
-    if (backfill?.running && !pollRef.current) {
-      pollRef.current = setInterval(() => {
-        void window.api.salesBrain.backfill.status().then((p) => {
-          setBackfill(p)
-          if (!p.running && pollRef.current) {
-            clearInterval(pollRef.current)
-            pollRef.current = null
-          }
-        })
-      }, 1000)
-    }
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current)
-        pollRef.current = null
-      }
-    }
-  }, [backfill?.running])
-
-  const startBackfill = async (): Promise<void> => {
+  const startBackfill = useCallback(async (): Promise<void> => {
     setStartError(null)
     const result = await window.api.salesBrain.backfill.start({
       includeContacts: true,
       includeDeals: true,
       includeCalls
     })
-    if (result.ok) {
-      const p = await window.api.salesBrain.backfill.status()
-      setBackfill(p)
+    if (!mountedRef.current) return
+    if (result.ok && result.jobId) {
+      const fresh = await window.api.jobs.get(result.jobId)
+      if (mountedRef.current && fresh) setBackfillJob(fresh)
     } else {
       // Was previously swallowed entirely — the button would just do
       // nothing with no indication why (e.g. "Sales Brain is not ready
@@ -92,7 +99,9 @@ export function SalesBrainSection(): React.JSX.Element {
       // to initialize memory.db live). Surface it instead of silence.
       setStartError(result.message ?? 'Import could not start.')
     }
-  }
+  }, [includeCalls])
+
+  const importing = backfillJob?.state === 'running' || backfillJob?.state === 'queued'
 
   return (
     <>
@@ -162,25 +171,22 @@ export function SalesBrainSection(): React.JSX.Element {
                   type="checkbox"
                   checked={includeCalls}
                   onChange={(e) => setIncludeCalls(e.target.checked)}
-                  disabled={backfill?.running}
+                  disabled={importing}
                 />
                 Also scan past calls
               </label>
-              {backfill?.running && (
+              {importing && backfillJob?.progress.mode === 'stages' && (
                 <p className="mt-1 text-[11px] text-accent">
-                  {backfill.stage === 'contacts'
-                    ? 'Scanning contacts'
-                    : backfill.stage === 'deals'
-                      ? 'Scanning deals'
-                      : 'Scanning calls'}
-                  … {backfill.processed} / {backfill.total}
+                  {backfillJob.progress.stageLabel} — safe to leave this screen, tracked in Activity too.
                 </p>
               )}
-              {backfill?.stage === 'done' && !backfill.running && (
-                <p className="mt-1 text-[11px] text-success">Import complete.</p>
+              {backfillJob?.state === 'succeeded' && (
+                <p className="mt-1 text-[11px] text-success">{backfillJob.resultRef ?? 'Import complete.'}</p>
               )}
-              {backfill?.stage === 'error' && (
-                <p className="mt-1 text-[11px] text-danger">Something went wrong: {backfill.lastError}</p>
+              {backfillJob?.state === 'failed' && (
+                <p className="mt-1 text-[11px] text-danger">
+                  Something went wrong: {backfillJob.error?.message ?? 'unknown error'}
+                </p>
               )}
               {startError && (
                 <p className="mt-1 text-[11px] text-danger">Couldn&apos;t start: {startError}</p>
@@ -191,9 +197,9 @@ export function SalesBrainSection(): React.JSX.Element {
               size="sm"
               icon={Download}
               onClick={() => void startBackfill()}
-              disabled={backfill?.running}
+              disabled={importing}
             >
-              {backfill?.running ? 'Importing…' : 'Import now'}
+              {importing ? 'Importing…' : 'Import now'}
             </Button>
           </div>
         </Card>

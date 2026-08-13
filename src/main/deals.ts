@@ -13,10 +13,14 @@ import {
 } from './deals-fs'
 import { loadDealStages } from './deal-stages'
 import { listCalls, getCall } from './calls-fs'
-import { assessDealRisk, type DealRiskResult, type DealRiskCallInput } from './deal-risk'
+import { assessDealRisk, type DealRiskCallInput } from './deal-risk'
 import { getContact } from './contacts-fs'
 import { listTasks, createTask } from './tasks-fs'
 import { scheduleBackup } from './backup'
+import { getJobManager } from './jobs/instance'
+import type { Job } from './jobs/types'
+
+const ASSESS_RISK_JOB_TYPE = 'deals:assessRisk'
 
 function dealsDir(): string {
   return join(app.getPath('userData'), 'deals')
@@ -137,39 +141,70 @@ export function registerDeals(): void {
   })
 
   // Phase 5 Step 1: manual, per-deal AI risk assessment — never automatic.
-  ipcMain.handle('deals:assessRisk', async (_event, dealId: string): Promise<DealRiskResult> => {
-    try {
-      const deal = await getDeal(dealsDir(), dealId)
-      if (!deal) return { ok: false, error: 'failed', message: 'Deal not found.' }
-      const stages = loadDealStages()
-      const stageLabel = stages.find((s) => s.id === deal.stageId)?.label ?? 'Unknown'
-      const calls = await gatherRiskContext(deal.contactId)
-      const result = await assessDealRisk({
-        title: deal.title,
-        stageLabel,
-        value: deal.value,
-        expectedCloseDate: deal.expectedCloseDate,
-        createdAt: deal.createdAt,
-        calls
-      })
-      if (result.ok) {
-        const saved = await setDealRiskAssessment(dealsDir(), dealId, result.assessment)
-        if (!saved) {
-          return {
-            ok: false,
-            error: 'failed',
-            message: 'The assessment could not be saved. Please try again.'
-          }
+  //
+  // M26 Phase 3 — an INTERACTIVE-lane job, same as the CallDetail AI
+  // buttons. The assessment logic is unchanged, moved as-is into the
+  // executor. Deliberately NO resultData here (unlike Generate tasks): the
+  // assessment is already written to the deal on disk via
+  // setDealRiskAssessment BEFORE the job resolves, so there is no
+  // review-then-save step and therefore nothing that could be lost by
+  // navigating away — this is a progress-visibility migration only, not a
+  // data-loss fix. The renderer refetches the deal to read the result, the
+  // same way it always did.
+  getJobManager().registerType<{ dealId: string }, string>({
+    type: ASSESS_RISK_JOB_TYPE,
+    lane: 'INTERACTIVE',
+    titleFor: () => 'Assessing deal risk',
+    targetRefFor: (i) => i.dealId,
+    // BUG-060 — earned: handle.signal is threaded into assessDealRisk below.
+    cancellable: true,
+    executor: {
+      kind: 'inline-async',
+      run: async (input, handle) => {
+        const deal = await getDeal(dealsDir(), input.dealId)
+        if (!deal) throw new Error('Deal not found.')
+        const stages = loadDealStages()
+        const stageLabel = stages.find((s) => s.id === deal.stageId)?.label ?? 'Unknown'
+        const calls = await gatherRiskContext(deal.contactId)
+        const result = await assessDealRisk(
+          {
+            title: deal.title,
+            stageLabel,
+            value: deal.value,
+            expectedCloseDate: deal.expectedCloseDate,
+            createdAt: deal.createdAt,
+            calls
+          },
+          { signal: handle.signal }
+        )
+        if (!result.ok) {
+          throw Object.assign(new Error(result.message ?? 'Could not assess this deal.'), {
+            code: result.error
+          })
         }
+        const saved = await setDealRiskAssessment(dealsDir(), input.dealId, result.assessment)
+        if (!saved) throw new Error('The assessment could not be saved. Please try again.')
         if (result.assessment.level === 'high') void autoCreateHighRiskTask(saved)
-      }
-      return result
-    } catch {
-      return {
-        ok: false,
-        error: 'failed',
-        message: 'The assessment could not be saved. Please try again.'
+        return input.dealId
       }
     }
   })
+
+  ipcMain.handle(
+    'deals:assessRisk',
+    async (_event, dealId: string): Promise<{ ok: boolean; jobId?: string }> => {
+      const manager = getJobManager()
+      const already = manager
+        .list()
+        .find(
+          (j: Job) =>
+            j.type === ASSESS_RISK_JOB_TYPE &&
+            j.targetRef === dealId &&
+            (j.state === 'running' || j.state === 'queued')
+        )
+      if (already) return { ok: true, jobId: already.id }
+      const job = manager.enqueue(ASSESS_RISK_JOB_TYPE, { dealId })
+      return { ok: true, jobId: job.id }
+    }
+  )
 }

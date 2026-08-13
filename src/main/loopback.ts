@@ -37,7 +37,13 @@
 // existing consent check below still applies unchanged.
 import { ipcMain, session, desktopCapturer, shell } from 'electron'
 import { loadAppSettings } from './app-settings'
-import { clearActiveConsent, consentPermitsCapture, persistActiveConsent } from './consent-gate'
+import {
+  clearActiveConsent,
+  consentPermitsCapture,
+  persistActiveConsent,
+  readActiveConsent
+} from './consent-gate'
+import { recordConsent } from './live/live-transcript'
 
 // One-shot: set true by 'loopback:arm', consumed the moment a request is granted.
 let armed = false
@@ -78,13 +84,28 @@ export function registerLoopbackCapture(): void {
   // capture prompt would never appear.
   ipcMain.on('consent:persist', (event, payload: { sessionId: number; consent: unknown }) => {
     const sessionId = Number(payload?.sessionId)
-    event.returnValue = Number.isFinite(sessionId)
-      ? persistActiveConsent(sessionId, payload?.consent)
-      : false
+    const ok = Number.isFinite(sessionId) ? persistActiveConsent(sessionId, payload?.consent) : false
+    event.returnValue = ok
+    // M26 Phase 4.2 — copy the grant into the call's own journal.
+    //
+    // Load-bearing, not bookkeeping: applyConsentRetention strips every
+    // channel-tagged buyer segment from a call whose recordOtherParty isn't
+    // true, so a recovered buyer-capture call without this would lose the
+    // buyer's entire half at the moment of recovery, silently.
+    //
+    // Read BACK rather than passed through, so the journal stores the same
+    // sanitized record the gate actually accepted — never the renderer's raw
+    // payload, which could claim a permission the sanitizer just refused. And
+    // it is a copy: active-consent.json is still cleared on every app start,
+    // so a grant that outlives a crash still cannot authorise the next call.
+    recordConsent(ok ? (readActiveConsent()?.consent ?? null) : null)
   })
 
   ipcMain.on('consent:clear', (event) => {
     clearActiveConsent()
+    // Revocation is journaled too — the strip is keyed on the FINAL flag, so a
+    // call that goes consented -> revoked must replay as revoked.
+    recordConsent(null)
     event.returnValue = true
   })
 

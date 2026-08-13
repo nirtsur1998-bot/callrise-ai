@@ -10,6 +10,7 @@
 // Field names are camelCase on the wire (toolConfig, functionCallingConfig,
 // allowedFunctionNames, inlineData, mimeType) - this is the REST/JSON
 // convention, not the snake_case used by Google's Python client libraries.
+import { classifyFailureClass } from '../failure-class'
 import {
   AIProviderError,
   LATENCY_POLICY,
@@ -28,7 +29,11 @@ const API_BASE = 'https://generativelanguage.googleapis.com/v1beta'
 // catalog.ts) resolves the REAL "latest Flash" id from listModels() at
 // runtime for the catalog entry - this is only the validate-key/default
 // fallback, never the catalog's source of truth for the Gemini Flash entry.
-const DEFAULT_MODEL = 'gemini-flash-latest'
+// Exported for registry.ts's `defaultModelId` (BUG-057): a legacy chain step
+// sets no explicit model, so THIS is the concrete model it actually resolves
+// to, and resolveChain() needs it to avoid appending a catalog entry that
+// would re-issue the identical request as a later "fallback".
+export const DEFAULT_MODEL = 'gemini-flash-latest'
 
 interface GeminiPart {
   text?: string
@@ -114,29 +119,78 @@ function combineSignals(a?: AbortSignal, timeoutMs?: number): AbortSignal {
   return AbortSignal.any(signals)
 }
 
+/** BUG-058 — Gemini reports its own backoff in the error body rather than a
+ *  header: an `error.details[]` entry of type `google.rpc.RetryInfo` with a
+ *  protobuf-duration `retryDelay` ("23s", "1.5s"). It was never read, so a
+ *  Gemini 429 carried no wait hint at all — and Gemini is the first entry in
+ *  the quality chain, so that hint mattered more here than anywhere else.
+ *  Exported for direct unit testing. */
+export function parseGeminiRetryDelayMs(body: unknown): number | undefined {
+  const details = (body as { error?: { details?: unknown } })?.error?.details
+  if (!Array.isArray(details)) return undefined
+  for (const d of details) {
+    const delay = (d as { retryDelay?: unknown })?.retryDelay
+    if (typeof delay !== 'string') continue
+    const m = /^([0-9]*\.?[0-9]+)s$/.exec(delay.trim())
+    if (!m) continue
+    const secs = Number(m[1])
+    if (Number.isFinite(secs) && secs > 0) return Math.round(secs * 1000)
+  }
+  return undefined
+}
+
 async function toProviderError(displayName: string, res: Response): Promise<AIProviderError> {
   let message = `${displayName} returned an error (${res.status}).`
   let googleStatus = ''
+  let retryAfterMs: number | undefined
   try {
     const body = (await res.json()) as { error?: { message?: string; status?: string } }
     if (body.error?.message) message = body.error.message
     if (body.error?.status) googleStatus = body.error.status
+    retryAfterMs = parseGeminiRetryDelayMs(body)
   } catch {
     /* non-JSON error body - keep the generic status-code message */
   }
+  // A Retry-After header still wins if one is present — cheap to honour and
+  // some proxies add it even though Gemini itself does not.
+  const header = res.headers?.get?.('retry-after')
+  if (retryAfterMs === undefined && header) {
+    const n = Number(header)
+    if (Number.isFinite(n) && n > 0) retryAfterMs = n * 1000
+  }
   if (res.status === 401 || res.status === 403 || googleStatus === 'PERMISSION_DENIED') {
-    return new AIProviderError('auth', `Your ${displayName} API key was rejected.`)
+    return new AIProviderError('auth', `Your ${displayName} API key was rejected.`, undefined, 'structural')
   }
   if (res.status === 429 || googleStatus === 'RESOURCE_EXHAUSTED') {
-    return new AIProviderError('rate-limit', `${displayName} is rate-limiting requests right now.`)
+    return new AIProviderError(
+      'rate-limit',
+      `${displayName} is rate-limiting requests right now.`,
+      retryAfterMs,
+      classifyFailureClass('rate-limit', { message, status: res.status })
+    )
   }
   if (res.status === 404 || googleStatus === 'NOT_FOUND') {
-    return new AIProviderError('model-not-found', `${displayName} does not recognize this model.`)
+    return new AIProviderError(
+      'model-not-found',
+      `${displayName} does not recognize this model.`,
+      undefined,
+      'structural'
+    )
   }
   if (res.status >= 500) {
-    return new AIProviderError('failed', `${displayName} returned a server error (${res.status}).`)
+    return new AIProviderError(
+      'failed',
+      `${displayName} returned a server error (${res.status}).`,
+      undefined,
+      'transient'
+    )
   }
-  return new AIProviderError('failed', message)
+  return new AIProviderError(
+    'failed',
+    message,
+    undefined,
+    classifyFailureClass('failed', { message, status: res.status })
+  )
 }
 
 export class GeminiProvider implements AIProvider {

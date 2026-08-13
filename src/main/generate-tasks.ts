@@ -93,9 +93,10 @@ const ALLOWED_TYPES = new Set<TaskType>(['follow-up', 'email', 'meeting', 'resea
 const ALLOWED_PRIORITIES = new Set<TaskPriority>(['low', 'medium', 'high'])
 
 function friendlyError(err: unknown): string {
-  if (err instanceof AllModelsExhaustedError) {
-    return 'Every configured AI model failed to generate tasks. Check your keys and free-tier limits in Settings, or try again shortly.'
-  }
+  // BUG-057 Phase 3 — err.message is now summarizeExhaustion()'s classified
+  // wait/add-key/bug message, not the old flat reason-code join this
+  // hardcoded string used to compensate for.
+  if (err instanceof AllModelsExhaustedError) return err.message
   if (err instanceof AIProviderError) return err.message
   return 'Something went wrong while generating tasks. Please try again.'
 }
@@ -139,15 +140,20 @@ function toProposedTask(value: unknown): ProposedTask | null {
   }
 }
 
-/** Ask the model for suggested tasks from a call's text. Does not save anything. */
-export async function generateTasks(text: string): Promise<GenerateTasksResult> {
+/** Ask the model for suggested tasks from a call's text. Does not save anything.
+ *  BUG-060 — `opts.signal` is what makes this job's Cancel button real. */
+export async function generateTasks(
+  text: string,
+  opts?: { signal?: AbortSignal }
+): Promise<GenerateTasksResult> {
   const trimmed = text.slice(0, MAX_TEXT_CHARS)
   try {
     const result = await completeWithFallback({
       purpose: 'tasks',
       maxTokens: 4096,
       tool: TASKS_TOOL,
-      messages: [{ role: 'user', content: `${PROMPT}\n\n--- CALL ---\n${trimmed}` }]
+      messages: [{ role: 'user', content: `${PROMPT}\n\n--- CALL ---\n${trimmed}` }],
+      signal: opts?.signal
     })
 
     const raw = result.toolInput ?? {}

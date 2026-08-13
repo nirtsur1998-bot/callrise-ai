@@ -41,9 +41,12 @@ export type CrmNoteResult = { ok: true; note: string } | { ok: false }
 
 /** `content` can be a call's transcript OR its existing summary text — either
  *  is enough context to draft a note from. */
+/** BUG-060 — `opts.signal` is what makes this job's Cancel button real.
+ *  Optional so non-job callers are unchanged. */
 export async function generateCrmNote(
   content: string,
-  length: CrmNoteLength = 'medium'
+  length: CrmNoteLength = 'medium',
+  opts?: { signal?: AbortSignal }
 ): Promise<CrmNoteResult> {
   const text = content.slice(0, MAX_TEXT_CHARS)
   if (!text.trim()) return { ok: false }
@@ -59,7 +62,8 @@ export async function generateCrmNote(
       purpose: 'other',
       maxTokens: crmNoteMaxTokens(length),
       tool: noteTool(length),
-      messages: [{ role: 'user', content: `${prompt(length)}${businessContext}\n\n--- CONTENT ---\n${text}` }]
+      messages: [{ role: 'user', content: `${prompt(length)}${businessContext}\n\n--- CONTENT ---\n${text}` }],
+      signal: opts?.signal
     })
     const note = typeof result.toolInput?.note === 'string' ? result.toolInput.note.trim() : ''
     if (!note) return { ok: false }

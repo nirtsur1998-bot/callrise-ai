@@ -1,10 +1,17 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { ShieldAlert, RotateCw, ArrowRight, PhoneCall, History, ChevronDown } from 'lucide-react'
 import { Badge, type BadgeTone } from '@renderer/components/Badge'
 import { Button } from '@renderer/components/Button'
 import { Skeleton } from '@renderer/components/Skeleton'
+import { useJobByTarget } from '@renderer/features/jobs/useJobByTarget'
 import { formatRelative } from '@renderer/features/contacts/contactStats'
 import type { Deal, DealRiskLevel } from './types'
+
+// M26 Phase 3 — tracked per-deal so the spinner survives navigating away
+// and back. No resultData needed here (unlike Generate tasks): main saves
+// the assessment onto the deal before the job finishes, so there is
+// nothing to lose by leaving — onAssessed() just refetches it.
+const ASSESS_RISK_JOB_TYPE = 'deals:assessRisk'
 
 const LEVEL_TONE: Record<DealRiskLevel, BadgeTone> = {
   low: 'positive',
@@ -30,25 +37,33 @@ export function RiskAssessmentCard({
   deal,
   onAssessed
 }: RiskAssessmentCardProps): React.JSX.Element {
-  const [assessing, setAssessing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [noKey, setNoKey] = useState(false)
 
-  const assess = async (): Promise<void> => {
+  const [job, startJob] = useJobByTarget(ASSESS_RISK_JOB_TYPE, deal.id, {
+    onSucceeded: () => onAssessed(),
+    onFailed: (failed) => {
+      if (failed.error?.code === 'no-key') setNoKey(true)
+      else setError(failed.error?.message ?? 'Could not assess this deal. Please try again.')
+    }
+  })
+  const assessing = job?.state === 'running' || job?.state === 'queued'
+
+  const assess = useCallback(async (): Promise<void> => {
     setError(null)
     setNoKey(false)
-    setAssessing(true)
     try {
       const res = await window.api.deals.assessRisk(deal.id)
-      if (res.ok) onAssessed()
-      else if (res.error === 'no-key') setNoKey(true)
-      else setError(res.message ?? 'Could not assess this deal.')
+      if (res.ok && res.jobId) {
+        const fresh = await window.api.jobs.get(res.jobId)
+        if (fresh) startJob(fresh)
+      } else {
+        setError('Could not start the assessment. Please try again.')
+      }
     } catch {
       setError('Could not assess this deal. Please try again.')
-    } finally {
-      setAssessing(false)
     }
-  }
+  }, [deal.id, startJob])
 
   const assessment = deal.riskAssessment
 

@@ -25,13 +25,20 @@ process.on('unhandledRejection', (err) => writeCrashLog('unhandledRejection', er
 writeCrashLog('process started', 'reached top of main/index.ts')
 
 import { config as loadEnv } from 'dotenv'
-import { app, shell, BrowserWindow, session } from 'electron'
+import { app, shell, BrowserWindow, session, dialog } from 'electron'
 import { join, dirname } from 'path'
 import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { DEFAULT_CONFIG } from './default-config'
 import { clearActiveConsent } from './consent-gate'
 import { registerCrashLogging, registerLog } from './log'
+import { JobManager } from './jobs/JobManager'
+import { registerJobsIpc } from './jobs/ipc'
+import { registerFakeJobTypes } from './jobs/fakeJobs'
+import { wireJobActivity } from './jobs/activity'
+import { setJobManager } from './jobs/instance'
+import { Scheduler } from './jobs/scheduler'
+import { setScheduler } from './jobs/scheduler-instance'
 writeCrashLog('imports resolved', 'all top-level imports completed without throwing')
 
 // Renamed "Sales OS" -> "CallRise AI" (rebrand), but the on-disk data folder
@@ -127,7 +134,11 @@ for (const [key, value] of Object.entries(DEFAULT_CONFIG)) {
   if (!process.env[key]) process.env[key] = value
 }
 import icon from '../../resources/icon.png?asset'
-import { registerTranscription, disposeTranscription } from './transcription'
+import {
+  registerTranscription,
+  disposeTranscription,
+  handleRenderProcessGone
+} from './transcription'
 import { registerCalls } from './calls'
 import { registerTasks } from './tasks'
 import { registerContacts } from './contacts'
@@ -140,13 +151,18 @@ import { registerDealFeedback } from './deal-feedback-fs'
 import { registerEvents } from './events'
 import { registerLiveCue } from './live-cue'
 import { registerLoopbackCapture } from './loopback'
+import { registerLiveTranscriptIpc } from './live/live-transcript-ipc'
 import { registerGoogle } from './google'
 import { registerOutlook } from './outlook'
 import { registerBackup } from './backup'
 import { registerVirtualMic, disposeVirtualMic } from './virtualmic'
 import { registerKnowledge } from './knowledge'
 import { registerObjectionQueue } from './objection-queue'
-import { registerAppSettings } from './app-settings'
+import {
+  registerAppSettings,
+  getJobConcurrencySettings,
+  setJobConcurrencyChangedListener
+} from './app-settings'
 import { registerLaunchAtLogin } from './launch-at-login'
 import { registerActiveApp } from './active-app'
 import { registerAlerts } from './alerts'
@@ -161,11 +177,13 @@ import { disposeTray } from './detection-tray'
 import { registerCoachPdf } from './coach-pdf'
 import { registerAiKeys, loadStoredAiKeysIntoEnv } from './ai-keys'
 import { registerFallbackLog } from './ai/fallback-log'
+import { registerPurposeHealthStore } from './ai/purpose-health-store'
 import { registerModelCatalog } from './ai/catalog-ipc'
 import { initSalesBrain, maybeRunNightlyConsolidation } from './memory/memory-runtime'
 import { registerOnboarding } from './memory/onboarding-ipc'
 import { registerBackfill } from './memory/backfill-ipc'
 import { registerMemoryCenter } from './memory/memory-center-ipc'
+import { registerMemoryExtractionJob } from './memory/memory-extraction-job'
 import { registerUpdater } from './updater'
 import { buildDiagnoseReport, wantsDiagnose } from './diagnose'
 import { registerPrepBrief } from './prep-brief-ipc'
@@ -174,6 +192,11 @@ import { registerCrmNoteGenerator } from './crm-note-generator-ipc'
 import { registerContactIntelligence } from './contact-intelligence-ipc'
 
 let mainWindow: BrowserWindow | null = null
+
+// M26 — created inside whenReady() below (needs userData, same as every
+// other -fs.ts/-ipc.ts module's own storage), read by before-quit further
+// down to flush state before the process actually exits.
+let jobManager: JobManager | undefined
 
 // Set by handleDeepLink() when it fires before the window exists yet (a cold
 // start via the protocol) — flushed once ready-to-show fires below. A send()
@@ -249,6 +272,16 @@ function createWindow(): void {
     event.preventDefault()
   })
 
+  // M26 4.4 — the renderer crashed, was OOM-killed, or its GPU process died.
+  // Without this a live transcription session just keeps running: nothing
+  // else in the app watches for a dead renderer, so the socket stays open
+  // (and billing) into a page that no longer exists. See
+  // handleRenderProcessGone's own doc comment for why ordering matters.
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error(`[main] render-process-gone: ${details.reason}`)
+    handleRenderProcessGone()
+  })
+
   mainWindow.on('closed', () => {
     disposeTranscription()
     handleMainWindowClosed()
@@ -282,12 +315,44 @@ app.whenReady().then(async () => {
     return
   }
 
+  // M26 — created before every other registerX() call below: several of
+  // them (starting with Phase 3's adapters, e.g. calls.ts) register their
+  // own job type at registration time via jobs/instance.ts's singleton, so
+  // the manager has to exist and be set first, not merely before
+  // createWindow() (Phase 1/2's original, now too-late, placement).
+  jobManager = new JobManager()
+  setJobManager(jobManager)
+  registerJobsIpc(jobManager)
+  if (is.dev) registerFakeJobTypes(jobManager)
+  wireJobActivity(jobManager, () => mainWindow)
+  // M26 Phase 5 — same placement reasoning as jobManager above: created
+  // before any registerX() that might register a recurring/idle job
+  // (memory-runtime.ts's nightly consolidation, so far).
+  setScheduler(new Scheduler())
+
+  // M26 Phase 5 — apply the persisted per-lane concurrency override (if
+  // any) at startup, and again on every live Settings change. LIVE is
+  // deliberately never included — it stays fixed at unbounded, the
+  // milestone's own hard rule that a live call must never wait behind
+  // anything.
+  const applyJobConcurrency = (): void => {
+    const c = getJobConcurrencySettings()
+    jobManager?.configureLanes({
+      INTERACTIVE: { maxConcurrent: c.interactive },
+      BATCH: { maxConcurrent: c.batch },
+      MAINTENANCE: { maxConcurrent: c.maintenance }
+    })
+  }
+  applyJobConcurrency()
+  setJobConcurrencyChangedListener(applyJobConcurrency)
+
   // Before anything that might use Deepgram/Anthropic — a user's own
   // Settings-entered key (if any) needs to be in process.env first.
   await loadStoredAiKeysIntoEnv()
   registerAiKeys()
   registerModelCatalog()
   registerFallbackLog()
+  registerPurposeHealthStore()
 
   // Any consent record still on disk belongs to a call that is already over —
   // this process has not started one. A crash mid-call must never leave behind
@@ -365,7 +430,17 @@ app.whenReady().then(async () => {
   registerUpdater()
 
   registerTranscription()
+  // Registers a job type only — no memory access of its own, so unlike
+  // registerOnboarding/registerBackfill/registerMemoryCenter it is NOT
+  // subject to the initSalesBrain() race below, and must NOT sit behind
+  // that await: registerCalls() below can enqueue against this the moment
+  // a call is saved, and enqueue() throws on an unregistered type.
+  registerMemoryExtractionJob()
   registerCalls()
+  // M26 Phase 4.2 — journaled-call recovery. Registered right after
+  // registerCalls because recovery writes a real Call through the same
+  // saveCall path, into the same directory.
+  registerLiveTranscriptIpc(() => join(app.getPath('userData'), 'calls'))
   registerCoachPdf()
   registerTasks()
   registerContacts()
@@ -402,10 +477,7 @@ app.whenReady().then(async () => {
   // failure genuinely can never take the rest of startup down with it,
   // matching what was already documented as the intent.
   try {
-    await Promise.race([
-      initSalesBrain(),
-      new Promise((resolve) => setTimeout(resolve, 15_000))
-    ])
+    await Promise.race([initSalesBrain(), new Promise((resolve) => setTimeout(resolve, 15_000))])
   } catch (err) {
     console.error('[sales-brain] init failed at startup, disabled for this session:', err)
   }
@@ -427,6 +499,7 @@ app.whenReady().then(async () => {
   registerCrmNoteGenerator()
   registerContactIntelligence()
   registerDetectionService()
+
   writeCrashLog('registrations done', 'all registerX() calls completed, about to createWindow()')
 
   // A cold start via callrise://meeting/<id> on Windows/Linux — the URL
@@ -446,13 +519,75 @@ app.whenReady().then(async () => {
   })
 })
 
-// Stop any live session before the process exits.
-app.on('before-quit', () => {
-  disposeTranscription()
-  disposeVirtualMic()
-  disposeDetectionService()
-  disposeOverlay()
-  disposeTray()
+// M26 Phase 2 — the quit guard. Set once a quit is genuinely going ahead
+// (nothing was running, or the rep chose "Cancel and quit"), so the SECOND
+// before-quit firing (from this handler's own app.quit() call below) skips
+// straight to teardown instead of asking again.
+let quitConfirmed = false
+
+app.on('before-quit', (event) => {
+  if (quitConfirmed) {
+    disposeTranscription()
+    disposeVirtualMic()
+    disposeDetectionService()
+    disposeOverlay()
+    disposeTray()
+    jobManager?.dispose()
+    void jobManager?.flush()
+    return
+  }
+
+  const active =
+    jobManager?.list().filter((j) => j.state === 'running' || j.state === 'queued') ?? []
+  if (active.length === 0) {
+    quitConfirmed = true
+    return // nothing to guard against — let this same event proceed normally
+  }
+
+  event.preventDefault()
+  const count = active.length
+  const options = {
+    type: 'question' as const,
+    buttons: [`Wait for ${count} job${count === 1 ? '' : 's'}`, 'Cancel and quit'],
+    defaultId: 0,
+    cancelId: 0,
+    message: `${count} background job${count === 1 ? ' is' : 's are'} still running.`,
+    // BUG-054 — this used to read "a live call is saved first either way",
+    // which is false: nothing in before-quit asks the renderer to save an
+    // in-progress call, and a quit mid-call loses it entirely. Telling the
+    // rep their call is safe at the exact moment it is being destroyed is
+    // worse than saying nothing. The honest warning stands until Phase 4's
+    // incremental journaling actually makes a mid-call quit survivable, at
+    // which point this copy should change to match the new truth.
+    detail:
+      'Quitting now stops them. A call still in progress is NOT saved — stop the call first if you want to keep it. Backup/maintenance work gets a few seconds to finish on its own.'
+  }
+  const choice = mainWindow
+    ? dialog.showMessageBoxSync(mainWindow, options)
+    : dialog.showMessageBoxSync(options)
+  if (choice === 0) return // "Wait" — stay open, nothing else to do here
+
+  // "Cancel and quit": stop everything cancellable right away, but give
+  // MAINTENANCE-lane work (e.g. a backup already mid-write) a short grace
+  // window to finish on its own rather than yanking it mid-flight.
+  for (const job of active) {
+    if (job.lane !== 'MAINTENANCE') jobManager?.cancel(job.id)
+  }
+  const graceDeadline = Date.now() + 3000
+  const tryQuit = (): void => {
+    const stillFinishing =
+      jobManager
+        ?.list()
+        .some((j) => j.lane === 'MAINTENANCE' && (j.state === 'running' || j.state === 'queued')) ??
+      false
+    if (!stillFinishing || Date.now() >= graceDeadline) {
+      quitConfirmed = true
+      app.quit()
+      return
+    }
+    setTimeout(tryQuit, 250)
+  }
+  tryQuit()
 })
 
 // Quit when all windows are closed, except on macOS.

@@ -1,4 +1,5 @@
 import OpenAI from 'openai'
+import { classifyFailureClass } from '../failure-class'
 import {
   AIProviderError,
   LATENCY_POLICY,
@@ -58,10 +59,16 @@ function usageFrom(model: string, inputTokens: number, outputTokens: number): AI
 
 function toProviderError(err: unknown): AIProviderError {
   if (err instanceof OpenAI.AuthenticationError) {
-    return new AIProviderError('auth', 'Your OpenAI API key was rejected.')
+    return new AIProviderError('auth', 'Your OpenAI API key was rejected.', undefined, 'structural')
   }
   if (err instanceof OpenAI.RateLimitError) {
-    return new AIProviderError('rate-limit', 'OpenAI is rate-limiting requests right now.')
+    const msg = typeof err.message === 'string' ? err.message : ''
+    return new AIProviderError(
+      'rate-limit',
+      'OpenAI is rate-limiting requests right now.',
+      undefined,
+      classifyFailureClass('rate-limit', { message: msg, status: err.status ?? undefined })
+    )
   }
   if (err instanceof OpenAI.APIConnectionError) {
     return new AIProviderError('network', 'Could not reach OpenAI. Check your internet connection.')
@@ -71,10 +78,17 @@ function toProviderError(err: unknown): AIProviderError {
     if (msg.includes('quota') || msg.includes('billing')) {
       return new AIProviderError(
         'failed',
-        'Your OpenAI account is out of quota. Check billing at platform.openai.com.'
+        'Your OpenAI account is out of quota. Check billing at platform.openai.com.',
+        undefined,
+        'period-exhausted'
       )
     }
-    return new AIProviderError('failed', `OpenAI returned an error (${err.status ?? 'unknown'}).`)
+    return new AIProviderError(
+      'failed',
+      `OpenAI returned an error (${err.status ?? 'unknown'}).`,
+      undefined,
+      classifyFailureClass('failed', { message: msg, status: err.status ?? undefined })
+    )
   }
   return new AIProviderError('failed', 'Something went wrong calling OpenAI. Please try again.')
 }
@@ -161,7 +175,12 @@ export class OpenAIProvider implements AIProvider {
           tools: toTools(req),
           tool_choice: toToolChoice(req)
         },
-        { timeout: policy.timeoutMs, maxRetries: policy.maxRetries, signal: req.signal }
+        // BUG-058/BUG-059 — always the literal 0, never a variable. The SDK's own
+        // internal retry sleep is an unabortable, uncapped setTimeout driven
+        // by the provider's own Retry-After header — see openai-compatible.ts's
+        // identical comment for the verified source. Our own walker owns every
+        // retry decision now.
+        { timeout: policy.timeoutMs, maxRetries: 0, signal: req.signal }
       )
       const message = response.choices[0]?.message
       const usage = usageFrom(
@@ -201,7 +220,12 @@ export class OpenAIProvider implements AIProvider {
             stream: true,
             stream_options: { include_usage: true }
           },
-          { timeout: policy.timeoutMs, maxRetries: policy.maxRetries, signal: req.signal }
+          // BUG-058/BUG-059 — always the literal 0, never a variable. The SDK's own
+        // internal retry sleep is an unabortable, uncapped setTimeout driven
+        // by the provider's own Retry-After header — see openai-compatible.ts's
+        // identical comment for the verified source. Our own walker owns every
+        // retry decision now.
+        { timeout: policy.timeoutMs, maxRetries: 0, signal: req.signal }
         )
         let inputTokens = 0
         let outputTokens = 0

@@ -38,6 +38,7 @@ import { GenerateTasksDialog } from '@renderer/features/tasks/GenerateTasksDialo
 import { CoachReportView, CoachLoading } from '@renderer/features/coaching/CoachReportView'
 import { CoachChatCard } from '@renderer/features/coaching/CoachChatPanel'
 import { MineTestPanel } from '@renderer/features/objection-library/MineTestPanel'
+import { useJobByTarget } from '@renderer/features/jobs/useJobByTarget'
 import { useContacts } from '@renderer/features/contacts/useContacts'
 import { ContactPicker } from '@renderer/features/contacts/ContactPicker'
 import {
@@ -45,7 +46,10 @@ import {
   AutoLinkedNotice
 } from '@renderer/features/contacts/CalendarMatchSuggestion'
 import { IdentityContactSuggestion } from './IdentityContactSuggestion'
-import { isIdentitySuggestionDismissed, dismissIdentitySuggestion } from './identitySuggestionDismiss'
+import {
+  isIdentitySuggestionDismissed,
+  dismissIdentitySuggestion
+} from './identitySuggestionDismiss'
 import {
   findCalendarMatches,
   isMatchDismissed,
@@ -61,6 +65,7 @@ import { formatDate, formatDuration, formatBytes } from './format'
 import { PracticeMode } from './PracticeMode'
 import { RadarReport } from '@renderer/features/deal-intelligence/ui/RadarReport'
 import type { Attachment, Call, Commitment } from './types'
+import type { DetectNameResult } from '../../../../preload/index.d'
 
 /** mm:ss relative to call start — bookmarks store `atMs` as milliseconds. */
 function formatMmSs(ms: number): string {
@@ -95,6 +100,14 @@ const ACCEPT = '.pdf,.txt,.md,.docx'
 const SUPPORTED = ['pdf', 'txt', 'md', 'docx']
 const MAX_FILE_BYTES = 20 * 1024 * 1024
 
+// M26 Phase 3 — job types backing the AI summary / Coach / Find commitments
+// buttons below, tracked per-call via useJobByTarget so the spinner/result
+// survives navigating away and back (see calls.ts for the executors).
+const SUMMARIZE_JOB_TYPE = 'calls:summarize'
+const COACH_JOB_TYPE = 'calls:coach'
+const FIND_COMMITMENTS_JOB_TYPE = 'calls:findCommitments'
+const DETECT_JOB_TYPE = 'contactIntelligence:detectName'
+
 interface CallDetailProps {
   callId: string
   onBack: () => void
@@ -109,7 +122,6 @@ export function CallDetail({
   onChanged
 }: CallDetailProps): React.JSX.Element {
   const [call, setCall] = useState<Call | null>(null)
-  const [summarizing, setSummarizing] = useState(false)
   const [summaryError, setSummaryError] = useState<string | null>(null)
   const [noKey, setNoKey] = useState(false)
   const [adding, setAdding] = useState(false)
@@ -117,9 +129,7 @@ export function CallDetail({
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [showTasks, setShowTasks] = useState(false)
   const [tasksAdded, setTasksAdded] = useState(0)
-  const [coaching, setCoaching] = useState(false)
   const [coachError, setCoachError] = useState<string | null>(null)
-  const [findingCommitments, setFindingCommitments] = useState(false)
   const [commitmentsError, setCommitmentsError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [practicing, setPracticing] = useState(false)
@@ -152,7 +162,6 @@ export function CallDetail({
   // M23 Workstream D — post-hoc "Detect who this was" (transcript self-intro
   // scan). Mirrors autoLinkAttemptedFor's shape: which call id full-auto mode
   // has already tried detection for, so it fires at most once per call.
-  const [detecting, setDetecting] = useState(false)
   const [detectError, setDetectError] = useState<string | null>(null)
   const [detectedNothing, setDetectedNothing] = useState(false)
   const [autoDetectAttemptedFor, setAutoDetectAttemptedFor] = useState<string | null>(null)
@@ -160,7 +169,9 @@ export function CallDetail({
   // two used to share one flag, so dismissing either suggestion silently
   // suppressed the other, unrelated one for that call. See
   // identitySuggestionDismiss.ts's own header comment.
-  const [identityDismissed, setIdentityDismissed] = useState(() => isIdentitySuggestionDismissed(callId))
+  const [identityDismissed, setIdentityDismissed] = useState(() =>
+    isIdentitySuggestionDismissed(callId)
+  )
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mountedRef = useRef(true)
@@ -184,7 +195,8 @@ export function CallDetail({
     setAutoLinkNotice(null)
     setAutoLinkAttemptedFor(null)
     setIdentityDismissed(isIdentitySuggestionDismissed(callId))
-    setDetecting(false)
+    // `detecting` is no longer local state — useJobByTarget re-adopts per
+    // callId on its own, so there is nothing to reset here.
     setDetectError(null)
     setDetectedNothing(false)
     setAutoDetectAttemptedFor(null)
@@ -257,60 +269,98 @@ export function CallDetail({
     onChanged()
   }, [reload, onChanged])
 
+  // M26 Phase 3 — tracks the summarize job for THIS call specifically
+  // (targetRef-scoped), so switching to a different call never shows this
+  // one's stale spinner/error, and coming back to a call whose summarize is
+  // still running (or already finished while you were away) picks up
+  // exactly where it left off instead of losing the button's feedback.
+  const [summaryJob, startSummaryJob] = useJobByTarget(SUMMARIZE_JOB_TYPE, callId, {
+    onSucceeded: () => void notifyChanged(),
+    onFailed: (job) => {
+      if (job.error?.code === 'no-key') setNoKey(true)
+      else
+        setSummaryError(job.error?.message ?? 'Could not generate the summary. Please try again.')
+    }
+  })
+  const summarizing = summaryJob?.state === 'running' || summaryJob?.state === 'queued'
+
   const summarizeCall = useCallback(async () => {
     setSummaryError(null)
     setNoKey(false)
-    setSummarizing(true)
     try {
       const res = await window.api.calls.summarizeCall(callId)
       if (!mountedRef.current) return
-      if (res.ok) await notifyChanged()
-      else if (res.error === 'no-key') setNoKey(true)
-      else setSummaryError(res.message ?? 'Could not generate the summary.')
+      if (res.ok && res.jobId) {
+        const fresh = await window.api.jobs.get(res.jobId)
+        if (mountedRef.current && fresh) startSummaryJob(fresh)
+      } else {
+        setSummaryError('Could not start the summary. Please try again.')
+      }
     } catch {
       if (mountedRef.current) setSummaryError('Could not generate the summary. Please try again.')
-    } finally {
-      if (mountedRef.current) setSummarizing(false)
     }
-  }, [callId, notifyChanged])
+  }, [callId, startSummaryJob])
+
+  const [coachJob, startCoachJob] = useJobByTarget(COACH_JOB_TYPE, callId, {
+    onSucceeded: () => void notifyChanged(),
+    onFailed: (job) => {
+      if (job.error?.code === 'no-key') setNoKey(true)
+      else setCoachError(job.error?.message ?? 'Could not coach this call. Please try again.')
+    }
+  })
+  const coaching = coachJob?.state === 'running' || coachJob?.state === 'queued'
 
   const coachCall = useCallback(async () => {
     setCoachError(null)
     setNoKey(false)
-    setCoaching(true)
     try {
       const res = await window.api.calls.coachCall(callId)
       if (!mountedRef.current) return
-      if (res.ok) await notifyChanged()
-      else if (res.error === 'no-key') setNoKey(true)
-      else setCoachError(res.message ?? 'Could not coach this call.')
+      if (res.ok && res.jobId) {
+        const fresh = await window.api.jobs.get(res.jobId)
+        if (mountedRef.current && fresh) startCoachJob(fresh)
+      } else {
+        setCoachError('Could not start coaching. Please try again.')
+      }
     } catch {
       if (mountedRef.current) setCoachError('Could not coach this call. Please try again.')
-    } finally {
-      if (mountedRef.current) setCoaching(false)
     }
-  }, [callId, notifyChanged])
+  }, [callId, startCoachJob])
+
+  const [commitmentsJob, startCommitmentsJob] = useJobByTarget(FIND_COMMITMENTS_JOB_TYPE, callId, {
+    onSucceeded: () => void notifyChanged(),
+    onFailed: (job) => {
+      if (job.error?.code === 'no-key') setNoKey(true)
+      else if (job.error?.code === 'empty-call') {
+        setCommitmentsError('This call is too short to have any commitments worth extracting.')
+      } else {
+        setCommitmentsError(
+          job.error?.message ?? 'Could not find commitments on this call. Please try again.'
+        )
+      }
+    }
+  })
+  const findingCommitments =
+    commitmentsJob?.state === 'running' || commitmentsJob?.state === 'queued'
 
   const findCommitments = useCallback(async () => {
     setCommitmentsError(null)
     setNoKey(false)
-    setFindingCommitments(true)
     try {
       const res = await window.api.calls.extractCommitments(callId)
       if (!mountedRef.current) return
-      if (res.ok) await notifyChanged()
-      else if (res.error === 'no-key') setNoKey(true)
-      else if (res.error === 'empty-call') {
-        setCommitmentsError('This call is too short to have any commitments worth extracting.')
-      } else setCommitmentsError(res.message ?? 'Could not find commitments on this call.')
+      if (res.ok && res.jobId) {
+        const fresh = await window.api.jobs.get(res.jobId)
+        if (mountedRef.current && fresh) startCommitmentsJob(fresh)
+      } else {
+        setCommitmentsError('Could not start. Please try again.')
+      }
     } catch {
       if (mountedRef.current) {
         setCommitmentsError('Could not find commitments on this call. Please try again.')
       }
-    } finally {
-      if (mountedRef.current) setFindingCommitments(false)
     }
-  }, [callId, notifyChanged])
+  }, [callId, startCommitmentsJob])
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -474,7 +524,9 @@ export function CallDetail({
       if (linkBusyRef.current) return
       linkBusyRef.current = true
       try {
-        const existing = contacts.find((c) => c.name.trim().toLowerCase() === name.trim().toLowerCase())
+        const existing = contacts.find(
+          (c) => c.name.trim().toLowerCase() === name.trim().toLowerCase()
+        )
         if (existing) {
           await doLink(existing.id)
           return
@@ -502,29 +554,40 @@ export function CallDetail({
   // background hook in calls.ts usually beats the rep to it anyway (full-
   // auto mode also runs right after the call is saved/coached, independent
   // of this page ever being opened).
+  // M26 Phase 3 — tracked per-call, so the spinner and the outcome survive
+  // navigating away. The job resolves with the full DetectNameResult (see
+  // contact-intelligence-ipc.ts) rather than throwing on a non-error "found
+  // nothing"/"gate is off" outcome, so all three cases still read
+  // distinctly here.
+  const [detectJob, startDetectJob] = useJobByTarget(DETECT_JOB_TYPE, callId, {
+    onSucceeded: (job) => {
+      const res = job.resultData as DetectNameResult | undefined
+      if (!res) return
+      if (res.ok && res.name) void notifyChanged()
+      else if (res.ok) setDetectedNothing(true)
+      else setDetectError(res.message ?? 'Could not detect who this was.')
+    },
+    onFailed: () => setDetectError('Could not detect who this was.')
+  })
+  const detecting = detectJob?.state === 'running' || detectJob?.state === 'queued'
+
   const detectIdentity = useCallback(async () => {
     if (detecting) return
-    setDetecting(true)
     setDetectError(null)
     setDetectedNothing(false)
     try {
       const res = await window.api.contactIntelligence.detectName(callId)
       if (!mountedRef.current) return
-      if (res.ok) {
-        if (res.name) {
-          await notifyChanged() // refresh so the new identity shows up
-        } else {
-          setDetectedNothing(true) // ran cleanly, nothing found — not an error
-        }
+      if (res.ok && res.jobId) {
+        const fresh = await window.api.jobs.get(res.jobId)
+        if (mountedRef.current && fresh) startDetectJob(fresh)
       } else {
-        setDetectError(res.message ?? 'Could not detect who this was.')
+        setDetectError('Could not detect who this was.')
       }
     } catch {
       if (mountedRef.current) setDetectError('Could not detect who this was.')
-    } finally {
-      if (mountedRef.current) setDetecting(false)
     }
-  }, [callId, detecting, notifyChanged])
+  }, [callId, detecting, startDetectJob])
 
   // Auto-link (Settings → CRM, opt-in, default off): when there's exactly one
   // calendar match AND it points to a contact that already exists, link it
@@ -1005,7 +1068,11 @@ export function CallDetail({
         </Card>
 
         {/* M23 Workstream B — coaching chat (advisor + practice mode) */}
-        <CoachChatCard callId={callId} initialMessages={call.coachChat ?? []} hasContact={!!call.contactId} />
+        <CoachChatCard
+          callId={callId}
+          initialMessages={call.coachChat ?? []}
+          hasContact={!!call.contactId}
+        />
 
         {/* Commitments (§4.7) — who promised what */}
         <Card>
