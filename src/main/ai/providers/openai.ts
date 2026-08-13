@@ -1,4 +1,5 @@
 import OpenAI from 'openai'
+import { classifyFailureClass } from '../failure-class'
 import {
   AIProviderError,
   LATENCY_POLICY,
@@ -58,10 +59,16 @@ function usageFrom(model: string, inputTokens: number, outputTokens: number): AI
 
 function toProviderError(err: unknown): AIProviderError {
   if (err instanceof OpenAI.AuthenticationError) {
-    return new AIProviderError('auth', 'Your OpenAI API key was rejected.')
+    return new AIProviderError('auth', 'Your OpenAI API key was rejected.', undefined, 'structural')
   }
   if (err instanceof OpenAI.RateLimitError) {
-    return new AIProviderError('rate-limit', 'OpenAI is rate-limiting requests right now.')
+    const msg = typeof err.message === 'string' ? err.message : ''
+    return new AIProviderError(
+      'rate-limit',
+      'OpenAI is rate-limiting requests right now.',
+      undefined,
+      classifyFailureClass('rate-limit', { message: msg, status: err.status ?? undefined })
+    )
   }
   if (err instanceof OpenAI.APIConnectionError) {
     return new AIProviderError('network', 'Could not reach OpenAI. Check your internet connection.')
@@ -71,10 +78,17 @@ function toProviderError(err: unknown): AIProviderError {
     if (msg.includes('quota') || msg.includes('billing')) {
       return new AIProviderError(
         'failed',
-        'Your OpenAI account is out of quota. Check billing at platform.openai.com.'
+        'Your OpenAI account is out of quota. Check billing at platform.openai.com.',
+        undefined,
+        'period-exhausted'
       )
     }
-    return new AIProviderError('failed', `OpenAI returned an error (${err.status ?? 'unknown'}).`)
+    return new AIProviderError(
+      'failed',
+      `OpenAI returned an error (${err.status ?? 'unknown'}).`,
+      undefined,
+      classifyFailureClass('failed', { message: msg, status: err.status ?? undefined })
+    )
   }
   return new AIProviderError('failed', 'Something went wrong calling OpenAI. Please try again.')
 }

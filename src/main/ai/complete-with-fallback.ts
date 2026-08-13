@@ -14,10 +14,18 @@ import { getActiveAIProvider } from './index'
 import { loadAppSettings } from '../app-settings'
 import { catalogEntry, type CatalogEntry } from './model-catalog'
 import { logFallbackEvent } from './fallback-log'
-import { clearCooldown, isCoolingDown, markRateLimited, soonestExpiry } from './model-cooldown'
+import {
+  clearCooldown,
+  isUsable,
+  markPeriodExhausted,
+  markRateLimited,
+  markStructurallyBroken,
+  soonestExpiry
+} from './model-cooldown'
 import {
   AIProviderError,
   CHAIN_BUDGET,
+  effectiveFailureClass,
   HARD_CEILING_MS,
   LATENCY_POLICY,
   SAME_MODEL_RETRY_LIMIT,
@@ -395,7 +403,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   // + keys, and so the "everything is cooling down" case below can tell the
   // difference between "you have no keys" and "your keys need a minute".
   const startedNow = Date.now()
-  const chain = resolved.filter((s) => !isCoolingDown(s.catalogId, startedNow))
+  const chain = resolved.filter((s) => isUsable(s.catalogId, startedNow))
 
   if (chain.length === 0) {
     // Every model is in cooldown. Refusing here is the POINT: walking the
@@ -479,16 +487,33 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     } catch (err) {
       const reason = classifyReason(err)
       const detail = detailFrom(err)
+      const failureClass = err instanceof AIProviderError ? effectiveFailureClass(err) : 'transient'
       if (reason === 'auth') deadProviders.add(step.providerId)
       // BUG-058 — honour the provider's own "come back in N seconds" so the
       // next call skips this model instead of re-burning it. Without this,
       // every subsequent call restarted at position 1 and hit the same 429.
-      if (reason === 'rate-limit') {
+      // BUG-057 Phase 2 — a period-exhausted 429 (quota/billing, not an
+      // ordinary throttle) gets the longer period-exhausted default instead
+      // of the ordinary 60s guess; retrying inside a quota window is pure
+      // waste, not just impolite.
+      if (reason === 'rate-limit' && failureClass === 'period-exhausted') {
+        markPeriodExhausted(
+          step.catalogId,
+          err instanceof AIProviderError ? err.retryAfterMs : undefined,
+          Date.now()
+        )
+      } else if (reason === 'rate-limit') {
         markRateLimited(
           step.catalogId,
           err instanceof AIProviderError ? err.retryAfterMs : undefined,
           Date.now()
         )
+      } else if (failureClass === 'structural' && reason !== 'auth') {
+        // 'auth' already gets a coarser, PROVIDER-wide skip (deadProviders,
+        // above) — checking the raw reason string here, not re-deriving from
+        // failureClass (which would also say 'structural' for auth), avoids
+        // two independent encodings of the same exclusion drifting apart.
+        markStructurallyBroken(step.catalogId, Date.now())
       }
       attempts.push({ catalogId: step.catalogId, reason: detail ? `${reason}: ${detail}` : reason })
       const nextStep = chain[i + 1] ?? null
@@ -560,7 +585,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
   // consumer, and it is interactive, so spending its first attempt on a model
   // we already know is limited is the most visible possible version of this.
   const startedNow = Date.now()
-  const chain = resolved.filter((s) => !isCoolingDown(s.catalogId, startedNow))
+  const chain = resolved.filter((s) => isUsable(s.catalogId, startedNow))
 
   let resolveFinal!: (v: { text: string; model: string; usage: AICompletionResult['usage'] }) => void
   let rejectFinal!: (e: unknown) => void
@@ -656,12 +681,21 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         lastErr = err
         const reason = classifyReason(err)
         const detail = detailFrom(err)
-        if (reason === 'rate-limit') {
+        const failureClass = err instanceof AIProviderError ? effectiveFailureClass(err) : 'transient'
+        if (reason === 'rate-limit' && failureClass === 'period-exhausted') {
+          markPeriodExhausted(
+            step.catalogId,
+            err instanceof AIProviderError ? err.retryAfterMs : undefined,
+            Date.now()
+          )
+        } else if (reason === 'rate-limit') {
           markRateLimited(
             step.catalogId,
             err instanceof AIProviderError ? err.retryAfterMs : undefined,
             Date.now()
           )
+        } else if (failureClass === 'structural' && reason !== 'auth') {
+          markStructurallyBroken(step.catalogId, Date.now())
         }
         attempts.push({ catalogId: step.catalogId, reason: detail ? `${reason}: ${detail}` : reason })
         const nextStep = chain[i + 1] ?? null

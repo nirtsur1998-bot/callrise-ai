@@ -68,10 +68,89 @@ export function isCoolingDown(catalogId: string, now: number): boolean {
   return cooldownUntil(catalogId, now) !== null
 }
 
+/** BUG-057 Phase 2 — a period-exhausted failure (daily/monthly free-tier cap,
+ *  credits exhausted) clears on a clock the account doesn't control
+ *  minute-to-minute, unlike an ordinary rate limit. Reuses the SAME
+ *  `cooldowns` map as markRateLimited — both are "don't ask again until
+ *  this time" — but with its own default/cap tuned for a much longer wait,
+ *  since retrying inside a quota window is pure waste, not just impolite. */
+const PERIOD_EXHAUSTED_DEFAULT_MS = 60 * 60_000 // 1h — CHOSEN, not sourced: no
+// adapter today surfaces a provider-stated "resets in N hours" for a quota
+// response (only retryAfterMs exists, and it's absent for Anthropic/OpenAI-
+// direct entirely). Long enough not to hammer a period cap on a guess; short
+// enough that a mislabeled transient-as-period-exhausted doesn't idle a
+// model for a full day.
+const PERIOD_EXHAUSTED_MAX_MS = 24 * 60 * 60_000 // 24h — the common unit for
+// free-tier daily caps across this app's provider set (Groq, Gemini,
+// OpenRouter free tiers are all documented as daily-reset).
+
+/** Mark a model as period-exhausted (a quota/billing cap, not an ordinary
+ *  rate limit) until `retryAfterMs` from now, or PERIOD_EXHAUSTED_DEFAULT_MS
+ *  when the provider gave no hint. Same never-shorten rule as
+ *  markRateLimited, and the same map — a period-exhausted entry IS a
+ *  cooldown, just one with a deliberately longer default/cap. */
+export function markPeriodExhausted(catalogId: string, retryAfterMs: number | undefined, now: number): void {
+  const wait = Math.min(
+    Math.max(retryAfterMs ?? PERIOD_EXHAUSTED_DEFAULT_MS, 60_000),
+    PERIOD_EXHAUSTED_MAX_MS
+  )
+  const until = now + wait
+  const existing = cooldowns.get(catalogId)
+  if (existing !== undefined && existing >= until) return
+  cooldowns.set(catalogId, until)
+}
+
+/** BUG-057 Phase 2 — a structural failure (auth rejected, model delisted, a
+ *  400 on this exact request shape) will very likely fail again immediately,
+ *  so unlike a rate limit no clock fixes it directly. A truly permanent,
+ *  only-manually-clearable entry would be unsafe in this codebase today:
+ *  nothing wires an explicit clear action to it (no Settings button, no IPC
+ *  handler), so a wrongly-classified structural failure would silently and
+ *  invisibly blacklist a model for the life of the process with zero
+ *  corrective path. STRUCTURAL_BREAK_MS is therefore a long, self-healing
+ *  TTL — CHOSEN (no provider documents "how long until we reconsider a
+ *  400"): long enough that a genuinely broken integration (wrong tool
+ *  schema, delisted model) isn't retried every few minutes wasting a real
+ *  attempt, short enough that a misclassification self-heals within a
+ *  working day rather than needing a process restart. Also cleared early by
+ *  success, same as a normal cooldown — proof beats the guess whenever we
+ *  get proof. */
+export const STRUCTURAL_BREAK_MS = 4 * 60 * 60_000 // 4h
+
+const structuralBreaks = new Map<string, number>() // catalogId -> expiry, same shape as `cooldowns`
+
+export function markStructurallyBroken(catalogId: string, now: number): void {
+  const until = now + STRUCTURAL_BREAK_MS
+  const existing = structuralBreaks.get(catalogId)
+  if (existing !== undefined && existing >= until) return
+  structuralBreaks.set(catalogId, until)
+}
+
+export function isStructurallyBroken(catalogId: string, now: number): boolean {
+  const until = structuralBreaks.get(catalogId)
+  if (until === undefined) return false
+  if (until <= now) {
+    structuralBreaks.delete(catalogId)
+    return false
+  }
+  return true
+}
+
+/** The single gate chain resolution should filter on — cooling down (an
+ *  ordinary rate limit or a period-exhausted cap, same map) OR structurally
+ *  broken (a separate map, since "will not succeed for this request shape"
+ *  isn't a wait-then-retry condition the same way a cooldown is). */
+export function isUsable(catalogId: string, now: number): boolean {
+  return !isCoolingDown(catalogId, now) && !isStructurallyBroken(catalogId, now)
+}
+
 /** A success proves the limit lifted early — trust the evidence over the
- *  estimate. Matters most when the default 60s guess was too pessimistic. */
+ *  estimate. Matters most when the default 60s guess was too pessimistic.
+ *  Clears BOTH maps: a success is proof regardless of what class the LAST
+ *  failure was classified as. */
 export function clearCooldown(catalogId: string): void {
   cooldowns.delete(catalogId)
+  structuralBreaks.delete(catalogId)
 }
 
 /** The soonest moment any of these models is worth trying again. Used to tell
@@ -89,4 +168,5 @@ export function soonestExpiry(catalogIds: string[], now: number): number | null 
 /** Test-only. */
 export function resetCooldownsForTests(): void {
   cooldowns.clear()
+  structuralBreaks.clear()
 }

@@ -206,3 +206,65 @@ describe('same-model retry, against the REAL SDK connection-error path', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
+
+// BUG-057 Phase 2 — the taxonomy classifier is a pure function (see
+// failureClass.test.ts for that), but whether it's actually WIRED into a
+// real provider's error construction is a separate claim, and only a real
+// adapter can prove it. Before this phase, openai-compatible.ts's
+// RateLimitError branch constructed AIProviderError with only 3 args — the
+// 4th (failureClass) simply didn't exist as a call site concern, so
+// err.failureClass was always undefined regardless of what the response
+// body said. These fail on revert to that 3-arg construction.
+describe('failureClass, wired into the REAL openai-compatible adapter (not just the pure classifier)', () => {
+  function quotaRateLimitResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        error: { message: 'You have exceeded your current quota, please check your plan and billing details.' }
+      }),
+      { status: 429, headers: { 'content-type': 'application/json' } }
+    )
+  }
+
+  function serverErrorResponse(): Response {
+    return new Response(JSON.stringify({ error: { message: 'internal error' } }), {
+      status: 503,
+      headers: { 'content-type': 'application/json' }
+    })
+  }
+
+  it('a real 429 whose body mentions quota/billing classifies as period-exhausted, not just code:rate-limit', async () => {
+    const fetchMock = vi.fn(async () => quotaRateLimitResponse())
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+    const provider = createOpenAICompatibleProvider(GROQ_CONFIG, 'test-key-not-real')
+
+    const err = await provider
+      .complete({ purpose: 'memory-extract', maxTokens: 50, messages: [{ role: 'user', content: 'hi' }] })
+      .catch((e: unknown) => e)
+
+    expect(err).toMatchObject({ code: 'rate-limit', failureClass: 'period-exhausted' })
+  })
+
+  it('a real 503 classifies as transient despite code:failed — the generic bucket is not one-size-fits-all', async () => {
+    const fetchMock = vi.fn(async () => serverErrorResponse())
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+    const provider = createOpenAICompatibleProvider(GROQ_CONFIG, 'test-key-not-real')
+
+    const err = await provider
+      .complete({ purpose: 'memory-extract', maxTokens: 50, messages: [{ role: 'user', content: 'hi' }] })
+      .catch((e: unknown) => e)
+
+    expect(err).toMatchObject({ code: 'failed', failureClass: 'transient' })
+  })
+
+  it('an ordinary 429 with no quota language still classifies as transient (unchanged)', async () => {
+    const fetchMock = vi.fn(async () => rateLimitResponse(5))
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+    const provider = createOpenAICompatibleProvider(GROQ_CONFIG, 'test-key-not-real')
+
+    const err = await provider
+      .complete({ purpose: 'memory-extract', maxTokens: 50, messages: [{ role: 'user', content: 'hi' }] })
+      .catch((e: unknown) => e)
+
+    expect(err).toMatchObject({ code: 'rate-limit', failureClass: 'transient' })
+  })
+})

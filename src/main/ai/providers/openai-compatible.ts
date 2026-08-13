@@ -5,6 +5,7 @@
 // Responses" reasoning, which applies identically here) — this file exists
 // so a 6th OpenAI-compatible provider is a config object, not a new file.
 import OpenAI from 'openai'
+import { classifyFailureClass } from '../failure-class'
 import {
   AIProviderError,
   LATENCY_POLICY,
@@ -189,17 +190,24 @@ export function retryAfterMsFrom(err: unknown): number | undefined {
  *  OpenAI client. */
 export function toProviderError(displayName: string, err: unknown): AIProviderError {
   if (err instanceof OpenAI.AuthenticationError) {
-    return new AIProviderError('auth', `Your ${displayName} API key was rejected.`)
+    return new AIProviderError('auth', `Your ${displayName} API key was rejected.`, undefined, 'structural')
   }
   if (err instanceof OpenAI.RateLimitError) {
+    const msg = typeof err.message === 'string' ? err.message : ''
     return new AIProviderError(
       'rate-limit',
       `${displayName} is rate-limiting requests right now.`,
-      retryAfterMsFrom(err)
+      retryAfterMsFrom(err),
+      classifyFailureClass('rate-limit', { message: msg, status: err.status ?? undefined })
     )
   }
   if (err instanceof OpenAI.NotFoundError) {
-    return new AIProviderError('model-not-found', `${displayName} does not recognize this model.`)
+    return new AIProviderError(
+      'model-not-found',
+      `${displayName} does not recognize this model.`,
+      undefined,
+      'structural'
+    )
   }
   if (err instanceof OpenAI.APIConnectionTimeoutError || err instanceof OpenAI.APIUserAbortError) {
     // APIUserAbortError fires when an AbortSignal we passed in aborts - in
@@ -217,17 +225,28 @@ export function toProviderError(displayName: string, err: unknown): AIProviderEr
   if (err instanceof OpenAI.APIError) {
     const msg = typeof err.message === 'string' ? err.message.toLowerCase() : ''
     if (msg.includes('quota') || msg.includes('billing') || msg.includes('credit')) {
-      return new AIProviderError('failed', `Your ${displayName} account is out of quota/credits.`)
+      return new AIProviderError(
+        'failed',
+        `Your ${displayName} account is out of quota/credits.`,
+        undefined,
+        'period-exhausted'
+      )
     }
     if (err.status === 429) {
       return new AIProviderError(
         'rate-limit',
         `${displayName} is rate-limiting requests right now.`,
-        retryAfterMsFrom(err)
+        retryAfterMsFrom(err),
+        classifyFailureClass('rate-limit', { message: msg, status: err.status ?? undefined })
       )
     }
     if (err.status === 404) {
-      return new AIProviderError('model-not-found', `${displayName} does not recognize this model.`)
+      return new AIProviderError(
+        'model-not-found',
+        `${displayName} does not recognize this model.`,
+        undefined,
+        'structural'
+      )
     }
     // BUG-057 — KEEP the provider's own message. This used to return only
     // "<provider> returned an error (400)." and throw err.message away, which
@@ -246,7 +265,9 @@ export function toProviderError(displayName: string, err: unknown): AIProviderEr
       'failed',
       detail
         ? `${displayName} returned an error (${err.status ?? 'unknown'}): ${detail.slice(0, 300)}`
-        : `${displayName} returned an error (${err.status ?? 'unknown'}).`
+        : `${displayName} returned an error (${err.status ?? 'unknown'}).`,
+      undefined,
+      classifyFailureClass('failed', { message: msg, status: err.status ?? undefined })
     )
   }
   return new AIProviderError('failed', `Something went wrong calling ${displayName}. Please try again.`)

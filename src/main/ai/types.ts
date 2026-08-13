@@ -144,6 +144,19 @@ export interface AIProvider {
 export type AIProviderErrorCode =
   'no-key' | 'auth' | 'rate-limit' | 'network' | 'failed' | 'model-not-found' | 'timeout'
 
+/** BUG-057 Phase 2 — HOW a failure behaves over time, distinct from
+ *  AIProviderErrorCode (WHAT shape it took). Drives cooldown SHAPE
+ *  (model-cooldown.ts) and message copy (AllModelsExhaustedError).
+ *  - 'transient': clears on its own in seconds-minutes — network blip, a
+ *    per-minute rate-limit window, a provider 5xx.
+ *  - 'period-exhausted': clears on a clock the account doesn't control
+ *    minute-to-minute (daily/monthly free-tier cap, credits exhausted).
+ *    Retrying inside the window is pure waste.
+ *  - 'structural': will not succeed for this exact request shape against
+ *    this exact model without a config change (a 400/tool-schema mismatch,
+ *    a delisted model, an auth failure). */
+export type AIFailureClass = 'transient' | 'period-exhausted' | 'structural'
+
 export class AIProviderError extends Error {
   constructor(
     readonly code: AIProviderErrorCode,
@@ -155,11 +168,24 @@ export class AIProviderError extends Error {
      *  difference between waiting the ~20s they asked for and burning every
      *  other provider's quota in the meantime. Undefined when the provider
      *  gave no hint — callers fall back to their own default. */
-    readonly retryAfterMs?: number
+    readonly retryAfterMs?: number,
+    /** BUG-057 Phase 2 — set via failure-class.ts's classifyFailureClass()
+     *  at the point a provider adapter constructs this error, where the raw
+     *  message/status are still available. Undefined at call sites with
+     *  nothing to classify from (validateKey's probe, the AbortError branch
+     *  in completeWithSameModelRetry) — effectiveFailureClass() treats
+     *  undefined as 'transient', not the most severe class: an ambiguous
+     *  failure should default to whichever class self-heals fastest even on
+     *  a wrong guess, not to the one that's hardest to recover from. */
+    readonly failureClass?: AIFailureClass
   ) {
     super(message)
     this.name = 'AIProviderError'
   }
+}
+
+export function effectiveFailureClass(err: AIProviderError): AIFailureClass {
+  return err.failureClass ?? 'transient'
 }
 
 /** Per-purpose latency policy — M9 fixed live-coaching latency with

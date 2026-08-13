@@ -10,6 +10,7 @@
 // Field names are camelCase on the wire (toolConfig, functionCallingConfig,
 // allowedFunctionNames, inlineData, mimeType) - this is the REST/JSON
 // convention, not the snake_case used by Google's Python client libraries.
+import { classifyFailureClass } from '../failure-class'
 import {
   AIProviderError,
   LATENCY_POLICY,
@@ -158,22 +159,38 @@ async function toProviderError(displayName: string, res: Response): Promise<AIPr
     if (Number.isFinite(n) && n > 0) retryAfterMs = n * 1000
   }
   if (res.status === 401 || res.status === 403 || googleStatus === 'PERMISSION_DENIED') {
-    return new AIProviderError('auth', `Your ${displayName} API key was rejected.`)
+    return new AIProviderError('auth', `Your ${displayName} API key was rejected.`, undefined, 'structural')
   }
   if (res.status === 429 || googleStatus === 'RESOURCE_EXHAUSTED') {
     return new AIProviderError(
       'rate-limit',
       `${displayName} is rate-limiting requests right now.`,
-      retryAfterMs
+      retryAfterMs,
+      classifyFailureClass('rate-limit', { message, status: res.status })
     )
   }
   if (res.status === 404 || googleStatus === 'NOT_FOUND') {
-    return new AIProviderError('model-not-found', `${displayName} does not recognize this model.`)
+    return new AIProviderError(
+      'model-not-found',
+      `${displayName} does not recognize this model.`,
+      undefined,
+      'structural'
+    )
   }
   if (res.status >= 500) {
-    return new AIProviderError('failed', `${displayName} returned a server error (${res.status}).`)
+    return new AIProviderError(
+      'failed',
+      `${displayName} returned a server error (${res.status}).`,
+      undefined,
+      'transient'
+    )
   }
-  return new AIProviderError('failed', message)
+  return new AIProviderError(
+    'failed',
+    message,
+    undefined,
+    classifyFailureClass('failed', { message, status: res.status })
+  )
 }
 
 export class GeminiProvider implements AIProvider {

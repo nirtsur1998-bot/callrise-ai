@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { classifyFailureClass } from '../failure-class'
 import {
   AIProviderError,
   LATENCY_POLICY,
@@ -53,10 +54,16 @@ function usageFrom(model: string, inputTokens: number, outputTokens: number): AI
 
 function toProviderError(err: unknown): AIProviderError {
   if (err instanceof Anthropic.AuthenticationError) {
-    return new AIProviderError('auth', 'Your Anthropic API key was rejected.')
+    return new AIProviderError('auth', 'Your Anthropic API key was rejected.', undefined, 'structural')
   }
   if (err instanceof Anthropic.RateLimitError) {
-    return new AIProviderError('rate-limit', 'Anthropic is rate-limiting requests right now.')
+    const msg = typeof err.message === 'string' ? err.message : ''
+    return new AIProviderError(
+      'rate-limit',
+      'Anthropic is rate-limiting requests right now.',
+      undefined,
+      classifyFailureClass('rate-limit', { message: msg, status: err.status ?? undefined })
+    )
   }
   if (err instanceof Anthropic.APIConnectionError) {
     return new AIProviderError(
@@ -73,12 +80,16 @@ function toProviderError(err: unknown): AIProviderError {
     ) {
       return new AIProviderError(
         'failed',
-        'Your Anthropic account is out of credits. Add credits at console.anthropic.com.'
+        'Your Anthropic account is out of credits. Add credits at console.anthropic.com.',
+        undefined,
+        'period-exhausted'
       )
     }
     return new AIProviderError(
       'failed',
-      `Anthropic returned an error (${err.status ?? 'unknown'}).`
+      `Anthropic returned an error (${err.status ?? 'unknown'}).`,
+      undefined,
+      classifyFailureClass('failed', { message: msg, status: err.status ?? undefined })
     )
   }
   return new AIProviderError('failed', 'Something went wrong calling Anthropic. Please try again.')
