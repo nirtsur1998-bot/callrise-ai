@@ -1806,6 +1806,25 @@ export interface AppSettings {
   /** M26 Phase 4.5.2 — live coaching cues (M9) enable/sensitivity. On by
    *  default; see main/app-settings.ts's LiveCueSettings. */
   liveCues: LiveCueSettings
+  /** M26 Phase 5 — per-lane job concurrency override (LIVE excluded —
+   *  always unbounded). See main/app-settings.ts's JobConcurrencySettings. */
+  jobConcurrency: JobConcurrencySettings
+  /** M26 Phase 5 — job-completion notification preferences. On by default;
+   *  see main/app-settings.ts's JobNotificationSettings. */
+  jobNotifications: JobNotificationSettings
+}
+
+/** M26 Phase 5 — see main/app-settings.ts's JobConcurrencySettings for the
+ *  exact behavior (clamped 1-10, LIVE never included). */
+export interface JobConcurrencySettings {
+  interactive: number
+  batch: number
+  maintenance: number
+}
+
+/** M26 Phase 5 — see main/app-settings.ts's JobNotificationSettings. */
+export interface JobNotificationSettings {
+  nativeEnabled: boolean
 }
 
 /** M26 Phase 4.5.2 — see main/app-settings.ts's DealIntelligenceSettings
@@ -1905,6 +1924,11 @@ export interface AppSettingsPatch {
   }
   /** Partial — only the keys present are changed; others are left as-is. */
   liveCues?: Partial<LiveCueSettings>
+  /** Partial — only the keys present are changed; others are left as-is.
+   *  Each value clamped to [1, 10]. */
+  jobConcurrency?: Partial<JobConcurrencySettings>
+  /** Partial — only the keys present are changed; others are left as-is. */
+  jobNotifications?: Partial<JobNotificationSettings>
 }
 
 export interface AppSettingsApi {

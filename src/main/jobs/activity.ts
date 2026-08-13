@@ -14,6 +14,7 @@
 // that actually calls into Electron.
 import { BrowserWindow } from 'electron'
 import { showNativeNotification } from '../notifications'
+import { isJobNativeNotificationsEnabled } from '../app-settings'
 import type { Job, JobState } from './types'
 import type { JobManager } from './JobManager'
 
@@ -167,6 +168,11 @@ export function wireJobActivity(
       // point of the OS layer is reaching the rep while they're in a
       // DIFFERENT app; the in-app toast already covers the focused case.
       if (event.kind === 'started') continue
+      // M26 Phase 5 — the in-app toast above is unconditional; this OS-level
+      // popup is the one layer that can interrupt whatever else the rep is
+      // doing on their machine, so it's the one this Settings toggle gates.
+      // Read fresh per event, not cached at wireJobActivity() call time.
+      if (!isJobNativeNotificationsEnabled()) continue
       const win = getMainWindow()
       if (win && win.isFocused() && win.isVisible()) continue
       showNativeNotification({

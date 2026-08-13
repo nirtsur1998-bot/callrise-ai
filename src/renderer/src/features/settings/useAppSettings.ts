@@ -66,7 +66,9 @@ const DEFAULT_SETTINGS: AppSettings = {
     enabledTypes: { risk: true, opportunity: true, tactical: true },
     frequency: 'balanced'
   },
-  liveCues: { enabled: true, sensitivity: 'low' }
+  liveCues: { enabled: true, sensitivity: 'low' },
+  jobConcurrency: { interactive: 2, batch: 1, maintenance: 1 },
+  jobNotifications: { nativeEnabled: true }
 }
 
 export interface UseAppSettings {

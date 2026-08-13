@@ -158,7 +158,11 @@ import { registerBackup } from './backup'
 import { registerVirtualMic, disposeVirtualMic } from './virtualmic'
 import { registerKnowledge } from './knowledge'
 import { registerObjectionQueue } from './objection-queue'
-import { registerAppSettings } from './app-settings'
+import {
+  registerAppSettings,
+  getJobConcurrencySettings,
+  setJobConcurrencyChangedListener
+} from './app-settings'
 import { registerLaunchAtLogin } from './launch-at-login'
 import { registerActiveApp } from './active-app'
 import { registerAlerts } from './alerts'
@@ -325,6 +329,22 @@ app.whenReady().then(async () => {
   // before any registerX() that might register a recurring/idle job
   // (memory-runtime.ts's nightly consolidation, so far).
   setScheduler(new Scheduler())
+
+  // M26 Phase 5 — apply the persisted per-lane concurrency override (if
+  // any) at startup, and again on every live Settings change. LIVE is
+  // deliberately never included — it stays fixed at unbounded, the
+  // milestone's own hard rule that a live call must never wait behind
+  // anything.
+  const applyJobConcurrency = (): void => {
+    const c = getJobConcurrencySettings()
+    jobManager?.configureLanes({
+      INTERACTIVE: { maxConcurrent: c.interactive },
+      BATCH: { maxConcurrent: c.batch },
+      MAINTENANCE: { maxConcurrent: c.maintenance }
+    })
+  }
+  applyJobConcurrency()
+  setJobConcurrencyChangedListener(applyJobConcurrency)
 
   // Before anything that might use Deepgram/Anthropic — a user's own
   // Settings-entered key (if any) needs to be in process.env first.
