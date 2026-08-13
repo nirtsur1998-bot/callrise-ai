@@ -62,6 +62,42 @@ export function setTranscriptListener(fn: ((patch: TranscriptPatch) => void) | n
   listener = fn
 }
 
+// M26 Phase 4.5.0 — a second, additive tap into the same patch stream
+// `setTranscriptListener` feeds the renderer relay. The cue and Deal
+// Intelligence engines each need their own in-process subscription once
+// their state moves into main (4.5.3/4.5.4), without displacing or being
+// displaced by the renderer relay — hence a separate Set rather than
+// widening the single `listener` slot to an array.
+const subscribers = new Set<(patch: TranscriptPatch) => void>()
+
+/** Register an additional, additive subscriber to every transcript patch
+ *  (both mid-call deltas from `publish()` and the reset marker `beginCall()`
+ *  announces). Returns an unsubscribe function. Independent of
+ *  `setTranscriptListener` — registering here never displaces the renderer
+ *  relay, and clearing it never touches subscribers registered here. */
+export function subscribeTranscript(fn: (patch: TranscriptPatch) => void): () => void {
+  subscribers.add(fn)
+  return () => subscribers.delete(fn)
+}
+
+/** Fan a patch out to the renderer relay and every engine subscriber. Never
+ *  throws — one subscriber's bug must not stop the renderer relay, or any
+ *  other subscriber, from getting the same patch. */
+function notify(patch: TranscriptPatch): void {
+  try {
+    listener?.(patch)
+  } catch (err) {
+    console.error('[live-transcript] renderer relay threw on a transcript patch:', err)
+  }
+  for (const fn of subscribers) {
+    try {
+      fn(patch)
+    } catch (err) {
+      console.error('[live-transcript] a transcript subscriber threw:', err)
+    }
+  }
+}
+
 function at(call: LiveCall): number {
   return Math.max(0, Math.round(Date.now() - call.startedAtMs))
 }
@@ -82,7 +118,7 @@ function publish(call: LiveCall): void {
     if (from < 0) return
     call.lastPublished = next
     call.seq += 1
-    listener?.({ callId: call.id, seq: call.seq, from, segments: next.slice(from) })
+    notify({ callId: call.id, seq: call.seq, from, segments: next.slice(from) })
   } catch (err) {
     // Same rule as every other entry point here: publishing can never break a
     // call. The renderer's own sequence check turns a missed patch into a
@@ -143,13 +179,11 @@ export function beginCall(opts: { restart: boolean }): void {
     seq: 0,
     lastPublished: []
   }
-  // seq 0 with from 0 is the reset marker: it tells a renderer already
-  // mirroring a previous call to drop it rather than splice into it.
-  try {
-    listener?.({ callId: id, seq: 0, from: 0, segments: [] })
-  } catch (err) {
-    console.error('[live-transcript] could not announce the new call:', err)
-  }
+  // seq 0 with from 0 is the reset marker: it tells a renderer (or an
+  // engine subscriber) already mirroring a previous call to drop it rather
+  // than splice into it. notify() never throws, so there's nothing further
+  // for this entry point to guard against.
+  notify({ callId: id, seq: 0, from: 0, segments: [] })
 }
 
 /** One finalized Deepgram result. Called from transcription.ts's result path,
@@ -312,5 +346,6 @@ export function resetLiveTranscriptForTests(): void {
   }
   current = null
   listener = null
+  subscribers.clear()
   saveInFlight = false
 }

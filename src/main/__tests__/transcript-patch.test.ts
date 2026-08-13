@@ -21,6 +21,7 @@ const {
   recordGap,
   recordRepIdentified,
   setTranscriptListener,
+  subscribeTranscript,
   currentTranscript,
   liveCallInfo,
   resetLiveTranscriptForTests
@@ -217,6 +218,68 @@ describe('publishing never churns the array for nothing', () => {
     const before = patches.length
     recordRepIdentified(0, 0) // only unlabelled turns exist; none may be back-filled
     expect(patches.length).toBe(before)
+  })
+})
+
+describe('M26 4.5.0 — subscribeTranscript is an additive tap alongside the renderer relay', () => {
+  it('a subscriber sees exactly the same patch stream as the renderer relay', () => {
+    const seen: TranscriptPatch[] = []
+    const unsubscribe = subscribeTranscript((p) => seen.push(p))
+    try {
+      beginCall({ restart: false })
+      recordResult(result([{ speaker: 0, text: 'hello there' }]))
+      recordGap('[gap: 9s]')
+      expect(JSON.stringify(seen)).toBe(JSON.stringify(patches))
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('two independent subscribers both receive every patch, and unsubscribing one leaves the other unaffected', () => {
+    const a: TranscriptPatch[] = []
+    const b: TranscriptPatch[] = []
+    const unsubA = subscribeTranscript((p) => a.push(p))
+    const unsubB = subscribeTranscript((p) => b.push(p))
+    try {
+      beginCall({ restart: false })
+      recordResult(result([{ speaker: 0, text: 'first' }]))
+      unsubA()
+      recordResult(result([{ speaker: 1, text: 'second' }]))
+      expect(a).toHaveLength(2) // reset + 'first' only
+      expect(b).toHaveLength(3) // reset + 'first' + 'second'
+    } finally {
+      unsubA()
+      unsubB()
+    }
+  })
+
+  it('a throwing subscriber does not stop the renderer relay or other subscribers from getting the patch', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const good: TranscriptPatch[] = []
+    const unsubBad = subscribeTranscript(() => {
+      throw new Error('engine bug')
+    })
+    const unsubGood = subscribeTranscript((p) => good.push(p))
+    try {
+      beginCall({ restart: false })
+      recordResult(result([{ speaker: 0, text: 'still works' }]))
+      expect(good.length).toBeGreaterThan(0)
+      expect(patches.length).toBeGreaterThan(0) // renderer relay unaffected
+    } finally {
+      unsubBad()
+      unsubGood()
+      err.mockRestore()
+    }
+  })
+
+  it('resetLiveTranscriptForTests clears subscribers, same as it clears the renderer relay', () => {
+    const seen: TranscriptPatch[] = []
+    subscribeTranscript((p) => seen.push(p))
+    resetLiveTranscriptForTests()
+    setTranscriptListener((p) => patches.push(p)) // afterEach's next beforeEach would normally do this
+    beginCall({ restart: false })
+    recordResult(result([{ speaker: 0, text: 'after reset' }]))
+    expect(seen).toHaveLength(0)
   })
 })
 
