@@ -4,14 +4,12 @@
 // on the master flag — see initSalesBrain()'s own doc comment for exactly
 // where and why.
 import { app } from 'electron'
-import { join } from 'node:path'
-import { readFile } from 'node:fs/promises'
 import type Database from 'better-sqlite3'
 import { memoryDbPath, openMemoryDb, migrate, type MigrateResult } from './db'
 import { configureEmbeddingsCacheDir, warmUpEmbeddings } from './embeddings'
 import { isSalesBrainEnabled } from '../app-settings'
-import { writeJsonAtomic } from '../atomic-write'
 import { runNightlyConsolidation } from './consolidation'
+import { getScheduler } from '../jobs/scheduler-instance'
 import {
   enqueueNightlyConsolidation,
   enqueueWarmUpEmbeddings,
@@ -23,64 +21,62 @@ let db: Database.Database | null = null
 let lastInitResult: { ok: boolean; detail: string } | null = null
 
 // --- Nightly consolidation trigger ---------------------------------------
-// This app has no real cron/scheduled-task infrastructure (confirmed during
-// Phase 0's codebase map) — building one just for this would be a lot of
-// new surface area for one feature. A "run once per ~20 hours, checked at
-// each app launch" timestamp file is a pragmatic, honest substitute: it
-// can't guarantee 2am-sharp execution, but it DOES guarantee the deep pass
-// (reflection + decay) runs roughly once a day for anyone who opens the app
-// at all that day, without needing the app to be running in the background
-// 24/7. The ~20h (not 24h) window means "once a day" still triggers even if
-// someone opens the app at a slightly earlier time than yesterday.
+// M26 Phase 5 — this used to be a hand-rolled "run once per ~20 hours,
+// checked at each app launch" timestamp file (this module's own doc comment
+// used to explain why: "this app has no real cron/scheduled-task
+// infrastructure... building one just for this would be a lot of new
+// surface area for one feature"). Phase 1 built that shared infrastructure
+// (jobs/scheduler.ts) specifically so this and backup.ts wouldn't each keep
+// reinventing it — see that file's own header comment. This is the first
+// caller.
+//
+// The ~20h (not 24h) window means "once a day" still triggers even if
+// someone opens the app at a slightly earlier time than yesterday — same
+// reasoning as before, just now expressed as Scheduler.registerRecurring's
+// intervalMs instead of a bespoke comparison.
+//
+// One real behavior change from the migration, worth stating plainly:
+// Scheduler records a spec's "last ran" timestamp the moment it's TRIGGERED
+// (synchronously, before `run()` executes), not after the work actually
+// finishes — unlike the old markNightlyConsolidationRan(), which only ever
+// ran on SUCCESS, so a failed pass would retry on the next eligible check
+// rather than waiting out the full ~20h again. Accepted deliberately: this
+// is best-effort maintenance, not a correctness-critical operation, and a
+// failure is no longer silent either way — it now shows up as a failed job
+// in the Activity Center, which the timestamp-file version never surfaced
+// at all.
 const NIGHTLY_INTERVAL_MS = 20 * 60 * 60 * 1000
 
-function nightlySchedulePath(userDataDir: string): string {
-  return join(userDataDir, 'sales-brain-schedule.json')
-}
-
-async function shouldRunNightlyConsolidation(userDataDir: string): Promise<boolean> {
-  try {
-    const raw = JSON.parse(await readFile(nightlySchedulePath(userDataDir), 'utf8')) as {
-      lastRunAt?: string
-    }
-    if (!raw.lastRunAt) return true
-    const last = Date.parse(raw.lastRunAt)
-    if (Number.isNaN(last)) return true
-    return Date.now() - last >= NIGHTLY_INTERVAL_MS
-  } catch {
-    return true // no schedule file yet — first run
-  }
-}
-
-async function markNightlyConsolidationRan(userDataDir: string): Promise<void> {
-  await writeJsonAtomic(nightlySchedulePath(userDataDir), {
-    lastRunAt: new Date().toISOString()
-  }).catch(() => {})
-}
-
-/** Called once at startup, after initSalesBrain() — fire-and-forget, never
- *  blocks startup (reflection + decay across every scope can take a real
- *  amount of wall-clock time with several AI calls; this must never be
- *  something the user waits on just to open the app). No-ops instantly if
- *  Sales Brain is off, if init failed, or if it already ran recently. */
+/** Called once at startup, after initSalesBrain() — registers the recurring
+ *  spec (idempotent-ish: Scheduler doesn't dedupe by name today, so this
+ *  must only ever be called once per process, same as every other
+ *  registerXxx() in this codebase's own `let registered = false` guards —
+ *  here that's naturally true, since index.ts calls this exactly once).
+ *  No-ops instantly if Sales Brain is off or init failed — never even
+ *  registers the recurring spec, so a user who never opts in never has this
+ *  running in the background at all. */
 export function maybeRunNightlyConsolidation(): void {
   if (!isSalesBrainEnabled() || !db) return
-  const userDataDir = app.getPath('userData')
-  void shouldRunNightlyConsolidation(userDataDir).then((should) => {
-    if (!should || !db) return
-    // M26 Batch 5 — runs as a MAINTENANCE job so the longest recurring AI
-    // operation in the app stops being completely invisible (Phase 0 row 36:
-    // "no 'is it running' indicator anywhere"). The once-a-day decision and
-    // the ran-marker stay here; the job owns only the work itself.
-    registerNightlyConsolidationJob(async () => {
-      // `db` is re-read INSIDE the executor rather than captured from the
-      // check above: the job can start after this function returns, and a
-      // Sales Brain that shut down in between must not be written to.
-      if (!db) return
-      await runNightlyConsolidation(db)
-      await markNightlyConsolidationRan(userDataDir)
-    })
-    enqueueNightlyConsolidation()
+  // M26 Batch 5 — runs as a MAINTENANCE job so the longest recurring AI
+  // operation in the app stops being completely invisible (Phase 0 row 36:
+  // "no 'is it running' indicator anywhere").
+  registerNightlyConsolidationJob(async () => {
+    // `db` is re-read INSIDE the executor rather than captured from the
+    // check above: the job can start well after registration, and a Sales
+    // Brain that shut down in between must not be written to.
+    if (!db) return
+    await runNightlyConsolidation(db)
+  })
+  getScheduler().registerRecurring({
+    name: 'salesBrain:nightlyConsolidation',
+    intervalMs: NIGHTLY_INTERVAL_MS,
+    run: () => {
+      // Re-checked fresh at fire time, not just at registration — the rep
+      // may have turned Sales Brain off (or it may have failed to init)
+      // sometime in the ~20h since this was registered.
+      if (!isSalesBrainEnabled() || !db) return
+      enqueueNightlyConsolidation()
+    }
   })
 }
 

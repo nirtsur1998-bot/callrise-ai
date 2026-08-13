@@ -37,6 +37,8 @@ import { registerJobsIpc } from './jobs/ipc'
 import { registerFakeJobTypes } from './jobs/fakeJobs'
 import { wireJobActivity } from './jobs/activity'
 import { setJobManager } from './jobs/instance'
+import { Scheduler } from './jobs/scheduler'
+import { setScheduler } from './jobs/scheduler-instance'
 writeCrashLog('imports resolved', 'all top-level imports completed without throwing')
 
 // Renamed "Sales OS" -> "CallRise AI" (rebrand), but the on-disk data folder
@@ -319,6 +321,10 @@ app.whenReady().then(async () => {
   registerJobsIpc(jobManager)
   if (is.dev) registerFakeJobTypes(jobManager)
   wireJobActivity(jobManager, () => mainWindow)
+  // M26 Phase 5 — same placement reasoning as jobManager above: created
+  // before any registerX() that might register a recurring/idle job
+  // (memory-runtime.ts's nightly consolidation, so far).
+  setScheduler(new Scheduler())
 
   // Before anything that might use Deepgram/Anthropic — a user's own
   // Settings-entered key (if any) needs to be in process.env first.
