@@ -70,7 +70,18 @@ export const SENSITIVITY_THRESHOLDS: Record<Sensitivity, Thresholds> = {
 const WINDOW_TURNS = 24 // recent speaker turns sent to the brain (fixed size)
 const MAX_TURNS = 80 // cap the in-memory turn buffer
 const PACE_WINDOW_MS = 15_000 // window for the rep-only words/min estimate
-const CALL_GAP_MS = 2_500 // minimum gap between brain (LLM) calls
+// M27 H1 — DERIVED, not chosen: matches model-pacing.ts's PACING_GAP_MS,
+// which is 60_000 / 10 (Gemini 2.5 Flash's conservative documented free-tier
+// floor, 10-15 RPM). `live`-tier purposes (coaching-cue is one) are
+// deliberately exempt from that cross-purpose pacing gate for latency — but
+// that means THIS is the only thing standing between coaching-cue and
+// exceeding a low-RPM provider's own limit, on its own, with zero help from
+// any other purpose. The previous value (2_500ms) allowed up to 24
+// requests/minute from this purpose alone — 1.6-2.4x over Gemini's floor
+// before anything else even contributes, a plausible direct cause of
+// "coaching cues temporarily unavailable" mid-call. Same floor, same
+// reasoning, applied where the pacing gate can't reach.
+const CALL_GAP_MS = 6_000 // minimum gap between brain (LLM) calls
 const DEBOUNCE_MS = 400 // wait after a client turn-end before calling the brain
 /** How long an interrupt cue stays before fading. Exported because the card's
  *  countdown bar animates against it — two copies of this number drift the

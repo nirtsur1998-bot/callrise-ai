@@ -164,7 +164,8 @@ describe('useLiveCues — coachingPaused/coachingPausedReason routing (BUG-057 P
     expect(api.coachingPaused).toBe(true)
 
     // Flip the mock to a success and drive a second cue call (CALL_GAP_MS is
-    // 2_500ms, already cleared by the 500ms advance above plus this one).
+    // 6_000ms — M27 H1 — already cleared by the 500ms advance above plus
+    // this one).
     ;(window.api.transcription.liveCue as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: true,
       cue: 'none',
@@ -174,7 +175,7 @@ describe('useLiveCues — coachingPaused/coachingPausedReason routing (BUG-057 P
       buyerSpeaker: null
     })
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000)
+      await vi.advanceTimersByTimeAsync(6000)
     })
     act(() => onTranscript.current!(CLIENT_TURN))
     await act(async () => {
