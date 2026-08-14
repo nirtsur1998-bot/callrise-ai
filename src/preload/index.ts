@@ -69,8 +69,15 @@ const api = {
     onMultichannelFallback: (cb: (payload: unknown) => void) =>
       subscribe('transcription:multichannelFallback', cb),
     suggestQuestion: (text: string) => ipcRenderer.invoke('live:suggestQuestion', text),
-    askCoach: (transcript: string, question: string) =>
-      ipcRenderer.invoke('live:askCoach', { transcript, question }),
+    // 1.2.5 hotfix — sessionId + includesBuyerContent, same shape as liveCue
+    // below, let main check fresh consent before a pass that may include
+    // buyer-attributed content ever reaches an AI prompt.
+    askCoach: (
+      transcript: string,
+      question: string,
+      sessionId?: number,
+      includesBuyerContent?: boolean
+    ) => ipcRenderer.invoke('live:askCoach', { transcript, question, sessionId, includesBuyerContent }),
     // M26 4.5 (BUG-055) — sessionId + includesBuyerContent let main check
     // fresh consent before a pass that may include buyer-attributed content
     // ever reaches an AI prompt. See main/live-cue.ts's own doc comment.

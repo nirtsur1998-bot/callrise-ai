@@ -103,7 +103,8 @@ export async function suggestQuestion(text: unknown): Promise<SuggestResult> {
 // WITH the full running transcript so Claude answers with the call's context.
 
 export type AskCoachResult =
-  { ok: true; headline: string; tips: string[] } | { ok: false; message?: string }
+  | { ok: true; headline: string; tips: string[] }
+  | { ok: false; message?: string; blockedReason?: 'consent' }
 
 const REPLY_TOOL: AITool = {
   name: 'coach_reply',
@@ -140,10 +141,36 @@ function friendlyError(err: unknown): string {
 }
 
 export async function askCoach(input: unknown): Promise<AskCoachResult> {
-  const body = (input ?? {}) as { transcript?: unknown; question?: unknown }
+  const body = (input ?? {}) as {
+    transcript?: unknown
+    question?: unknown
+    sessionId?: unknown
+    includesBuyerContent?: unknown
+  }
   const transcript = (typeof body.transcript === 'string' ? body.transcript : '').slice(-100_000)
   const question = (typeof body.question === 'string' ? body.question : '').trim().slice(0, 1000)
   if (!question) return { ok: false, message: 'Type what you need help with first.' }
+
+  // 1.2.5 hotfix (privacy) — the transcript sent below can include
+  // buyer-attributed content during multichannel/buyer-capture. Every other
+  // live AI path that can see buyer content (liveCue, analyzeDealTier1,
+  // analyzeDealTier2 — see their identical block) re-checks consent fresh,
+  // immediately before the AI call; this one never did, so a rep could ask
+  // the coach a question after buyer consent was revoked mid-call and still
+  // ship the buyer's already-captured words to the AI provider. Same fix,
+  // same principle: PERMISSION is always re-read, never trusted from an
+  // earlier moment in the call.
+  if (body.includesBuyerContent === true) {
+    const sessionId = typeof body.sessionId === 'number' ? body.sessionId : undefined
+    if (!consentPermitsCapture(sessionId)) {
+      return {
+        ok: false,
+        blockedReason: 'consent',
+        message:
+          "Can't include the other party's words right now — buyer consent isn't currently active for this call."
+      }
+    }
+  }
 
   try {
     const result = await completeWithFallback({

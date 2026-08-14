@@ -15,10 +15,15 @@ interface Answer {
  */
 export function AskCoach({
   segments,
-  interimText
+  interimText,
+  getSessionId
 }: {
   segments: CallSegment[]
   interimText: string
+  /** 1.2.5 hotfix — see main/live-cue.ts's own doc comment: lets main check
+   *  fresh consent before a pass that may include buyer-attributed content
+   *  ever reaches an AI prompt. */
+  getSessionId: () => number | null
 }): React.JSX.Element {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -33,8 +38,18 @@ export function AskCoach({
     setError(null)
     setAnswer(null)
     const transcript = [...segments.map((s) => s.text), interimText].filter(Boolean).join('\n')
+    // 1.2.5 hotfix — channel 1 is always the other party's loopback, a
+    // hardware fact never a diarization guess (see CallSegment.channel's own
+    // doc comment) — same precise per-turn signal useLiveCues.ts already
+    // uses for its own includesBuyerContent check.
+    const includesBuyerContent = segments.some((s) => s.channel === 1)
     try {
-      const res = await window.api.transcription.askCoach(transcript, q)
+      const res = await window.api.transcription.askCoach(
+        transcript,
+        q,
+        getSessionId() ?? undefined,
+        includesBuyerContent
+      )
       if (res.ok) {
         setAnswer({ headline: res.headline, tips: res.tips })
         setInput('')
