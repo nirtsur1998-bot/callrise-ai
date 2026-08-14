@@ -946,12 +946,31 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     const deadProviders = new Set<AIProviderId>()
     const rateLimitCountByProvider = new Map<AIProviderId, number>()
 
+    // M27 A1 — one hard wall-clock ceiling across the ENTIRE stream walk,
+    // mirroring completeWithFallback's BUG-059 fix exactly. Without this,
+    // coaching-chat (this function's only consumer) had NO ceiling at all:
+    // worst case was the full fallback chain (up to the uncapped 9-entry
+    // QUALITY_CHAIN, reachable whenever a user's default provider key lapses
+    // but others remain configured) x LATENCY_POLICY's per-attempt timeout,
+    // unboundedly, with no way for the caller to cancel out of it — up to
+    // ~13.5 minutes confirmed against the real chain-resolution logic. The
+    // ceiling is always in the combined signal so it bounds the SDK's own
+    // retries too, not just this loop's iteration.
+    const ceiling = new AbortController()
+    const ceilingTimer = setTimeout(() => ceiling.abort(), HARD_CEILING_MS[purpose])
+
+    try {
     for (let i = 0; i < chain.length; i++) {
+      if (ceiling.signal.aborted) break
       const step = chain[i]
       if (deadProviders.has(step.providerId)) continue
       const key = process.env[PROVIDER_REGISTRY[step.providerId].keyEnvName]?.trim()
       if (!key) continue
       const provider = PROVIDER_REGISTRY[step.providerId].build(key)
+
+      const parts: AbortSignal[] = [ceiling.signal]
+      if (req.signal) parts.push(req.signal)
+      const attemptSignal = parts.length === 1 ? parts[0] : AbortSignal.any(parts)
 
       // BUG-058/BUG-059 — the SDK's own retry is now always off (maxRetries:
       // 0, see providers/*.ts's stream()): its sleep was unabortable and
@@ -967,10 +986,20 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       let stepStartedStreaming = false
 
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        // M27 A1 — matches completeWithSameModelRetry's identical guard: once
+        // the combined signal is aborted (the ceiling fired, or the caller
+        // cancelled), a same-model retry can only fail the same way again —
+        // skip straight to the failure handling below instead of burning a
+        // pointless extra attempt.
+        if (attemptSignal.aborted) {
+          stepErr = stepErr ?? new AIProviderError('timeout', 'Aborted.')
+          break
+        }
         try {
           const streamResult = provider.stream({
             ...req,
-            model: step.modelId || undefined
+            model: step.modelId || undefined,
+            signal: attemptSignal
           })
           for await (const chunk of streamResult) {
             startedStreaming = true
@@ -992,7 +1021,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           const reason = classifyReason(err)
           const retryable = reason === 'network' || reason === 'timeout'
           if (retryable && attempt < maxAttempts - 1) {
-            await abortableSleep(Math.min(200 * 2 ** attempt, 2_000), req.signal)
+            await abortableSleep(Math.min(200 * 2 ** attempt, 2_000), attemptSignal)
             continue
           }
           break
@@ -1073,6 +1102,27 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         }
         // Nothing shown yet — safe to fall through and try the next entry.
       }
+    }
+    } finally {
+      clearTimeout(ceilingTimer)
+    }
+
+    if (ceiling.signal.aborted) {
+      // M27 A1 — same distinction completeWithFallback's identical check
+      // makes: "we ran out of time" vs. "every model rejected us" are
+      // different problems with different user actions, and collapsing them
+      // is how the unbounded hang stayed invisible in the first place.
+      void recordAiFailure(purpose, {
+        reason: 'timeout',
+        providerId: lastAttempt?.providerId ?? null,
+        detail: lastAttempt?.detail
+      })
+      const timeoutErr = new AIProviderError(
+        'timeout',
+        `This took too long and was stopped after ${Math.round(HARD_CEILING_MS[purpose] / 1000)}s. Your AI provider may be rate-limiting or slow right now — try again shortly.`
+      )
+      rejectFinal(timeoutErr)
+      throw timeoutErr
     }
 
     // Unconditional, matching completeWithFallback()'s own exhaustion
