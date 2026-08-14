@@ -80,20 +80,20 @@ afterEach(() => {
 
 describe('the post-call learned notification respects the app\'s own gates', () => {
   it('fires normally when no call is live and notifications are on', async () => {
-    await runMemoryExtractionForCall('call-1', 'post-save')
+    await runMemoryExtractionForCall('call-1', { pass: 'post-save' })
     expect(state.shown).toHaveLength(1)
     expect(state.shown[0].title).toBe('Sales Brain learned something')
   })
 
   it('is SUPPRESSED while a live call is in progress — the job system\'s hard DND rule', async () => {
     state.liveCall = { callId: 'some-other-call' }
-    await runMemoryExtractionForCall('call-1', 'post-save')
+    await runMemoryExtractionForCall('call-1', { pass: 'post-save' })
     expect(state.shown).toEqual([])
   })
 
   it('is suppressed when the user has turned job notifications off', async () => {
     state.notificationsEnabled = false
-    await runMemoryExtractionForCall('call-1', 'post-save')
+    await runMemoryExtractionForCall('call-1', { pass: 'post-save' })
     expect(state.shown).toEqual([])
   })
 
@@ -104,7 +104,7 @@ describe('the post-call learned notification respects the app\'s own gates', () 
     const consolidation = await import('../consolidation')
     const spy = vi.spyOn(consolidation, 'consolidateNewCandidate')
     state.liveCall = { callId: 'some-other-call' }
-    await runMemoryExtractionForCall('call-1', 'post-save')
+    await runMemoryExtractionForCall('call-1', { pass: 'post-save' })
     expect(state.shown).toEqual([])
     expect(spy).toHaveBeenCalled()
   })

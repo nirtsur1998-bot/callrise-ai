@@ -101,19 +101,66 @@ const CONTRADICTION_JUDGE_TOOL: AITool = {
   }
 }
 
+/**
+ * M27 C1 — how many independent episodes a HYPOTHESIS needs before it is
+ * worth contradiction-checking against.
+ *
+ * The tradeoff this number resolves: checking every hypothesis would charge
+ * an AI call for every fresh single-mention candidate against every other
+ * one — and on a new install, where nothing is active yet, that means paying
+ * on essentially every extraction (the `length === 0` early return below used
+ * to skip the call entirely in exactly that case). Checking none was the old
+ * behaviour, and it's what let two contradictory memories coexist forever.
+ *
+ * 2 is the founder's call, and it is aimed at a specific real failure: the
+ * memory that caused visible harm was a RESTATED fact ("don't chase this yet"
+ * heard across more than one call), not a one-off. Requiring a second
+ * independent episode keeps the check pointed at facts the system has already
+ * seen twice — the ones actually shaping a client's profile — while a single
+ * unconfirmed mention stays cheap and silent until it earns a second.
+ */
+const CONTRADICTION_MIN_EPISODES_FOR_HYPOTHESIS = 2
+
 /** Contradiction detection (spec section 2, Zep-style temporal
- *  invalidation). Only checks ACTIVE memories in the same scope+category —
- *  a hypothesis contradicting another hypothesis isn't worth an AI call
- *  yet (neither is trusted enough to matter), and cross-category
- *  contradiction ("prefers Slack" vs "charges per-seat") is nonsensical by
- *  construction. Best-effort: on failure, no contradiction is assumed
- *  (same safer-default reasoning as judgeSameFact). */
+ *  invalidation), in the same scope+category — cross-category contradiction
+ *  ("prefers Slack" vs "charges per-seat") is nonsensical by construction.
+ *  Best-effort: on failure, no contradiction is assumed (same safer-default
+ *  reasoning as judgeSameFact).
+ *
+ *  M27 C1 — this used to check ACTIVE memories ONLY, on the reasoning that
+ *  "a hypothesis contradicting another hypothesis isn't worth an AI call yet
+ *  (neither is trusted enough to matter)". That was wrong in a way that
+ *  produced real, visible harm: EVERY auto-extracted memory starts as a
+ *  hypothesis (memories-store.ts's initialStatus), so two flatly
+ *  contradictory statements — "don't chase this yet" and, weeks later,
+ *  "they're ready to move" — were never compared to each other at all. The
+ *  similarity check above correctly declines to merge them (they are
+ *  opposites, not restatements), so both were simply stored, both fed the
+ *  compiled profile and retrieval, and the AI could be told both things about
+ *  the same client. Worse, each could independently reach the promotion
+ *  threshold, since promoteHypotheses() does no contradiction check either —
+ *  turning two contradictory hunches into two contradictory "facts".
+ *
+ *  The real-world case this exists for is not an extraction error but a
+ *  genuine CHANGE OVER TIME: both statements were true when said. That is
+ *  precisely what temporal invalidation is for, and the handling is
+ *  unchanged from the active case — supersede the older, never delete it,
+ *  and link it forward to whatever replaced it (see invalidateMemory), so
+ *  it stays visible and auditable in Memory Center. */
 async function detectContradiction(
   db: Database.Database,
   candidate: MemoryCandidate
 ): Promise<Memory | null> {
-  const activeInScope = listMemories(db, { scope: candidate.scope, status: 'active', category: candidate.category })
-  if (activeInScope.length === 0) return null
+  const comparable = listMemories(db, {
+    scope: candidate.scope,
+    statuses: ['active', 'hypothesis'],
+    category: candidate.category
+  }).filter(
+    (m) =>
+      m.status === 'active' ||
+      distinctEpisodeCount(m.evidence) >= CONTRADICTION_MIN_EPISODES_FOR_HYPOTHESIS
+  )
+  if (comparable.length === 0) return null
 
   try {
     const result = await completeWithFallback({
@@ -123,15 +170,15 @@ async function detectContradiction(
       messages: [
         {
           role: 'user',
-          content: `NEW statement: "${candidate.statement}"\n\nEXISTING statements:\n${activeInScope
+          content: `NEW statement: "${candidate.statement}"\n\nEXISTING statements:\n${comparable
             .map((m, i) => `${i}. ${m.statement}`)
             .join('\n')}\n\nDoes the NEW statement contradict any of the EXISTING ones?`
         }
       ]
     })
     const idx = result.toolInput?.contradictsIndex
-    if (typeof idx !== 'number' || idx < 0 || idx >= activeInScope.length) return null
-    return activeInScope[idx]
+    if (typeof idx !== 'number' || idx < 0 || idx >= comparable.length) return null
+    return comparable[idx]
   } catch {
     return null
   }
