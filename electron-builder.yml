@@ -61,6 +61,37 @@ asarUnpack:
   # (onnxruntime-node/bin/napi-v3/<platform>/<arch>/onnxruntime_binding.node)
   # - same asar problem, same fix.
   - node_modules/onnxruntime-node/**
+
+# The Visual C++ runtime, shipped app-locally beside CallRiseAI.exe.
+#
+# onnxruntime-node's binding (the local-embeddings backend behind Sales
+# Brain) statically imports MSVCP140.dll / VCRUNTIME140.dll /
+# VCRUNTIME140_1.dll — verified with `dumpbin /dependents` on the exact
+# .node we ship, not assumed. Those DLLs are present on every machine with
+# Visual Studio installed, which silently includes every dev box AND every
+# GitHub Actions windows runner — and ABSENT on a clean Windows install,
+# where Windows fails the load with ERROR_MOD_NOT_FOUND, surfaced to the
+# user as the bare OS string "The specified module could not be found."
+#
+# That is a real user-reported failure, not a theoretical one: Sales Brain
+# was completely dead on a clean machine while working perfectly on the dev
+# machine and passing every CI check, because BOTH environments had the
+# runtime and neither could see the dependency. Local testing of the
+# packaged app on a developer machine cannot catch this class of bug at all
+# — the only honest check is a machine that never had Visual Studio.
+#
+# These are Microsoft's own redistributable binaries, taken from the VC
+# Redist folder that exists specifically to be redistributed with an
+# application; app-local deployment beside the .exe is an explicitly
+# supported deployment mode. Windows' dependency search always includes the
+# application directory, so placing them next to CallRiseAI.exe resolves
+# them for the .node regardless of where under resources/ it lives.
+extraFiles:
+  - from: build/vcruntime
+    to: .
+    filter:
+      - '*.dll'
+
 win:
   executableName: CallRiseAI
   # The "portable" target was added as a debugging alternative to the NSIS

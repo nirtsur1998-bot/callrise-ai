@@ -10,11 +10,12 @@
 // "leaves your device" privacy exception. Every embedding computed AFTER
 // that first download is 100% local and offline.
 import { join } from 'node:path'
-import { pipeline, env, type FeatureExtractionPipeline } from '@xenova/transformers'
+import type { FeatureExtractionPipeline } from '@xenova/transformers'
 
 const EMBEDDING_MODEL = 'Xenova/all-MiniLM-L6-v2'
 export const EMBEDDING_DIMENSIONS = 384
 
+let cacheDir: string | null = null
 let configured = false
 let extractorPromise: Promise<FeatureExtractionPipeline> | null = null
 
@@ -24,17 +25,47 @@ let extractorPromise: Promise<FeatureExtractionPipeline> | null = null
  *  at a folder under userData — the default cache location isn't
  *  guaranteed writable in a packaged app, and userData is where this app's
  *  own established convention already puts every other piece of local
- *  state. */
+ *  state.
+ *
+ *  RECORDS THE PATH ONLY — deliberately does not touch @xenova/transformers.
+ *  That module is a static-import away from onnxruntime-node, whose
+ *  .node binary links against the Visual C++ runtime (MSVCP140.dll,
+ *  VCRUNTIME140.dll, VCRUNTIME140_1.dll — verified with dumpbin). Those are
+ *  present on any machine with Visual Studio (every dev box, every CI
+ *  runner) and ABSENT on a clean Windows install, where loading it throws
+ *  the OS-level "The specified module could not be found"
+ *  (ERROR_MOD_NOT_FOUND). This function is the FIRST thing initSalesBrain()
+ *  calls, so back when it touched `env` eagerly, that throw took down the
+ *  entire Sales Brain init — database and all — on machines missing the
+ *  runtime, even though embeddings are only needed for semantic search.
+ *  Shipping the runtime alongside the app (electron-builder.yml's
+ *  extraFiles) is the actual fix for the missing DLLs; keeping this lazy is
+ *  the independent guarantee that a native-load failure can never again
+ *  cost more than the one feature that needs it. */
 export function configureEmbeddingsCacheDir(userDataDir: string): void {
   if (configured) return
-  env.cacheDir = join(userDataDir, 'memory-model-cache')
-  env.allowLocalModels = false
+  cacheDir = join(userDataDir, 'memory-model-cache')
   configured = true
+}
+
+/** The only place @xenova/transformers is ever loaded, and deliberately
+ *  behind a dynamic import so the native backend is pulled in on first real
+ *  embedding work — never at startup. Applies the cache dir recorded above
+ *  at that point instead of at configure time. */
+async function loadTransformers(): Promise<typeof import('@xenova/transformers')> {
+  const mod = await import('@xenova/transformers')
+  if (cacheDir) {
+    mod.env.cacheDir = cacheDir
+    mod.env.allowLocalModels = false
+  }
+  return mod
 }
 
 function getExtractor(): Promise<FeatureExtractionPipeline> {
   if (!extractorPromise) {
-    extractorPromise = pipeline('feature-extraction', EMBEDDING_MODEL, { quantized: true })
+    extractorPromise = loadTransformers().then((mod) =>
+      mod.pipeline('feature-extraction', EMBEDDING_MODEL, { quantized: true })
+    )
   }
   return extractorPromise
 }
