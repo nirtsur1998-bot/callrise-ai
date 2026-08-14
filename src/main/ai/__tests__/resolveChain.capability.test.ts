@@ -58,6 +58,7 @@ vi.mock('../model-catalog', () => ({
 const { loadAppSettings } = await import('../../app-settings')
 const { completeWithFallback, streamWithFallback, resolveChain } = await import('../complete-with-fallback')
 const { resetCooldownsForTests } = await import('../model-cooldown')
+const { resetPacingForTests } = await import('../model-pacing')
 
 function assignments(purpose: string, chain: string[]): ReturnType<typeof loadAppSettings> {
   return {
@@ -83,6 +84,7 @@ const ORIGINAL_ENV = { ...process.env }
 
 beforeEach(() => {
   resetCooldownsForTests()
+  resetPacingForTests()
   built.length = 0
   activeProviderId.current = null
   process.env.GROQ_API_KEY = 'g'

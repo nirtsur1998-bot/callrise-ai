@@ -73,6 +73,7 @@ const {
   MAX_COOLDOWN_MS,
   STRUCTURAL_BREAK_MS
 } = await import('../model-cooldown')
+const { resetPacingForTests } = await import('../model-pacing')
 
 // These pre-Phase-5 tests aren't about tiering — 'durable' on both the
 // write (causedBy) and read (callerTier) side reproduces the exact
@@ -111,6 +112,7 @@ const ORIGINAL_ENV = { ...process.env }
 
 beforeEach(() => {
   resetCooldownsForTests()
+  resetPacingForTests()
   built.length = 0
   behavior.throwCode = 'rate-limit'
   behavior.retryAfterMs = undefined

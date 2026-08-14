@@ -62,6 +62,8 @@ vi.mock('../registry', () => ({
 
 const { loadAppSettings } = await import('../../app-settings')
 const { streamWithFallback, AllModelsExhaustedError } = await import('../complete-with-fallback')
+const { resetCooldownsForTests } = await import('../model-cooldown')
+const { resetPacingForTests } = await import('../model-pacing')
 
 function assignments(chain: string[]): ReturnType<typeof loadAppSettings> {
   return {
@@ -101,6 +103,8 @@ async function collect(
 const ORIGINAL_ENV = { ...process.env }
 
 beforeEach(() => {
+  resetCooldownsForTests()
+  resetPacingForTests()
   process.env.ANTHROPIC_API_KEY = 'test-key'
   behaviorByModel.clear()
 })

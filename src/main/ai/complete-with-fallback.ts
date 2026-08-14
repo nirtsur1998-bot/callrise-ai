@@ -21,9 +21,9 @@ import {
   markPeriodExhausted,
   markRateLimited,
   markStructurallyBroken,
-  soonestExpiry,
-  type CooldownTier
+  soonestExpiry
 } from './model-cooldown'
+import { markUsed } from './model-pacing'
 import {
   AIProviderError,
   CHAIN_BUDGET,
@@ -36,7 +36,8 @@ import {
   type AIFailureClass,
   type AIProviderErrorCode,
   type AIProviderId,
-  type AIPurpose
+  type AIPurpose,
+  type CooldownTier
 } from './types'
 
 /** BUG-057 Phase 3 — founder's explicit ask: exactly one of three actions,
@@ -600,6 +601,13 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
       const result = await completeWithSameModelRetry(provider, req, step.modelId, attemptSignal, purpose)
       // Proof the limit lifted — trust that over any earlier estimate.
       clearCooldown(step.catalogId)
+      // BUG-058 remainder — a success is real evidence this model's capacity
+      // was just spent, exactly like a rate-limit failure below is; a
+      // DIFFERENT durable purpose asking again in the next few seconds
+      // should try elsewhere first. Marked on the real outcome, not before
+      // the attempt — see the 'rate-limit' branch below for why a plain
+      // failure deliberately does NOT mark this.
+      markUsed(step.catalogId, Date.now(), tier)
       void recordAiSuccess(purpose, { providerId: step.providerId, fromImplicitTail: !!step.fromImplicitTail })
       return result
     } catch (err) {
@@ -622,6 +630,15 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
           Date.now(),
           tier
         )
+        // BUG-058 remainder — pacing marks alongside cooldown, deliberately
+        // ONLY on a rate-limit-classified failure (same condition as this
+        // branch and the sibling one below), never on a plain 'failed' —
+        // "only rate limits cool down... applying it to every failure would
+        // sideline healthy models after one blip" is model-cooldown.ts's own
+        // established rule for cooldown; pacing follows the identical rule
+        // for the identical reason. A structural/generic error tells us
+        // nothing about this model being near a shared capacity limit.
+        markUsed(step.catalogId, Date.now(), tier)
       } else if (reason === 'rate-limit') {
         markRateLimited(
           step.catalogId,
@@ -629,6 +646,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
           Date.now(),
           tier
         )
+        markUsed(step.catalogId, Date.now(), tier)
       } else if (failureClass === 'structural' && reason !== 'auth') {
         // 'auth' already gets a coarser, PROVIDER-wide skip (deadProviders,
         // above) — checking the raw reason string here, not re-deriving from
@@ -828,6 +846,9 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           }
           const usage = await streamResult.usage
           clearCooldown(step.catalogId)
+          // BUG-058 remainder — same reasoning as completeWithFallback: mark
+          // on the real outcome (success), never on a plain failure.
+          markUsed(step.catalogId, Date.now(), tier)
           void recordAiSuccess(purpose, { providerId: step.providerId, fromImplicitTail: !!step.fromImplicitTail })
           resolveFinal({ text: fullText, model: step.modelId || `${step.providerId} (default)`, usage })
           return
@@ -858,6 +879,10 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
             Date.now(),
             tier
           )
+          // BUG-058 remainder — same reasoning as completeWithFallback's
+          // identical branch: pacing marks alongside cooldown only on a
+          // rate-limit-classified failure, never a plain one.
+          markUsed(step.catalogId, Date.now(), tier)
         } else if (reason === 'rate-limit') {
           markRateLimited(
             step.catalogId,
@@ -865,6 +890,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
             Date.now(),
             tier
           )
+          markUsed(step.catalogId, Date.now(), tier)
         } else if (failureClass === 'structural' && reason !== 'auth') {
           markStructurallyBroken(step.catalogId, Date.now())
         }

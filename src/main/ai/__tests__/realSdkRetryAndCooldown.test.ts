@@ -27,6 +27,7 @@ const { loadAppSettings } = await import('../../app-settings')
 const { completeWithFallback } = await import('../complete-with-fallback')
 const { createOpenAICompatibleProvider } = await import('../providers/openai-compatible')
 const { resetCooldownsForTests, isCoolingDown } = await import('../model-cooldown')
+const { resetPacingForTests } = await import('../model-pacing')
 
 const PURPOSES = [
   'coaching-cue', 'summary', 'scorecard', 'tasks', 'other', 'prep-brief',
@@ -69,6 +70,7 @@ const ORIGINAL_FETCH = globalThis.fetch
 
 beforeEach(() => {
   resetCooldownsForTests()
+  resetPacingForTests()
   activeProviderId.current = null
   process.env.GROQ_API_KEY = 'test-key-not-real'
 })

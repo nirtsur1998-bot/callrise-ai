@@ -157,6 +157,19 @@ export type AIProviderErrorCode =
  *    a delisted model, an auth failure). */
 export type AIFailureClass = 'transient' | 'period-exhausted' | 'structural'
 
+/** BUG-057 Phase 5 / BUG-058 — which kind of caller is asking, for every
+ *  mechanism that treats 'live' and 'durable' differently: model-cooldown.ts's
+ *  tiered bypass (a durable caller may bypass a live-caused cooldown, never
+ *  the reverse) and model-pacing.ts's cross-purpose pacing (only durable
+ *  callers are paced, and only by another durable caller's recent use).
+ *  Declared once, here, so both modules import the same concept instead of
+ *  each declaring their own — model-cooldown.ts calls into model-pacing.ts
+ *  internally (see isUsableFor), so this also avoids a circular import
+ *  between the two. 'live' = CHAIN_BUDGET purposes (coaching-cue,
+ *  deal-tier1) with single-digit-second total budgets; 'durable' = everyone
+ *  else. */
+export type CooldownTier = 'live' | 'durable'
+
 export class AIProviderError extends Error {
   constructor(
     readonly code: AIProviderErrorCode,
