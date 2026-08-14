@@ -26,8 +26,17 @@ import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs'
 import { sanitizeConsent, type ConsentRecord } from './calls-fs'
 
 export interface ActiveConsent {
-  /** The transcription session this consent belongs to. */
-  sessionId: number
+  /** M27 E1 — the CALL this consent belongs to, not the transcription
+   *  session. A mono<->multichannel restart mid-call (turning buyer-capture
+   *  on) mints a brand-new session id in main, but it is still the same
+   *  call — keying on sessionId meant every consent check after that exact
+   *  restart silently failed for the rest of the call (fail-safe, not a
+   *  leak, but it defeated the feature the instant it was turned on). callId
+   *  is the identifier this codebase already uses for "survives a session
+   *  restart" elsewhere (see useDealIntelligence.ts/useLiveCues.ts's own
+   *  BUG-055 fix) — this doc comment's own next line already described the
+   *  invariant as call-scoped before the code did. */
+  callId: string
   consent: ConsentRecord
   /** When it was written. Metadata for the audit trail, never a gate. */
   persistedAt: string
@@ -56,7 +65,7 @@ function gatePath(): string {
  * sanitizer's invariant is applied here too, so a renderer that sent a
  * hand-built "consented" object without the flag gets nothing written.
  */
-export function persistActiveConsent(sessionId: number, raw: unknown): boolean {
+export function persistActiveConsent(callId: string, raw: unknown): boolean {
   const consent = sanitizeConsent(raw)
   if (consent.recordOtherParty !== true) {
     // Not an error — turning consent off legitimately lands here. Clear any
@@ -65,7 +74,7 @@ export function persistActiveConsent(sessionId: number, raw: unknown): boolean {
     return false
   }
   const payload: ActiveConsent = {
-    sessionId,
+    callId,
     consent,
     persistedAt: new Date().toISOString()
   }
@@ -87,9 +96,9 @@ export function readActiveConsent(): ActiveConsent | null {
     // Re-sanitized on READ as well as write, exactly like a saved call: a
     // hand-edited file claiming consent it never had collapses here.
     if (consent.recordOtherParty !== true) return null
-    if (typeof parsed?.sessionId !== 'number') return null
+    if (typeof parsed?.callId !== 'string' || !parsed.callId) return null
     return {
-      sessionId: parsed.sessionId,
+      callId: parsed.callId,
       consent,
       persistedAt: typeof parsed.persistedAt === 'string' ? parsed.persistedAt : ''
     }
@@ -110,13 +119,16 @@ export function clearActiveConsent(): void {
  * The gate itself. True only when a record on disk genuinely permits capturing
  * the other party.
  *
- * When `sessionId` is supplied it must match, so consent recorded for one call
+ * When `callId` is supplied it must match, so consent recorded for one call
  * can never authorise the next — the case that matters is a rep who consented
- * on call A, hung up, and started call B without being asked again.
+ * on call A, hung up, and started call B without being asked again. M27 E1 —
+ * deliberately NOT sessionId: a mono<->multichannel restart mid-call mints a
+ * new session id for the SAME call, and a grant that couldn't survive that
+ * restart silently stopped protecting anything for the rest of the call.
  */
-export function consentPermitsCapture(sessionId?: number): boolean {
+export function consentPermitsCapture(callId?: string): boolean {
   const active = readActiveConsent()
   if (!active) return false
-  if (typeof sessionId === 'number' && active.sessionId !== sessionId) return false
+  if (typeof callId === 'string' && active.callId !== callId) return false
   return true
 }

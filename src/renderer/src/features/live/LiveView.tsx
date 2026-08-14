@@ -190,6 +190,7 @@ export function LiveView({
     dismissMultichannelFallbackNotice,
     start,
     getSessionId,
+    getCallId,
     stop,
     togglePause,
     enableOtherParty,
@@ -372,8 +373,9 @@ export function LiveView({
     autoBuyerAttemptedRef.current = true
     // Standing consent still has to be written before capture can be armed —
     // the gate does not care WHERE the consent came from, only that a record
-    // for this call exists on disk.
-    window.api.consent.persist(getSessionId() ?? -1, consent.recordRef.current)
+    // for this call exists on disk. M27 E1 — keyed on callId, not sessionId
+    // (see main/consent-gate.ts's own doc comment for why).
+    window.api.consent.persist(getCallId() ?? '', consent.recordRef.current)
     void enableOtherParty()
   }, [
     status,
@@ -381,7 +383,7 @@ export function LiveView({
     otherPartyLive,
     otherPartyError,
     enableOtherParty,
-    getSessionId,
+    getCallId,
     consent.recordRef
   ])
 
@@ -634,8 +636,9 @@ export function LiveView({
     // Persist BEFORE arming. Main reads the consent back from disk at both the
     // arm and the grant and refuses without it, so this is not bookkeeping —
     // it is the step that makes capture possible at all. Synchronous, so the
-    // click's user activation survives into getDisplayMedia.
-    window.api.consent.persist(getSessionId() ?? -1, consent.recordRef.current)
+    // click's user activation survives into getDisplayMedia. M27 E1 — keyed
+    // on callId, not sessionId (see main/consent-gate.ts's own doc comment).
+    window.api.consent.persist(getCallId() ?? '', consent.recordRef.current)
     void enableOtherParty()
   }
 
@@ -1110,7 +1113,7 @@ export function LiveView({
         )}
       </div>
 
-      <AskCoach segments={segments} interimText={interimText} getSessionId={getSessionId} />
+      <AskCoach segments={segments} interimText={interimText} getCallId={getCallId} />
 
       {consentOpen && allowOtherPartyRecording && (
         <ConsentModal

@@ -44,18 +44,17 @@ function installMockApi(liveCueResult: unknown): { onTranscript: { current: Tran
   return { onTranscript: onTranscriptRef }
 }
 
-// Stable references, matching useTranscription's own real getCallId/
-// getSessionId contract ("a stable function reference by design" — see
-// useLiveCues.ts's own param doc comment). An inline arrow function passed
-// fresh on every render would change the effect's dependency array the
-// moment ANY state inside useLiveCues updates (e.g. setEngagementScore),
-// tearing down and re-registering the transcript subscription — including
-// clearing the just-scheduled debounce timer — before it ever fires.
+// Stable reference, matching useTranscription's own real getCallId contract
+// ("a stable function reference by design" — see useLiveCues.ts's own param
+// doc comment). An inline arrow function passed fresh on every render would
+// change the effect's dependency array the moment ANY state inside
+// useLiveCues updates (e.g. setEngagementScore), tearing down and
+// re-registering the transcript subscription — including clearing the
+// just-scheduled debounce timer — before it ever fires.
 const getCallId = (): string => 'call-1'
-const getSessionId = (): number => 1
 
 function HookHost({ onApi }: { onApi: (api: UseLiveCues) => void }): null {
-  const result = useLiveCues(true, true, getCallId, getSessionId, 'low')
+  const result = useLiveCues(true, true, getCallId, 'low')
   onApi(result)
   return null
 }

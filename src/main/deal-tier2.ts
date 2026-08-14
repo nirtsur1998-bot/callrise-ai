@@ -165,7 +165,7 @@ export async function analyzeDealTier2(input: unknown): Promise<Tier2AnalyzeResu
     compactState?: unknown
     dealContext?: unknown
     triggerReason?: unknown
-    sessionId?: unknown
+    callId?: unknown
     includesBuyerContent?: unknown
   }
   const transcriptDelta = (
@@ -182,9 +182,12 @@ export async function analyzeDealTier2(input: unknown): Promise<Tier2AnalyzeResu
 
   // M26 4.5 (BUG-055) — see deal-tier1.ts's identical check for the full
   // rationale. A pass with no buyer content has no consent question to ask.
+  // M27 E1 — keyed on callId, not sessionId; see consent-gate.ts's own doc
+  // comment for why (a mono<->multichannel restart mid-call mints a new
+  // session id for the same call).
   if (body.includesBuyerContent === true) {
-    const sessionId = typeof body.sessionId === 'number' ? body.sessionId : undefined
-    if (!consentPermitsCapture(sessionId)) {
+    const callId = typeof body.callId === 'string' ? body.callId : undefined
+    if (!consentPermitsCapture(callId)) {
       return { ok: false, blockedReason: 'consent' }
     }
   }

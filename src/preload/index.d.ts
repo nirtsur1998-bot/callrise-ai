@@ -67,8 +67,10 @@ export type PostCallBriefEvent =
 /** The durable consent gate: main reads capture permission from disk, never
  *  from the renderer's word for it (acceptance criterion 11). */
 export interface ConsentGateApi {
-  /** Write this call's consent. Returns false when it does not permit capture. */
-  persist: (sessionId: number, consent: ConsentRecord) => boolean
+  /** Write this call's consent. Returns false when it does not permit
+   *  capture. Keyed on callId, not sessionId — M27 E1, see
+   *  main/consent-gate.ts's own doc comment for why. */
+  persist: (callId: string, consent: ConsentRecord) => boolean
   /** Drop the record — call ended, or consent revoked. */
   clear: () => void
 }
@@ -167,10 +169,11 @@ export interface TranscriptionApi {
   askCoach: (
     transcript: string,
     question: string,
-    /** 1.2.5 hotfix — see main/live-cue.ts's own doc comment: lets main check
-     *  fresh consent before a pass that may include buyer-attributed content
-     *  ever reaches an AI prompt. */
-    sessionId?: number,
+    /** 1.2.5 hotfix, M27 E1 — see main/live-cue.ts's own doc comment: lets
+     *  main check fresh consent before a pass that may include
+     *  buyer-attributed content ever reaches an AI prompt. Keyed on callId,
+     *  not sessionId (see main/consent-gate.ts's own doc comment for why). */
+    callId?: string,
     includesBuyerContent?: boolean
   ) => Promise<
     | { ok: true; headline: string; tips: string[] }
@@ -180,10 +183,11 @@ export interface TranscriptionApi {
   liveCue: (
     transcript: string,
     repSpeaker: number | null,
-    /** M26 4.5 (BUG-055) — see main/live-cue.ts's own doc comment: lets main
-     *  check fresh consent before a pass that may include buyer-attributed
-     *  content ever reaches an AI prompt. */
-    sessionId?: number,
+    /** M26 4.5 (BUG-055) / M27 E1 — see main/live-cue.ts's own doc comment:
+     *  lets main check fresh consent before a pass that may include
+     *  buyer-attributed content ever reaches an AI prompt. Keyed on callId,
+     *  not sessionId. */
+    callId?: string,
     includesBuyerContent?: boolean
   ) => Promise<
     | {
@@ -283,8 +287,9 @@ export interface DealIntelligenceApi {
     compactState: string
     dealContext?: string
     triggerReason?: string
-    /** M26 4.5 (BUG-055) — see main/deal-tier1.ts's own doc comment. */
-    sessionId?: number
+    /** M26 4.5 (BUG-055) / M27 E1 — see main/deal-tier1.ts's own doc
+     *  comment. Keyed on callId, not sessionId. */
+    callId?: string
     includesBuyerContent?: boolean
   }) => Promise<DealTier1Result>
   analyzeTier2: (input: {
@@ -292,7 +297,7 @@ export interface DealIntelligenceApi {
     compactState: string
     dealContext?: string
     triggerReason?: string
-    sessionId?: number
+    callId?: string
     includesBuyerContent?: boolean
   }) => Promise<DealTier2Result>
   /** M24 §8 — the feedback loop. */

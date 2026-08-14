@@ -123,11 +123,6 @@ export function useDealIntelligence(
    *  hoisted above the navigation boundary — a screen remount). Only a change
    *  in THIS value, not in `active`, may trigger the per-call reset below. */
   getCallId: () => string | null,
-  /** M26 4.5 (BUG-055) — from useTranscription's getSessionId(). Passed with
-   *  every Tier 1/Tier 2 call so main can check FRESH consent (never a
-   *  renderer-held snapshot) before any buyer-attributed turn in the batch
-   *  reaches an AI prompt. */
-  getSessionId: () => number | null,
   sensitivity: Sensitivity,
   agendaTopics: string[] = [],
   /** LiveView's own currentMeeting (§5 context fusion) — null when this call
@@ -328,7 +323,7 @@ export function useDealIntelligence(
           compactState,
           dealContext: dealContextRef.current,
           triggerReason,
-          sessionId: getSessionId() ?? undefined,
+          callId: getCallId() ?? undefined,
           includesBuyerContent: turns.some((t) => t.role === 'other')
         })
         if (myGeneration !== generationRef.current) return // stale — reset() ran mid-flight
@@ -372,7 +367,7 @@ export function useDealIntelligence(
         if (myGeneration === generationRef.current) tier1InFlightRef.current = false
       }
     },
-    [enabled, getSessionId]
+    [enabled, getCallId]
   )
 
   const runTier2Pass = useCallback(
@@ -408,7 +403,7 @@ export function useDealIntelligence(
           compactState,
           dealContext: dealContextRef.current,
           triggerReason,
-          sessionId: getSessionId() ?? undefined,
+          callId: getCallId() ?? undefined,
           includesBuyerContent: turns.some((t) => t.role === 'other')
         })
         if (myGeneration !== generationRef.current) return
@@ -461,7 +456,7 @@ export function useDealIntelligence(
         if (myGeneration === generationRef.current) tier2InFlightRef.current = false
       }
     },
-    [enabled, getSessionId]
+    [enabled, getCallId]
   )
 
   // The ~20s Tier 1 idle cadence — fires regardless of Tier 0 activity, so a

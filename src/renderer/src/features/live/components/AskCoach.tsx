@@ -16,14 +16,15 @@ interface Answer {
 export function AskCoach({
   segments,
   interimText,
-  getSessionId
+  getCallId
 }: {
   segments: CallSegment[]
   interimText: string
-  /** 1.2.5 hotfix — see main/live-cue.ts's own doc comment: lets main check
-   *  fresh consent before a pass that may include buyer-attributed content
-   *  ever reaches an AI prompt. */
-  getSessionId: () => number | null
+  /** 1.2.5 hotfix, M27 E1 — see main/live-cue.ts's own doc comment: lets
+   *  main check fresh consent before a pass that may include
+   *  buyer-attributed content ever reaches an AI prompt. Keyed on callId,
+   *  not sessionId (see main/consent-gate.ts's own doc comment for why). */
+  getCallId: () => string | null
 }): React.JSX.Element {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -47,7 +48,7 @@ export function AskCoach({
       const res = await window.api.transcription.askCoach(
         transcript,
         q,
-        getSessionId() ?? undefined,
+        getCallId() ?? undefined,
         includesBuyerContent
       )
       if (res.ok) {

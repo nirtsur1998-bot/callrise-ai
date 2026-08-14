@@ -82,9 +82,12 @@ export function registerLoopbackCapture(): void {
   // renderer calls it inside the click that opens getDisplayMedia — an async
   // round-trip would spend the user activation the browser requires, and the
   // capture prompt would never appear.
-  ipcMain.on('consent:persist', (event, payload: { sessionId: number; consent: unknown }) => {
-    const sessionId = Number(payload?.sessionId)
-    const ok = Number.isFinite(sessionId) ? persistActiveConsent(sessionId, payload?.consent) : false
+  // M27 E1 — keyed on callId, not sessionId (see consent-gate.ts's own doc
+  // comment for why: a mono<->multichannel restart mid-call mints a new
+  // session id for the same call).
+  ipcMain.on('consent:persist', (event, payload: { callId: string; consent: unknown }) => {
+    const callId = typeof payload?.callId === 'string' ? payload.callId : ''
+    const ok = callId ? persistActiveConsent(callId, payload?.consent) : false
     event.returnValue = ok
     // M26 Phase 4.2 — copy the grant into the call's own journal.
     //

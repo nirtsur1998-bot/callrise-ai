@@ -69,24 +69,26 @@ const api = {
     onMultichannelFallback: (cb: (payload: unknown) => void) =>
       subscribe('transcription:multichannelFallback', cb),
     suggestQuestion: (text: string) => ipcRenderer.invoke('live:suggestQuestion', text),
-    // 1.2.5 hotfix — sessionId + includesBuyerContent, same shape as liveCue
-    // below, let main check fresh consent before a pass that may include
-    // buyer-attributed content ever reaches an AI prompt.
+    // 1.2.5 hotfix, M27 E1 — callId + includesBuyerContent, same shape as
+    // liveCue below, let main check fresh consent before a pass that may
+    // include buyer-attributed content ever reaches an AI prompt. Keyed on
+    // callId, not sessionId (see main/consent-gate.ts's own doc comment).
     askCoach: (
       transcript: string,
       question: string,
-      sessionId?: number,
+      callId?: string,
       includesBuyerContent?: boolean
-    ) => ipcRenderer.invoke('live:askCoach', { transcript, question, sessionId, includesBuyerContent }),
-    // M26 4.5 (BUG-055) — sessionId + includesBuyerContent let main check
-    // fresh consent before a pass that may include buyer-attributed content
-    // ever reaches an AI prompt. See main/live-cue.ts's own doc comment.
+    ) => ipcRenderer.invoke('live:askCoach', { transcript, question, callId, includesBuyerContent }),
+    // M26 4.5 (BUG-055) / M27 E1 — callId + includesBuyerContent let main
+    // check fresh consent before a pass that may include buyer-attributed
+    // content ever reaches an AI prompt. See main/live-cue.ts's own doc
+    // comment.
     liveCue: (
       transcript: string,
       repSpeaker: number | null,
-      sessionId?: number,
+      callId?: string,
       includesBuyerContent?: boolean
-    ) => ipcRenderer.invoke('live:cue', { transcript, repSpeaker, sessionId, includesBuyerContent })
+    ) => ipcRenderer.invoke('live:cue', { transcript, repSpeaker, callId, includesBuyerContent })
   },
   trackers: {
     /** Turn a rep's plain-English request into a candidate tracker (§4.8).
@@ -105,8 +107,9 @@ const api = {
       compactState: string
       dealContext?: string
       triggerReason?: string
-      /** M26 4.5 (BUG-055) — see main/deal-tier1.ts's own doc comment. */
-      sessionId?: number
+      /** M26 4.5 (BUG-055) / M27 E1 — see main/deal-tier1.ts's own doc
+       *  comment. Keyed on callId, not sessionId. */
+      callId?: string
       includesBuyerContent?: boolean
     }) => ipcRenderer.invoke('dealIntelligence:analyzeTier1', input),
     /** M24 §4 — Tier 2 strategic analysis: a wider transcript delta +
@@ -117,7 +120,7 @@ const api = {
       compactState: string
       dealContext?: string
       triggerReason?: string
-      sessionId?: number
+      callId?: string
       includesBuyerContent?: boolean
     }) => ipcRenderer.invoke('dealIntelligence:analyzeTier2', input),
     /** M24 §8 — the feedback loop. recordFeedback fires immediately per
@@ -350,8 +353,10 @@ const api = {
   consent: {
     // Synchronous, like arm/disarm: this runs inside the click that opens
     // getDisplayMedia, and an async hop would spend the user activation.
-    persist: (sessionId: number, consent: unknown): boolean =>
-      ipcRenderer.sendSync('consent:persist', { sessionId, consent }) === true,
+    // M27 E1 — keyed on callId, not sessionId (see main/consent-gate.ts's
+    // own doc comment for why).
+    persist: (callId: string, consent: unknown): boolean =>
+      ipcRenderer.sendSync('consent:persist', { callId, consent }) === true,
     clear: (): void => {
       ipcRenderer.sendSync('consent:clear')
     }

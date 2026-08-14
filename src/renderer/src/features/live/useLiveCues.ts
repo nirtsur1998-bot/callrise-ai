@@ -252,11 +252,6 @@ export function useLiveCues(
    *  navigate-away-and-back — or, mid-call, a buyer-capture toggle — silently
    *  wipe the interrupt channel's cooldown/dedupe state. */
   getCallId: () => string | null,
-  /** M26 4.5 (BUG-055) — from useTranscription's getSessionId(). Passed with
-   *  every liveCue() call so main can check FRESH consent (never a
-   *  renderer-held snapshot) before any buyer-attributed content in the
-   *  window reaches an AI prompt. */
-  getSessionId: () => number | null,
   sensitivity: Sensitivity,
   knownRepSpeaker: number | null = null,
   /** Told to the transcript the moment the rep is identified, so already-
@@ -581,7 +576,7 @@ export function useLiveCues(
         .slice(-WINDOW_TURNS)
         .some((t) => t.channel !== undefined && t.channel !== knownRepRef.current)
       void window.api.transcription
-        .liveCue(transcript, repSpeakerRef.current, getSessionId() ?? undefined, includesBuyerContent)
+        .liveCue(transcript, repSpeakerRef.current, getCallId() ?? undefined, includesBuyerContent)
         .then((res) => {
           if (!mountedRef.current || generation !== generationRef.current) return
           if (!res.ok) {
@@ -749,7 +744,7 @@ export function useLiveCues(
       offUtteranceEnd()
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [active, enabled, clearCue, getCallId, getSessionId])
+  }, [active, enabled, clearCue, getCallId])
 
   return {
     cue,

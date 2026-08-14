@@ -144,7 +144,7 @@ export async function askCoach(input: unknown): Promise<AskCoachResult> {
   const body = (input ?? {}) as {
     transcript?: unknown
     question?: unknown
-    sessionId?: unknown
+    callId?: unknown
     includesBuyerContent?: unknown
   }
   const transcript = (typeof body.transcript === 'string' ? body.transcript : '').slice(-100_000)
@@ -160,9 +160,14 @@ export async function askCoach(input: unknown): Promise<AskCoachResult> {
   // ship the buyer's already-captured words to the AI provider. Same fix,
   // same principle: PERMISSION is always re-read, never trusted from an
   // earlier moment in the call.
+  //
+  // M27 E1 — keyed on callId, not sessionId (see consent-gate.ts's own doc
+  // comment): a mono<->multichannel restart mid-call mints a new session id
+  // for the same call, and a grant that couldn't survive that restart
+  // silently stopped protecting anything for the rest of the call.
   if (body.includesBuyerContent === true) {
-    const sessionId = typeof body.sessionId === 'number' ? body.sessionId : undefined
-    if (!consentPermitsCapture(sessionId)) {
+    const callId = typeof body.callId === 'string' ? body.callId : undefined
+    if (!consentPermitsCapture(callId)) {
       return {
         ok: false,
         blockedReason: 'consent',
@@ -416,7 +421,7 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
   const body = (input ?? {}) as {
     transcript?: unknown
     repSpeaker?: unknown
-    sessionId?: unknown
+    callId?: unknown
     includesBuyerContent?: unknown
   }
   const transcript = (typeof body.transcript === 'string' ? body.transcript : '').slice(-MAX_INPUT)
@@ -431,9 +436,13 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
   // content" from it — a diarization guess is not a genuine other-party
   // signal either way (BUG-002). The caller (useLiveCues.ts) tells main
   // explicitly, from real channel-tagged data.
+  //
+  // M27 E1 — keyed on callId, not sessionId; see consent-gate.ts's own doc
+  // comment for why (a mono<->multichannel restart mid-call mints a new
+  // session id for the same call).
   if (body.includesBuyerContent === true) {
-    const sessionId = typeof body.sessionId === 'number' ? body.sessionId : undefined
-    if (!consentPermitsCapture(sessionId)) {
+    const callId = typeof body.callId === 'string' ? body.callId : undefined
+    if (!consentPermitsCapture(callId)) {
       return { ok: false, blockedReason: 'consent' }
     }
   }

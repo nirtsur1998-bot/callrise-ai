@@ -221,7 +221,7 @@ export async function analyzeDealTier1(input: unknown): Promise<Tier1AnalyzeResu
     compactState?: unknown
     dealContext?: unknown
     triggerReason?: unknown
-    sessionId?: unknown
+    callId?: unknown
     includesBuyerContent?: unknown
   }
   const transcriptDelta = (
@@ -244,9 +244,13 @@ export async function analyzeDealTier1(input: unknown): Promise<Tier1AnalyzeResu
   // content at all has no consent question to ask — mono/diarized turns were
   // never gated on this (BUG-002), and this must not become the first place
   // that changes.
+  //
+  // M27 E1 — keyed on callId, not sessionId; see consent-gate.ts's own doc
+  // comment for why (a mono<->multichannel restart mid-call mints a new
+  // session id for the same call).
   if (body.includesBuyerContent === true) {
-    const sessionId = typeof body.sessionId === 'number' ? body.sessionId : undefined
-    if (!consentPermitsCapture(sessionId)) {
+    const callId = typeof body.callId === 'string' ? body.callId : undefined
+    if (!consentPermitsCapture(callId)) {
       return { ok: false, blockedReason: 'consent' }
     }
   }

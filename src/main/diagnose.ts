@@ -164,7 +164,7 @@ export function buildDiagnoseReport(): string {
   if (!consent) {
     push('  active grant      : none on disk — buyer capture cannot start')
   } else {
-    push(`  active grant      : session ${consent.sessionId}, status ${consent.consent.status}`)
+    push(`  active grant      : call ${consent.callId}, status ${consent.consent.status}`)
     push(`  permits capture   : ${yesNo(consent.consent.recordOtherParty)}`)
     push(`  method            : ${consent.consent.method ?? 'unrecorded'}`)
   }

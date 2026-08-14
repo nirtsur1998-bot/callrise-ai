@@ -57,13 +57,12 @@ function installMockApi(): {
   return { onTranscript: onTranscriptRef, liveCue }
 }
 
-// Stable references — see useLiveCues.pausedReason.test.ts's identical
-// comment for why these must not be fresh closures per render.
+// Stable reference — see useLiveCues.pausedReason.test.ts's identical
+// comment for why this must not be a fresh closure per render.
 const getCallId = (): string => 'call-1'
-const getSessionId = (): number => 1
 
 function HookHost({ onApi }: { onApi: (api: UseLiveCues) => void }): null {
-  const result = useLiveCues(true, true, getCallId, getSessionId, 'low')
+  const result = useLiveCues(true, true, getCallId, 'low')
   onApi(result)
   return null
 }
