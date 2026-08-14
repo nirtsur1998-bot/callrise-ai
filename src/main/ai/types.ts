@@ -190,7 +190,22 @@ export class AIProviderError extends Error {
      *  undefined as 'transient', not the most severe class: an ambiguous
      *  failure should default to whichever class self-heals fastest even on
      *  a wrong guess, not to the one that's hardest to recover from. */
-    readonly failureClass?: AIFailureClass
+    readonly failureClass?: AIFailureClass,
+    /** BUG-058 Phase 3 — when the underlying QUOTA actually resets, epoch ms.
+     *  Deliberately separate from retryAfterMs: that answers "how long until
+     *  worth retrying" (short, drives cooldown DURATION); this answers "when
+     *  does the account-level cap actually clear" (potentially much longer,
+     *  drives MESSAGING only — see purpose-health.ts's messageFor). Set only
+     *  where a real signal exists: a provider's own reset header/field
+     *  (Anthropic, OpenRouter), or a provider's documented FIXED reset
+     *  schedule computed from `now` (Groq: midnight UTC; Gemini: midnight
+     *  Pacific) when the failure is already classified period-exhausted —
+     *  never a guess. Undefined everywhere else, including every ordinary
+     *  (non-period-exhausted) rate limit: an honest "we don't know" beats a
+     *  number that looks precise and isn't. See
+     *  docs/BUG-058-shared-resource-pacing-design.md §3 for the per-provider
+     *  research this is built from. */
+    readonly resetsAt?: number
   ) {
     super(message)
     this.name = 'AIProviderError'

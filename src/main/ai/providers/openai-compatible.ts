@@ -185,20 +185,67 @@ export function retryAfterMsFrom(err: unknown): number | undefined {
   return undefined
 }
 
+/**
+ * BUG-058 Phase 3 — the underlying quota's real (or documented-fixed-
+ * schedule) reset time, for messaging only (see AIProviderError.resetsAt's
+ * own doc comment — separate concept from retryAfterMsFrom's short-term
+ * hint). Only called once a failure is ALREADY classified period-exhausted:
+ * an ordinary per-minute 429 has nothing to do with a daily clock.
+ *
+ * - OpenRouter: `X-RateLimit-Reset`, a real Unix-MS timestamp on rate-limit
+ *   error responses — read directly, no computation, no guessing.
+ * - Groq: no live header exists for the DAILY cap specifically (Groq's own
+ *   docs: track it yourself, it resets at a fixed midnight UTC) — computed
+ *   here from `now`, and labeled in this function's own name/doc as a
+ *   documented schedule, not a parsed value, so a future Groq policy change
+ *   reads as a stale assumption here, not a parsing bug.
+ * - NVIDIA/Cerebras/Mistral: unconfirmed by this session's research —
+ *   returns undefined, the honest default, same as no signal at all.
+ *
+ * Exported for direct unit testing, same reasoning as retryAfterMsFrom.
+ */
+export function resetsAtFrom(providerId: AIProviderId, err: unknown, now: number): number | undefined {
+  if (providerId === 'openrouter') {
+    const headers = (err as { headers?: unknown })?.headers
+    if (!headers) return undefined
+    const get = (name: string): string | null =>
+      typeof (headers as Headers).get === 'function'
+        ? (headers as Headers).get(name)
+        : ((headers as Record<string, string | undefined>)[name] ?? null)
+    const raw = get('x-ratelimit-reset')
+    if (!raw) return undefined
+    const n = Number(raw)
+    return Number.isFinite(n) && n > 0 ? n : undefined
+  }
+  if (providerId === 'groq') {
+    const next = new Date(now)
+    return Date.UTC(next.getUTCFullYear(), next.getUTCMonth(), next.getUTCDate() + 1, 0, 0, 0, 0)
+  }
+  return undefined
+}
+
 /** Exported for direct unit testing, same reasoning as resolveMaxTokensField
  *  below — asserting on error mapping shouldn't require standing up a real
- *  OpenAI client. */
-export function toProviderError(displayName: string, err: unknown): AIProviderError {
+ *  OpenAI client. `providerId` distinguishes which of the six providers this
+ *  config instance is (BUG-058 Phase 3 — resetsAtFrom needs to know, since
+ *  only Groq/OpenRouter currently have a real-or-documented reset signal). */
+export function toProviderError(
+  displayName: string,
+  providerId: AIProviderId,
+  err: unknown
+): AIProviderError {
   if (err instanceof OpenAI.AuthenticationError) {
     return new AIProviderError('auth', `Your ${displayName} API key was rejected.`, undefined, 'structural')
   }
   if (err instanceof OpenAI.RateLimitError) {
     const msg = typeof err.message === 'string' ? err.message : ''
+    const failureClass = classifyFailureClass('rate-limit', { message: msg, status: err.status ?? undefined })
     return new AIProviderError(
       'rate-limit',
       `${displayName} is rate-limiting requests right now.`,
       retryAfterMsFrom(err),
-      classifyFailureClass('rate-limit', { message: msg, status: err.status ?? undefined })
+      failureClass,
+      failureClass === 'period-exhausted' ? resetsAtFrom(providerId, err, Date.now()) : undefined
     )
   }
   if (err instanceof OpenAI.NotFoundError) {
@@ -233,11 +280,13 @@ export function toProviderError(displayName: string, err: unknown): AIProviderEr
       )
     }
     if (err.status === 429) {
+      const failureClass = classifyFailureClass('rate-limit', { message: msg, status: err.status ?? undefined })
       return new AIProviderError(
         'rate-limit',
         `${displayName} is rate-limiting requests right now.`,
         retryAfterMsFrom(err),
-        classifyFailureClass('rate-limit', { message: msg, status: err.status ?? undefined })
+        failureClass,
+        failureClass === 'period-exhausted' ? resetsAtFrom(providerId, err, Date.now()) : undefined
       )
     }
     if (err.status === 404) {
@@ -337,7 +386,7 @@ class OpenAICompatibleProvider implements AIProvider {
       return { text: message.content ?? '', model, usage }
     } catch (err) {
       if (err instanceof AIProviderError) throw err
-      throw toProviderError(this.displayName, err)
+      throw toProviderError(this.displayName, this.id, err)
     }
   }
 
@@ -346,6 +395,7 @@ class OpenAICompatibleProvider implements AIProvider {
     const model = req.model ?? this.config.defaultModel
     const client = this.client
     const displayName = this.displayName
+    const providerId = this.id
     const maxTokensField = this.maxTokensField(req.maxTokens)
 
     let resolveUsage: (u: AIUsage) => void
@@ -392,7 +442,7 @@ class OpenAICompatibleProvider implements AIProvider {
         resolveUsage(usageFrom(inputTokens, outputTokens))
       } catch (err) {
         resolveUsage({ inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 })
-        throw err instanceof AIProviderError ? err : toProviderError(displayName, err)
+        throw err instanceof AIProviderError ? err : toProviderError(displayName, providerId, err)
       }
     }
 
@@ -413,7 +463,7 @@ class OpenAICompatibleProvider implements AIProvider {
       )
       return { ok: true, models: await this.listModels() }
     } catch (err) {
-      const providerErr = toProviderError(this.displayName, err)
+      const providerErr = toProviderError(this.displayName, this.id, err)
       return { ok: false, reason: providerErr.message }
     }
   }

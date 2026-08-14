@@ -79,6 +79,8 @@ function sanitize(value: unknown): HealthMap {
       lastFailureReason: (e.lastFailureReason as PurposeHealth['lastFailureReason']) ?? null,
       lastFailureProviderId: (e.lastFailureProviderId as AIProviderId | null) ?? null,
       lastFailureDetail: typeof e.lastFailureDetail === 'string' ? e.lastFailureDetail : null,
+      lastFailureClass: (e.lastFailureClass as PurposeHealth['lastFailureClass']) ?? null,
+      lastFailureResetsAt: typeof e.lastFailureResetsAt === 'number' ? e.lastFailureResetsAt : null,
       lastSuccessAt: typeof e.lastSuccessAt === 'string' ? e.lastSuccessAt : null,
       lastSuccessProviderId: (e.lastSuccessProviderId as AIProviderId | null) ?? null,
       substitutingSince: typeof e.substitutingSince === 'string' ? e.substitutingSince : null,

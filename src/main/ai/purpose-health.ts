@@ -14,7 +14,7 @@
 // minutes on the founder's machine), pruning is a read-modify-write after
 // every append, and coaching-cue fires roughly every 2.5s mid-call. A counter
 // is state — twelve purposes times a few scalars — not events.
-import type { AIProviderErrorCode, AIProviderId } from './types'
+import type { AIFailureClass, AIProviderErrorCode, AIProviderId } from './types'
 
 /** Three separate failure occasions. Not a new number: it is
  *  objection-scan-tally.ts's CONSECUTIVE_FAILURE_LIMIT, the same "three in a
@@ -75,6 +75,18 @@ export interface PurposeHealth {
   lastFailureReason: AIProviderErrorCode | null
   lastFailureProviderId: AIProviderId | null
   lastFailureDetail: string | null
+  /** BUG-058 Phase 3 — HOW the last failure behaves over time (see
+   *  AIFailureClass in types.ts), so messageFor() can tell an ordinary
+   *  rate-limit apart from a genuine quota exhaustion — today collapsed
+   *  into the same lastFailureReason ('rate-limit') for both. Null whenever
+   *  the failure had nothing to classify from, same convention as every
+   *  other lastFailure* field. */
+  lastFailureClass: AIFailureClass | null
+  /** BUG-058 Phase 3 — when the exhausted quota actually resets, epoch ms,
+   *  when a real signal or documented fixed schedule exists (see
+   *  AIProviderError.resetsAt's own doc comment). Null otherwise — the
+   *  honest "we don't know" case messageFor() must say plainly, not guess. */
+  lastFailureResetsAt: number | null
   lastSuccessAt: string | null
   lastSuccessProviderId: AIProviderId | null
   /** When the current substitute-only run began; null while a step the user
@@ -95,6 +107,8 @@ export function emptyHealth(): PurposeHealth {
     lastFailureReason: null,
     lastFailureProviderId: null,
     lastFailureDetail: null,
+    lastFailureClass: null,
+    lastFailureResetsAt: null,
     lastSuccessAt: null,
     lastSuccessProviderId: null,
     substitutingSince: null,
@@ -142,6 +156,9 @@ export interface FailureInfo {
   reason: AIProviderErrorCode
   providerId: AIProviderId | null
   detail?: string
+  /** BUG-058 Phase 3 — see PurposeHealth.lastFailureClass/lastFailureResetsAt. */
+  failureClass?: AIFailureClass
+  resetsAt?: number
 }
 
 export function recordFailure(h: PurposeHealth, at: string, info: FailureInfo): PurposeHealth {
@@ -155,7 +172,9 @@ export function recordFailure(h: PurposeHealth, at: string, info: FailureInfo): 
     lastFailureAt: at,
     lastFailureReason: info.reason,
     lastFailureProviderId: info.providerId,
-    lastFailureDetail: info.detail ?? null
+    lastFailureDetail: info.detail ?? null,
+    lastFailureClass: info.failureClass ?? null,
+    lastFailureResetsAt: info.resetsAt ?? null
   }
 }
 
@@ -194,6 +213,14 @@ export function severityOf(
   return countTrip || staleTrip ? 'failing' : 'ok'
 }
 
+/** BUG-058 Phase 3 — local wall-clock time only ("around 4:30 PM"), never a
+ *  date: PERIOD_EXHAUSTED_MAX_MS (model-cooldown.ts) already caps how far
+ *  out this can be at 24h, so a bare time is always unambiguous ("today" or
+ *  "tomorrow" is implied by context, not worth spelling out). */
+function formatResetTime(resetsAt: number): string {
+  return new Date(resetsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
 /** What to actually tell the user, per cause. An indicator that says
  *  "something's wrong" with no next step is the weak version of this feature. */
 export function messageFor(
@@ -207,6 +234,21 @@ export function messageFor(
         action: 'ai-setup'
       }
     case 'rate-limit':
+      // BUG-058 Phase 3 — a genuine quota exhaustion (daily/monthly free-tier
+      // cap) reads very differently from an ordinary per-minute throttle: no
+      // amount of waiting a few seconds fixes it, so the copy says so
+      // honestly, with a real reset time when one exists and an explicit
+      // "we don't know" when it doesn't — never a guessed duration dressed
+      // up as a fact.
+      if (h.lastFailureClass === 'period-exhausted') {
+        return {
+          text:
+            h.lastFailureResetsAt !== null
+              ? `${providerName}'s free-tier quota is used up — resets around ${formatResetTime(h.lastFailureResetsAt)}. Add another provider's key, or wait.`
+              : `${providerName}'s free-tier quota is used up. We don't know exactly when it resets — add another provider's key, or check back later.`,
+          action: 'ai-setup'
+        }
+      }
       return {
         text: `${providerName} is rate-limiting your key. Adding a second provider's key lets this fall back instead of failing.`,
         action: 'ai-setup'

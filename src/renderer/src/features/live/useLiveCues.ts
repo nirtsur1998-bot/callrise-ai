@@ -220,7 +220,7 @@ export interface UseLiveCues {
   coachingPaused: boolean
   /** BUG-057 Phase 2 — WHY coachingPaused is true, for copy only. undefined
    *  whenever coachingPaused is false. */
-  coachingPausedReason: 'all-models-unavailable' | 'timed-out' | undefined
+  coachingPausedReason: 'all-models-unavailable' | 'timed-out' | 'quota-exhausted' | undefined
 }
 
 /**
@@ -271,7 +271,7 @@ export function useLiveCues(
   // rate-limited"), but nothing else in this hook needs to branch on it —
   // every other consumer only ever needed "is coaching paused right now."
   const [coachingPausedReason, setCoachingPausedReason] = useState<
-    'all-models-unavailable' | 'timed-out' | undefined
+    'all-models-unavailable' | 'timed-out' | 'quota-exhausted' | undefined
   >(undefined)
   const monologueRef = useRef(new MonologueTracker())
 

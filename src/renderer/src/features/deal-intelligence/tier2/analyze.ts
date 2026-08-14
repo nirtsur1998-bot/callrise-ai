@@ -16,7 +16,11 @@ export interface Tier2AnalyzeInput {
 
 export type Tier2AnalyzeOutcome =
   | { ok: true; score: number; factors: HealthFactors; topRecommendation: string }
-  | { ok: false; pausedReason?: 'all-models-unavailable' | 'timed-out'; blockedReason?: 'consent' }
+  | {
+      ok: false
+      pausedReason?: 'all-models-unavailable' | 'timed-out' | 'quota-exhausted'
+      blockedReason?: 'consent'
+    }
 
 export async function analyzeTier2(input: Tier2AnalyzeInput): Promise<Tier2AnalyzeOutcome> {
   try {

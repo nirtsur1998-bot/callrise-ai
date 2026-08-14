@@ -284,8 +284,14 @@ export type LiveCueResult =
        *  paused" and the rep saw nothing. Consumers that only need the
        *  boolean ("is coaching paused right now") should check
        *  `!== undefined`, never compare to one literal — that comparison is
-       *  exactly the bug this comment exists to prevent recurring. */
-      pausedReason?: 'all-models-unavailable' | 'timed-out'
+       *  exactly the bug this comment exists to prevent recurring.
+       *
+       *  BUG-058 Phase 3 — 'quota-exhausted' added: a genuine free-tier
+       *  quota exhaustion reads very differently from an ordinary rate
+       *  limit (no amount of waiting seconds fixes it), and the renderer's
+       *  own `!== undefined` check above already treats any pausedReason as
+       *  paused, so this widens for free. */
+      pausedReason?: 'all-models-unavailable' | 'timed-out' | 'quota-exhausted'
       /** M26 4.5 (BUG-055) — see deal-tier1.ts's Tier1AnalyzeResult for the
        *  full rationale. Never read as "paused" by the renderer. */
       blockedReason?: 'consent'
@@ -515,7 +521,12 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
       console.log(
         `[live-cue] all models exhausted: ${err.attempts.map((a) => a.reason).join(', ')}`
       )
-      return { ok: false, pausedReason: 'all-models-unavailable' }
+      // BUG-058 Phase 3 — a genuine quota exhaustion (daily/monthly free-tier
+      // cap) is a different condition from an ordinary rate limit, and the
+      // rep deserves to know which: `attempts` already carries per-step
+      // failureClass (see complete-with-fallback.ts), so this is free.
+      const quotaExhausted = err.attempts.some((a) => a.failureClass === 'period-exhausted')
+      return { ok: false, pausedReason: quotaExhausted ? 'quota-exhausted' : 'all-models-unavailable' }
     }
     if (err instanceof AIProviderError) {
       // BUG-057 Phase 2 — these two used to fall straight through to the

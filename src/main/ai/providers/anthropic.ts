@@ -52,17 +52,45 @@ function usageFrom(model: string, inputTokens: number, outputTokens: number): AI
   }
 }
 
-function toProviderError(err: unknown): AIProviderError {
+/** BUG-058 Phase 3 — Anthropic sends real ISO-8601 reset timestamps on every
+ *  response (`anthropic-ratelimit-requests-reset` / `-tokens-reset`), not
+ *  just 429s — confirmed against the SDK's own `RateLimitError.headers`
+ *  (`core/error.d.ts`: a standard Fetch `Headers`, always populated on an
+ *  APIError). Never parsed before this. Which resource actually caused the
+ *  429 isn't told to us, so this takes the LATER of the two when both are
+ *  present: an earlier timestamp could still be blocked if the OTHER
+ *  resource is what was actually exhausted, and overstating the wait is a
+ *  smaller error than promising a time that's still limited. */
+function resetsAtFromHeaders(headers: Headers | undefined): number | undefined {
+  if (!headers) return undefined
+  const candidates = ['anthropic-ratelimit-requests-reset', 'anthropic-ratelimit-tokens-reset']
+    .map((name) => headers.get(name))
+    .filter((v): v is string => v !== null)
+    .map((v) => Date.parse(v))
+    .filter((v) => Number.isFinite(v))
+  return candidates.length > 0 ? Math.max(...candidates) : undefined
+}
+
+/** Exported for direct unit testing, same reasoning as
+ *  openai-compatible.ts's own toProviderError export — asserting on error
+ *  mapping (including BUG-058 Phase 3's resetsAt) shouldn't require
+ *  standing up a real Anthropic client. */
+export function toProviderError(err: unknown): AIProviderError {
   if (err instanceof Anthropic.AuthenticationError) {
     return new AIProviderError('auth', 'Your Anthropic API key was rejected.', undefined, 'structural')
   }
   if (err instanceof Anthropic.RateLimitError) {
     const msg = typeof err.message === 'string' ? err.message : ''
+    const failureClass = classifyFailureClass('rate-limit', { message: msg, status: err.status ?? undefined })
     return new AIProviderError(
       'rate-limit',
       'Anthropic is rate-limiting requests right now.',
       undefined,
-      classifyFailureClass('rate-limit', { message: msg, status: err.status ?? undefined })
+      failureClass,
+      // Messaging-only — only worth attaching when this IS the period-
+      // exhausted case messageFor() actually branches on; an ordinary
+      // per-minute throttle has no use for a reset timestamp.
+      failureClass === 'period-exhausted' ? resetsAtFromHeaders(err.headers) : undefined
     )
   }
   if (err instanceof Anthropic.APIConnectionError) {

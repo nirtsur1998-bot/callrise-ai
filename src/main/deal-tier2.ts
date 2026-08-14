@@ -69,8 +69,9 @@ export type Tier2AnalyzeResult =
       /** Same shape/meaning as deal-tier1.ts's pausedReason — the renderer
        *  reuses the same "paused" status rather than a second indicator.
        *  BUG-057 Phase 2 — 'timed-out' added; see live-cue.ts's identical
-       *  field for the full rationale. */
-      pausedReason?: 'all-models-unavailable' | 'timed-out'
+       *  field for the full rationale. BUG-058 Phase 3 — 'quota-exhausted'
+       *  added the same way. */
+      pausedReason?: 'all-models-unavailable' | 'timed-out' | 'quota-exhausted'
       /** M26 4.5 (BUG-055) — see deal-tier1.ts's Tier1AnalyzeResult for the
        *  full rationale. Never read as "paused" by the renderer. */
       blockedReason?: 'consent'
@@ -225,7 +226,9 @@ export async function analyzeDealTier2(input: unknown): Promise<Tier2AnalyzeResu
       console.log(
         `[deal-tier2] all models exhausted: ${err.attempts.map((a) => a.reason).join(', ')}`
       )
-      return { ok: false, pausedReason: 'all-models-unavailable' }
+      // BUG-058 Phase 3 — see live-cue.ts's identical branch.
+      const quotaExhausted = err.attempts.some((a) => a.failureClass === 'period-exhausted')
+      return { ok: false, pausedReason: quotaExhausted ? 'quota-exhausted' : 'all-models-unavailable' }
     }
     if (err instanceof AIProviderError) {
       // BUG-057 Phase 2 — see live-cue.ts's identical branch for the full

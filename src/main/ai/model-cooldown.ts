@@ -144,19 +144,28 @@ const PERIOD_EXHAUSTED_MAX_MS = 24 * 60 * 60_000 // 24h — the common unit for
 // OpenRouter free tiers are all documented as daily-reset).
 
 /** Mark a model as period-exhausted (a quota/billing cap, not an ordinary
- *  rate limit) until `retryAfterMs` from now, or PERIOD_EXHAUSTED_DEFAULT_MS
- *  when the provider gave no hint. Same never-shorten and same sticky-
- *  durable-causation rules as markRateLimited, and the same map — a
+ *  rate limit) until `retryAfterMs` from now, or `resetsAt` (a real or
+ *  documented-fixed-schedule quota reset — see AIProviderError.resetsAt's
+ *  own doc comment) when no explicit short-term hint exists, or
+ *  PERIOD_EXHAUSTED_DEFAULT_MS when NEITHER exists. `retryAfterMs` still
+ *  wins outright when present — same rule as markRateLimited: a provider's
+ *  own direct instruction beats a broader reset-schedule estimate, which
+ *  itself beats a guess. BUG-058 Phase 3 — `resetsAt` is new; before it,
+ *  this always fell straight to the 1h guess whenever no direct
+ *  retryAfterMs existed, even on the rare provider that DOES tell us
+ *  (indirectly) when the quota actually clears. Same never-shorten and same
+ *  sticky-durable-causation rules as markRateLimited, and the same map — a
  *  period-exhausted entry IS a cooldown, just one with a deliberately
  *  longer default/cap. */
 export function markPeriodExhausted(
   catalogId: string,
   retryAfterMs: number | undefined,
   now: number,
-  causedBy: CooldownTier
+  causedBy: CooldownTier,
+  resetsAt?: number
 ): void {
   const wait = Math.min(
-    Math.max(retryAfterMs ?? PERIOD_EXHAUSTED_DEFAULT_MS, 60_000),
+    Math.max(retryAfterMs ?? (resetsAt !== undefined ? resetsAt - now : PERIOD_EXHAUSTED_DEFAULT_MS), 60_000),
     PERIOD_EXHAUSTED_MAX_MS
   )
   const until = now + wait

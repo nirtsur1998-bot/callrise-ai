@@ -558,8 +558,17 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   // final one, the same "N in a row" unit the rest of that module counts
   // in), so this is tracked here rather than recorded inside the per-step
   // catch block below.
-  let lastAttempt: { reason: AIProviderErrorCode; providerId: AIProviderId; detail?: string } | null =
-    null
+  let lastAttempt: {
+    reason: AIProviderErrorCode
+    providerId: AIProviderId
+    detail?: string
+    // BUG-058 Phase 3 — carried through to recordAiFailure below so
+    // purpose-health.ts's messageFor() can distinguish an ordinary rate
+    // limit from a genuine quota exhaustion, and show a real reset time
+    // when one exists.
+    failureClass?: AIFailureClass
+    resetsAt?: number
+  } | null = null
   const attempted = new Set<string>() // defense-in-depth: chain is already deduped by construction
   // BUG-057 — an invalid or revoked key fails IDENTICALLY on every model that
   // provider offers, so once one step returns 'auth', every remaining step on
@@ -644,7 +653,8 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
       const reason = classifyReason(err)
       const detail = detailFrom(err)
       const failureClass = err instanceof AIProviderError ? effectiveFailureClass(err) : 'transient'
-      lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail }
+      const resetsAt = err instanceof AIProviderError ? err.resetsAt : undefined
+      lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail, failureClass, resetsAt }
       if (reason === 'auth') deadProviders.add(step.providerId)
       // BUG-058 — honour the provider's own "come back in N seconds" so the
       // next call skips this model instead of re-burning it. Without this,
@@ -658,7 +668,8 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
           step.catalogId,
           err instanceof AIProviderError ? err.retryAfterMs : undefined,
           Date.now(),
-          tier
+          tier,
+          resetsAt
         )
         // BUG-058 remainder — pacing marks alongside cooldown, deliberately
         // ONLY on a rate-limit-classified failure (same condition as this
@@ -735,7 +746,11 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   void recordAiFailure(purpose, {
     reason: lastAttempt?.reason ?? 'failed',
     providerId: lastAttempt?.providerId ?? null,
-    detail: lastAttempt?.detail
+    detail: lastAttempt?.detail,
+    // BUG-058 Phase 3 — the last attempt's own classification/reset time,
+    // for messageFor()'s period-exhausted branch.
+    failureClass: lastAttempt?.failureClass,
+    resetsAt: lastAttempt?.resetsAt
   })
   throw new AllModelsExhaustedError(purpose, attempts)
 }
@@ -841,8 +856,13 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     // BUG-057 Part 3 — same per-CALL (not per-step) tracking as
     // completeWithFallback's lastAttempt; see that function's identical
     // field for the full reasoning.
-    let lastAttempt: { reason: AIProviderErrorCode; providerId: AIProviderId; detail?: string } | null =
-      null
+    let lastAttempt: {
+      reason: AIProviderErrorCode
+      providerId: AIProviderId
+      detail?: string
+      failureClass?: AIFailureClass
+      resetsAt?: number
+    } | null = null
     const attempts: { catalogId: string; reason: string; failureClass?: AIFailureClass }[] = []
     // BUG-058 Phase 2 — this walk previously had NO early-exit at all, unlike
     // completeWithFallback's identical deadProviders mechanism: an auth
@@ -914,15 +934,17 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         lastErr = err
         const reason = classifyReason(err)
         const detail = detailFrom(err)
-        lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail }
         const failureClass = err instanceof AIProviderError ? effectiveFailureClass(err) : 'transient'
+        const resetsAt = err instanceof AIProviderError ? err.resetsAt : undefined
+        lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail, failureClass, resetsAt }
         if (reason === 'auth') deadProviders.add(step.providerId)
         if (reason === 'rate-limit' && failureClass === 'period-exhausted') {
           markPeriodExhausted(
             step.catalogId,
             err instanceof AIProviderError ? err.retryAfterMs : undefined,
             Date.now(),
-            tier
+            tier,
+            resetsAt
           )
           // BUG-058 remainder — same reasoning as completeWithFallback's
           // identical branch: pacing marks alongside cooldown only on a
@@ -962,7 +984,13 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           // and a mid-stream cutoff genuinely isn't "it worked" from the
           // rep's point of view — a simplification, not a fully-reasoned
           // partial-success case, noted rather than silently assumed.
-          void recordAiFailure(purpose, { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail })
+          void recordAiFailure(purpose, {
+            reason: reason as AIProviderErrorCode,
+            providerId: step.providerId,
+            detail,
+            failureClass,
+            resetsAt
+          })
           const streamErr =
             err instanceof AIProviderError
               ? err
@@ -983,7 +1011,9 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     void recordAiFailure(purpose, {
       reason: lastAttempt?.reason ?? 'failed',
       providerId: lastAttempt?.providerId ?? null,
-      detail: lastAttempt?.detail
+      detail: lastAttempt?.detail,
+      failureClass: lastAttempt?.failureClass,
+      resetsAt: lastAttempt?.resetsAt
     })
     const finalErr = new AllModelsExhaustedError(purpose, attempts)
     rejectFinal(finalErr)

@@ -386,6 +386,42 @@ describe('period-exhausted — a much longer wait than an ordinary rate limit', 
     expect(isCoolingDown('m', now)).toBe(true)
     expect(isUsableFor('m', now, DURABLE)).toBe(false)
   })
+
+  describe('BUG-058 Phase 3 — resetsAt replaces the 1h guess, but never beats an explicit retryAfterMs', () => {
+    it('uses resetsAt instead of PERIOD_EXHAUSTED_DEFAULT_MS when no retryAfterMs hint exists', () => {
+      const now = 1_000_000
+      const resetsAt = now + 3 * 60 * 60_000 // 3h out — real data, not the 1h guess
+      markPeriodExhausted('m', undefined, now, DURABLE, resetsAt)
+      const until = cooldownUntil('m', now)
+      expect(until).toBe(resetsAt)
+    })
+
+    it('an explicit retryAfterMs still wins outright over resetsAt — a direct instruction beats an estimate', () => {
+      const now = 1_000_000
+      const resetsAt = now + 3 * 60 * 60_000 // 3h out — must NOT be what wins
+      // Above the 60s floor both paths share, so a value winning here can only
+      // mean retryAfterMs itself was used, not a floor coincidence.
+      markPeriodExhausted('m', 90_000, now, DURABLE, resetsAt)
+      const until = cooldownUntil('m', now)
+      expect((until as number) - now).toBe(90_000)
+    })
+
+    it('resetsAt is still capped at PERIOD_EXHAUSTED_MAX_MS, same backstop as the guess', () => {
+      const now = 1_000_000
+      const resetsAt = now + 999 * 60 * 60_000 // an absurd 999h-out value
+      markPeriodExhausted('m', undefined, now, DURABLE, resetsAt)
+      const until = cooldownUntil('m', now)
+      expect((until as number) - now).toBe(24 * 60 * 60_000)
+    })
+
+    it('omitting resetsAt falls back to the ordinary 1h guess, unchanged behavior', () => {
+      const now = 1_000_000
+      markPeriodExhausted('m', undefined, now, DURABLE)
+      const until = cooldownUntil('m', now)
+      expect((until as number) - now).toBeGreaterThan(MAX_COOLDOWN_MS)
+      expect((until as number) - now).toBeLessThan(24 * 60 * 60_000)
+    })
+  })
 })
 
 describe('the taxonomy, through the real chain walk', () => {
