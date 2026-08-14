@@ -6,15 +6,44 @@ import { EmptyState } from '@renderer/components/EmptyState'
 import { useToast } from '@renderer/features/notifications/useToast'
 import { useJobs } from './useJobs'
 import { holdsUnreviewedOutput } from './holdsUnreviewedOutput'
+import {
+  BUTTON_SIZE,
+  clampToViewport,
+  defaultPosition,
+  panelPlacement,
+  type Point
+} from './activityButtonPosition'
 import type { Job, JobActivityEvent, JobState } from '../../../../preload/index.d'
 
 const LAST_VIEWED_KEY = 'salesos.activityCenter.lastViewedAt'
+const POSITION_KEY = 'salesos.activityCenter.position'
 
 function getLastViewed(): number {
   const raw = localStorage.getItem(LAST_VIEWED_KEY)
   const n = raw ? Number(raw) : 0
   return Number.isFinite(n) ? n : 0
 }
+
+/** Where the rep last parked the button, or null to use the default corner.
+ *  Tolerant of anything unparseable — a corrupt value must never stop the
+ *  Activity Center rendering at all. */
+function getStoredPosition(): Point | null {
+  try {
+    const raw = localStorage.getItem(POSITION_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<Point>
+    if (typeof parsed?.x !== 'number' || typeof parsed?.y !== 'number') return null
+    if (!Number.isFinite(parsed.x) || !Number.isFinite(parsed.y)) return null
+    return { x: parsed.x, y: parsed.y }
+  } catch {
+    return null
+  }
+}
+
+/** How far the pointer must travel before a press counts as a DRAG rather
+ *  than a click. Without it, the tiny movement in an ordinary click would
+ *  register as a drag and swallow the open-the-panel action. */
+const DRAG_THRESHOLD_PX = 4
 
 const STATE_TONE: Record<JobState, BadgeTone> = {
   queued: 'neutral',
@@ -53,6 +82,84 @@ export function ActivityCenter(): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [lastViewedAt, setLastViewedAt] = useState(getLastViewed)
   const rootRef = useRef<HTMLDivElement>(null)
+
+  // M27 — draggable button. `null` means "never moved", which renders at the
+  // original bottom-right anchor; the default is computed lazily from the
+  // live window size rather than stored, so a rep who never drags it keeps
+  // the corner placement across any window size, exactly as before.
+  const [position, setPosition] = useState<Point | null>(getStoredPosition)
+  const dragRef = useRef<{ dx: number; dy: number; moved: boolean } | null>(null)
+  // Set the moment a drag ends, and cleared by the click that immediately
+  // follows it. Pointer-up on a moved button still fires a click event; this
+  // is what stops parking the button from also opening the panel.
+  const suppressNextClickRef = useRef(false)
+
+  const viewport = (): { width: number; height: number } => ({
+    width: window.innerWidth,
+    height: window.innerHeight
+  })
+
+  // Re-clamp when the window changes size. This is the difference between
+  // "drag it anywhere" and "drag it somewhere you can never reach again": a
+  // button parked at the right edge of a maximised window would otherwise sit
+  // outside a restored half-width one, permanently.
+  useEffect(() => {
+    const onResize = (): void => {
+      setPosition((p) => (p === null ? null : clampToViewport(p, viewport())))
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  const onPointerDown = (e: React.PointerEvent<HTMLButtonElement>): void => {
+    // Left button / primary touch only — a right-click should still be a
+    // plain context menu, not the start of a drag.
+    if (e.button !== 0) return
+    const start = position ?? defaultPosition(viewport())
+    dragRef.current = { dx: e.clientX - start.x, dy: e.clientY - start.y, moved: false }
+    // Keeps events coming even when the pointer outruns the 40px button,
+    // which it will on any fast drag.
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+
+  const onPointerMove = (e: React.PointerEvent<HTMLButtonElement>): void => {
+    const drag = dragRef.current
+    if (!drag) return
+    const next = clampToViewport(
+      { x: e.clientX - drag.dx, y: e.clientY - drag.dy },
+      viewport()
+    )
+    const from = position ?? defaultPosition(viewport())
+    if (!drag.moved && Math.hypot(next.x - from.x, next.y - from.y) >= DRAG_THRESHOLD_PX) {
+      drag.moved = true
+    }
+    if (drag.moved) setPosition(next)
+  }
+
+  const endDrag = (e: React.PointerEvent<HTMLButtonElement>): void => {
+    const drag = dragRef.current
+    dragRef.current = null
+    if (!drag) return
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+    if (!drag.moved) return
+    suppressNextClickRef.current = true
+    // Persisted only on drop, not on every move — a drag is dozens of frames
+    // and localStorage is synchronous.
+    setPosition((p) => {
+      if (p) localStorage.setItem(POSITION_KEY, JSON.stringify(p))
+      return p
+    })
+  }
+
+  const handleButtonClick = (): void => {
+    if (suppressNextClickRef.current) {
+      suppressNextClickRef.current = false
+      return
+    }
+    openPanel()
+  }
 
   useEffect(() => {
     const onDown = (e: MouseEvent): void => {
@@ -148,23 +255,41 @@ export function ActivityCenter(): React.JSX.Element {
   const clearableCount = recent.length
 
   return (
-    // Bottom-right, same corner as the toast stack (ToastProvider.tsx —
-    // `right-6 bottom-6`, growing upward as toasts stack) but parked well
-    // above it rather than sharing the exact spot, so a toast never
-    // physically covers this persistent button. Bottom-LEFT was tried
-    // first and rejected — it collided with the sidebar's own Settings +
-    // account block, which (like the copilot panel's own header icons)
-    // isn't visible from Settings' completely separate tree anyway, so it
-    // couldn't have anchored against it even on purpose.
-    <div ref={rootRef} className="fixed right-6 bottom-24 z-50">
+    // M27 — DRAGGABLE. The default is still the original bottom-right corner
+    // (same corner as the toast stack, parked above it so a toast never
+    // covers this persistent button; bottom-LEFT was tried and rejected for
+    // colliding with the sidebar's Settings + account block). But it is no
+    // longer FIXED there: the rep can drag it anywhere, because where it
+    // needs to be depends on what they're looking at — on the live-call
+    // screen it sat over the Voice AI panel's own controls.
+    //
+    // Positioned by explicit coordinates once moved; `position === null` means
+    // untouched, which resolves to the same corner it has always used.
+    <div
+      ref={rootRef}
+      className="fixed z-50"
+      style={(() => {
+        const p = position ?? defaultPosition(viewport())
+        return { left: p.x, top: p.y, width: BUTTON_SIZE, height: BUTTON_SIZE }
+      })()}
+    >
       <button
         type="button"
-        onClick={openPanel}
+        onClick={handleButtonClick}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
         aria-label={
           active > 0 ? `${active} background job${active === 1 ? '' : 's'} active` : 'Activity'
         }
+        title="Activity — drag to move"
         className={cn(
-          'press relative flex h-10 w-10 items-center justify-center rounded-full border shadow-pop transition',
+          'press relative flex h-10 w-10 cursor-grab items-center justify-center rounded-full border shadow-pop transition active:cursor-grabbing',
+          // Suppresses the browser's own touch panning/scrolling while
+          // dragging, so a drag on a touchscreen moves the button instead of
+          // scrolling whatever is underneath it.
+          'touch-none',
           active > 0
             ? 'border-accent/30 bg-accent-soft text-accent'
             : 'border-line-soft bg-surface text-faint hover:text-ink'
@@ -182,7 +307,23 @@ export function ActivityCenter(): React.JSX.Element {
       </button>
 
       {open && (
-        <div className="absolute right-0 bottom-12 flex max-h-[70vh] w-80 flex-col overflow-hidden rounded-2xl border border-line-soft bg-surface shadow-pop">
+        // M27 — placement follows the button. This used to be hardcoded
+        // `right-0 bottom-12`, which is correct ONLY for a bottom-right
+        // button; with the button draggable to the top-left, that same panel
+        // would open upward and leftward — off-screen on both axes. Each axis
+        // now picks the side with room (see panelPlacement).
+        <div
+          className={cn(
+            'absolute flex max-h-[70vh] w-80 flex-col overflow-hidden rounded-2xl border border-line-soft bg-surface shadow-pop',
+            (() => {
+              const place = panelPlacement(position ?? defaultPosition(viewport()), viewport())
+              return cn(
+                place.vertical === 'above' ? 'bottom-12' : 'top-12',
+                place.horizontal === 'right' ? 'right-0' : 'left-0'
+              )
+            })()
+          )}
+        >
           <div className="flex items-center justify-between border-b border-line-soft px-3.5 py-2.5">
             <h3 className="text-[13px] font-semibold">Activity</h3>
             {clearableCount > 0 && (
