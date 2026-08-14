@@ -293,7 +293,13 @@ describe('the spiral, through the real chain walk', () => {
     expect(err).toBeInstanceOf(AIProviderError)
     expect(err.code).toBe('rate-limit')
     // A number the user can act on — "chain exhausted" told them nothing.
-    expect(err.message).toMatch(/try again in about \d+s/i)
+    // M27 D — CORRECTED, not relaxed. This asserted the raw-seconds format
+    // ("try again in about 3578s"), which was deliberately changed: that
+    // exact string reached a real user, and nobody converts 3578 seconds to
+    // "an hour" in their head. The guarantee this test protects is unchanged
+    // and still asserted — the refusal must carry an ACTIONABLE WAIT TIME
+    // rather than a generic failure — only its rendering moved.
+    expect(err.message).toMatch(/try again in (a moment|about \d+ (seconds|minutes?|hours?)|about an hour|about a day)/i)
     expect(built).toEqual([]) // and it cost zero requests
   })
 

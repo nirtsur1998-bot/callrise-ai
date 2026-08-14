@@ -2381,6 +2381,10 @@ export interface SalesBrainBackfillApi {
     includeContacts?: boolean
     includeDeals?: boolean
     includeCalls?: boolean
+    /** Forget past attempts and reconsider every call. Normal runs resume —
+     *  that is what makes the import completable at all on a rate-limited
+     *  key — so this is the explicit "learn from everything again". */
+    rescanAll?: boolean
   }) => Promise<{ ok: boolean; message?: string; jobId?: string }>
 }
 

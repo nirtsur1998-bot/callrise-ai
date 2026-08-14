@@ -68,6 +68,18 @@ CREATE TABLE compiled_profiles (
 `
 }
 
+const MIGRATION_003: Migration = {
+  version: 3,
+  description: 'M27 — backfill_attempts: which calls the import has already tried, so a run interrupted by quota exhaustion resumes instead of restarting',
+  sql: `
+CREATE TABLE backfill_attempts (
+  call_id TEXT PRIMARY KEY,
+  attempted_at TEXT NOT NULL,
+  outcome TEXT NOT NULL
+);
+`
+}
+
 /** Ordered ascending by version — db.ts applies whichever versions are
  *  greater than the DB's current `user_version`, in this order. Adding a new
  *  migration later: append a new `MIGRATION_00N` here, never edit an
@@ -75,6 +87,6 @@ CREATE TABLE compiled_profiles (
  *  already applied it has that exact SQL baked into their file; changing it
  *  retroactively would make the same version number mean two different
  *  things depending on when a user installed). */
-export const MIGRATIONS: Migration[] = [MIGRATION_001, MIGRATION_002]
+export const MIGRATIONS: Migration[] = [MIGRATION_001, MIGRATION_002, MIGRATION_003]
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version

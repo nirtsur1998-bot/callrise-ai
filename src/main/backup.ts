@@ -47,6 +47,7 @@ import {
 } from './backup-core'
 import { getJobManager } from './jobs/instance'
 import type { Job } from './jobs/types'
+import { NO_AI_PURPOSE } from './jobs/types'
 
 /** M26 Phase 3 — the visible sync job. Registered from registerBackup(),
  *  which runs after main creates the shared JobManager. */
@@ -1059,6 +1060,8 @@ export function registerBackup(): void {
   getJobManager().registerType<Record<string, never>, string>({
     type: SYNC_JOB_TYPE,
     lane: 'MAINTENANCE',
+    // M27 — cloud backup — Supabase upload, no AI provider, so AI quota pressure must never hold it.
+    aiPurpose: NO_AI_PURPOSE,
     titleFor: () => 'Syncing with the cloud',
     // syncNow has no AbortSignal support, and adding one would mean
     // rewriting the push/pull internals — out of scope for an adapter.

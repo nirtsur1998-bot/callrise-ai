@@ -17,15 +17,30 @@
 // exists to prevent. Zero-usable-capacity is the precise condition under
 // which starting the job cannot possibly help.
 //
-// DELIBERATELY NOT PURPOSE-AWARE. This asks about the user's whole configured
-// model set, not one purpose's resolved chain. A purpose-specific version
-// would need a purpose to ask about, and the caller (the job scheduler) is
-// deciding whether to start a job whose eventual AI calls may span several
-// purposes. The whole-set question is both the simpler one and the one that
-// actually matches "there is nothing left to serve ANY of this work."
+// ~~DELIBERATELY NOT PURPOSE-AWARE.~~ **WRONG, and corrected below.** The
+// original version of this file argued that asking about the user's whole
+// configured model set was "both the simpler question and the one that
+// actually matches 'there is nothing left to serve ANY of this work'." It
+// isn't. A job runs ONE purpose's chain, and that chain is a strict subset of
+// the keyed catalog — narrowed by the purpose's configured assignment, and
+// again by tool-capability. So every model outside it is capacity the job can
+// never spend, and counting them answers a question nobody asked.
+//
+// Found in the field, not in review: Sales Brain's import ran straight into a
+// fully-exhausted memory-extract chain while this function reported capacity,
+// failed three calls in a row, and tripped the scan breaker — the app's own
+// error saying "every model set up for THIS is rate-limited" while the gate
+// meant to prevent exactly that said go.
+//
+// Worth naming precisely, because the comment that used to sit here is the
+// tell: it explained why it should be trusted instead of asking what it could
+// not see. That is taxonomy species 13, in our own runtime code rather than
+// in a doc — see the M26 Engine Room note.
 import { MODEL_CATALOG } from './model-catalog'
 import { PROVIDER_REGISTRY } from './registry'
 import { isUsableFor } from './model-cooldown'
+import { purposeTier, resolveChain } from './complete-with-fallback'
+import type { AIPurpose } from './types'
 
 /** Every catalog model whose provider currently has a key configured. Read
  *  fresh from process.env on every call, never cached — ai-keys.ts sets and
@@ -61,4 +76,28 @@ export function hasUsableAiCapacity(now: number): boolean {
   const ids = keyedCatalogIds()
   if (ids.length === 0) return true // no keys at all — a setup state, not pressure
   return ids.some((id) => isUsableFor(id, now, 'durable', { ignorePacing: true }))
+}
+
+/**
+ * The same question, asked about the chain a specific purpose will actually
+ * walk — which is what a job whose AI work is all one purpose really needs.
+ *
+ * Uses the purpose's own resolved chain and its own tier, both from the same
+ * definitions the fallback walk uses, so this can't drift into disagreeing
+ * with the code it is predicting. `needsTool: true` deliberately: a tool
+ * chain is the narrower of the two, and over-narrowing here is the safe
+ * direction — it defers a job that might have squeaked through, where
+ * over-widening starts a job that cannot possibly succeed, which is the bug
+ * this exists to fix.
+ *
+ * Empty chain returns TRUE for the same reason the whole-set version does:
+ * "nothing configured" is a setup state, and a job deferred behind a
+ * "waiting for provider capacity" label would hide the real, actionable
+ * no-key error instead of surfacing it.
+ */
+export function hasUsableCapacityForPurpose(purpose: AIPurpose, now: number): boolean {
+  const { capable } = resolveChain(purpose, { needsTool: true })
+  if (capable.length === 0) return true
+  const tier = purposeTier(purpose)
+  return capable.some((step) => isUsableFor(step.catalogId, now, tier, { ignorePacing: true }))
 }

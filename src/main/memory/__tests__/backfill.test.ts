@@ -9,7 +9,10 @@
 // runBackfill against fully mocked fs/extraction/consolidation dependencies,
 // so the assertion is about the actual gate wired into the loop, not a
 // description of it.
-import { describe, expect, it, beforeEach, vi } from 'vitest'
+import { afterEach, describe, expect, it, beforeEach, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type Database from 'better-sqlite3'
 
 const isSalesBrainEnabled = vi.fn((): boolean => true)
@@ -47,6 +50,7 @@ vi.mock('../consolidation', () => ({
 }))
 
 const { runBackfill } = await import('../backfill')
+const { openMemoryDb, memoryDbPath, migrate } = await import('../db')
 
 function callSummary(id: string, overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -73,7 +77,27 @@ function fullCall(id: string, overrides: Partial<Record<string, unknown>> = {}) 
   }
 }
 
-const FAKE_DB = {} as Database.Database
+// M27 — a REAL database, not `{} as Database`. runBackfill now keeps a
+// resume ledger (backfill-ledger.ts) so a run cut short by an exhausted key
+// picks up where it stopped, and that ledger is a real table. A stub object
+// would either crash on `db.prepare` or force the ledger to be written
+// defensively enough to no-op in production too, which is how the resume
+// would silently regress. Rebuilt per test so one test's attempts can never
+// make the next one skip work it meant to do.
+let FAKE_DB: Database.Database
+let dbDir: string
+
+beforeEach(async () => {
+  dbDir = mkdtempSync(join(tmpdir(), 'callrise-backfill-'))
+  FAKE_DB = openMemoryDb(memoryDbPath(dbDir))
+  const res = await migrate(FAKE_DB, memoryDbPath(dbDir))
+  if (!res.ok) throw new Error(`migrate failed: ${JSON.stringify(res)}`)
+})
+
+afterEach(() => {
+  FAKE_DB.close()
+  rmSync(dbDir, { recursive: true, force: true })
+})
 
 describe('runBackfill — BUG-046 fresh-permission checks', () => {
   beforeEach(() => {

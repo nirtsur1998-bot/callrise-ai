@@ -11,6 +11,7 @@
 // 500-job retention cap — nothing like the every-10-minutes sync heartbeat
 // that was deliberately left off the job system for noise reasons.
 import { getJobManager } from '../jobs/instance'
+import { NO_AI_PURPOSE } from '../jobs/types'
 
 export const NIGHTLY_CONSOLIDATION_JOB_TYPE = 'salesBrain:nightlyConsolidation'
 
@@ -29,6 +30,9 @@ export function registerNightlyConsolidationJob(run: () => Promise<void>): void 
     // MAINTENANCE, per the approved Phase 0 lane assignment: idle-time
     // housekeeping that must never compete with anything the rep clicked.
     lane: 'MAINTENANCE',
+    // M27 — the chain whose exhaustion makes this run pointless. It also
+    // reflects (memory-reflect) later, but consolidation is what gates it.
+    aiPurpose: 'memory-consolidate',
     titleFor: () => 'Sales Brain: nightly tidy-up',
     // runNightlyConsolidation has no AbortSignal support, and adding one
     // would mean rewriting M25 internals — out of scope for an adapter.
@@ -104,6 +108,11 @@ export function registerWarmUpEmbeddingsJob(run: () => Promise<void>): void {
   getJobManager().registerType<Record<string, never>, string>({
     type: WARM_UP_EMBEDDINGS_JOB_TYPE,
     lane: 'MAINTENANCE',
+    // M27 — downloads the LOCAL embedding model (@xenova/transformers). No
+    // provider, no key, no quota. Deferring it on AI pressure would leave
+    // on-device search permanently unset up for exactly the users whose keys
+    // are exhausted — the ones who most need the local path to work.
+    aiPurpose: NO_AI_PURPOSE,
     titleFor: () => 'Setting up on-device search',
     cancellable: false,
     executor: {

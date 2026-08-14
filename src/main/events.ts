@@ -21,6 +21,7 @@ import {
 import { scheduleBackup } from './backup'
 import { getJobManager } from './jobs/instance'
 import type { Job } from './jobs/types'
+import { NO_AI_PURPOSE } from './jobs/types'
 
 function eventsDir(): string {
   return join(app.getPath('userData'), 'events')
@@ -343,6 +344,8 @@ export function registerEvents(): void {
   getJobManager().registerType<Record<string, never>, string>({
     type: RECONCILE_JOB_TYPE,
     lane: 'MAINTENANCE',
+    // M27 — calendar reminders — no AI provider, so AI quota pressure must never hold it.
+    aiPurpose: NO_AI_PURPOSE,
     titleFor: () => 'Catching up calendar changes',
     cancellable: false,
     silent: true,

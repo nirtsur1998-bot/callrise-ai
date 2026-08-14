@@ -112,7 +112,13 @@ describe('streamWithFallback — cooling-down is no longer mislabeled as no-key'
 
     expect(err).not.toBeNull()
     expect((err as { code?: string }).code).toBe('rate-limit')
-    expect((err as Error).message).toMatch(/try again in about \d+s/i)
+    // M27 D — CORRECTED, not relaxed. This asserted the raw-seconds format
+    // ("try again in about 3578s"), which was deliberately changed: that
+    // exact string reached a real user, and nobody converts 3578 seconds to
+    // "an hour" in their head. The guarantee this test protects is unchanged
+    // and still asserted — the refusal must carry an ACTIONABLE WAIT TIME
+    // rather than a generic failure — only its rendering moved.
+    expect((err as Error).message).toMatch(/try again in (a moment|about \d+ (seconds|minutes?|hours?)|about an hour|about a day)/i)
     // The bug this closes: before the fix, this exact scenario threw
     // AIProviderError('no-key', 'No AI provider is configured for this yet.')
     expect((err as Error).message).not.toMatch(/no ai provider is configured/i)

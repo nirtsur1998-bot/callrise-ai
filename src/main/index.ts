@@ -33,7 +33,8 @@ import { DEFAULT_CONFIG } from './default-config'
 import { clearActiveConsent } from './consent-gate'
 import { registerCrashLogging, registerLog } from './log'
 import { JobManager, reportPersistFailure } from './jobs/JobManager'
-import { hasUsableAiCapacity } from './ai/capacity'
+import { hasUsableAiCapacity, hasUsableCapacityForPurpose } from './ai/capacity'
+import type { AIPurpose } from './ai/types'
 import { registerJobsIpc } from './jobs/ipc'
 import { registerFakeJobTypes } from './jobs/fakeJobs'
 import { wireJobActivity } from './jobs/activity'
@@ -340,10 +341,21 @@ app.whenReady().then(async () => {
   // M27 — quota-pressure deferral. Wired HERE rather than imported inside
   // JobManager, so the job system keeps zero dependency on the AI layer (see
   // setCapacityGate's own doc comment). Holds BATCH/MAINTENANCE work while
-  // EVERY configured model is unusable: starting it then would only walk a
+  // nothing usable is left to serve it: starting it then would only walk a
   // doomed fallback chain and add retry pressure to a key that live coaching
   // is competing for.
-  jobManager.setCapacityGate(() => hasUsableAiCapacity(Date.now()))
+  //
+  // The purpose branch is the whole point. A job that declared one is asking
+  // about the chain it will really walk; without it, an exhausted
+  // memory-extract chain looked like capacity because some unrelated keyed
+  // model was fine, and Sales Brain's import ran straight into the scan
+  // breaker. Undeclared purposes keep the whole-catalog question.
+  jobManager.setCapacityGate((purpose) => {
+    // NO_AI_PURPOSE never reaches here — JobManager honours it itself, so
+    // the guarantee doesn't depend on this wiring remembering to.
+    if (purpose) return hasUsableCapacityForPurpose(purpose as AIPurpose, Date.now())
+    return hasUsableAiCapacity(Date.now())
+  })
   setJobManager(jobManager)
   registerJobsIpc(jobManager)
   if (is.dev) registerFakeJobTypes(jobManager)

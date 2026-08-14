@@ -279,6 +279,9 @@ const api = {
         includeContacts?: boolean
         includeDeals?: boolean
         includeCalls?: boolean
+        /** Forget past attempts and reconsider every call. Normal runs
+         *  resume; this is the explicit "learn from everything again". */
+        rescanAll?: boolean
       }) => ipcRenderer.invoke('salesBrain:backfill:start', opts)
     },
     memories: {

@@ -369,6 +369,49 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
  *  tool-calling capability filter. `capable` equals `configured` when
  *  `needsTool` is false/omitted, so every existing caller that never passes
  *  `opts` sees identical behavior to before this phase. */
+/**
+ * BUG-057 Phase 5 — CHAIN_BUDGET is exactly the two live, latency-critical
+ * purposes (coaching-cue, deal-tier1); everything else is 'durable'. See
+ * model-cooldown.ts's CooldownTier doc comment for what this drives.
+ *
+ * M27 — exported and made the SINGLE definition. It was previously inlined
+ * identically at both fallback walks, and ai/capacity.ts now needs the same
+ * answer to decide whether a background job's chain has anything usable. A
+ * third hand-copy of `purpose in CHAIN_BUDGET` is exactly the shape that let
+ * DealIntelligenceStatus drift into two declarations with only one fixed.
+ */
+/**
+ * M27 — a wait, said the way a person says it.
+ *
+ * This message is read by a rep in the middle of their working day, and it
+ * used to render as "Try again in about 3578s." Nobody converts that in their
+ * head; it reads as a machine talking to itself, and it hides the one fact
+ * that matters (it's an hour, so go and do something else).
+ *
+ * Deliberately vague at the top end. The underlying number is a CHOSEN
+ * default (PERIOD_EXHAUSTED_DEFAULT_MS), not a provider-stated reset time, so
+ * "about an hour" is exactly as precise as the data actually is — and
+ * "3578s" implied a precision that never existed.
+ */
+export function humanWait(ms: number): string {
+  const secs = Math.max(1, Math.ceil(ms / 1000))
+  // A cooldown that expired between the check and the message renders as
+  // "in a moment" rather than "about 1 seconds" — which is both ungrammatical
+  // and reads as broken rather than ready.
+  if (secs <= 2) return 'a moment'
+  if (secs < 90) return `about ${secs} seconds`
+  const mins = Math.round(secs / 60)
+  if (mins < 45) return `about ${mins} minute${mins === 1 ? '' : 's'}`
+  const hours = Math.round(mins / 60)
+  if (hours <= 1) return 'about an hour'
+  if (hours < 24) return `about ${hours} hours`
+  return 'about a day'
+}
+
+export function purposeTier(purpose: AIPurpose): CooldownTier {
+  return purpose in CHAIN_BUDGET ? 'live' : 'durable'
+}
+
 export function resolveChain(purpose: AIPurpose, opts?: { needsTool?: boolean }): ResolvedChain {
   const configured = resolveConfiguredChain(purpose)
   const capable = opts?.needsTool
@@ -554,10 +597,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   const purpose = req.purpose
   const { configured, capable } = resolveChain(purpose, { needsTool: Boolean(req.tool) })
   logToolCapabilityExclusions(purpose, configured, capable)
-  // BUG-057 Phase 5 — CHAIN_BUDGET is exactly the two live, latency-critical
-  // purposes (coaching-cue, deal-tier1); everything else is 'durable'. See
-  // model-cooldown.ts's CooldownTier doc comment for what this drives.
-  const tier: CooldownTier = purpose in CHAIN_BUDGET ? 'live' : 'durable'
+  const tier: CooldownTier = purposeTier(purpose)
 
   if (configured.length === 0) {
     void recordAiFailure(purpose, { reason: 'no-key', providerId: null })
@@ -603,7 +643,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     void recordAiFailure(purpose, { reason: 'rate-limit', providerId: null })
     throw new AIProviderError(
       'rate-limit',
-      `Every model set up for this is rate-limited right now. Try again in about ${secs}s.`,
+      `Every model set up for this is rate-limited right now. Try again in ${humanWait(secs * 1000)}.`,
       until ? until - startedNow : undefined
     )
   }
@@ -854,11 +894,10 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
   const purpose = req.purpose
   const { configured, capable } = resolveChain(purpose, { needsTool: Boolean(req.tool) })
   logToolCapabilityExclusions(purpose, configured, capable)
-  // BUG-057 Phase 5 — coaching-chat (the only consumer today) isn't in
-  // CHAIN_BUDGET, so this is always 'durable' currently; computed the same
-  // way as completeWithFallback rather than hardcoded, so a future live
+  // coaching-chat (the only consumer today) isn't in CHAIN_BUDGET, so this is
+  // always 'durable' currently; asked rather than hardcoded, so a future live
   // streaming consumer gets the right tier automatically.
-  const tier: CooldownTier = purpose in CHAIN_BUDGET ? 'live' : 'durable'
+  const tier: CooldownTier = purposeTier(purpose)
   // BUG-058 — same cooldown filter as completeWithFallback: a model that just
   // 429'd must not be re-burned here either. coaching-chat is the only
   // consumer, and it is interactive, so spending its first attempt on a model
@@ -917,7 +956,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       void recordAiFailure(purpose, { reason: 'rate-limit', providerId: null })
       const err = new AIProviderError(
         'rate-limit',
-        `Every model set up for this is rate-limited right now. Try again in about ${secs}s.`,
+        `Every model set up for this is rate-limited right now. Try again in ${humanWait(secs * 1000)}.`,
         until ? until - startedNow : undefined
       )
       rejectFinal(err)
