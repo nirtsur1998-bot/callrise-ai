@@ -7,11 +7,13 @@
 // conversation thrown away without anyone seeing it — so neither is allowed to
 // happen automatically. The rep is asked.
 import { ipcMain } from 'electron'
-import { saveCall, type CallSummary } from '../calls-fs'
+import { getCall, saveCall, toSummary, type CallSummary } from '../calls-fs'
 import {
   discardJournal,
   listOrphanJournals,
+  markJournalRecoveredAsCall,
   readJournal,
+  readRecoveredCallId,
   redactJournalConsentIfNeeded,
   replayJournal,
   retireJournal
@@ -79,6 +81,28 @@ export async function listRecoverableCalls(): Promise<RecoverableCall[]> {
 /** Turn one interrupted call into a real Call record, on the rep's explicit
  *  say-so. */
 export async function recoverCall(id: string, callsDir: string): Promise<CallSummary | null> {
+  // M27 E2 — idempotency check FIRST. saveCall() below and retireJournal()
+  // further down are two separate steps; a crash between them (force-quit,
+  // power loss) leaves a journal that still looks like an untouched orphan
+  // even though its Call already exists. Recovering it again would mint a
+  // SECOND Call for the same conversation — saveCall() always generates a
+  // fresh id with nothing linking it back to this journal. If a previous
+  // attempt got far enough to record which Call it already produced, finish
+  // that interrupted cleanup and hand back the SAME call rather than
+  // creating a new one.
+  const alreadyRecoveredCallId = await readRecoveredCallId(id)
+  if (alreadyRecoveredCallId) {
+    const existing = await getCall(callsDir, alreadyRecoveredCallId)
+    await retireJournal(id)
+    await redactJournalConsentIfNeeded(id).catch((err) =>
+      console.error('[live-transcript] consent redaction failed:', err)
+    )
+    // The Call record itself is missing (deleted since, or the marker
+    // survived a disk problem that ate the actual save) — conservative
+    // fallback: report no recoverable call rather than fabricate one.
+    return existing ? toSummary(existing) : null
+  }
+
   const journal = await readJournal(id)
   if (!journal) return null
   const replayed = replayJournal(journal)
@@ -96,6 +120,11 @@ export async function recoverCall(id: string, callsDir: string): Promise<CallSum
     // cannot grant a permission the call never had.
     ...(replayed.consent ? { consent: replayed.consent } : {})
   })
+  // M27 E2 — written BEFORE retireJournal(), which is the whole point: if
+  // the process dies between this line and that one, the marker survives
+  // (it's its own file, already durably on disk) and the next attempt takes
+  // the branch above instead of saving again.
+  await markJournalRecoveredAsCall(id, summary.id)
   // Kept under a .recovered name rather than deleted: if the replay produced
   // something wrong, the source is still on disk to look at.
   await retireJournal(id)

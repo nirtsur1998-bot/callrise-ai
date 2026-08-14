@@ -113,6 +113,13 @@ function redactedMarkerPath(id: string): string {
   return join(journalsDir(), `${id}.redacted`)
 }
 
+// M27 E2 — bridges the crash window between recoverCall() saving a real Call
+// record and retireJournal() marking the journal as spent. See
+// readRecoveredCallId's own doc comment for the full mechanism.
+function recoveredCallMarkerPath(id: string): string {
+  return join(journalsDir(), `${id}.recovered-call`)
+}
+
 /**
  * One live call's journal writer.
  *
@@ -357,6 +364,47 @@ export async function discardJournal(id: string): Promise<void> {
 export async function retireJournal(id: string): Promise<void> {
   await rename(journalPath(id), recoveredPath(id)).catch(() => {})
   await unlink(donePath(id)).catch(() => {})
+  // M27 E2 — the marker's only job was surviving a crash between saveCall()
+  // and this function running; once retirement itself succeeds, the journal
+  // is no longer offered as an orphan (its `.jsonl` name is gone), so the
+  // marker has nothing left to protect. Cleaned up here rather than left to
+  // accumulate forever.
+  await unlink(recoveredCallMarkerPath(id)).catch(() => {})
+}
+
+/**
+ * M27 E2 — the crash window this closes: recoverCall() first calls
+ * saveCall() (a real, permanent Call record) and only afterward calls
+ * retireJournal() to mark the journal spent. A crash in between leaves a
+ * journal that still LOOKS orphaned (no `.done`, not renamed) even though
+ * its Call already exists — recovering it again would mint a SECOND Call
+ * for the same conversation, since saveCall() always generates a fresh id
+ * with no idempotency key linking it back to the journal.
+ *
+ * This marker is written with the new Call's id immediately after saveCall()
+ * succeeds, before retireJournal() runs — so a retry after exactly that
+ * crash can detect "this journal already produced a Call" and recover the
+ * SAME id instead of minting a new one. Returns null (not an error) when no
+ * such marker exists, which is the overwhelmingly common case — most
+ * recoveries never cross this specific crash window at all.
+ */
+export async function readRecoveredCallId(id: string): Promise<string | null> {
+  try {
+    const raw = (await readFile(recoveredCallMarkerPath(id), 'utf8')).trim()
+    return raw || null
+  } catch {
+    return null
+  }
+}
+
+/** Write BEFORE retireJournal() — see readRecoveredCallId's own doc comment
+ *  for why the ordering matters. Never throws: a failure to write this is a
+ *  narrower window reopening (the original race, not a new one), not a
+ *  reason to fail the recovery that already genuinely succeeded. */
+export async function markJournalRecoveredAsCall(id: string, callId: string): Promise<void> {
+  await writeFile(recoveredCallMarkerPath(id), callId, 'utf8').catch((err) => {
+    console.error('[call-journal] could not write recovered-call marker:', err)
+  })
 }
 
 /**
