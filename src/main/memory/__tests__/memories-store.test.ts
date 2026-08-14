@@ -132,6 +132,13 @@ describe('searchMemoriesByVector', () => {
       embedding(5)
     )
     const results = searchMemoriesByVector(db, embedding(5), { scope: 'rep' })
+    // M27 G — the length assertion is load-bearing, not decoration:
+    // `[].every(...)` is trivially true in JavaScript, so without it this
+    // passed just as happily if the filter returned NOTHING (taxonomy
+    // species 6, the vacuous universal quantifier). Pinning the exact count
+    // also proves the other-scope memory was genuinely excluded, rather than
+    // "everything that came back happens to be rep-scoped".
+    expect(results).toHaveLength(1)
     expect(results.every((r) => r.memory.scope === 'rep')).toBe(true)
   })
 })
@@ -256,6 +263,10 @@ describe('buildChangelog', () => {
     insertMemory(db, candidate({ scope: 'rep' }), embedding(1))
     insertMemory(db, candidate({ scope: 'business', category: 'pricing-model', statement: 'X' }), embedding(2))
     const log = buildChangelog(db, 'rep')
+    // M27 G — see the identical note in searchMemoriesByVector's scope-filter
+    // test above: `[].every(...)` is trivially true, so a filter that
+    // returned nothing at all would have passed this unchanged.
+    expect(log.length).toBeGreaterThan(0)
     expect(log.every((e) => e.scope === 'rep')).toBe(true)
   })
 })

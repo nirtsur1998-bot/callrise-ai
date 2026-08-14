@@ -1,5 +1,31 @@
 # AI provider abstraction
 
+> ⚠️ **STALE — describes M17 Phase 1 only. Read `src/main/ai/` for current reality.**
+> *(Flagged by the M27 Phase 4 docs audit, 2026-08-14. Left in place rather than
+> deleted because the core idea it explains — one provider-neutral interface, no
+> SDK imported at a call site — is still exactly right. Its specifics are not.)*
+>
+> Three concrete ways this document is now wrong:
+>
+> 1. **Two providers → EIGHT.** `AIProviderId` (`src/main/ai/types.ts`) is
+>    `anthropic | openai | groq | openrouter | google | nvidia | cerebras |
+>    mistral`. This file knows only the first two, so a reader would conclude
+>    six shipped providers don't exist.
+> 2. **`LATENCY_POLICY.maxRetries` NO LONGER EXISTS** — removed, not renamed
+>    (`types.ts` says so explicitly at its definition). Retry behaviour now
+>    lives in three constants with distinct jobs: `SAME_MODEL_RETRY_LIMIT`,
+>    `CHAIN_BUDGET`, and `HARD_CEILING_MS`. Anyone following the "Latency
+>    policy" section below would go looking for a field that isn't there.
+> 3. **The whole fallback/resilience subsystem is absent here.**
+>    `complete-with-fallback.ts` (chain resolution and the walk),
+>    `model-cooldown.ts`, `model-pacing.ts`, `purpose-health.ts` and
+>    `failure-class.ts` were built across M20 and BUG-057/058/059. A call today
+>    doesn't simply hit "the active provider" — it walks a resolved chain with
+>    per-model cooldowns, cross-purpose pacing, failure classification and a
+>    wall-clock ceiling.
+>
+> The purposes listed below have also grown from five to twelve.
+
 CallRise AI's text-AI features (coaching cues, post-call summaries, coaching
 scorecards, task generation, deal-risk assessment, call titles, objection
 mining) route through one provider-neutral interface in `src/main/ai/`,

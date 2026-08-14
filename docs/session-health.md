@@ -59,9 +59,26 @@ trips a reset when every bucket is ≥ the one before it (within 0.1s) and the n
 rise is ≥ 1.5s — regardless of the absolute value. This fires while the number
 still looks fine, which is the only time the fix is cheap.
 
-Resets are budgeted: **max 3 per 10 minutes**, with backoff. Past the budget the
-verdict degrades to `shed` rather than `reset`, because an unbudgeted reset loop
-is a reconnect storm that looks identical to the bug it is trying to fix.
+Resets are **rate-limited by backoff only** — `resetBackoffMs: [0, 2000, 8000]`,
+whose last entry becomes a steady-state minimum gap between resets. There is
+deliberately **no hard cap that can refuse a reset outright**.
+
+> ⚠️ **CORRECTION (M27 Phase 4 docs audit, 2026-08-14).** This paragraph used to
+> read *"Resets are budgeted: max 3 per 10 minutes, with backoff. Past the budget
+> the verdict degrades to `shed` rather than `reset`."* **That cap was REMOVED in
+> M22 (`b58e682`, "reset safety-net could permanently give up, letting lag run
+> away") because it caused a real, user-visible bug:** once the budget was burned,
+> lag grew perfectly linearly and unbounded — 47+ seconds with zero recovery,
+> matching a real field report of lag climbing past 70 seconds mid-call. The
+> reasoning in the old text is not wrong about reconnect storms; it just weighed
+> that risk against the wrong failure, and unbounded lag turned out to be much
+> worse than a reconnect loop. See `src/main/session-health/lag.ts`'s own comment
+> block, which documents the removal in detail.
+>
+> Flagged specifically because this file is the canonical explanation of a
+> subsystem whose entire purpose is catching subtle lag bugs — describing the
+> removed, bug-*causing* mechanism as current would actively mislead whoever
+> debugs the next lag incident.
 
 Silence injected to keep the socket alive (see liveness, below) advances
 Deepgram's audio clock without being real audio, so it is tracked separately and

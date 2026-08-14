@@ -8,6 +8,18 @@ Researched by: 15 parallel deep-dive passes over the actual source (every claim 
 
 ## Read this first — the 4 things that actually matter
 
+> 📌 **POINT-IN-TIME SNAPSHOT (2026-08-12), kept as a record — not current state.**
+> *(Flagged by the M27 Phase 4 docs audit, 2026-08-14.)* Item 1 below describes
+> the live-call data-loss bug as an active, unfixed emergency. **It was fixed
+> four phases later and shipped in v1.2.0** — the transcript now lives in the
+> main process with incremental journaling (`live/live-transcript.ts`,
+> `live/call-journal.ts`), the capture session is hoisted above the navigation
+> boundary in `LiveCallProvider.tsx`, and a dedicated crash test
+> (`render-process-gone.test.ts`) proves the journal survives a renderer crash.
+> This doc's status line already says "awaiting founder go-ahead before Phase
+> 1", but nothing in it says the headline scenario was resolved — so a skim
+> could still conclude the app is losing customer calls today. It is not.
+
 **1. The scariest bug isn't "AI jobs die on navigation" — it's silent, total loss of the live call itself.**
 Every screen switch (clicking any sidebar item, or opening/closing Settings) fully destroys and rebuilds the screen you're leaving — that's how this app's screen-switching works today, on every screen, always. For 10 of the 11 screens that's harmless: the real work happens in the background app process regardless, so you just don't see the "done!" checkmark until you go back and look. **Live Calls is the one screen where it's catastrophic**: the code that "stops everything when you leave" was written for the Stop button, and screen navigation accidentally triggers that exact same code path — except the Stop button also saves the call first, and plain navigation does not. Today, if you're on a live call and click Settings (or anything else) before pressing Stop, **the entire transcript, live coaching cues, and deal-intelligence read-out for that call are silently thrown away** — no save, no warning, nothing recoverable. This is the single most important thing Phase 4 needs to fix, and honestly the most urgent one — worth considering as a fast, standalone fix before the rest of M26 if you want to stop the bleeding sooner.
 
