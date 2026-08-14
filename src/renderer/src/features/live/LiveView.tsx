@@ -949,6 +949,14 @@ export function LiveView({
               // equality bug this closes).
               <>AI coaching cues are temporarily unavailable (the model is taking too long to respond
                 right now) — transcription is unaffected. Resumes automatically.</>
+            ) : coachingPausedReason === 'quota-exhausted' ? (
+              // BUG-058 Phase 3 — a genuine free-tier quota exhaustion is a
+              // different condition from an ordinary rate limit: no amount
+              // of waiting a few seconds fixes it, so this says so honestly
+              // instead of implying it'll clear itself shortly.
+              <>AI coaching cues are temporarily unavailable (a configured model&rsquo;s free-tier
+                quota is used up) — transcription is unaffected. Add another provider&rsquo;s key in
+                Settings, or wait for it to reset.</>
             ) : (
               <>AI coaching cues are temporarily unavailable (every configured model is unreachable or
                 rate-limited right now) — transcription is unaffected. Resumes automatically.</>

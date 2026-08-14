@@ -21,9 +21,9 @@ import {
   markPeriodExhausted,
   markRateLimited,
   markStructurallyBroken,
-  soonestExpiry,
-  type CooldownTier
+  soonestExpiry
 } from './model-cooldown'
+import { markUsed } from './model-pacing'
 import {
   AIProviderError,
   CHAIN_BUDGET,
@@ -36,7 +36,8 @@ import {
   type AIFailureClass,
   type AIProviderErrorCode,
   type AIProviderId,
-  type AIPurpose
+  type AIPurpose,
+  type CooldownTier
 } from './types'
 
 /** BUG-057 Phase 3 — founder's explicit ask: exactly one of three actions,
@@ -372,6 +373,78 @@ export function resolveChain(purpose: AIPurpose, opts?: { needsTool?: boolean })
   return { configured, capable }
 }
 
+// BUG-057 Phase 6 follow-up — the one deferred piece of that phase, closed.
+// `supportsToolCalling: false` (model-catalog.ts) is a static, hand-verified
+// flag with NO live re-check — unlike `knownStale`, which resolveCatalog()
+// re-confirms every ~10 min, listModels() returns ID strings only, no
+// capability data. Its own doc comment names the resulting staleness risk
+// exactly: if a provider ships tool-calling support later, a `false` entry
+// stays SILENTLY excluded from a needsTool chain — "no error and no log
+// line... worse than a wasted attempt, which at least surfaces in
+// fallback-log.ts." This closes precisely that gap: an exclusion is now
+// logged to the SAME fallback-event surface every other fallback decision
+// already uses (Settings → Model Assignment's recent-activity list), so a
+// stale flag is diagnosable there instead of invisible. It does NOT change
+// the filter's behavior — the model stays excluded (attempting it anyway
+// would waste a request per call on the correct-flag case, and eat the live
+// path's tight CHAIN_BUDGET); it only makes the already-correct exclusion
+// visible.
+//
+// Deduplicated per (purpose, catalogId) per process: the exclusion is a
+// static property of the catalog + needsTool, identical on every call, and
+// coaching-cue re-resolves this every ~2.5s mid-call — logging it every time
+// would both spam and evict real fallback history from fallback-log.ts's
+// 1000-entry cap. Once per model per session makes it visible; a restart
+// re-logs, which is correct — a process restart is exactly when a provider's
+// support (and thus the flag's staleness) may have changed.
+const loggedToolExclusions = new Set<string>()
+
+function logToolCapabilityExclusions(
+  purpose: AIPurpose,
+  configured: ResolvedStep[],
+  capable: ResolvedStep[]
+): void {
+  if (configured.length === capable.length) return // nothing was excluded
+  const capableIds = new Set(capable.map((s) => s.catalogId))
+  for (const step of configured) {
+    if (capableIds.has(step.catalogId)) continue
+    const key = `${purpose}:${step.catalogId}`
+    if (loggedToolExclusions.has(key)) continue
+    loggedToolExclusions.add(key)
+    void logFallbackEvent({
+      ts: new Date().toISOString(),
+      purpose,
+      fromCatalogId: step.catalogId,
+      toCatalogId: null,
+      reason: 'skipped: tool-calling not verified for this model',
+      detail:
+        'Excluded from a tool-calling request by the catalog flag supportsToolCalling:false. If this provider now supports forced tool calls, that flag is stale — see model-catalog.ts.'
+    })
+  }
+}
+
+/** Test-only — resets the once-per-session dedup set for logToolCapabilityExclusions. */
+export function resetToolExclusionLogForTests(): void {
+  loggedToolExclusions.clear()
+}
+
+/** BUG-058 Phase 2 — shared by both walks. Call once per rate-limit-classified
+ *  failure (period-exhausted or plain); once the SAME provider has done this
+ *  twice in one walk, on two different models (chain is deduped by catalogId,
+ *  so a second count here is necessarily a different model), the rest of that
+ *  provider's entries are added to deadProviders. See the doc comment on
+ *  deadProviders itself for why this is scoped to same-walk, same-provider
+ *  evidence only, not a cooldown-duration or classification change. */
+function noteRateLimitForDeadProviders(
+  providerId: AIProviderId,
+  rateLimitCountByProvider: Map<AIProviderId, number>,
+  deadProviders: Set<AIProviderId>
+): void {
+  const count = (rateLimitCountByProvider.get(providerId) ?? 0) + 1
+  rateLimitCountByProvider.set(providerId, count)
+  if (count >= 2) deadProviders.add(providerId)
+}
+
 function classifyReason(err: unknown): string {
   if (err instanceof AIProviderError) return err.code
   if (err instanceof Error && err.name === 'AbortError') return 'timeout'
@@ -476,6 +549,7 @@ async function completeWithSameModelRetry(
 export async function completeWithFallback(req: AICompletionRequest): Promise<AICompletionResult> {
   const purpose = req.purpose
   const { configured, capable } = resolveChain(purpose, { needsTool: Boolean(req.tool) })
+  logToolCapabilityExclusions(purpose, configured, capable)
   // BUG-057 Phase 5 — CHAIN_BUDGET is exactly the two live, latency-critical
   // purposes (coaching-cue, deal-tier1); everything else is 'durable'. See
   // model-cooldown.ts's CooldownTier doc comment for what this drives.
@@ -540,8 +614,17 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   // final one, the same "N in a row" unit the rest of that module counts
   // in), so this is tracked here rather than recorded inside the per-step
   // catch block below.
-  let lastAttempt: { reason: AIProviderErrorCode; providerId: AIProviderId; detail?: string } | null =
-    null
+  let lastAttempt: {
+    reason: AIProviderErrorCode
+    providerId: AIProviderId
+    detail?: string
+    // BUG-058 Phase 3 — carried through to recordAiFailure below so
+    // purpose-health.ts's messageFor() can distinguish an ordinary rate
+    // limit from a genuine quota exhaustion, and show a real reset time
+    // when one exists.
+    failureClass?: AIFailureClass
+    resetsAt?: number
+  } | null = null
   const attempted = new Set<string>() // defense-in-depth: chain is already deduped by construction
   // BUG-057 — an invalid or revoked key fails IDENTICALLY on every model that
   // provider offers, so once one step returns 'auth', every remaining step on
@@ -550,7 +633,20 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   // single-key user with a bad key. Deliberately NOT extended to
   // 'rate-limit': Groq and Gemini rate-limit per-MODEL, so a different model
   // on the same key really can succeed.
+  //
+  // BUG-058 Phase 2 — extended to 'rate-limit' too, but only after a SECOND,
+  // different model on the same provider also comes back rate-limited within
+  // THIS walk (rateLimitCountByProvider below). One rate-limited model still
+  // proves nothing about its neighbors (that's why the rule above stays
+  // narrow) — but two different models on the same provider both refusing
+  // within seconds of each other, in the same call, is stronger evidence
+  // than either alone: the account is the likelier shared cause at that
+  // point, not either individual model. Doesn't touch markRateLimited or its
+  // cooldown duration — this only skips a third doomed attempt within an
+  // already-doomed walk, layered on top of per-model cooldown, not replacing
+  // it.
   const deadProviders = new Set<AIProviderId>()
+  const rateLimitCountByProvider = new Map<AIProviderId, number>()
 
   // BUG-059 — one hard wall-clock ceiling across the ENTIRE walk, including
   // each SDK's own internal retries (the signal below is threaded all the way
@@ -600,13 +696,21 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
       const result = await completeWithSameModelRetry(provider, req, step.modelId, attemptSignal, purpose)
       // Proof the limit lifted — trust that over any earlier estimate.
       clearCooldown(step.catalogId)
+      // BUG-058 remainder — a success is real evidence this model's capacity
+      // was just spent, exactly like a rate-limit failure below is; a
+      // DIFFERENT durable purpose asking again in the next few seconds
+      // should try elsewhere first. Marked on the real outcome, not before
+      // the attempt — see the 'rate-limit' branch below for why a plain
+      // failure deliberately does NOT mark this.
+      markUsed(step.catalogId, Date.now(), tier)
       void recordAiSuccess(purpose, { providerId: step.providerId, fromImplicitTail: !!step.fromImplicitTail })
       return result
     } catch (err) {
       const reason = classifyReason(err)
       const detail = detailFrom(err)
       const failureClass = err instanceof AIProviderError ? effectiveFailureClass(err) : 'transient'
-      lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail }
+      const resetsAt = err instanceof AIProviderError ? err.resetsAt : undefined
+      lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail, failureClass, resetsAt }
       if (reason === 'auth') deadProviders.add(step.providerId)
       // BUG-058 — honour the provider's own "come back in N seconds" so the
       // next call skips this model instead of re-burning it. Without this,
@@ -620,8 +724,19 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
           step.catalogId,
           err instanceof AIProviderError ? err.retryAfterMs : undefined,
           Date.now(),
-          tier
+          tier,
+          resetsAt
         )
+        // BUG-058 remainder — pacing marks alongside cooldown, deliberately
+        // ONLY on a rate-limit-classified failure (same condition as this
+        // branch and the sibling one below), never on a plain 'failed' —
+        // "only rate limits cool down... applying it to every failure would
+        // sideline healthy models after one blip" is model-cooldown.ts's own
+        // established rule for cooldown; pacing follows the identical rule
+        // for the identical reason. A structural/generic error tells us
+        // nothing about this model being near a shared capacity limit.
+        markUsed(step.catalogId, Date.now(), tier)
+        noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
       } else if (reason === 'rate-limit') {
         markRateLimited(
           step.catalogId,
@@ -629,6 +744,8 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
           Date.now(),
           tier
         )
+        markUsed(step.catalogId, Date.now(), tier)
+        noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
       } else if (failureClass === 'structural' && reason !== 'auth') {
         // 'auth' already gets a coarser, PROVIDER-wide skip (deadProviders,
         // above) — checking the raw reason string here, not re-deriving from
@@ -685,7 +802,11 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   void recordAiFailure(purpose, {
     reason: lastAttempt?.reason ?? 'failed',
     providerId: lastAttempt?.providerId ?? null,
-    detail: lastAttempt?.detail
+    detail: lastAttempt?.detail,
+    // BUG-058 Phase 3 — the last attempt's own classification/reset time,
+    // for messageFor()'s period-exhausted branch.
+    failureClass: lastAttempt?.failureClass,
+    resetsAt: lastAttempt?.resetsAt
   })
   throw new AllModelsExhaustedError(purpose, attempts)
 }
@@ -715,6 +836,7 @@ export interface StreamWithFallbackResult extends AsyncIterable<{ delta: string 
 export function streamWithFallback(req: AICompletionRequest): StreamWithFallbackResult {
   const purpose = req.purpose
   const { configured, capable } = resolveChain(purpose, { needsTool: Boolean(req.tool) })
+  logToolCapabilityExclusions(purpose, configured, capable)
   // BUG-057 Phase 5 — coaching-chat (the only consumer today) isn't in
   // CHAIN_BUDGET, so this is always 'durable' currently; computed the same
   // way as completeWithFallback rather than hardcoded, so a future live
@@ -791,12 +913,29 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     // BUG-057 Part 3 — same per-CALL (not per-step) tracking as
     // completeWithFallback's lastAttempt; see that function's identical
     // field for the full reasoning.
-    let lastAttempt: { reason: AIProviderErrorCode; providerId: AIProviderId; detail?: string } | null =
-      null
+    let lastAttempt: {
+      reason: AIProviderErrorCode
+      providerId: AIProviderId
+      detail?: string
+      failureClass?: AIFailureClass
+      resetsAt?: number
+    } | null = null
     const attempts: { catalogId: string; reason: string; failureClass?: AIFailureClass }[] = []
+    // BUG-058 Phase 2 — this walk previously had NO early-exit at all, unlike
+    // completeWithFallback's identical deadProviders mechanism: an auth
+    // failure on entry 1 didn't stop entry 2 on the same now-known-dead
+    // provider from being tried anyway. Ported verbatim, same two rules —
+    // 'auth' skips the rest of that provider immediately (a bad key fails
+    // identically on every model it offers); 'rate-limit' only skips after a
+    // SECOND different model on the same provider also rate-limits within
+    // this same walk (noteRateLimitForDeadProviders, above) — one rate-
+    // limited model still proves nothing about its neighbors on its own.
+    const deadProviders = new Set<AIProviderId>()
+    const rateLimitCountByProvider = new Map<AIProviderId, number>()
 
     for (let i = 0; i < chain.length; i++) {
       const step = chain[i]
+      if (deadProviders.has(step.providerId)) continue
       const key = process.env[PROVIDER_REGISTRY[step.providerId].keyEnvName]?.trim()
       if (!key) continue
       const provider = PROVIDER_REGISTRY[step.providerId].build(key)
@@ -828,6 +967,9 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           }
           const usage = await streamResult.usage
           clearCooldown(step.catalogId)
+          // BUG-058 remainder — same reasoning as completeWithFallback: mark
+          // on the real outcome (success), never on a plain failure.
+          markUsed(step.catalogId, Date.now(), tier)
           void recordAiSuccess(purpose, { providerId: step.providerId, fromImplicitTail: !!step.fromImplicitTail })
           resolveFinal({ text: fullText, model: step.modelId || `${step.providerId} (default)`, usage })
           return
@@ -849,15 +991,23 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         lastErr = err
         const reason = classifyReason(err)
         const detail = detailFrom(err)
-        lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail }
         const failureClass = err instanceof AIProviderError ? effectiveFailureClass(err) : 'transient'
+        const resetsAt = err instanceof AIProviderError ? err.resetsAt : undefined
+        lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail, failureClass, resetsAt }
+        if (reason === 'auth') deadProviders.add(step.providerId)
         if (reason === 'rate-limit' && failureClass === 'period-exhausted') {
           markPeriodExhausted(
             step.catalogId,
             err instanceof AIProviderError ? err.retryAfterMs : undefined,
             Date.now(),
-            tier
+            tier,
+            resetsAt
           )
+          // BUG-058 remainder — same reasoning as completeWithFallback's
+          // identical branch: pacing marks alongside cooldown only on a
+          // rate-limit-classified failure, never a plain one.
+          markUsed(step.catalogId, Date.now(), tier)
+          noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
         } else if (reason === 'rate-limit') {
           markRateLimited(
             step.catalogId,
@@ -865,6 +1015,8 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
             Date.now(),
             tier
           )
+          markUsed(step.catalogId, Date.now(), tier)
+          noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
         } else if (failureClass === 'structural' && reason !== 'auth') {
           markStructurallyBroken(step.catalogId, Date.now())
         }
@@ -889,7 +1041,13 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           // and a mid-stream cutoff genuinely isn't "it worked" from the
           // rep's point of view — a simplification, not a fully-reasoned
           // partial-success case, noted rather than silently assumed.
-          void recordAiFailure(purpose, { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail })
+          void recordAiFailure(purpose, {
+            reason: reason as AIProviderErrorCode,
+            providerId: step.providerId,
+            detail,
+            failureClass,
+            resetsAt
+          })
           const streamErr =
             err instanceof AIProviderError
               ? err
@@ -910,7 +1068,9 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     void recordAiFailure(purpose, {
       reason: lastAttempt?.reason ?? 'failed',
       providerId: lastAttempt?.providerId ?? null,
-      detail: lastAttempt?.detail
+      detail: lastAttempt?.detail,
+      failureClass: lastAttempt?.failureClass,
+      resetsAt: lastAttempt?.resetsAt
     })
     const finalErr = new AllModelsExhaustedError(purpose, attempts)
     rejectFinal(finalErr)

@@ -194,7 +194,7 @@ export interface TranscriptionApi {
          *  and every entry failed this cycle (not on "not enough transcript
          *  yet"). Renderer shows a small non-blocking "coaching paused"
          *  indicator, never a modal — see LiveView.tsx. */
-        pausedReason?: 'all-models-unavailable' | 'timed-out'
+        pausedReason?: 'all-models-unavailable' | 'timed-out' | 'quota-exhausted'
         /** M26 4.5 (BUG-055) — never read as "paused"; see main/live-cue.ts. */
         blockedReason?: 'consent'
       }

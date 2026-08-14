@@ -81,8 +81,10 @@ export type Tier1AnalyzeResult =
        *  genuinely distinct from every model being unreachable/rate-limited,
        *  and used to be silently indistinguishable from "not paused" at
        *  all). Consumers wanting the plain boolean must check
-       *  `!== undefined`, never compare to one literal. */
-      pausedReason?: 'all-models-unavailable' | 'timed-out'
+       *  `!== undefined`, never compare to one literal.
+       *  BUG-058 Phase 3 — 'quota-exhausted' added; see live-cue.ts's
+       *  identical field for the full rationale. */
+      pausedReason?: 'all-models-unavailable' | 'timed-out' | 'quota-exhausted'
       /** M26 4.5 (BUG-055) — set when this pass was refused because buyer-
        *  attributed content was in scope and a fresh consentPermitsCapture()
        *  check found no active grant. Deliberately NOT surfaced as "paused"
@@ -276,7 +278,9 @@ export async function analyzeDealTier1(input: unknown): Promise<Tier1AnalyzeResu
       console.log(
         `[deal-tier1] all models exhausted: ${err.attempts.map((a) => a.reason).join(', ')}`
       )
-      return { ok: false, pausedReason: 'all-models-unavailable' }
+      // BUG-058 Phase 3 — see live-cue.ts's identical branch.
+      const quotaExhausted = err.attempts.some((a) => a.failureClass === 'period-exhausted')
+      return { ok: false, pausedReason: quotaExhausted ? 'quota-exhausted' : 'all-models-unavailable' }
     }
     if (err instanceof AIProviderError) {
       // BUG-057 Phase 2 — see live-cue.ts's identical branch for the full

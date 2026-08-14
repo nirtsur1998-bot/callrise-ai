@@ -160,6 +160,7 @@ export function DealIntelligencePanel({
       {status === 'idle' && <StatusNotice variant="idle" />}
       {status === 'paused' && <StatusNotice variant="paused" />}
       {status === 'timed-out' && <StatusNotice variant="timed-out" />}
+      {status === 'quota-exhausted' && <StatusNotice variant="quota-exhausted" />}
       {status === 'active' && (
         <CollapseTransition open={showQuiet}>
           <StatusNotice variant="quiet" />

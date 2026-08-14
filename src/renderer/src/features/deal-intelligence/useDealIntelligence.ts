@@ -88,8 +88,9 @@ const MAX_RADAR_REPORT_HEALTH_POINTS = 100
  *  `npm run typecheck` (not the no-op `tsc --noEmit` this session had been
  *  trusting) discovering `setStatus('timed-out')` no longer type-checked
  *  against this file's own un-widened declaration. Keep both in sync by
- *  hand when this union changes again. */
-export type DealIntelligenceStatus = 'idle' | 'active' | 'paused' | 'timed-out'
+ *  hand when this union changes again — BUG-058 Phase 3's 'quota-exhausted'
+ *  is the next one; both copies were updated together this time. */
+export type DealIntelligenceStatus = 'idle' | 'active' | 'paused' | 'timed-out' | 'quota-exhausted'
 
 export interface UseDealIntelligence {
   status: DealIntelligenceStatus
@@ -344,7 +345,9 @@ export function useDealIntelligence(
               ? 'paused'
               : outcome.pausedReason === 'timed-out'
                 ? 'timed-out'
-                : 'active'
+                : outcome.pausedReason === 'quota-exhausted'
+                  ? 'quota-exhausted'
+                  : 'active'
           )
           return
         }
@@ -422,7 +425,9 @@ export function useDealIntelligence(
               ? 'paused'
               : outcome.pausedReason === 'timed-out'
                 ? 'timed-out'
-                : 'active'
+                : outcome.pausedReason === 'quota-exhausted'
+                  ? 'quota-exhausted'
+                  : 'active'
           )
           return
         }

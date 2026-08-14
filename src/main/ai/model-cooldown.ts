@@ -22,6 +22,8 @@
 // Keyed by catalogId, not provider: Groq and Gemini rate-limit per MODEL, so
 // a sibling model on the same key is often still usable. A genuine
 // account-wide limit simply marks each model as it is tried.
+import type { CooldownTier } from './types'
+import { isPacedFor } from './model-pacing'
 
 /** Used when the provider rate-limits us but says nothing about when to come
  *  back. Long enough to actually clear a per-minute window, short enough that
@@ -34,19 +36,22 @@ export const DEFAULT_COOLDOWN_MS = 60_000
  *  again and find out, not to trust a number indefinitely. */
 export const MAX_COOLDOWN_MS = 10 * 60_000
 
-/** BUG-057 Phase 5 — which frequency tier CAUSED a given cooldown, not which
- *  tier is asking right now. `'live'` = a purpose in CHAIN_BUDGET
- *  (coaching-cue, deal-tier1 — fires every ~2.5s while a call is active).
- *  `'durable'` = everything else (summary, memory-extract, etc. — fires on
- *  its own, much slower cadence). Drives the tiered-cooldown bypass in
- *  isUsableFor: a durable purpose may skip a cooldown a LIVE purpose caused
- *  (that purpose's own aggressive polling burned this attempt, not a
- *  genuine account-wide limit as far as a durable caller can tell), but
- *  never a cooldown ANY durable purpose caused — durable purposes fire rare
- *  enough that their own failure is much stronger evidence of a real
- *  limit, and a live purpose bypassing another live purpose's cooldown
- *  would defeat BUG-058 entirely. */
-export type CooldownTier = 'live' | 'durable'
+// BUG-057 Phase 5 — CooldownTier itself now lives in types.ts (BUG-058's
+// pacing work needed the same concept without a circular import between
+// this file and model-pacing.ts — see that type's own doc comment there).
+// Re-exported here so every existing importer of it from this file keeps
+// working unchanged.
+//
+// What it drives here specifically: `causedBy` on a CooldownEntry is which
+// frequency tier CAUSED a given cooldown, not which tier is asking right
+// now. Drives the tiered-cooldown bypass in isUsableFor: a durable purpose
+// may skip a cooldown a LIVE purpose caused (that purpose's own aggressive
+// polling burned this attempt, not a genuine account-wide limit as far as a
+// durable caller can tell), but never a cooldown ANY durable purpose caused
+// — durable purposes fire rare enough that their own failure is much
+// stronger evidence of a real limit, and a live purpose bypassing another
+// live purpose's cooldown would defeat BUG-058 entirely.
+export type { CooldownTier } from './types'
 
 interface CooldownEntry {
   until: number
@@ -139,19 +144,28 @@ const PERIOD_EXHAUSTED_MAX_MS = 24 * 60 * 60_000 // 24h — the common unit for
 // OpenRouter free tiers are all documented as daily-reset).
 
 /** Mark a model as period-exhausted (a quota/billing cap, not an ordinary
- *  rate limit) until `retryAfterMs` from now, or PERIOD_EXHAUSTED_DEFAULT_MS
- *  when the provider gave no hint. Same never-shorten and same sticky-
- *  durable-causation rules as markRateLimited, and the same map — a
+ *  rate limit) until `retryAfterMs` from now, or `resetsAt` (a real or
+ *  documented-fixed-schedule quota reset — see AIProviderError.resetsAt's
+ *  own doc comment) when no explicit short-term hint exists, or
+ *  PERIOD_EXHAUSTED_DEFAULT_MS when NEITHER exists. `retryAfterMs` still
+ *  wins outright when present — same rule as markRateLimited: a provider's
+ *  own direct instruction beats a broader reset-schedule estimate, which
+ *  itself beats a guess. BUG-058 Phase 3 — `resetsAt` is new; before it,
+ *  this always fell straight to the 1h guess whenever no direct
+ *  retryAfterMs existed, even on the rare provider that DOES tell us
+ *  (indirectly) when the quota actually clears. Same never-shorten and same
+ *  sticky-durable-causation rules as markRateLimited, and the same map — a
  *  period-exhausted entry IS a cooldown, just one with a deliberately
  *  longer default/cap. */
 export function markPeriodExhausted(
   catalogId: string,
   retryAfterMs: number | undefined,
   now: number,
-  causedBy: CooldownTier
+  causedBy: CooldownTier,
+  resetsAt?: number
 ): void {
   const wait = Math.min(
-    Math.max(retryAfterMs ?? PERIOD_EXHAUSTED_DEFAULT_MS, 60_000),
+    Math.max(retryAfterMs ?? (resetsAt !== undefined ? resetsAt - now : PERIOD_EXHAUSTED_DEFAULT_MS), 60_000),
     PERIOD_EXHAUSTED_MAX_MS
   )
   const until = now + wait
@@ -219,9 +233,16 @@ export function isStructurallyBroken(catalogId: string, now: number): boolean {
  *  cost model backs this too: a bypass is framed as one bounded HTTP round
  *  trip that falls through like any ordinary failure if wrong — a fixed
  *  cost that doesn't scale with how escalated the cooldown is, so there's
- *  no cost-based reason to make bypass conditional on it either. */
+ *  no cost-based reason to make bypass conditional on it either.
+ *
+ *  BUG-058 remainder — also the single gate for pacing (model-pacing.ts):
+ *  checked here, internally, rather than a second call every caller has to
+ *  remember to add alongside this one. Checked before the cooldown map, not
+ *  after — a model can be "recently used, not yet cooling down" (no failure
+ *  has happened at all), which cooldown alone has no way to represent. */
 export function isUsableFor(catalogId: string, now: number, callerTier: CooldownTier): boolean {
   if (isStructurallyBroken(catalogId, now)) return false
+  if (isPacedFor(catalogId, now, callerTier)) return false
   const entry = cooldowns.get(catalogId)
   if (entry === undefined) return true
   if (entry.until <= now) {

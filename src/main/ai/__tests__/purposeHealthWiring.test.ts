@@ -53,6 +53,7 @@ vi.mock('../registry', () => {
 const { loadAppSettings } = await import('../../app-settings')
 const { completeWithFallback } = await import('../complete-with-fallback')
 const { resetCooldownsForTests } = await import('../model-cooldown')
+const { resetPacingForTests } = await import('../model-pacing')
 
 function allEmpty(): ReturnType<typeof loadAppSettings> {
   const purposes = [
@@ -69,6 +70,7 @@ const ORIGINAL_ENV = { ...process.env }
 
 beforeEach(() => {
   resetCooldownsForTests()
+  resetPacingForTests()
   recordAiSuccess.mockClear()
   recordAiFailure.mockClear()
   behavior.shouldFail = false

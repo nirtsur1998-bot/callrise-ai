@@ -18,7 +18,11 @@ export interface Tier1AnalyzeInput {
 
 export type Tier1AnalyzeOutcome =
   | { ok: true; candidates: Tier1SignalCandidate[] }
-  | { ok: false; pausedReason?: 'all-models-unavailable' | 'timed-out'; blockedReason?: 'consent' }
+  | {
+      ok: false
+      pausedReason?: 'all-models-unavailable' | 'timed-out' | 'quota-exhausted'
+      blockedReason?: 'consent'
+    }
 
 export async function analyzeTier1(input: Tier1AnalyzeInput): Promise<Tier1AnalyzeOutcome> {
   try {

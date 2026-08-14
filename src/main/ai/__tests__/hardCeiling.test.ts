@@ -66,6 +66,7 @@ vi.mock('../registry', () => {
 const { loadAppSettings } = await import('../../app-settings')
 const { completeWithFallback } = await import('../complete-with-fallback')
 const { resetCooldownsForTests } = await import('../model-cooldown')
+const { resetPacingForTests } = await import('../model-pacing')
 
 const PURPOSES = [
   'coaching-cue', 'summary', 'scorecard', 'tasks', 'other', 'prep-brief',
@@ -79,6 +80,7 @@ const ORIGINAL_ENV = { ...process.env }
 
 beforeEach(() => {
   resetCooldownsForTests()
+  resetPacingForTests()
   started.length = 0
   hang.enabled = true
   activeProviderId.current = null

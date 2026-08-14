@@ -31,8 +31,16 @@ export interface Nudge {
  *  rate-limited. Kept as separate union members (not folded into 'paused')
  *  because every Record<DealIntelligenceStatus, ...> lookup below is
  *  exhaustive — the compiler forces every consumer to decide what this
- *  status looks like rather than silently inheriting 'paused''s copy. */
-export type DealIntelligenceStatus = 'idle' | 'active' | 'paused' | 'timed-out'
+ *  status looks like rather than silently inheriting 'paused''s copy.
+ *
+ *  BUG-058 Phase 3 — 'quota-exhausted' added the same way: a genuine
+ *  free-tier quota exhaustion is a different condition from an ordinary
+ *  rate limit (no amount of waiting seconds fixes it), same reasoning as
+ *  'timed-out'. REMEMBER: useDealIntelligence.ts keeps its own SEPARATE
+ *  copy of this exact union (deliberately, see that file's own doc comment)
+ *  — keep both in sync by hand, the real `npm run typecheck` (not a bare
+ *  `tsc`) is what catches a missed one. */
+export type DealIntelligenceStatus = 'idle' | 'active' | 'paused' | 'timed-out' | 'quota-exhausted'
 
 // Tier 2's output shape — a slower (every 2-3 minutes), whole-call read that
 // sits alongside the Tier 1 nudges above rather than replacing them. Mirrored

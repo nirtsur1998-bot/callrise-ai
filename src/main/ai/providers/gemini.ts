@@ -139,14 +139,82 @@ export function parseGeminiRetryDelayMs(body: unknown): number | undefined {
   return undefined
 }
 
+/** BUG-058 Phase 3 — whether this quota failure is specifically the DAILY
+ *  cap, from `google.rpc.QuotaFailure.violations[].quotaId` (e.g.
+ *  "GenerateRequestsPerDayPerProjectPerModel-FreeTier" — confirmed against a
+ *  real Gemini 429 body via this session's own research; `quotaId`, not
+ *  `quotaMetric`, is the field that actually names the window — `quotaMetric`
+ *  is a bare resource path with no "PerDay" in it, checked here too only as
+ *  a defensive fallback in case a future response shape moves the text).
+ *  Gemini also rate-limits per-minute, which has nothing to do with the
+ *  midnight-Pacific daily schedule below — this is what tells the two apart.
+ *  Exported for direct unit testing, same reasoning as parseGeminiRetryDelayMs. */
+export function isGeminiDailyQuota(body: unknown): boolean {
+  const details = (body as { error?: { details?: unknown } })?.error?.details
+  if (!Array.isArray(details)) return false
+  for (const d of details) {
+    const violations = (d as { violations?: unknown })?.violations
+    if (!Array.isArray(violations)) continue
+    for (const v of violations) {
+      const id = (v as { quotaId?: unknown })?.quotaId
+      const metric = (v as { quotaMetric?: unknown })?.quotaMetric
+      if (typeof id === 'string' && /perday/i.test(id)) return true
+      if (typeof metric === 'string' && /perday/i.test(metric)) return true
+    }
+  }
+  return false
+}
+
+/** America/Los_Angeles's UTC offset (minutes) at a given instant, via Intl's
+ *  real timezone data rather than a hardcoded constant — Pacific alternates
+ *  PST (UTC-8) / PDT (UTC-7), and hardcoding either would be wrong half the
+ *  year. */
+function pacificOffsetMinutesAt(at: number): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).formatToParts(new Date(at))
+  const get = (t: string): number => Number(parts.find((p) => p.type === t)?.value ?? 0)
+  const asIfUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second'))
+  return Math.round((asIfUtc - at) / 60_000)
+}
+
+/** BUG-058 Phase 3 — Gemini's daily free-tier cap resets on a documented
+ *  FIXED schedule, midnight Pacific Time, not a live per-response signal
+ *  (confirmed via this session's research — see
+ *  docs/BUG-058-shared-resource-pacing-design.md §3). Labeled as computed,
+ *  not parsed, for exactly that reason: a future Gemini policy change here
+ *  reads as a stale assumption in this function, never a parsing bug.
+ *  Accepted limitation: off by up to an hour on the rare day Pacific Time
+ *  itself changes clocks (this uses `now`'s offset for "tomorrow midnight",
+ *  which is only wrong if a DST transition falls exactly between the two) —
+ *  not worth a full DST-transition-aware calculation for a schedule Gemini
+ *  itself only documents to the nearest hour ("00:00 Pacific Time").
+ *  Exported for direct unit testing. */
+export function nextMidnightPacificMs(now: number): number {
+  const offsetMin = pacificOffsetMinutesAt(now)
+  const pacificNowAsUtc = now + offsetMin * 60_000
+  const d = new Date(pacificNowAsUtc)
+  const nextMidnightAsIfUtc = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1, 0, 0, 0, 0)
+  return nextMidnightAsIfUtc - offsetMin * 60_000
+}
+
 async function toProviderError(displayName: string, res: Response): Promise<AIProviderError> {
   let message = `${displayName} returned an error (${res.status}).`
   let googleStatus = ''
   let retryAfterMs: number | undefined
+  let body: unknown
   try {
-    const body = (await res.json()) as { error?: { message?: string; status?: string } }
-    if (body.error?.message) message = body.error.message
-    if (body.error?.status) googleStatus = body.error.status
+    body = (await res.json()) as { error?: { message?: string; status?: string } }
+    const parsed = body as { error?: { message?: string; status?: string } }
+    if (parsed.error?.message) message = parsed.error.message
+    if (parsed.error?.status) googleStatus = parsed.error.status
     retryAfterMs = parseGeminiRetryDelayMs(body)
   } catch {
     /* non-JSON error body - keep the generic status-code message */
@@ -162,11 +230,20 @@ async function toProviderError(displayName: string, res: Response): Promise<AIPr
     return new AIProviderError('auth', `Your ${displayName} API key was rejected.`, undefined, 'structural')
   }
   if (res.status === 429 || googleStatus === 'RESOURCE_EXHAUSTED') {
+    const failureClass = classifyFailureClass('rate-limit', { message, status: res.status })
+    // BUG-058 Phase 3 — messaging-only, and only worth computing when this IS
+    // the daily cap specifically: Gemini also rate-limits per-minute, which
+    // has nothing to do with the midnight-Pacific schedule below.
+    const resetsAt =
+      failureClass === 'period-exhausted' && isGeminiDailyQuota(body)
+        ? nextMidnightPacificMs(Date.now())
+        : undefined
     return new AIProviderError(
       'rate-limit',
       `${displayName} is rate-limiting requests right now.`,
       retryAfterMs,
-      classifyFailureClass('rate-limit', { message, status: res.status })
+      failureClass,
+      resetsAt
     )
   }
   if (res.status === 404 || googleStatus === 'NOT_FOUND') {

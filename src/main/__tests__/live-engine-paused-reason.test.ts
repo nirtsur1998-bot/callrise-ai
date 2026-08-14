@@ -15,7 +15,7 @@ vi.mock('../ai/complete-with-fallback', () => ({
   AllModelsExhaustedError: class extends Error {
     constructor(
       readonly purpose: string,
-      readonly attempts: { catalogId: string; reason: string }[]
+      readonly attempts: { catalogId: string; reason: string; failureClass?: string }[]
     ) {
       super('exhausted')
     }
@@ -30,6 +30,7 @@ vi.mock('../consent-gate', () => ({ consentPermitsCapture: () => true }))
 const { liveCue } = await import('../live-cue')
 const { analyzeDealTier1 } = await import('../deal-tier1')
 const { analyzeDealTier2 } = await import('../deal-tier2')
+const { AllModelsExhaustedError } = await import('../ai/complete-with-fallback')
 
 beforeEach(() => {
   completeWithFallback.mockReset()
@@ -62,6 +63,26 @@ describe('live-cue.ts — pausedReason routing (BUG-057 Phase 2)', () => {
     expect(result.ok).toBe(false)
     expect((result as { pausedReason?: unknown }).pausedReason).toBeUndefined()
   })
+
+  it('BUG-058 Phase 3 — a genuine quota exhaustion is reported as pausedReason: quota-exhausted, not all-models-unavailable', async () => {
+    completeWithFallback.mockRejectedValue(
+      new AllModelsExhaustedError('coaching-cue', [
+        { catalogId: 'groq-llama-3.3-70b-versatile', reason: 'rate-limit', failureClass: 'period-exhausted' }
+      ])
+    )
+    const result = await liveCue({ transcript: WINDOW, repSpeaker: 0 })
+    expect(result).toMatchObject({ ok: false, pausedReason: 'quota-exhausted' })
+  })
+
+  it('BUG-058 Phase 3 — an ordinary chain exhaustion (no period-exhausted attempts) still reports all-models-unavailable', async () => {
+    completeWithFallback.mockRejectedValue(
+      new AllModelsExhaustedError('coaching-cue', [
+        { catalogId: 'groq-llama-3.3-70b-versatile', reason: 'rate-limit', failureClass: 'transient' }
+      ])
+    )
+    const result = await liveCue({ transcript: WINDOW, repSpeaker: 0 })
+    expect(result).toMatchObject({ ok: false, pausedReason: 'all-models-unavailable' })
+  })
 })
 
 describe('deal-tier1.ts — pausedReason routing (BUG-057 Phase 2)', () => {
@@ -76,6 +97,16 @@ describe('deal-tier1.ts — pausedReason routing (BUG-057 Phase 2)', () => {
     const result = await analyzeDealTier1({ transcriptDelta: LONG_TEXT, compactState: '' })
     expect(result).toMatchObject({ ok: false, pausedReason: 'all-models-unavailable' })
   })
+
+  it('BUG-058 Phase 3 — a genuine quota exhaustion is reported as pausedReason: quota-exhausted', async () => {
+    completeWithFallback.mockRejectedValue(
+      new AllModelsExhaustedError('deal-tier1', [
+        { catalogId: 'groq-llama-3.3-70b-versatile', reason: 'rate-limit', failureClass: 'period-exhausted' }
+      ])
+    )
+    const result = await analyzeDealTier1({ transcriptDelta: LONG_TEXT, compactState: '' })
+    expect(result).toMatchObject({ ok: false, pausedReason: 'quota-exhausted' })
+  })
 })
 
 describe('deal-tier2.ts — pausedReason routing (BUG-057 Phase 2)', () => {
@@ -89,5 +120,15 @@ describe('deal-tier2.ts — pausedReason routing (BUG-057 Phase 2)', () => {
     completeWithFallback.mockRejectedValue(new AIProviderError('rate-limit', 'rate-limited right now'))
     const result = await analyzeDealTier2({ transcriptDelta: LONG_TEXT, compactState: '' })
     expect(result).toMatchObject({ ok: false, pausedReason: 'all-models-unavailable' })
+  })
+
+  it('BUG-058 Phase 3 — a genuine quota exhaustion is reported as pausedReason: quota-exhausted', async () => {
+    completeWithFallback.mockRejectedValue(
+      new AllModelsExhaustedError('deal-tier2', [
+        { catalogId: 'groq-llama-3.3-70b-versatile', reason: 'rate-limit', failureClass: 'period-exhausted' }
+      ])
+    )
+    const result = await analyzeDealTier2({ transcriptDelta: LONG_TEXT, compactState: '' })
+    expect(result).toMatchObject({ ok: false, pausedReason: 'quota-exhausted' })
   })
 })

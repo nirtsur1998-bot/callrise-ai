@@ -55,6 +55,7 @@ const { completeWithFallback, resolveConfiguredChain, AllModelsExhaustedError } 
   '../complete-with-fallback'
 )
 const { resetCooldownsForTests } = await import('../model-cooldown')
+const { resetPacingForTests } = await import('../model-pacing')
 
 const PURPOSES = [
   'coaching-cue', 'summary', 'scorecard', 'tasks', 'other', 'prep-brief',
@@ -77,6 +78,7 @@ beforeEach(() => {
   // for every purpose, so that is correct at runtime) — which means one
   // test's 429s would otherwise silently suppress the next test's attempts.
   resetCooldownsForTests()
+  resetPacingForTests()
   activeProviderId.current = 'groq'
   vi.mocked(loadAppSettings).mockReturnValue(allEmpty())
   process.env.GROQ_API_KEY = 'g'
