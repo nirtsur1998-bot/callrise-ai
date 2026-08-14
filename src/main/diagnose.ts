@@ -18,6 +18,10 @@
 //   it is in, not silently skipped, so the absence is itself visible.
 
 import { app } from 'electron'
+import { existsSync } from 'node:fs'
+import { getLoadablePath as getVecLoadablePath } from 'sqlite-vec'
+import { resolveVecExtensionPath } from './memory/db'
+import { getLastInitResult, getMemoryDb } from './memory/memory-runtime'
 import { runChannelSelfTest } from './session-health/channel-test'
 import { loadRealWorkletRender } from './session-health/real-worklet-render'
 import { HEALTH_TUNING } from './session-health/types'
@@ -178,6 +182,32 @@ export function buildDiagnoseReport(): string {
   for (const name of ['DEEPGRAM_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']) {
     push(`  ${name.padEnd(18)}: ${process.env[name]?.trim() ? 'set' : 'not set'}`)
   }
+  push()
+
+  // Sales Brain shipped completely dead on a real user's machine while
+  // working on the dev machine and passing every CI check — exactly the
+  // shape this file's own header exists for, and it took four releases to
+  // find because nothing anywhere reported WHY the database failed to open.
+  // The vec0 line is the one that mattered: sqlite-vec resolves its
+  // extension through require.resolve, which inside a packaged app points
+  // into app.asar, where the Win32 loader cannot open it.
+  push('SALES BRAIN')
+  const brainEnabled = safe(() => loadAppSettings().salesBrain.enabled, false)
+  push(`  enabled           : ${yesNo(brainEnabled)}`)
+  const vec = safe(
+    () => {
+      const raw = getVecLoadablePath()
+      const corrected = resolveVecExtensionPath(raw)
+      return { raw, corrected, exists: existsSync(corrected) }
+    },
+    { raw: 'unresolvable', corrected: 'unresolvable', exists: false }
+  )
+  push(`  vec0 path         : ${vec.corrected}`)
+  push(`  vec0 on disk      : ${yesNo(vec.exists)}${vec.exists ? '' : ' — extension load WILL fail'}`)
+  if (vec.raw !== vec.corrected) push('  vec0 asar fix     : applied (raw path pointed inside app.asar)')
+  const init = safe(() => getLastInitResult(), null)
+  push(`  init result       : ${init ? `${init.ok ? 'ok' : 'FAILED'} — ${init.detail}` : 'has not run yet'}`)
+  push(`  database open     : ${yesNo(safe(() => getMemoryDb() !== null, false))}`)
   push()
 
   push('='.repeat(60))

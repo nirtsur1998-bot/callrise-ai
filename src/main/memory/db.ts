@@ -56,10 +56,42 @@ export type MigrateResult =
  *  extension into it. Does NOT migrate — call migrate() separately so a
  *  caller can decide what to do (block startup vs. degrade gracefully) if
  *  it reports failure, rather than this function making that call silently. */
+/**
+ * The vec0 extension path, corrected for asar packaging.
+ *
+ * sqlite-vec's own load() resolves vec0.dll via `require.resolve` (see
+ * node_modules/sqlite-vec/index.cjs), which inside a packaged app returns a
+ * path INSIDE app.asar — e.g.
+ *   ...\resources\app.asar\node_modules\sqlite-vec-windows-x64\vec0.dll
+ * That path is fine for anything going through Node's fs (Electron's asar
+ * shim transparently redirects it), but loadExtension() hands the string
+ * straight to SQLite's C `sqlite3_load_extension`, which calls LoadLibraryW
+ * directly. The Win32 loader knows nothing about asar archives, finds no
+ * such file on the real filesystem, and fails with ERROR_MOD_NOT_FOUND —
+ * surfaced to the user as the bare OS string "The specified module could
+ * not be found."
+ *
+ * electron-builder already unpacks the real DLL to the mirrored
+ * app.asar.unpacked tree (see electron-builder.yml's asarUnpack), so the fix
+ * is to point at that copy. Same correction the two in-repo native addons
+ * make in their own resolveAddonPath (MacAdapter/WindowsAdapter).
+ *
+ * A no-op outside a packaged app (dev has no "app.asar" path segment), and
+ * falls back to the original path if the unpacked copy somehow isn't there,
+ * so this can only ever help. Exported for direct unit testing.
+ */
+export function resolveVecExtensionPath(resolved: string): string {
+  const unpacked = resolved.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1')
+  if (unpacked !== resolved && existsSync(unpacked)) return unpacked
+  return resolved
+}
+
 export function openMemoryDb(dbPath: string): Database.Database {
   const db = new Database(dbPath)
   db.pragma('journal_mode = WAL') // same durability/perf tradeoff every other SQLite app on desktop makes
-  sqliteVec.load(db)
+  // NOT sqliteVec.load(db) — that uses the raw require.resolve path, which
+  // is broken inside a packaged app. See resolveVecExtensionPath above.
+  db.loadExtension(resolveVecExtensionPath(sqliteVec.getLoadablePath()))
   return db
 }
 
