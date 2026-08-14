@@ -26,7 +26,7 @@
 // wrong would end every buyer-capture call with a spurious "we found an
 // interrupted call" prompt for a call that saved perfectly well.
 import { randomUUID } from 'node:crypto'
-import { CallJournal } from './call-journal'
+import { CallJournal, redactJournalConsentIfNeeded } from './call-journal'
 import {
   TranscriptAccumulator,
   type AccumulatedSegment,
@@ -311,6 +311,18 @@ export function endCall(opts: { saved: boolean }): void {
     else call.journal?.close()
   } catch (err) {
     console.error('[live-transcript] could not close journal:', err)
+  }
+  // 1.2.5 hotfix (privacy) — the journal has no consent-retention strip of
+  // its own; this is what applies it, now that the call (and this journal's
+  // final consent state) is settled. Fire-and-forget, same as everything
+  // else in this function: journaling — and now its cleanup — must never be
+  // on the hot path a caller waits on. Only reachable when the call was
+  // actually saved; an unsaved journal stays an untouched recovery candidate
+  // until the rep decides its fate, same as retireJournal/discardJournal.
+  if (opts.saved && call.journal) {
+    void redactJournalConsentIfNeeded(call.journal.id).catch((err) =>
+      console.error('[live-transcript] consent redaction failed:', err)
+    )
   }
 }
 

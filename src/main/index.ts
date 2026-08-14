@@ -152,6 +152,7 @@ import { registerEvents } from './events'
 import { registerLiveCue } from './live-cue'
 import { registerLoopbackCapture } from './loopback'
 import { registerLiveTranscriptIpc } from './live/live-transcript-ipc'
+import { redactPendingClosedJournals } from './live/call-journal'
 import { registerGoogle } from './google'
 import { registerOutlook } from './outlook'
 import { registerBackup } from './backup'
@@ -441,6 +442,16 @@ app.whenReady().then(async () => {
   // registerCalls because recovery writes a real Call through the same
   // saveCall path, into the same directory.
   registerLiveTranscriptIpc(() => join(app.getPath('userData'), 'calls'))
+  // 1.2.5 hotfix (privacy) — one-time-per-launch backlog sweep, redacting
+  // buyer content out of any already-closed journal from before this fix
+  // shipped (or one whose close-time redaction didn't get to run). Fire-
+  // and-forget and NOT awaited: must never sit on the startup critical path
+  // to createWindow() — see J2's own lesson about the Sales Brain init race
+  // just above. Safe to run every launch regardless: already-redacted
+  // journals are skipped instantly via their `.redacted` marker.
+  void redactPendingClosedJournals().catch((err) =>
+    console.error('[index] pending journal redaction sweep failed:', err)
+  )
   registerCoachPdf()
   registerTasks()
   registerContacts()
