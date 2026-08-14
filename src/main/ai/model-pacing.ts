@@ -45,14 +45,16 @@
 // exists. A second, separately-remembered check is exactly the shape that
 // let BUG-060 ship (`cancellable: true` defaulted on with nothing actually
 // checking `handle.signal`) — one gate, not one more thing to forget.
-import type { CooldownTier } from './types'
+import type { AIProviderId, CooldownTier } from './types'
+import { catalogEntry } from './model-catalog'
 
-/** How long a model stays "recently used" to a durable caller after a
- *  success or a rate-limit-classified failure (see markUsed). Derived,
- *  not guessed: Gemini 2.5 Flash's
- *  free-tier limit is reported as 10-15 RPM depending on source (Google's
- *  own current rate-limits page no longer publishes a static table — it's
- *  shown per-account in AI Studio). Using the conservative end,
+/** The DEFAULT pacing gap — how long a model stays "recently used" to a
+ *  durable caller after a success or a rate-limit-classified failure (see
+ *  markUsed), for any provider without a more specific documented free-tier
+ *  rate below. Derived, not guessed: Gemini 2.5 Flash's free-tier limit is
+ *  reported as 10-15 RPM depending on source (Google's own current
+ *  rate-limits page no longer publishes a static table — it's shown
+ *  per-account in AI Studio). Using the conservative end,
  *  60_000ms / 10 requests-per-minute = 6_000ms — the spacing that keeps
  *  this app's own pacing-gated traffic to a shared model at exactly the
  *  full published free-tier rate under worst-case sustained multi-purpose
@@ -62,8 +64,50 @@ import type { CooldownTier } from './types'
  *  caught the first two, not the third — consistent with "meaningfully
  *  reduces collisions," not "guarantees none." Worth revisiting with real
  *  post-ship data, same as HARD_CEILING_MS (types.ts) is a considered,
- *  not measured, backstop. */
+ *  not measured, backstop.
+ *
+ *  google (Gemini) IS this default — it's where the 10-RPM number comes
+ *  from — so it deliberately has no entry in the per-provider map below. */
 export const PACING_GAP_MS = 6_000
+
+/**
+ * M27 H2 — per-provider gaps where a free tier documents a HIGHER per-request
+ * rate than Gemini's conservative 10 RPM. The BUG-058 design that introduced
+ * PACING_GAP_MS shipped it as one global constant and explicitly deferred
+ * per-provider tuning ("Revisit with real post-ship data rather than more
+ * research now"); this is that revisit. Applying the single 6s gap to every
+ * provider throttled durable fallback hops on Groq/OpenRouter up to 3x more
+ * than their own published free-tier rate requires, adding avoidable latency
+ * to every cross-purpose divert that lands on one of them.
+ *
+ * Each value is 60_000ms / that provider's documented free-tier RPM (see
+ * docs/BUG-058-shared-resource-pacing-design.md §1's per-provider research).
+ * Deliberately ONE-DIRECTIONAL: only providers whose documented rate is
+ * HIGHER than the default get a shorter gap. Any provider whose free-tier
+ * rate this session couldn't source (nvidia/cerebras/mistral/anthropic/openai)
+ * falls to the conservative 6s default rather than a guessed shorter one —
+ * erring short would risk re-clustering the exact multi-purpose pileup
+ * BUG-058 exists to prevent, which is a worse failure than a slightly-longer
+ * divert.
+ */
+const PACING_GAP_MS_BY_PROVIDER: Partial<Record<AIProviderId, number>> = {
+  // Groq's free tier documents ~30 RPM per model → 60_000 / 30 = 2_000ms.
+  groq: 2_000,
+  // OpenRouter's free tier documents ~20 req/min → 60_000 / 20 = 3_000ms.
+  openrouter: 3_000
+}
+
+/** The pacing gap for one catalogId, keyed on its provider. A `legacy:<id>`
+ *  step (complete-with-fallback.ts's legacyStep — no catalog entry backs it)
+ *  carries its provider in the id itself, so parse that; a real catalog id
+ *  resolves through catalogEntry; anything unrecognised falls to the
+ *  conservative default. */
+function gapMsFor(catalogId: string): number {
+  const providerId = catalogId.startsWith('legacy:')
+    ? (catalogId.slice('legacy:'.length) as AIProviderId)
+    : catalogEntry(catalogId)?.providerId
+  return (providerId && PACING_GAP_MS_BY_PROVIDER[providerId]) ?? PACING_GAP_MS
+}
 
 interface PacingEntry {
   at: number
@@ -103,7 +147,7 @@ export function isPacedFor(catalogId: string, now: number, callerTier: CooldownT
   if (callerTier === 'live') return false
   const entry = lastUsed.get(catalogId)
   if (!entry || entry.causedBy === 'live') return false
-  return now - entry.at < PACING_GAP_MS
+  return now - entry.at < gapMsFor(catalogId)
 }
 
 /** Test-only reset — production code never calls this. */
