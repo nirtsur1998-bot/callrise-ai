@@ -125,3 +125,22 @@ describe('migrate — the migration drill', () => {
     expect(existsSync(`${dbPath}.pre-migration-backup`)).toBe(false)
   })
 })
+
+describe('M27 J3 — better-sqlite3/sqlite-vec are not loaded at module scope', () => {
+  it('openMemoryDb() still opens a real, working database despite the lazy require', () => {
+    // The behavioral half: the lazy-require refactor didn't just move where
+    // the import text sits, it still has to actually work. Real assertion,
+    // not just "doesn't throw" — a genuine round-trip through the opened
+    // connection, including the vec0 extension load this function exists to
+    // apply (db.loadExtension would throw if that path resolution broke).
+    const db = openMemoryDb(dbPath)
+    try {
+      db.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)')
+      db.prepare('INSERT INTO t (val) VALUES (?)').run('hello')
+      const row = db.prepare('SELECT val FROM t WHERE id = 1').get() as { val: string }
+      expect(row.val).toBe('hello')
+    } finally {
+      db.close()
+    }
+  })
+})
