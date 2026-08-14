@@ -10,7 +10,7 @@
 import { app, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { isSalesBrainEnabled } from '../app-settings'
-import { getMemoryDb } from './memory-runtime'
+import { ensureMemoryDb, getMemoryDb } from './memory-runtime'
 import { runBackfill, type BackfillOptions, type BackfillProgress } from './backfill'
 import { getJobManager } from '../jobs/instance'
 import type { Job } from '../jobs/types'
@@ -124,7 +124,12 @@ export function registerBackfill(): void {
     'salesBrain:backfill:start',
     async (_e, opts: unknown): Promise<{ ok: boolean; message?: string; jobId?: string }> => {
       if (!isSalesBrainEnabled()) return { ok: false, message: 'Sales Brain is off.' }
-      if (!getMemoryDb()) return { ok: false, message: 'Sales Brain is not ready yet.' }
+      // A null db here used to be a dead end for the rest of the session —
+      // see ensureMemoryDb()'s own doc comment. Retry once, right here,
+      // rather than failing on a stale/never-attempted init; surface the
+      // REAL reason if it's still not ready, not the old generic message.
+      const { db, detail } = await ensureMemoryDb()
+      if (!db) return { ok: false, message: `still not ready — ${detail}` }
 
       const manager = getJobManager()
       // One import at a time, same explicit re-check as the objection scan

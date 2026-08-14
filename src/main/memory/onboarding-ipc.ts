@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { writeJsonAtomic } from '../atomic-write'
 import { isSalesBrainEnabled } from '../app-settings'
-import { getMemoryDb } from './memory-runtime'
+import { ensureMemoryDb } from './memory-runtime'
 import { consolidateNewCandidate } from './consolidation'
 import { ONBOARDING_TOPICS, extractOnboardingFacts, topicById } from './onboarding'
 
@@ -98,7 +98,15 @@ export function registerOnboarding(): void {
       if (!topic) return computeStatus()
 
       if (isSalesBrainEnabled()) {
-        const db = getMemoryDb()
+        // A null db here used to mean this whole block silently no-op'd —
+        // the interview visibly advanced (completedTopicIds still gets
+        // updated below) while nothing the rep actually said was learned,
+        // with no error and no sign anything was wrong. Retry once, right
+        // here, same as the backfill start handler — see ensureMemoryDb()'s
+        // own doc comment for why this is the one background-adjacent path
+        // worth the retry: unlike a live/post-call hook, a rep is actively
+        // sitting in this modal waiting for their answer to be saved.
+        const { db } = await ensureMemoryDb()
         if (db) {
           const candidates = await extractOnboardingFacts(topic, answer.slice(0, 4000))
           for (const candidate of candidates) {

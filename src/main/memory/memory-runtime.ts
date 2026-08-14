@@ -146,6 +146,48 @@ export function getMemoryDb(): Database.Database | null {
   return db
 }
 
+let initRetryPromise: Promise<{ ok: boolean; detail: string }> | null = null
+
+/** A null db from getMemoryDb() can be PERMANENT for the rest of a session
+ *  even with Sales Brain switched on — initSalesBrain() only ever runs
+ *  automatically once, at startup (raced against a 15s cap so a slow init
+ *  never blocks login, see index.ts), or once more on a live settings-
+ *  toggle flip (app-settings.ts's settings:update handler). Nothing else
+ *  ever retries it. A startup init that loses that 15s race on a slower
+ *  machine, or any transient failure (a locked file, a momentary disk
+ *  hiccup), used to leave every Sales Brain surface permanently inert for
+ *  the rest of the session with the same generic "not ready yet," no way
+ *  to see why, and no recovery short of a full restart — confirmed live: a
+ *  real report where waiting well past the 15s window and retrying still
+ *  failed with the identical unhelpful message.
+ *
+ *  Used only at the USER-FACING entry points where someone is actively
+ *  waiting on an answer (backfill start, onboarding submit) — deliberately
+ *  NOT retrofitted into every background hook (memory-hooks.ts, rag.ts,
+ *  profile-injection.ts, memory-center-ipc.ts): those fire silently off the
+ *  live/post-call path by design, where a doomed retry costs real latency
+ *  nobody is watching for, for no benefit a background caller can act on
+ *  anyway. A foreground click is someone waiting right now, and deserves a
+ *  real answer instead of a dead end.
+ *
+ *  De-duplicates concurrent callers onto the SAME retry attempt (a bare
+ *  retry-on-every-call would let two near-simultaneous clicks race two
+ *  independent migrate() runs against the same file) rather than adding a
+ *  new lock primitive this codebase doesn't otherwise have — the in-flight
+ *  promise clears itself when it settles, so a LATER call still gets a
+ *  fresh attempt rather than being stuck replaying a stale one. */
+export async function ensureMemoryDb(): Promise<{ db: Database.Database | null; detail: string }> {
+  if (db) return { db, detail: 'already ready' }
+  if (!isSalesBrainEnabled()) return { db: null, detail: 'disabled' }
+  if (!initRetryPromise) {
+    initRetryPromise = initSalesBrain().finally(() => {
+      initRetryPromise = null
+    })
+  }
+  const result = await initRetryPromise
+  return { db, detail: result.detail }
+}
+
 export function getLastInitResult(): { ok: boolean; detail: string } | null {
   return lastInitResult
 }
