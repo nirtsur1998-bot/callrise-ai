@@ -6,8 +6,10 @@
 // needsTool is set) so a caller can tell "no keys at all" apart from "keys
 // exist but none support tools" — the first design pass's version filtered
 // internally and then re-ran the same already-filtered check, which could
-// never fire. These tests mock ../model-catalog directly since no REAL
-// catalog entry is currently marked supportsToolCalling: false.
+// never fire. These tests mock ../model-catalog with tiny fixtures for full
+// control over the capable/incapable split; the REAL catalog now has one
+// supportsToolCalling:false entry (openrouter-auto-free, M27 B2), covered
+// separately against the real data in model-catalog.b2.test.ts.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AIProviderError } from '../types'
 
@@ -39,9 +41,11 @@ vi.mock('../registry', () => {
   }
 })
 
-// A tiny, fully-controlled fixture catalog — real production data has no
-// entries with supportsToolCalling:false today, so the claim under test
-// (the filter itself) needs its own fixtures rather than hunting for one.
+// A tiny, fully-controlled fixture catalog — the claim under test (the
+// filter mechanism itself) is proven most cleanly against a two-entry
+// capable/incapable pair rather than the real catalog's churn. The real
+// openrouter-auto-free:false entry is asserted against production data in
+// model-catalog.b2.test.ts.
 const FIXTURE_CATALOG: Record<string, { id: string; providerId: string; modelId: string; supportsToolCalling?: false }> = {
   'fixture-capable': { id: 'fixture-capable', providerId: 'groq', modelId: 'capable-model' },
   'fixture-incapable': {

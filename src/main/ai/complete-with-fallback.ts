@@ -120,9 +120,13 @@ const SPEED_CHAIN = [
 const QUALITY_CHAIN = [
   'google-gemini-flash',
   'nvidia-deepseek-v3.2',
-  'openrouter-nemotron-3-ultra',
+  'openrouter-nemotron-3.5-lightning', // M27 B2 — was 'openrouter-nemotron-3-ultra' (dead id, 100% 400s)
   'nvidia-glm-5.2',
   'mistral-small',
+  // M27 B2 — openrouter-auto-free stays in the chain but is now
+  // supportsToolCalling:false in the catalog, so on a tool-using purpose it
+  // is filtered out (it failed 28/39 real attempts on tool-call output); on
+  // a plain-text purpose it remains the last-resort entry it always was.
   'openrouter-auto-free',
   'groq-llama-3.3-70b-versatile',
   'groq-gpt-oss-120b',
