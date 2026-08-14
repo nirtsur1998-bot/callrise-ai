@@ -84,10 +84,33 @@ export function ActivityCenter(): React.JSX.Element {
 
   const running = jobs.filter((j) => j.state === 'running')
   const queued = jobs.filter((j) => j.state === 'queued')
-  const recent = jobs
+  const finished = jobs
     .filter((j) => j.state === 'succeeded' || j.state === 'failed' || j.state === 'interrupted')
     .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))
-  const unread = recent.filter((j) => (j.endedAt ?? 0) > lastViewedAt).length
+
+  // M27 — drafts get their own pinned section instead of sinking into the
+  // chronological Recent list.
+  //
+  // BUG-048 and BUG-050 exist because already-paid-for AI output (Generate
+  // tasks' proposals, Generate CRM note's draft) used to be discarded when a
+  // screen closed. The fix moved that output into the JOB, where it survives
+  // navigation and even a restart — and retention.ts refuses to prune it, so
+  // it is genuinely safe on disk. But safe-on-disk and FINDABLE are different
+  // guarantees: Recent is strictly newest-first, and the post-call cascade
+  // alone fires roughly six automatic jobs per call, so a draft from this
+  // morning is buried under dozens of "Detecting who this was — done" rows by
+  // the afternoon. A draft the rep can't find is functionally a draft they
+  // lost, which is the exact outcome those two bugs were fixed to prevent.
+  //
+  // Same predicate retention.ts and Clear-history already use, deliberately —
+  // one definition of "still holds unreviewed output", so the section shown,
+  // the rows Clear-history skips, and the jobs pruning refuses can never
+  // disagree about which jobs those are.
+  const needsReview = finished.filter(holdsUnreviewedOutput)
+  const recent = finished.filter((j) => !holdsUnreviewedOutput(j))
+  // Counts drafts too (hence `finished`, not `recent`) — a freshly-generated
+  // draft waiting on the rep is the single most badge-worthy thing here.
+  const unread = finished.filter((j) => (j.endedAt ?? 0) > lastViewedAt).length
   const active = running.length + queued.length
 
   const openPanel = (): void => {
@@ -110,13 +133,19 @@ export function ActivityCenter(): React.JSX.Element {
   // since both adapters treat a succeeded job as "already generated". Main
   // refuses those outright now; skipping them here too means the button
   // clears what it legitimately can instead of half-failing invisibly.
+  // M27 — `recent` now EXCLUDES unreviewed drafts by construction (they live
+  // in their own pinned section above), so this loop can no longer reach one
+  // even in principle. That's a strictly stronger version of the same
+  // protection than the per-item skip this used to rely on. Main still
+  // refuses the delete outright (JobManager.dismiss demands consumed:true),
+  // which remains the actual guarantee — this is the third independent layer,
+  // not the only one.
   const clearHistory = (): void => {
     for (const job of recent) {
-      if (holdsUnreviewedOutput(job)) continue
       act(() => window.api.jobs.dismiss(job.id))
     }
   }
-  const clearableCount = recent.filter((j) => !holdsUnreviewedOutput(j)).length
+  const clearableCount = recent.length
 
   return (
     // Bottom-right, same corner as the toast stack (ToastProvider.tsx —
@@ -167,7 +196,10 @@ export function ActivityCenter(): React.JSX.Element {
             )}
           </div>
           <div className="flex-1 overflow-y-auto p-2">
-            {running.length === 0 && queued.length === 0 && recent.length === 0 ? (
+            {running.length === 0 &&
+            queued.length === 0 &&
+            recent.length === 0 &&
+            needsReview.length === 0 ? (
               <EmptyState
                 icon={Activity}
                 title="Nothing here yet"
@@ -176,6 +208,11 @@ export function ActivityCenter(): React.JSX.Element {
               />
             ) : (
               <>
+                {/* M27 — FIRST, above running work, and deliberately so: this
+                    is the only group holding something the rep must act on
+                    (already-paid-for AI output waiting to be reviewed or
+                    saved). Everything below it is informational. */}
+                <Group title="Needs your review" jobs={needsReview} act={act} />
                 <Group title="Running" jobs={running} act={act} />
                 <Group title="Queued" jobs={queued} act={act} />
                 <Group title="Recent" jobs={recent} act={act} />
