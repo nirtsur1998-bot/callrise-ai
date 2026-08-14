@@ -117,4 +117,49 @@ describe('ensureMemoryDb', () => {
     expect(b.db).toBe(fakeDb)
     expect(openMemoryDb).toHaveBeenCalledTimes(1)
   })
+
+  // The 1.2.1 regression, directly. openMemoryDb() (better-sqlite3's
+  // Database constructor) can throw synchronously on a native-module load
+  // failure — index.ts's startup call has always wrapped it in try/catch for
+  // exactly that reason. The first version of ensureMemoryDb did not, so on a
+  // machine where init genuinely throws, the rejection propagated out of the
+  // IPC handler and the renderer (which reads a result object, not a
+  // rejection) showed the user NOTHING — the Import button silently did
+  // nothing at all.
+  describe('an init that THROWS must resolve, never reject — a rejection reaches the user as silence', () => {
+    it('resolves with db:null and the real error text instead of rejecting', async () => {
+      openMemoryDb.mockImplementationOnce(() => {
+        throw new Error('was compiled against a different Node.js version')
+      })
+
+      const result = await ensureMemoryDb()
+
+      expect(result.db).toBeNull()
+      expect(result.detail).toContain('init threw')
+      expect(result.detail).toContain('different Node.js version')
+    })
+
+    it('does not poison later attempts — a throw clears the shared in-flight promise', async () => {
+      openMemoryDb.mockImplementationOnce(() => {
+        throw new Error('transient native load failure')
+      })
+      const first = await ensureMemoryDb()
+      expect(first.db).toBeNull()
+
+      const second = await ensureMemoryDb()
+      expect(second.db).toBe(fakeDb)
+    })
+
+    it('concurrent callers all resolve (never reject) when the shared attempt throws', async () => {
+      openMemoryDb.mockImplementationOnce(() => {
+        throw new Error('boom')
+      })
+
+      // Promise.all rejects if ANY of them rejected — this is the assertion.
+      const [a, b] = await Promise.all([ensureMemoryDb(), ensureMemoryDb()])
+
+      expect(a.db).toBeNull()
+      expect(b.db).toBeNull()
+    })
+  })
 })

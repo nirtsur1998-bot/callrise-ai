@@ -175,16 +175,49 @@ let initRetryPromise: Promise<{ ok: boolean; detail: string }> | null = null
  *  independent migrate() runs against the same file) rather than adding a
  *  new lock primitive this codebase doesn't otherwise have — the in-flight
  *  promise clears itself when it settles, so a LATER call still gets a
- *  fresh attempt rather than being stuck replaying a stale one. */
+ *  fresh attempt rather than being stuck replaying a stale one.
+ *
+ *  MUST NEVER THROW AND MUST NEVER HANG — this is awaited directly inside
+ *  IPC handlers, and an ipcMain.handle callback that throws or never
+ *  settles reaches the renderer as a rejected/pending promise. The renderer
+ *  call sites read a RESULT OBJECT; a rejection there isn't a visible error,
+ *  it's silence — the button appears to do nothing at all. That is exactly
+ *  what shipped in 1.2.1: initSalesBrain() can throw synchronously
+ *  (better-sqlite3's Database constructor on a native-module load failure —
+ *  index.ts's own startup call has always wrapped it in try/catch for
+ *  precisely this reason, which the first version of this function failed to
+ *  mirror), so on a machine where init genuinely fails, "not ready yet"
+ *  became "nothing happens." Both guards below exist for that: catch
+ *  everything, and bound the wait so a slow/stuck init can't leave the
+ *  click unanswered forever. */
+const ENSURE_TIMEOUT_MS = 20_000
+
 export async function ensureMemoryDb(): Promise<{ db: Database.Database | null; detail: string }> {
   if (db) return { db, detail: 'already ready' }
   if (!isSalesBrainEnabled()) return { db: null, detail: 'disabled' }
   if (!initRetryPromise) {
-    initRetryPromise = initSalesBrain().finally(() => {
-      initRetryPromise = null
-    })
+    // .catch() HERE, on the shared promise, not only around the await
+    // below: an un-caught rejection stored in initRetryPromise would also
+    // surface as an unhandled rejection for every OTHER caller awaiting the
+    // same attempt. Normalised to a result object so nothing downstream
+    // ever sees a rejected promise.
+    initRetryPromise = initSalesBrain()
+      .catch((err: unknown) => ({
+        ok: false,
+        detail: `init threw: ${err instanceof Error ? err.message : String(err)}`
+      }))
+      .finally(() => {
+        initRetryPromise = null
+      })
   }
-  const result = await initRetryPromise
+  // Bounded, for the same reason index.ts bounds the startup init: a slow or
+  // stuck open/migrate must not hold an IPC handler open indefinitely. The
+  // init itself keeps running in the background on timeout — a later click
+  // finds `db` already set if it eventually succeeds.
+  const timeout = new Promise<{ ok: boolean; detail: string }>((resolve) =>
+    setTimeout(() => resolve({ ok: false, detail: `still starting up (>${ENSURE_TIMEOUT_MS / 1000}s)` }), ENSURE_TIMEOUT_MS)
+  )
+  const result = await Promise.race([initRetryPromise, timeout])
   return { db, detail: result.detail }
 }
 

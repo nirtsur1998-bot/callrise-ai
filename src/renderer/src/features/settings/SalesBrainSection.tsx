@@ -83,21 +83,36 @@ export function SalesBrainSection(): React.JSX.Element {
 
   const startBackfill = useCallback(async (): Promise<void> => {
     setStartError(null)
-    const result = await window.api.salesBrain.backfill.start({
-      includeContacts: true,
-      includeDeals: true,
-      includeCalls
-    })
-    if (!mountedRef.current) return
-    if (result.ok && result.jobId) {
-      const fresh = await window.api.jobs.get(result.jobId)
-      if (mountedRef.current && fresh) setBackfillJob(fresh)
-    } else {
-      // Was previously swallowed entirely — the button would just do
-      // nothing with no indication why (e.g. "Sales Brain is not ready
-      // yet" right after enabling the toggle mid-session, before the fix
-      // to initialize memory.db live). Surface it instead of silence.
-      setStartError(result.message ?? 'Import could not start.')
+    // The try/catch is the point, not a formality. These calls read a RESULT
+    // OBJECT ({ok, message}), so the only failure this screen ever rendered
+    // was `ok: false`. A REJECTED ipcMain.handle — main throwing, or the
+    // handler not being registered at all — escaped this callback entirely
+    // and showed the user nothing whatsoever: the button just did nothing.
+    // That's precisely what 1.2.1 shipped (an uncaught throw inside the new
+    // ensureMemoryDb retry, since fixed at the source too). Belt-and-braces
+    // deliberately: main is now guaranteed not to throw here, and this still
+    // catches it if anything ever does again, because "silently does
+    // nothing" is the single worst failure mode this button can have.
+    try {
+      const result = await window.api.salesBrain.backfill.start({
+        includeContacts: true,
+        includeDeals: true,
+        includeCalls
+      })
+      if (!mountedRef.current) return
+      if (result.ok && result.jobId) {
+        const fresh = await window.api.jobs.get(result.jobId)
+        if (mountedRef.current && fresh) setBackfillJob(fresh)
+      } else {
+        // Was previously swallowed entirely — the button would just do
+        // nothing with no indication why (e.g. "Sales Brain is not ready
+        // yet" right after enabling the toggle mid-session, before the fix
+        // to initialize memory.db live). Surface it instead of silence.
+        setStartError(result.message ?? 'Import could not start.')
+      }
+    } catch (err) {
+      if (!mountedRef.current) return
+      setStartError(err instanceof Error ? err.message : String(err))
     }
   }, [includeCalls])
 
