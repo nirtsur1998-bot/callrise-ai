@@ -79,17 +79,39 @@ export class ActivityNotifier {
       // the end of this method regardless.
       if (job.silent) continue
       const prior = this.previous.get(job.id)
-      if (!prior) {
-        // A brand-new job. Suppressed entirely during a call, not
-        // buffered — by the time the call ends, "X started a while ago"
-        // is stale, uninteresting information; the digest should be about
-        // what finished, not what began.
+      // M27 — announce a start when the job ACTUALLY starts running, not on
+      // first sighting. This used to fire for any newly-seen job including a
+      // `queued` one, so a job that hadn't begun still toasted "Started: X".
+      // Always wrong, but invisible while queues drained in milliseconds;
+      // quota-pressure deferral (JobManager.setCapacityGate) can now hold a
+      // BATCH job queued for hours, which would have turned a brief
+      // inaccuracy into a flatly false claim — exactly the "nothing may imply
+      // work happened when it hasn't" rule this milestone is enforcing.
+      const justStarted = job.state === 'running' && prior?.state !== 'running'
+      if (justStarted) {
+        // Suppressed entirely during a call, not buffered — by the time the
+        // call ends, "X started a while ago" is stale, uninteresting
+        // information; the digest should be about what finished, not what
+        // began.
         if (!liveActive) {
           events.push({
             kind: 'started',
             job,
             message: `Started: ${job.title} — track in Activity`
           })
+        }
+        continue
+      }
+      if (!prior) {
+        // Never seen before and not running now. If it's already terminal it
+        // began and ended inside one snapshot window (the throttled
+        // broadcast coalesces fast jobs) — report the OUTCOME, which is the
+        // useful half. Otherwise it's queued/deferred: nothing has happened
+        // yet, so say nothing. The bookkeeping at the end of this method
+        // still records it, so its real start is announced when it comes.
+        if (job.state === 'succeeded' || job.state === 'failed') {
+          if (liveActive) this.pendingDigest.push(job)
+          else events.push(completionEvent(job))
         }
         continue
       }

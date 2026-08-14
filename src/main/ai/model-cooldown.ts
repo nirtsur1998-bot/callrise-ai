@@ -240,9 +240,25 @@ export function isStructurallyBroken(catalogId: string, now: number): boolean {
  *  remember to add alongside this one. Checked before the cooldown map, not
  *  after — a model can be "recently used, not yet cooling down" (no failure
  *  has happened at all), which cooldown alone has no way to represent. */
-export function isUsableFor(catalogId: string, now: number, callerTier: CooldownTier): boolean {
+export function isUsableFor(
+  catalogId: string,
+  now: number,
+  callerTier: CooldownTier,
+  /** M27 — `ignorePacing` exists for ONE caller: the quota-pressure capacity
+   *  check (ai/capacity.ts). Pacing is this app's own self-imposed spacing
+   *  (2-6s since WE last used the model), not the provider refusing us — a
+   *  model that is merely paced genuinely has capacity. Including it there
+   *  would make "no capacity anywhere" briefly true during any ordinary
+   *  burst and flicker a user-visible "waiting for provider capacity" label
+   *  for a few seconds at a time. Expressed as a flag on this one function
+   *  rather than a second near-copy of its logic elsewhere, so the two can
+   *  never drift apart (the exact failure mode this codebase's own taxonomy
+   *  warns about for duplicated encodings). Every existing caller omits it
+   *  and is completely unaffected. */
+  opts?: { ignorePacing?: boolean }
+): boolean {
   if (isStructurallyBroken(catalogId, now)) return false
-  if (isPacedFor(catalogId, now, callerTier)) return false
+  if (!opts?.ignorePacing && isPacedFor(catalogId, now, callerTier)) return false
   const entry = cooldowns.get(catalogId)
   if (entry === undefined) return true
   if (entry.until <= now) {

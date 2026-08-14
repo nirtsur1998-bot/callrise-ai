@@ -34,6 +34,15 @@ const LANES: JobLane[] = ['LIVE', 'INTERACTIVE', 'BATCH', 'MAINTENANCE']
  *  disk I/O. */
 const PERSIST_THROTTLE_MS = 250
 
+/** M27 — how often to re-check whether AI capacity has returned while
+ *  background jobs are being held (see setCapacityGate). CHOSEN, not derived:
+ *  the condition it waits on is minutes-to-hours long (a period-exhausted
+ *  cooldown is capped at 24h and typically ends at the provider's daily
+ *  reset), so anything faster buys nothing, and the cost of being up to a
+ *  minute late resuming background work is nil. Cheap enough to be
+ *  unconditional: a few in-memory map lookups, no network, no disk. */
+const CAPACITY_POLL_MS = 60_000
+
 interface RunningEntry {
   controller: AbortController
   worker?: Worker
@@ -78,12 +87,56 @@ export class JobManager {
    *  uses the default. */
   private maxRetainedJobs: number
 
-  constructor(initialJobs: Job[] = loadJobs(), opts: { maxRetainedJobs?: number } = {}) {
+  /**
+   * M27 — quota-pressure gate. Returns false when EVERY configured AI model
+   * is currently unusable, in which case background (BATCH/MAINTENANCE) jobs
+   * are held queued rather than started: they would walk their whole fallback
+   * chain and fail anyway, burning retry pressure on an already-exhausted key
+   * that live coaching is also competing for.
+   *
+   * INJECTED, not imported: JobManager stays free of any dependency on the AI
+   * layer (the same separation errorCode() above keeps for feature error
+   * types), and every existing test gets the default — always-available, so
+   * job semantics are completely unchanged unless something wires a real gate.
+   * Production wires ai/capacity.ts's hasUsableAiCapacity in jobs/instance.ts.
+   */
+  private capacityGate: () => boolean
+
+  constructor(
+    initialJobs: Job[] = loadJobs(),
+    opts: { maxRetainedJobs?: number; capacityGate?: () => boolean } = {}
+  ) {
     this.maxRetainedJobs = opts.maxRetainedJobs ?? MAX_RETAINED_JOBS
+    this.capacityGate = opts.capacityGate ?? ((): boolean => true)
     for (const j of initialJobs) {
       this.jobs.set(j.id, j)
       this.order.push(j.id)
     }
+  }
+
+  /** The un-defer poll. Only ever running in production (started by
+   *  setCapacityGate), so no test leaks a timer. */
+  private capacityPoll: ReturnType<typeof setInterval> | null = null
+
+  /** M27 — swap the gate after construction. Production calls this from
+   *  jobs/instance.ts once the AI layer is available, so JobManager itself
+   *  never has to import it.
+   *
+   *  Also starts the un-defer poll: the ordinary triggers (a job finishing,
+   *  a new enqueue) don't fire while everything is held, so without this a
+   *  deferred job would wait for unrelated activity to wake it. A quota
+   *  window is minutes-to-hours long (period-exhausted is capped at 24h and
+   *  usually ends at the provider's daily reset), so this is deliberately
+   *  slow — it costs a handful of in-memory map lookups per minute and never
+   *  touches the network. */
+  setCapacityGate(gate: () => boolean): void {
+    this.capacityGate = gate
+    if (this.capacityPoll === null) {
+      this.capacityPoll = setInterval(() => this.tick(), CAPACITY_POLL_MS)
+      // Never hold the process open just to poll a queue.
+      this.capacityPoll.unref?.()
+    }
+    this.tick()
   }
 
   // The internal registry is necessarily heterogeneous (every job type has
@@ -284,6 +337,10 @@ export class JobManager {
    *  anything itself. */
   dispose(): void {
     this.persistThrottled.cancel()
+    if (this.capacityPoll !== null) {
+      clearInterval(this.capacityPoll)
+      this.capacityPoll = null
+    }
     for (const entry of this.running.values()) {
       entry.controller.abort()
       void entry.worker?.terminate()
@@ -305,19 +362,68 @@ export class JobManager {
    *  capacity is never shared with or blocked by the other three, which is
    *  what actually guarantees "nothing else may starve it" rather than
    *  relying on priority numbers alone. */
+  /** M27 — which lanes hold back under quota pressure. LIVE is the call
+   *  itself; INTERACTIVE is something the rep clicked and is actively waiting
+   *  on, so it should still try (and fail with a real, visible error) rather
+   *  than silently stall. Only genuine background work defers. */
+  private static readonly PRESSURE_DEFERRABLE_LANES: ReadonlySet<JobLane> = new Set<JobLane>([
+    'BATCH',
+    'MAINTENANCE'
+  ])
+
   private tick(): void {
+    // Evaluated ONCE per tick, not per job: the gate hits the cooldown maps
+    // for every configured model, and every deferrable job in this tick is
+    // asking the identical question at the identical instant.
+    let capacityOk: boolean | null = null
+    const hasCapacity = (): boolean => {
+      if (capacityOk === null) capacityOk = this.capacityGate()
+      return capacityOk
+    }
+
     for (const lane of LANES) {
       let capacity = this.laneConfig[lane].maxConcurrent - this.runningCountInLane(lane)
       if (!(capacity > 0)) continue
       const queued = this.list()
         .filter((j) => j.lane === lane && j.state === 'queued')
         .sort((a, b) => b.priority - a.priority || a.createdAt - b.createdAt)
+      // M27 — hold background work while there is no usable AI capacity at
+      // all. Deliberately a SKIP of the start, not a state change: the job
+      // stays plain `queued`, so nothing about persistence, retention, the
+      // quit guard, or resume has to learn a new state. See
+      // deferredJobIds() for the user-visible side of the same condition.
+      if (JobManager.PRESSURE_DEFERRABLE_LANES.has(lane) && !hasCapacity()) continue
       for (const job of queued) {
         if (capacity <= 0) break
         this.start(job)
         capacity--
       }
     }
+  }
+
+  /**
+   * M27 — the ids currently being held back by quota pressure specifically,
+   * as opposed to merely waiting their turn behind a busy lane. Derived on
+   * demand from live state, never stored on the Job (which would drag a new
+   * field through persistence, migration, retention and resume for something
+   * fully computable from facts already in hand).
+   *
+   * Deliberately computed from the SAME three conditions tick() skips on —
+   * deferrable lane, no capacity, and the lane genuinely having room this job
+   * would otherwise take — so the label can never claim "waiting for provider
+   * capacity" about a job that is really just queued behind another BATCH job.
+   */
+  deferredJobIds(): Set<string> {
+    const out = new Set<string>()
+    if (this.capacityGate()) return out
+    for (const lane of JobManager.PRESSURE_DEFERRABLE_LANES) {
+      const room = this.laneConfig[lane].maxConcurrent - this.runningCountInLane(lane)
+      if (!(room > 0)) continue // queued behind a running job, not behind capacity
+      for (const job of this.list()) {
+        if (job.lane === lane && job.state === 'queued') out.add(job.id)
+      }
+    }
+    return out
   }
 
   private start(job: Job): void {

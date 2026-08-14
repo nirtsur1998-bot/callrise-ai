@@ -48,10 +48,31 @@ export function registerNightlyConsolidationJob(run: () => Promise<void>): void 
 }
 
 /** Queue the nightly pass. Never throws into its caller — this fires during
- *  startup, and a job-system problem must not take the app down with it. */
+ *  startup, and a job-system problem must not take the app down with it.
+ *
+ *  M27 — dedupes against an already-pending run, the same shape 8 other
+ *  adapters already use (backup.ts, calls.ts, deals.ts, ...). Previously this
+ *  enqueued unconditionally, which was harmless only because the queue always
+ *  drained long before the next nightly trigger. Quota-pressure deferral
+ *  (JobManager.setCapacityGate) breaks that assumption: with every AI model
+ *  unusable, a held consolidation can still be sitting queued when the NEXT
+ *  night's trigger fires, and the scheduler's own dedup can't help — it
+ *  correctly considers the run due again (see scheduler.ts's checkOne, which
+ *  stamps lastRuns at trigger time). Two identical consolidations would then
+ *  both run the moment capacity returned, doubling the AI spend of a pass
+ *  whose whole job is housekeeping. */
 export function enqueueNightlyConsolidation(): void {
   try {
-    getJobManager().enqueue(NIGHTLY_CONSOLIDATION_JOB_TYPE, {})
+    const manager = getJobManager()
+    const pending = manager
+      .list()
+      .find(
+        (j) =>
+          j.type === NIGHTLY_CONSOLIDATION_JOB_TYPE &&
+          (j.state === 'running' || j.state === 'queued')
+      )
+    if (pending) return
+    manager.enqueue(NIGHTLY_CONSOLIDATION_JOB_TYPE, {})
   } catch (err) {
     console.error('[sales-brain] could not enqueue nightly consolidation:', err)
   }

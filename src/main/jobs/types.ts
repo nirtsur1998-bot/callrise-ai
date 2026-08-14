@@ -96,6 +96,25 @@ export interface Job {
   checkpoint?: unknown
 }
 
+/**
+ * M27 — what the RENDERER receives: a Job plus purely-derived view state.
+ *
+ * `deferredForCapacity` is computed fresh at each IPC send from live
+ * scheduler state (see JobManager.deferredJobIds) and is deliberately NOT a
+ * field on Job itself — storing it would drag a new value through
+ * persistence, migration, retention, the quit guard and resume for something
+ * fully recomputable from facts already in hand, and would go stale the
+ * moment capacity changed without a write.
+ */
+export interface JobView extends Job {
+  /** True when this job is queued and the ONLY thing keeping it from starting
+   *  is that every configured AI model is currently unusable. False/absent
+   *  when it is merely waiting its turn behind another job in the same lane —
+   *  the two look identical to a user otherwise, which is exactly why this
+   *  distinction is surfaced. */
+  deferredForCapacity?: boolean
+}
+
 export interface JobHandle {
   /** Aborts the instant the job is cancelled — thread this straight into
    *  every fetch/AI-call this job's work makes (src/main/ai's

@@ -240,7 +240,12 @@ function Row({
           <AlertTriangle className="h-3.5 w-3.5 text-danger" />
         ) : (
           <Badge tone={STATE_TONE[job.state]} className="px-1.5 py-0 text-[9px]">
-            {job.state}
+            {/* M27 — a job held by quota-pressure deferral is still `queued`,
+                but the bare word "queued" reads as "your turn is coming
+                shortly" when the real reason is that every configured AI
+                model is currently unusable, which can last hours. Say which
+                one it actually is. */}
+            {job.deferredForCapacity ? 'waiting for AI capacity' : job.state}
           </Badge>
         )}
       </div>

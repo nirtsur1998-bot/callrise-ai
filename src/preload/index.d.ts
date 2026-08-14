@@ -2095,6 +2095,14 @@ export interface Job {
   retainUntilConsumed?: boolean
   input: unknown
   checkpoint?: unknown
+  /** M27 — DERIVED, never persisted: true when this job is queued and the
+   *  only thing keeping it from starting is that every configured AI model
+   *  is currently unusable (rate-limited / daily quota spent / cooling down).
+   *  Computed fresh in main at each send (see main/jobs/ipc.ts's jobViews and
+   *  JobManager.deferredJobIds); absent when the job is merely waiting its
+   *  turn behind another job in the same lane. Lets the UI say "waiting for
+   *  AI capacity" instead of implying work is underway. */
+  deferredForCapacity?: boolean
 }
 
 /** Mirrors src/main/jobs/activity.ts's ActivityEvent. */

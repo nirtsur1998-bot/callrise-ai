@@ -9,7 +9,7 @@
 import { BrowserWindow, ipcMain } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import type { JobManager } from './JobManager'
-import type { Job } from './types'
+import type { Job, JobView } from './types'
 import { throttle } from './throttle'
 import type { FakeBatchInput, FakeCpuInput, FakeStagedInput } from './fakeJobs'
 
@@ -37,22 +37,42 @@ const FAKE_JOB_TYPE: Record<DevFakeJobRequest['kind'], string> = {
 
 let registered = false
 
+/**
+ * M27 — the renderer's view: stored jobs plus the derived
+ * `deferredForCapacity` flag, attached HERE at the IPC boundary rather than
+ * inside JobManager. That placement is the point: `manager.list()` stays the
+ * clean stored state that `flush()` persists, so a purely-presentational flag
+ * can never leak into jobs-state.json (or into retention/resume logic that
+ * reads it back). Shallow-copies only the affected jobs — the common case
+ * (no pressure) allocates nothing at all.
+ */
+function jobViews(manager: JobManager): JobView[] {
+  const deferred = manager.deferredJobIds()
+  if (deferred.size === 0) return manager.list()
+  return manager.list().map((j) => (deferred.has(j.id) ? { ...j, deferredForCapacity: true } : j))
+}
+
 export function registerJobsIpc(manager: JobManager): void {
   if (registered) return
   registered = true
 
-  ipcMain.handle('jobs:list', (): Job[] => manager.list())
+  ipcMain.handle('jobs:list', (): JobView[] => jobViews(manager))
   ipcMain.handle('jobs:get', (_e, id: string): Job | null => manager.get(id))
   ipcMain.handle('jobs:cancel', (_e, id: string): { ok: boolean } => ({ ok: manager.cancel(id) }))
   ipcMain.handle('jobs:retry', (_e, id: string): Job | null => manager.retry(id))
   ipcMain.handle('jobs:resume', (_e, id: string): Job | null => manager.resume(id))
   ipcMain.handle('jobs:dismiss', (_e, id: string): { ok: boolean } => ({ ok: manager.dismiss(id) }))
 
+  // Re-derives the view at SEND time rather than forwarding the snapshot the
+  // change event carried: capacity can change without any job changing (a
+  // cooldown expiring is not a job event), and the poll in JobManager
+  // re-ticks on exactly that. Deriving here keeps the flag honest at the
+  // moment it's actually sent.
   const broadcastChanged = throttle(
-    (jobs: Job[]) => broadcast('jobs:changed', jobs),
+    () => broadcast('jobs:changed', jobViews(manager)),
     BROADCAST_THROTTLE_MS
   )
-  manager.onChange((jobs) => broadcastChanged.call(jobs))
+  manager.onChange(() => broadcastChanged.call())
 
   // Dev-only, and narrowly typed even in dev — see the file header.
   if (is.dev) {

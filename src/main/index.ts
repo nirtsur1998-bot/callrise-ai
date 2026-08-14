@@ -33,6 +33,7 @@ import { DEFAULT_CONFIG } from './default-config'
 import { clearActiveConsent } from './consent-gate'
 import { registerCrashLogging, registerLog } from './log'
 import { JobManager } from './jobs/JobManager'
+import { hasUsableAiCapacity } from './ai/capacity'
 import { registerJobsIpc } from './jobs/ipc'
 import { registerFakeJobTypes } from './jobs/fakeJobs'
 import { wireJobActivity } from './jobs/activity'
@@ -322,6 +323,13 @@ app.whenReady().then(async () => {
   // the manager has to exist and be set first, not merely before
   // createWindow() (Phase 1/2's original, now too-late, placement).
   jobManager = new JobManager()
+  // M27 — quota-pressure deferral. Wired HERE rather than imported inside
+  // JobManager, so the job system keeps zero dependency on the AI layer (see
+  // setCapacityGate's own doc comment). Holds BATCH/MAINTENANCE work while
+  // EVERY configured model is unusable: starting it then would only walk a
+  // doomed fallback chain and add retry pressure to a key that live coaching
+  // is competing for.
+  jobManager.setCapacityGate(() => hasUsableAiCapacity(Date.now()))
   setJobManager(jobManager)
   registerJobsIpc(jobManager)
   if (is.dev) registerFakeJobTypes(jobManager)

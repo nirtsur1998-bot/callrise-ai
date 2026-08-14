@@ -116,7 +116,22 @@ export function SalesBrainSection(): React.JSX.Element {
     }
   }, [includeCalls])
 
+  // `importing` gates the controls: the run is claimed and must not be
+  // double-started, whether it's actually running or still waiting its turn.
   const importing = backfillJob?.state === 'running' || backfillJob?.state === 'queued'
+  // M27 — but the LABEL must not claim work is happening when it isn't.
+  // Quota-pressure deferral (JobManager.setCapacityGate) can hold a BATCH job
+  // queued for hours when every configured AI model is unusable; without
+  // this, the button would read "Importing…" that entire time with no stage
+  // line underneath it (the stage row below requires progress.mode ===
+  // 'stages', which a queued job never has), so the only feedback the rep got
+  // would be a word that wasn't true.
+  const waitingForCapacity = backfillJob?.deferredForCapacity === true
+  const importLabel = waitingForCapacity
+    ? 'Waiting for AI capacity…'
+    : importing
+      ? 'Importing…'
+      : 'Import now'
 
   return (
     <>
@@ -214,7 +229,7 @@ export function SalesBrainSection(): React.JSX.Element {
               onClick={() => void startBackfill()}
               disabled={importing}
             >
-              {importing ? 'Importing…' : 'Import now'}
+              {importLabel}
             </Button>
           </div>
         </Card>
