@@ -373,6 +373,23 @@ export function resolveChain(purpose: AIPurpose, opts?: { needsTool?: boolean })
   return { configured, capable }
 }
 
+/** BUG-058 Phase 2 — shared by both walks. Call once per rate-limit-classified
+ *  failure (period-exhausted or plain); once the SAME provider has done this
+ *  twice in one walk, on two different models (chain is deduped by catalogId,
+ *  so a second count here is necessarily a different model), the rest of that
+ *  provider's entries are added to deadProviders. See the doc comment on
+ *  deadProviders itself for why this is scoped to same-walk, same-provider
+ *  evidence only, not a cooldown-duration or classification change. */
+function noteRateLimitForDeadProviders(
+  providerId: AIProviderId,
+  rateLimitCountByProvider: Map<AIProviderId, number>,
+  deadProviders: Set<AIProviderId>
+): void {
+  const count = (rateLimitCountByProvider.get(providerId) ?? 0) + 1
+  rateLimitCountByProvider.set(providerId, count)
+  if (count >= 2) deadProviders.add(providerId)
+}
+
 function classifyReason(err: unknown): string {
   if (err instanceof AIProviderError) return err.code
   if (err instanceof Error && err.name === 'AbortError') return 'timeout'
@@ -551,7 +568,20 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   // single-key user with a bad key. Deliberately NOT extended to
   // 'rate-limit': Groq and Gemini rate-limit per-MODEL, so a different model
   // on the same key really can succeed.
+  //
+  // BUG-058 Phase 2 — extended to 'rate-limit' too, but only after a SECOND,
+  // different model on the same provider also comes back rate-limited within
+  // THIS walk (rateLimitCountByProvider below). One rate-limited model still
+  // proves nothing about its neighbors (that's why the rule above stays
+  // narrow) — but two different models on the same provider both refusing
+  // within seconds of each other, in the same call, is stronger evidence
+  // than either alone: the account is the likelier shared cause at that
+  // point, not either individual model. Doesn't touch markRateLimited or its
+  // cooldown duration — this only skips a third doomed attempt within an
+  // already-doomed walk, layered on top of per-model cooldown, not replacing
+  // it.
   const deadProviders = new Set<AIProviderId>()
+  const rateLimitCountByProvider = new Map<AIProviderId, number>()
 
   // BUG-059 — one hard wall-clock ceiling across the ENTIRE walk, including
   // each SDK's own internal retries (the signal below is threaded all the way
@@ -639,6 +669,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
         // for the identical reason. A structural/generic error tells us
         // nothing about this model being near a shared capacity limit.
         markUsed(step.catalogId, Date.now(), tier)
+        noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
       } else if (reason === 'rate-limit') {
         markRateLimited(
           step.catalogId,
@@ -647,6 +678,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
           tier
         )
         markUsed(step.catalogId, Date.now(), tier)
+        noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
       } else if (failureClass === 'structural' && reason !== 'auth') {
         // 'auth' already gets a coarser, PROVIDER-wide skip (deadProviders,
         // above) — checking the raw reason string here, not re-deriving from
@@ -812,9 +844,21 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     let lastAttempt: { reason: AIProviderErrorCode; providerId: AIProviderId; detail?: string } | null =
       null
     const attempts: { catalogId: string; reason: string; failureClass?: AIFailureClass }[] = []
+    // BUG-058 Phase 2 — this walk previously had NO early-exit at all, unlike
+    // completeWithFallback's identical deadProviders mechanism: an auth
+    // failure on entry 1 didn't stop entry 2 on the same now-known-dead
+    // provider from being tried anyway. Ported verbatim, same two rules —
+    // 'auth' skips the rest of that provider immediately (a bad key fails
+    // identically on every model it offers); 'rate-limit' only skips after a
+    // SECOND different model on the same provider also rate-limits within
+    // this same walk (noteRateLimitForDeadProviders, above) — one rate-
+    // limited model still proves nothing about its neighbors on its own.
+    const deadProviders = new Set<AIProviderId>()
+    const rateLimitCountByProvider = new Map<AIProviderId, number>()
 
     for (let i = 0; i < chain.length; i++) {
       const step = chain[i]
+      if (deadProviders.has(step.providerId)) continue
       const key = process.env[PROVIDER_REGISTRY[step.providerId].keyEnvName]?.trim()
       if (!key) continue
       const provider = PROVIDER_REGISTRY[step.providerId].build(key)
@@ -872,6 +916,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         const detail = detailFrom(err)
         lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail }
         const failureClass = err instanceof AIProviderError ? effectiveFailureClass(err) : 'transient'
+        if (reason === 'auth') deadProviders.add(step.providerId)
         if (reason === 'rate-limit' && failureClass === 'period-exhausted') {
           markPeriodExhausted(
             step.catalogId,
@@ -883,6 +928,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           // identical branch: pacing marks alongside cooldown only on a
           // rate-limit-classified failure, never a plain one.
           markUsed(step.catalogId, Date.now(), tier)
+          noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
         } else if (reason === 'rate-limit') {
           markRateLimited(
             step.catalogId,
@@ -891,6 +937,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
             tier
           )
           markUsed(step.catalogId, Date.now(), tier)
+          noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
         } else if (failureClass === 'structural' && reason !== 'auth') {
           markStructurallyBroken(step.catalogId, Date.now())
         }

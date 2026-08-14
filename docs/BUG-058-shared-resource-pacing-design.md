@@ -116,6 +116,8 @@ Two small, independent pieces:
 
 Both purposes intentionally do not touch `markRateLimited`/`markPeriodExhausted`/`markStructurallyBroken` or their cooldown durations — this is purely about not spending a request within an *already-doomed* walk, layered on top of, not replacing, the existing per-model cooldown.
 
+**Shipped, exactly as designed above — no corrections this time.** `noteRateLimitForDeadProviders` (`complete-with-fallback.ts`) is the shared per-walk counter, called from both walks' `period-exhausted` and plain-`rate-limit` catch branches, right where `markUsed`/`markRateLimited`/`markPeriodExhausted` already fire. `streamWithFallback` gained its own `deadProviders`/`rateLimitCountByProvider` pair plus the `auth` short-circuit it never had. New file `__tests__/deadProvidersPhase2.test.ts`: the same three auth-short-circuit scenarios `authShortCircuit.test.ts` already proved for `completeWithFallback`, ported to `streamWithFallback`; plus three same-provider-twice tests (one per walk, proving the third same-provider entry is skipped while a different provider still gets tried; one proving two rate-limits split across *different* providers never trips the counter). Red-checked both mechanisms independently — disabling the `deadProviders` check failed 3/6 tests (the auth-parity ones plus the streaming same-provider test, since that one depends on the check too); disabling just `noteRateLimitForDeadProviders` failed exactly the 2 same-provider-heuristic tests and nothing else, confirming the two pieces are each doing their own distinct job rather than one accidentally covering for the other.
+
 ---
 
 ## 3. Honest quota messaging — with real data where it exists, not deferred everywhere
