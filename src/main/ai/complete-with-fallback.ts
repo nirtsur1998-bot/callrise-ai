@@ -715,11 +715,29 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
       // BUG-058 — honour the provider's own "come back in N seconds" so the
       // next call skips this model instead of re-burning it. Without this,
       // every subsequent call restarted at position 1 and hit the same 429.
-      // BUG-057 Phase 2 — a period-exhausted 429 (quota/billing, not an
+      // BUG-057 Phase 2 — a period-exhausted failure (quota/billing, not an
       // ordinary throttle) gets the longer period-exhausted default instead
       // of the ordinary 60s guess; retrying inside a quota window is pure
       // waste, not just impolite.
-      if (reason === 'rate-limit' && failureClass === 'period-exhausted') {
+      //
+      // M27 B3 — gated on failureClass ALONE, not `reason === 'rate-limit'
+      // && failureClass === 'period-exhausted'` as this used to read. That
+      // extra reason check was written to keep an ordinary structural/generic
+      // error from cooling a model down on no real evidence — a reasonable
+      // goal, but it happened to also exclude the one case failureClass was
+      // built to catch: openai-compatible.ts's toProviderError() already
+      // hardcodes failureClass:'period-exhausted' on its "out of quota/
+      // credits" branch, but that branch's `reason` is 'failed', not
+      // 'rate-limit' (Groq/OpenAI-compatible providers don't send a 429 for
+      // this — it's a plain error whose MESSAGE says quota, not its status
+      // code). The old condition threw that classification away right after
+      // computing it: 14% of this app's own real fallback-log events were
+      // exactly this shape, and every one got zero cooldown, retried on the
+      // very next call. failureClass is already the richer, correctly-
+      // derived signal (see failure-class.ts's classifyFailureClass) — reason
+      // is still recorded below for logging, it just shouldn't re-gate a
+      // conclusion failureClass already reached.
+      if (failureClass === 'period-exhausted') {
         markPeriodExhausted(
           step.catalogId,
           err instanceof AIProviderError ? err.retryAfterMs : undefined,
@@ -727,14 +745,9 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
           tier,
           resetsAt
         )
-        // BUG-058 remainder — pacing marks alongside cooldown, deliberately
-        // ONLY on a rate-limit-classified failure (same condition as this
-        // branch and the sibling one below), never on a plain 'failed' —
-        // "only rate limits cool down... applying it to every failure would
-        // sideline healthy models after one blip" is model-cooldown.ts's own
-        // established rule for cooldown; pacing follows the identical rule
-        // for the identical reason. A structural/generic error tells us
-        // nothing about this model being near a shared capacity limit.
+        // BUG-058 remainder — pacing marks alongside cooldown, on the same
+        // period-exhausted classification as the branch above (never on a
+        // plain transient 'failed' with no real capacity signal at all).
         markUsed(step.catalogId, Date.now(), tier)
         noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
       } else if (reason === 'rate-limit') {
@@ -995,7 +1008,11 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         const resetsAt = err instanceof AIProviderError ? err.resetsAt : undefined
         lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail, failureClass, resetsAt }
         if (reason === 'auth') deadProviders.add(step.providerId)
-        if (reason === 'rate-limit' && failureClass === 'period-exhausted') {
+        // M27 B3 — gated on failureClass alone; see completeWithFallback's
+        // identical branch for the full reasoning (a 'failed'-coded quota
+        // exhaustion, e.g. Groq's own "out of quota/credits" message, was
+        // being thrown away here for the same reason).
+        if (failureClass === 'period-exhausted') {
           markPeriodExhausted(
             step.catalogId,
             err instanceof AIProviderError ? err.retryAfterMs : undefined,
@@ -1003,9 +1020,8 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
             tier,
             resetsAt
           )
-          // BUG-058 remainder — same reasoning as completeWithFallback's
-          // identical branch: pacing marks alongside cooldown only on a
-          // rate-limit-classified failure, never a plain one.
+          // BUG-058 remainder — pacing marks alongside cooldown, on the same
+          // period-exhausted classification as the branch above.
           markUsed(step.catalogId, Date.now(), tier)
           noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
         } else if (reason === 'rate-limit') {

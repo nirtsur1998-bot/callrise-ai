@@ -486,6 +486,32 @@ describe('the taxonomy, through the real chain walk', () => {
     }
   })
 
+  it('a "failed"-coded quota exhaustion cools down exactly like a rate-limited one — M27 B3', async () => {
+    // Reproduces openai-compatible.ts's real "out of quota/credits" branch:
+    // toProviderError() hardcodes failureClass:'period-exhausted' there, but
+    // the raw code is 'failed', not 'rate-limit' — this provider never sends
+    // a 429 for it, only a plain error whose MESSAGE says quota. Before this
+    // fix, the gating condition required BOTH reason==='rate-limit' AND
+    // failureClass==='period-exhausted', so this exact real combination fell
+    // through every branch and got zero cooldown — confirmed against this
+    // app's own real fallback log, 14% of all logged events were this shape.
+    behavior.throwCode = 'failed'
+    behavior.failureClass = 'period-exhausted'
+
+    await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
+    const exhaustedId = built[0]
+    expect(exhaustedId).toBeTruthy()
+
+    built.length = 0
+    await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
+    // Refused before any attempt — same "refuse before spending a request"
+    // shape as the structural-failure test above. Before this fix, the model
+    // would appear in `built` again here, identical to a plain 'failed' with
+    // no quota signal (the "only rate limits cool down" test earlier in this
+    // file) — that's the exact bug this test catches.
+    expect(built).toEqual([])
+  })
+
   it('an auth failure does NOT also get marked structurally broken — deadProviders already excludes it, avoiding two independent encodings drifting apart', async () => {
     behavior.throwCode = 'auth'
     // Left set to 'structural' deliberately: real auth branches across all 4
