@@ -26,6 +26,24 @@ import {
 } from './retention'
 import { throttle } from './throttle'
 
+/**
+ * The single place a failed job-state write is reported, shared by both
+ * fire-and-forget persist paths (the throttled auto-save here, and the
+ * save-on-quit in index.ts) so they can't drift into describing the same
+ * failure two different ways.
+ *
+ * Deliberately log-only, and deliberately not surfaced to the user: there is
+ * no action a rep could take, and the queue self-heals on the next successful
+ * write. What was NOT acceptable was the previous behaviour — no handler at
+ * all, so the failure existed only as an unhandled rejection.
+ */
+export function reportPersistFailure(err: unknown): void {
+  console.error(
+    '[jobs] failed to persist job state — the queue on disk is stale until the next successful write:',
+    err
+  )
+}
+
 const LANES: JobLane[] = ['LIVE', 'INTERACTIVE', 'BATCH', 'MAINTENANCE']
 /** How often job-list state is actually written to disk, at most — cheap
  *  in-memory updates (progress ticks, etc.) can happen far more often
@@ -76,9 +94,26 @@ export class JobManager {
   // leading: false — see throttle()'s own doc comment: this makes dispose()'s
   // cancel() a real guarantee (no write can already be mid-flight when it
   // runs), which matters more here than shaving the first write's latency.
-  private persistThrottled = throttle(() => void this.flush(), PERSIST_THROTTLE_MS, {
+  private persistThrottled = throttle(() => this.persistInBackground(), PERSIST_THROTTLE_MS, {
     leading: false
   })
+
+  /** The auto-save path: nobody is awaiting this, so its rejection has to be
+   *  handled HERE. It previously wasn't (`void this.flush()`), which meant a
+   *  failed write became an unhandled rejection caught only by the
+   *  process-wide net in index.ts/log.ts — a real failure reported as a
+   *  generic crash-log line, indistinguishable from anything else that goes
+   *  wrong anywhere in the app.
+   *
+   *  That is also how it stayed hidden: it surfaced in CI only as an
+   *  intermittent "known flake" (a test's temp directory removed while a
+   *  throttled write was still in flight), and a suite that sometimes exits
+   *  non-zero for a benign reason teaches everyone to stop reading the exit
+   *  code — which is exactly the habit that let a real failure hide behind
+   *  it. See BUG-070. */
+  private persistInBackground(): void {
+    void this.flush().catch(reportPersistFailure)
+  }
 
   /** Cap on retained history. Overridable so tests can exercise pruning
    *  with a handful of jobs instead of 500+ — building fixtures that large

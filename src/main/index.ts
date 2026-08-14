@@ -32,7 +32,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { DEFAULT_CONFIG } from './default-config'
 import { clearActiveConsent } from './consent-gate'
 import { registerCrashLogging, registerLog } from './log'
-import { JobManager } from './jobs/JobManager'
+import { JobManager, reportPersistFailure } from './jobs/JobManager'
 import { hasUsableAiCapacity } from './ai/capacity'
 import { registerJobsIpc } from './jobs/ipc'
 import { registerFakeJobTypes } from './jobs/fakeJobs'
@@ -581,7 +581,11 @@ app.on('before-quit', (event) => {
     disposeOverlay()
     disposeTray()
     jobManager?.dispose()
-    void jobManager?.flush()
+    // Same reason as the throttled auto-save inside JobManager: nobody awaits
+    // this, so an unhandled rejection here is the only thing a failed
+    // final write would produce. Quit proceeds either way — a job queue we
+    // couldn't persist must never block the app from closing (BUG-070).
+    void jobManager?.flush().catch(reportPersistFailure)
     return
   }
 
