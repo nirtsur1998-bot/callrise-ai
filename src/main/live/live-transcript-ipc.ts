@@ -12,6 +12,7 @@ import {
   discardJournal,
   listOrphanJournals,
   readJournal,
+  redactJournalConsentIfNeeded,
   replayJournal,
   retireJournal
 } from './call-journal'
@@ -98,6 +99,19 @@ export async function recoverCall(id: string, callsDir: string): Promise<CallSum
   // Kept under a .recovered name rather than deleted: if the replay produced
   // something wrong, the source is still on disk to look at.
   await retireJournal(id)
+  // 1.2.5 hotfix (privacy) — same redaction the normal save path now runs at
+  // close time (see live-transcript.ts's endCall), applied here too: the
+  // recovered CALL already correctly lacks buyer content when consent didn't
+  // permit it (saveCall's own applyConsentRetention, just above) — this only
+  // makes the raw .recovered file on disk match what the save already
+  // decided, rather than leaving an un-redacted copy behind it. Awaited
+  // (unlike the fire-and-forget hot-call-path version) since this is already
+  // an async, user-initiated action with no live-call latency budget to
+  // protect; a failure here still can't fail the recovery itself — it only
+  // means retirement is retried by the startup sweep.
+  await redactJournalConsentIfNeeded(id).catch((err) =>
+    console.error('[live-transcript] consent redaction failed:', err)
+  )
   return summary
 }
 

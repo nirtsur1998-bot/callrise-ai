@@ -166,8 +166,16 @@ export interface TranscriptionApi {
   /** Manual mid-call help: sends the running transcript + the rep's question. */
   askCoach: (
     transcript: string,
-    question: string
-  ) => Promise<{ ok: true; headline: string; tips: string[] } | { ok: false; message?: string }>
+    question: string,
+    /** 1.2.5 hotfix — see main/live-cue.ts's own doc comment: lets main check
+     *  fresh consent before a pass that may include buyer-attributed content
+     *  ever reaches an AI prompt. */
+    sessionId?: number,
+    includesBuyerContent?: boolean
+  ) => Promise<
+    | { ok: true; headline: string; tips: string[] }
+    | { ok: false; message?: string; blockedReason?: 'consent' }
+  >
   /** Conversation-aware live cue from a speaker-labeled transcript window. */
   liveCue: (
     transcript: string,

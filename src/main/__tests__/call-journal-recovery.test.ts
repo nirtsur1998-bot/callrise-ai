@@ -10,9 +10,17 @@
 // process the way a crash would (by simply never running the shutdown path),
 // and then check what a fresh launch can actually recover.
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
+import {
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  readdirSync,
+  existsSync,
+  mkdirSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, basename } from 'node:path'
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpdir() } }))
 
@@ -21,7 +29,9 @@ const {
   listOrphanJournals,
   readJournal,
   replayJournal,
-  discardJournal
+  discardJournal,
+  redactJournalConsentIfNeeded,
+  redactPendingClosedJournals
 } = await import('../live/call-journal')
 
 const {
@@ -392,5 +402,247 @@ describe('the recovered call carries a real duration', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('1.2.5 hotfix — consent redaction of the raw journal', () => {
+  // F2: applyConsentRetention already strips buyer content from the SAVED
+  // call correctly. This suite is about the raw .jsonl file underneath it,
+  // which never got the same treatment before this fix — it kept every
+  // buyer word, in plaintext, forever, regardless of consent.
+  const CONSENTED = {
+    status: 'consented' as const,
+    jurisdiction: 'two-party' as const,
+    recordOtherParty: true,
+    method: 'verbal-on-call' as const
+  }
+
+  function journalFolder(): string {
+    return join(dir, 'call-journals')
+  }
+
+  function idOf(path: string): string {
+    return basename(path).replace(/\.jsonl(\.recovered)?$/, '')
+  }
+
+  function markerExists(id: string): boolean {
+    return existsSync(join(journalFolder(), `${id}.redacted`))
+  }
+
+  it('strips buyer words from the raw journal once a non-consented buyer-capture call is saved', async () => {
+    beginCall({ restart: false })
+    recordConsent(null) // buyer never consented
+    recordResult(
+      result(
+        [
+          { speaker: 0, text: 'rep talking', channel: 0 },
+          { speaker: 1, text: 'buyer talking', channel: 1 }
+        ],
+        { multichannel: true }
+      )
+    )
+    const id = idOf(journalFile())
+    endCall({ saved: true }) // fire-and-forget redaction kicks off here
+
+    await vi.waitFor(() => expect(markerExists(id)).toBe(true))
+    const raw = readFileSync(journalFile(), 'utf8')
+    expect(raw).not.toContain('buyer talking')
+    expect(raw).toContain('rep talking')
+  })
+
+  it('honours a mid-call revocation the same way applyConsentRetention does — last state wins', async () => {
+    beginCall({ restart: false })
+    recordConsent(CONSENTED)
+    recordResult(
+      result(
+        [
+          { speaker: 0, text: 'rep talking', channel: 0 },
+          { speaker: 1, text: 'buyer talking', channel: 1 }
+        ],
+        { multichannel: true }
+      )
+    )
+    recordConsent(null) // rep switched recording off before the call ended
+    const id = idOf(journalFile())
+    endCall({ saved: true })
+
+    await vi.waitFor(() => expect(markerExists(id)).toBe(true))
+    expect(readFileSync(journalFile(), 'utf8')).not.toContain('buyer talking')
+  })
+
+  it('leaves a consented call’s journal untouched', async () => {
+    beginCall({ restart: false })
+    recordConsent(CONSENTED)
+    recordResult(
+      result(
+        [
+          { speaker: 0, text: 'rep talking', channel: 0 },
+          { speaker: 1, text: 'buyer talking', channel: 1 }
+        ],
+        { multichannel: true }
+      )
+    )
+    const id = idOf(journalFile())
+    const before = readFileSync(journalFile(), 'utf8')
+    endCall({ saved: true })
+
+    await vi.waitFor(() => expect(markerExists(id)).toBe(true))
+    expect(readFileSync(journalFile(), 'utf8')).toBe(before)
+  })
+
+  it('never touches a mono-only call — BUG-002\'s rule applies here too', async () => {
+    beginCall({ restart: false })
+    recordConsent(null)
+    recordResult(result([{ speaker: 0, text: 'mono words' }, { speaker: 1, text: 'more mono' }]))
+    const id = idOf(journalFile())
+    const before = readFileSync(journalFile(), 'utf8')
+    endCall({ saved: true })
+
+    await vi.waitFor(() => expect(markerExists(id)).toBe(true))
+    expect(readFileSync(journalFile(), 'utf8')).toBe(before)
+  })
+
+  it('is idempotent — a second pass over an already-redacted journal is a no-op', async () => {
+    beginCall({ restart: false })
+    recordConsent(null)
+    recordResult(result([{ speaker: 1, text: 'buyer only', channel: 1 }], { multichannel: true }))
+    const id = idOf(journalFile())
+    await redactJournalConsentIfNeeded(id)
+    expect(markerExists(id)).toBe(true)
+
+    // Prove the second call never re-reads/rewrites the content: corrupt it
+    // directly, then call again — an untouched call would leave the
+    // corruption exactly as-is (a REAL second pass would try to parse it
+    // and either throw or silently lose the marker).
+    const path = journalFile()
+    writeFileSync(path, `${readFileSync(path, 'utf8')}not valid json at all`)
+    await expect(redactJournalConsentIfNeeded(id)).resolves.toBeUndefined()
+    expect(readFileSync(path, 'utf8')).toContain('not valid json at all')
+  })
+
+  it('a failure mid-redaction leaves no marker, so it is retried rather than silently skipped', async () => {
+    // An unreadable header is the same "nothing trustworthy" case readJournal
+    // already refuses to trust — this proves redaction fails the same way,
+    // rather than marking a journal it could not actually process.
+    beginCall({ restart: false })
+    recordResult(result([{ speaker: 1, text: 'x', channel: 1 }], { multichannel: true }))
+    const id = idOf(journalFile())
+    writeFileSync(journalFile(), 'not even a header\n{"t":"result"}\n')
+
+    await redactJournalConsentIfNeeded(id)
+    expect(markerExists(id)).toBe(false)
+  })
+
+  it('a nonexistent journal is a safe no-op — no marker, no throw', async () => {
+    await expect(redactJournalConsentIfNeeded('never-existed')).resolves.toBeUndefined()
+    expect(markerExists('never-existed')).toBe(false)
+  })
+
+  it('recovering a crashed, non-consented buyer-capture call redacts the .recovered file too', async () => {
+    beginCall({ restart: false })
+    recordConsent(null)
+    recordResult(
+      result(
+        [
+          { speaker: 0, text: 'rep on the crashed call', channel: 0 },
+          { speaker: 1, text: 'buyer on the crashed call', channel: 1 }
+        ],
+        { multichannel: true }
+      )
+    )
+    crash()
+
+    const [found] = await afterRelaunch()
+    await recoverCall(found.id, callsDir)
+    // retireJournal renamed it — recoverCall's own redaction call is awaited,
+    // so no vi.waitFor is needed here, unlike the fire-and-forget endCall path.
+    expect(markerExists(found.id)).toBe(true)
+    const recoveredPath = join(journalFolder(), `${found.id}.jsonl.recovered`)
+    const raw = readFileSync(recoveredPath, 'utf8')
+    expect(raw).not.toContain('buyer on the crashed call')
+    expect(raw).toContain('rep on the crashed call')
+  })
+
+  describe('redactPendingClosedJournals — the startup backlog sweep', () => {
+    // Simulates a journal written and normally closed by a pre-1.2.5 build:
+    // a real .jsonl + .done pair on disk, with no .redacted marker, created
+    // WITHOUT going through the (now auto-redacting) close-time hook.
+    function writeLegacyClosedJournal(id: string, words: Word[]): void {
+      mkdirSync(journalFolder(), { recursive: true })
+      const lines = [
+        JSON.stringify({ v: 1, callJournalId: id, startedAt: new Date().toISOString() }),
+        JSON.stringify({ t: 'consent', at: 0, c: null }),
+        JSON.stringify({ t: 'result', at: 1000, p: result(words) })
+      ]
+      writeFileSync(join(journalFolder(), `${id}.jsonl`), `${lines.join('\n')}\n`, 'utf8')
+      writeFileSync(join(journalFolder(), `${id}.done`), '', 'utf8')
+    }
+
+    it('redacts a pre-existing .done journal from before this fix shipped', async () => {
+      writeLegacyClosedJournal('legacy-1', [
+        { speaker: 0, text: 'rep legacy', channel: 0 },
+        { speaker: 1, text: 'buyer legacy', channel: 1 }
+      ])
+      await redactPendingClosedJournals()
+      expect(markerExists('legacy-1')).toBe(true)
+      const raw = readFileSync(join(journalFolder(), 'legacy-1.jsonl'), 'utf8')
+      expect(raw).not.toContain('buyer legacy')
+      expect(raw).toContain('rep legacy')
+    })
+
+    it('one journal failing does not stop the rest — the exact resumability the founder asked for', async () => {
+      writeLegacyClosedJournal('legacy-good-1', [{ speaker: 1, text: 'redact me', channel: 1 }])
+      // A journal that will fail every time: unreadable header.
+      mkdirSync(journalFolder(), { recursive: true })
+      writeFileSync(join(journalFolder(), 'legacy-bad.jsonl'), 'garbage\n', 'utf8')
+      writeFileSync(join(journalFolder(), 'legacy-bad.done'), '', 'utf8')
+      writeLegacyClosedJournal('legacy-good-2', [{ speaker: 1, text: 'redact me too', channel: 1 }])
+
+      await redactPendingClosedJournals()
+
+      expect(markerExists('legacy-good-1')).toBe(true)
+      expect(markerExists('legacy-good-2')).toBe(true)
+      expect(markerExists('legacy-bad')).toBe(false) // left for next launch to retry
+
+      // Simulating "the next launch": running it again only retries the bad
+      // one — the two good ones are already marked and are not re-touched.
+      const goodContentBefore = readFileSync(
+        join(journalFolder(), 'legacy-good-1.jsonl'),
+        'utf8'
+      )
+      await redactPendingClosedJournals()
+      expect(readFileSync(join(journalFolder(), 'legacy-good-1.jsonl'), 'utf8')).toBe(
+        goodContentBefore
+      )
+      expect(markerExists('legacy-bad')).toBe(false) // still unrecoverable, still not falsely marked
+    })
+
+    it('never touches a journal still awaiting a recover/discard decision', async () => {
+      beginCall({ restart: false })
+      recordConsent(null)
+      recordResult(
+        result([{ speaker: 1, text: 'still pending', channel: 1 }], { multichannel: true })
+      )
+      crash() // orphaned: no .done, no .recovered
+      const id = idOf(journalFile())
+      const before = readFileSync(journalFile(), 'utf8')
+
+      await redactPendingClosedJournals()
+
+      expect(markerExists(id)).toBe(false)
+      expect(readFileSync(journalFile(), 'utf8')).toBe(before)
+      // Still recoverable exactly as before — the sweep didn't interfere.
+      expect(await afterRelaunch()).toHaveLength(1)
+    })
+
+    it('is cheap to call on every launch — an already-redacted journal is skipped, not reprocessed', async () => {
+      writeLegacyClosedJournal('legacy-once', [{ speaker: 1, text: 'once', channel: 1 }])
+      await redactPendingClosedJournals()
+      const after1 = readFileSync(join(journalFolder(), 'legacy-once.jsonl'), 'utf8')
+
+      // A second "launch" must not touch it again.
+      await redactPendingClosedJournals()
+      expect(readFileSync(join(journalFolder(), 'legacy-once.jsonl'), 'utf8')).toBe(after1)
+    })
   })
 })

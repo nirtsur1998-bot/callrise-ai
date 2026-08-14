@@ -731,7 +731,11 @@ function speakerNumberFromKey(key: string): number | null {
  * about consent should ever touch its transcript. Revisit only alongside a
  * genuine second-voice detector, not a bare speaker-number comparison.
  */
-function isOtherPartySpeaker(n: number, channel: number | undefined): boolean {
+// Exported so call-journal.ts's consent-redaction pass can apply the exact
+// same "is this the buyer's turn" rule to raw journal words, rather than
+// re-deriving a channel/speaker predicate that could quietly drift from this
+// one over time.
+export function isOtherPartySpeaker(n: number, channel: number | undefined): boolean {
   return channel !== undefined && n === BUYER_SPEAKER
 }
 

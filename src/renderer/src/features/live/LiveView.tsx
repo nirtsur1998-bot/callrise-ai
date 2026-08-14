@@ -1110,7 +1110,7 @@ export function LiveView({
         )}
       </div>
 
-      <AskCoach segments={segments} interimText={interimText} />
+      <AskCoach segments={segments} interimText={interimText} getSessionId={getSessionId} />
 
       {consentOpen && allowOtherPartyRecording && (
         <ConsentModal

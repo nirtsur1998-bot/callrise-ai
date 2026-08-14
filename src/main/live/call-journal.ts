@@ -26,8 +26,8 @@
 import { app } from 'electron'
 import { join } from 'node:path'
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
-import { readdir, readFile, rename, unlink } from 'node:fs/promises'
-import type { ConsentRecord } from '../calls-fs'
+import { readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { isOtherPartySpeaker, type ConsentRecord } from '../calls-fs'
 import {
   TranscriptAccumulator,
   type AccumulatedSegment,
@@ -98,6 +98,19 @@ function donePath(id: string): string {
 
 function journalPath(id: string): string {
   return join(journalsDir(), `${id}.jsonl`)
+}
+
+function recoveredPath(id: string): string {
+  return `${journalPath(id)}.recovered`
+}
+
+// 1.2.5 hotfix (privacy) — marks a journal the consent-redaction pass has
+// already processed, whether or not a rewrite was actually needed. Separate
+// from `.done`/`.recovered`, which describe the CALL's fate, not the
+// journal's redaction status — a journal can be `.done` for months before
+// this fix ships and only get this marker the first time it's checked.
+function redactedMarkerPath(id: string): string {
+  return join(journalsDir(), `${id}.redacted`)
 }
 
 /**
@@ -342,6 +355,146 @@ export async function discardJournal(id: string): Promise<void> {
  *  under a `.recovered` name rather than deleting it. Cheap insurance: if the
  *  recovery itself produced something wrong, the source is still there. */
 export async function retireJournal(id: string): Promise<void> {
-  await rename(journalPath(id), `${journalPath(id)}.recovered`).catch(() => {})
+  await rename(journalPath(id), recoveredPath(id)).catch(() => {})
   await unlink(donePath(id)).catch(() => {})
+}
+
+/**
+ * 1.2.5 hotfix (privacy) — a normal successful save only ever marked the
+ * journal `.done`; it never touched the buyer-attributed words already
+ * written into it, so a call where the buyer never consented (or consent was
+ * revoked mid-call) still had every one of the buyer's words sitting in
+ * plaintext on disk forever — even though `applyConsentRetention`
+ * (calls-fs.ts) already correctly strips that same content from the SAVED
+ * CALL RECORD. This closes that gap on the raw journal file itself.
+ *
+ * Redaction happens at CLOSE time, not write time and not a periodic sweep:
+ * consent isn't final until the call ends (it can be revoked or granted
+ * mid-call), so redacting as events are written would mean guessing an
+ * outcome that hasn't happened yet — and wouldn't even shrink real exposure,
+ * since the case that matters most (a still-active call) is inherently still
+ * open regardless. Consent is determined the exact same way `replayJournal`
+ * already does: the LAST `consent` event in the file wins, matching
+ * `applyConsentRetention` keying on the final `recordOtherParty` flag rather
+ * than the status history.
+ *
+ * IDEMPOTENT AND FAILURE-SAFE BY DESIGN, on purpose: this runs both right
+ * after every future call closes (see live-transcript.ts's endCall and
+ * live-transcript-ipc.ts's recoverCall) AND as a startup sweep over the
+ * backlog of journals written before this fix existed
+ * (redactPendingClosedJournals, below). A `.redacted` marker is written ONLY
+ * after a redaction attempt fully succeeds — never before, never on failure
+ * — so a journal already processed is skipped instantly (cheap on every
+ * launch), and a journal whose processing is interrupted (crash, force-quit,
+ * locked file, corrupt line) is silently left unmarked and retried next time
+ * rather than the whole sweep aborting or a partially-redacted / falsely-
+ * marked journal being left behind.
+ */
+export async function redactJournalConsentIfNeeded(id: string): Promise<void> {
+  try {
+    await readFile(redactedMarkerPath(id), 'utf8')
+    return // already processed
+  } catch {
+    /* not yet processed — continue */
+  }
+
+  // The file may still be at its original name (redacting right after a
+  // normal save) or already renamed by retireJournal (redacting after a
+  // crash-recovery decision) — check both rather than assuming an order.
+  let path = journalPath(id)
+  let raw: string
+  try {
+    raw = await readFile(path, 'utf8')
+  } catch {
+    path = recoveredPath(id)
+    try {
+      raw = await readFile(path, 'utf8')
+    } catch {
+      return // discarded, or never existed — nothing to redact, nothing to mark
+    }
+  }
+
+  try {
+    const lines = raw.split('\n').filter((l) => l.trim() !== '')
+    if (lines.length === 0) {
+      await writeFile(redactedMarkerPath(id), '', 'utf8')
+      return
+    }
+
+    let header: JournalHeader
+    try {
+      header = JSON.parse(lines[0]) as JournalHeader
+    } catch {
+      return // unreadable header — same caution as readJournal: nothing trustworthy, retry later
+    }
+
+    const parsed: Array<JournalHeader | JournalEvent> = [header]
+    let consent: ConsentRecord | null = null
+    for (let i = 1; i < lines.length; i++) {
+      let event: JournalEvent
+      try {
+        event = JSON.parse(lines[i]) as JournalEvent
+      } catch {
+        // A torn last line (the same tolerance readJournal applies) — stop
+        // here rather than guessing at a broken line. Everything good before
+        // it still gets redacted and marked; nothing is lost by stopping.
+        break
+      }
+      if (event.t === 'consent') consent = event.c
+      parsed.push(event)
+    }
+
+    if (!consent || consent.recordOtherParty !== true) {
+      for (const event of parsed) {
+        if ('t' in event && event.t === 'result') {
+          const kept = event.p.words.filter((w) => !isOtherPartySpeaker(w.speaker, w.channel))
+          if (kept.length !== event.p.words.length) {
+            event.p.words = kept
+            event.p.transcript = kept.map((w) => w.text).join(' ')
+          }
+        }
+      }
+      const tmpPath = `${path}.redact-tmp`
+      await writeFile(tmpPath, `${parsed.map((e) => JSON.stringify(e)).join('\n')}\n`, 'utf8')
+      await rename(tmpPath, path) // atomic — never leaves a half-written journal on disk
+    }
+
+    await writeFile(redactedMarkerPath(id), '', 'utf8')
+  } catch (err) {
+    // Deliberately no marker written: a failure here (locked file, disk
+    // full, an error partway through) must leave the journal exactly as
+    // findable and retryable next time as if this function had never run.
+    console.error('[call-journal] consent redaction failed, will retry later:', id, err)
+  }
+}
+
+/**
+ * 1.2.5 hotfix — the backlog sweep for journals closed before this fix
+ * shipped (every `.done` or `.recovered` journal from 1.2.0-1.2.4), plus a
+ * safety net for any future one whose close-time redaction call didn't get
+ * to run (app killed in the gap). Cheap and safe to call on every launch:
+ * anything already `.redacted` is skipped via one failed readFile, and one
+ * journal failing never stops the rest — see redactJournalConsentIfNeeded's
+ * own per-item failure handling.
+ *
+ * Deliberately does NOT touch a journal still awaiting a recover/discard
+ * decision (no `.done`, no `.recovered`) — that one is left to the normal
+ * close path once the rep decides, so this sweep can never touch a journal
+ * the interrupted-call recovery prompt is actively showing.
+ */
+export async function redactPendingClosedJournals(): Promise<void> {
+  let entries: string[]
+  try {
+    entries = await readdir(journalsDir())
+  } catch {
+    return // no journals directory yet
+  }
+  const ids = new Set<string>()
+  for (const f of entries) {
+    if (f.endsWith('.done')) ids.add(f.slice(0, -'.done'.length))
+    else if (f.endsWith('.jsonl.recovered')) ids.add(f.slice(0, -'.jsonl.recovered'.length))
+  }
+  for (const id of ids) {
+    await redactJournalConsentIfNeeded(id)
+  }
 }

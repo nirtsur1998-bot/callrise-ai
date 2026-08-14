@@ -42,7 +42,7 @@ const { setConsentGateDirForTests, persistActiveConsent, clearActiveConsent } =
   await import('../consent-gate')
 const { analyzeDealTier1 } = await import('../deal-tier1')
 const { analyzeDealTier2 } = await import('../deal-tier2')
-const { liveCue } = await import('../live-cue')
+const { liveCue, askCoach } = await import('../live-cue')
 
 const CONSENTED = {
   status: 'consented' as const,
@@ -220,5 +220,72 @@ describe('liveCue — the same gate, same behaviour', () => {
       expect(result.pausedReason).toBeUndefined()
       expect(result.blockedReason).toBe('consent')
     }
+  })
+})
+
+describe('askCoach — 1.2.5 hotfix, the same gate as liveCue/tier1/tier2', () => {
+  it('blocks buyer content without a grant, proceeds with one', async () => {
+    const blocked = await askCoach({
+      transcript: LONG_TEXT,
+      question: 'they said it is too expensive',
+      sessionId: 1,
+      includesBuyerContent: true
+    })
+    expect(blocked.ok).toBe(false)
+    if (!blocked.ok) expect(blocked.blockedReason).toBe('consent')
+    // The whole point: refused BEFORE any AI spend, not after.
+    expect(completeWithFallback).not.toHaveBeenCalled()
+
+    persistActiveConsent(1, CONSENTED)
+    await askCoach({
+      transcript: LONG_TEXT,
+      question: 'they said it is too expensive',
+      sessionId: 1,
+      includesBuyerContent: true
+    })
+    expect(completeWithFallback).toHaveBeenCalledTimes(1)
+  })
+
+  it('mono-only content (includesBuyerContent false) is never gated, consent or not', async () => {
+    await askCoach({
+      transcript: LONG_TEXT,
+      question: 'they said it is too expensive',
+      sessionId: 1,
+      includesBuyerContent: false
+    })
+    expect(completeWithFallback).toHaveBeenCalledTimes(1)
+  })
+
+  it('consent revoked mid-call is honoured on the very next ask — no stale grace period', async () => {
+    persistActiveConsent(1, CONSENTED)
+    await askCoach({
+      transcript: LONG_TEXT,
+      question: 'first question',
+      sessionId: 1,
+      includesBuyerContent: true
+    })
+    expect(completeWithFallback).toHaveBeenCalledTimes(1)
+
+    clearActiveConsent() // the rep turns recording off mid-call
+    const after = await askCoach({
+      transcript: LONG_TEXT,
+      question: 'second question, after revoke',
+      sessionId: 1,
+      includesBuyerContent: true
+    })
+    expect(after).toMatchObject({ ok: false, blockedReason: 'consent' })
+    expect(completeWithFallback).toHaveBeenCalledTimes(1) // unchanged — no second AI call
+  })
+
+  it('a grant for a DIFFERENT session does not authorise this one', async () => {
+    persistActiveConsent(2, CONSENTED) // some other, unrelated call
+    const result = await askCoach({
+      transcript: LONG_TEXT,
+      question: 'they said it is too expensive',
+      sessionId: 1,
+      includesBuyerContent: true
+    })
+    expect(result).toMatchObject({ ok: false, blockedReason: 'consent' })
+    expect(completeWithFallback).not.toHaveBeenCalled()
   })
 })
