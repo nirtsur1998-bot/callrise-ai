@@ -97,9 +97,31 @@ docs/
 - Work in **small, runnable steps** — after each step, the app should still start.
 - **Explain in plain language** — the user is newer to coding.
 - **Pause and ask for confirmation before big or irreversible changes**: new major dependencies, architectural shifts, deleting things, or anything touching many files. When in doubt, ask instead of guessing.
-- Keep scope tight: **no backend, no audio, no AI, no live features** until we plan that work explicitly.
-- **Work in the main folder and commit directly to `main`.** The user is a solo beginner and runs `npm run dev` from the main project folder, so all work must land there. Edit the main checkout directly and commit straight to `main` — do **not** use feature branches or `.claude/worktrees/…` (the branch/worktree dance caused confusion where finished work wasn't visible in the running app). This overrides the default "branch before committing on the default branch" behavior. Still commit only when the user asks.
+- ~~Keep scope tight: **no backend, no audio, no AI, no live features** until we plan that work explicitly.~~ **Superseded** — the app now has all four (live transcription, live AI coaching, Supabase auth, Sales Brain memory). The surviving intent: plan substantial new capability explicitly before building it, rather than letting it accrete.
+- ~~**Work in the main folder and commit directly to `main`.**~~ **Superseded as of M26/M27 (2026-08).** The founder now works **one worktree per task, branched off `main`, and `main` is never edited directly** — the milestone branches `callrise-m26` / `callrise-m27` and the `fix/1.2.5-consent-leak` hotfix branch all followed this. Field-critical fixes get their **own branch off `main`**, never folded into a milestone branch. Still commit only when the user asks, and **one commit per fix**.
+- **Nothing is ever published without the founder saying so explicitly.** Releases are theirs alone, including tagging. Building an installer locally with `--publish=never` to verify is fine; anything that produces a public artifact is not.
 - **End with a doc-only CLAUDE.md commit whenever something CLAUDE.md-worthy ships** (a milestone, or a feature substantial enough that a future session would need to know it exists). Do this by default, without being asked — it's what keeps the Progress section from drifting out of sync with the actual commit history, which happened badly once (multiple parallel worktree sessions shipped M15, M16, CRM, Knowledge Base, Settings, and the Windows port with no matching doc update, so the doc silently froze at M14 for ~50 commits).
+
+## How we verify (read this before claiming anything passes)
+
+**The single most valuable document this project has produced is the hollow-green taxonomy** — 15 catalogued ways a test, gate, or guard reports success while proving nothing, each one found live in *this* codebase, plus three closing principles. It lives in the Obsidian vault:
+
+> `03-Features/M26 - The Engine Room (Background Jobs, Progress, Notifications).md` → the **"hollow-green taxonomy"** section.
+
+Read it before writing tests, and re-read it before reporting a milestone green. It is a **checklist to run, not a vaccine you've had** — there is direct evidence in it of the same person relapsing into a species minutes after naming it.
+
+The three rules that generalise past any single species:
+
+1. **Verify your verifier, more than once.** A tool seen passing once is consistent with both "it works" and "it cannot fail." Three separate times, the *verification tooling itself* was the broken thing.
+2. **Prove it, don't read it.** Break the thing on purpose and watch the check react. Every conclusion in this project that was instead reasoned from reading code was later found wrong or unverifiable.
+3. **Never judge a suite by eyeballing piped output.** A pipe (`cmd | tail`) replaces the exit status; a redirect (`cmd > file 2>&1`) preserves it.
+
+Concretely, for this repo:
+
+- `npm test` — the full suite **through `scripts/run-tests.mjs`**, which streams live, captures everything to `test-output.log`, and propagates vitest's real exit code. Read the exit code, not the summary line.
+- `npm run verify:runner` — proves the runner can still *fail*. A runner that can't be shown to fail is a runner nobody should trust.
+- `npm run typecheck` — the **project's own** command. Bare `npx tsc --noEmit` at the repo root silently checks **zero files** (the root tsconfig is references-only). It reported "clean" for four entire milestones.
+- Every fix gets **red-then-green**: prove the test fails without the fix, *for the right reason*. If a test can't discriminate, say so in the test's own comment and in the report — never count it as proof.
 
 ## Common commands
 
