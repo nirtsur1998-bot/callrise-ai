@@ -56,15 +56,19 @@ human does the boxes only a human can check before this goes out.
   BUG-057 had. **A user with 1-2 free-tier keys may still hit failures
   this release does not fully solve.** Don't ship release notes implying
   this is closed.
-- **Phase 4.5.3 onward (moving cue/Deal-Intelligence engine STATE into
-  main) is paused, deliberately**, not incomplete by accident. BUG-055
-  already closed the specific bugs that work targeted (replay storm,
-  missing consent gate) via a lower-risk mechanism. The remaining gap —
-  cue/nudge/health-score state doesn't survive a renderer CRASH the way
-  the transcript now does — is real but narrower than originally scoped.
-  See the M26 vault doc's own writeup for the full reasoning; this is
-  flagged for the founder's review, not something this checklist can
-  resolve on its own.
+- **Phase 4.5 is formally closed at 4.5.2 — founder's decision, 2026-08-14.**
+  4.5.3 onward (moving cue/Deal-Intelligence engine STATE into main) will
+  not be built. BUG-055 already closed the specific bugs that work
+  targeted (replay storm, missing consent gate) via a lower-risk mechanism.
+  Confirmed directly from the code before the founder decided: a renderer
+  crash mid-call resets cue history and the Deal Intelligence health
+  score/nudge history (pure in-process state, never persisted) — it does
+  NOT affect the transcript, the journal, or the recovery flow, which are
+  independently safe (journaled per-turn, closed-not-deleted on crash, same
+  Interrupted Call Prompt mechanism already shipped). **Known, accepted
+  limitation going forward, not a bug to track**: a renderer crash mid-call
+  loses live coaching/Deal Intelligence context for that call. Revisit only
+  if this is ever reported as actually affecting a real user.
 - **macOS is unverified for this milestone's live-call changes.** All
   development and testing happened on Windows. `LiveCallProvider`'s hoist
   and the transcript ownership change are platform-agnostic in principle
@@ -202,9 +206,10 @@ tests structurally cannot prove:**
 
 ## Known, accepted gaps at ship time
 
-- BUG-058 (free-tier rate-limit spiral) — open, see above.
-- Phase 4.5.3+ (cue/Deal-Intelligence state surviving a renderer crash) —
-  paused, see above.
+- BUG-058 (free-tier rate-limit spiral) — open, now top priority, design
+  in progress. Nothing in this checklist should read as this being fixed.
+- A renderer crash mid-call resets cue/Deal-Intelligence state (never the
+  transcript) — accepted, permanent scope decision, not tracked as a bug.
 - macOS — unverified for this milestone's changes.
 - Per-category (vs. master on/off) notification filtering — not built;
   there's no `category` field on `Job` today, see
