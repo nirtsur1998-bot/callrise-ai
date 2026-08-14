@@ -66,12 +66,18 @@ export interface CatalogEntry {
    *  `false` = verified NOT to support forced tool calls, dated in the
    *  entry's own comment where set. Undefined = "assumed to support it,
    *  unverified" — a newly added entry without this field is never silently
-   *  excluded. KNOWN STALENESS RISK, not solved: if a provider ships
-   *  tool-calling support later, a `false` entry stays silently excluded
-   *  with no error and no log line until someone manually revisits it —
-   *  worse than a wasted attempt, which at least surfaces in
-   *  fallback-log.ts. No automatic re-check exists; treat any `false` entry
-   *  as needing the same periodic-audit attention as a `knownStale` one. */
+   *  excluded. STALENESS RISK, now made VISIBLE (BUG-057 Phase 6 follow-up):
+   *  there's still no automatic re-check (listModels() has no capability
+   *  data to build one from), so a `false` entry that's gone stale — the
+   *  provider shipped tool-calling support later — stays excluded from a
+   *  needsTool chain until someone manually revisits it. But the exclusion
+   *  is no longer SILENT: complete-with-fallback.ts's
+   *  logToolCapabilityExclusions() records it (once per model per session)
+   *  to fallback-log.ts, so it surfaces in Settings → Model Assignment's
+   *  recent-activity list, diagnosable there the same as any other fallback
+   *  decision. Still treat a `false` entry as needing the same periodic-audit
+   *  attention as a `knownStale` one — the log makes a stale flag findable,
+   *  it doesn't self-heal it. */
   supportsToolCalling?: false
 }
 

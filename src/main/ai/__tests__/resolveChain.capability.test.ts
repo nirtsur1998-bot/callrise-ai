@@ -56,9 +56,11 @@ vi.mock('../model-catalog', () => ({
 }))
 
 const { loadAppSettings } = await import('../../app-settings')
-const { completeWithFallback, streamWithFallback, resolveChain } = await import('../complete-with-fallback')
+const { completeWithFallback, streamWithFallback, resolveChain, resetToolExclusionLogForTests } =
+  await import('../complete-with-fallback')
 const { resetCooldownsForTests } = await import('../model-cooldown')
 const { resetPacingForTests } = await import('../model-pacing')
+const { logFallbackEvent } = await import('../fallback-log')
 
 function assignments(purpose: string, chain: string[]): ReturnType<typeof loadAppSettings> {
   return {
@@ -85,6 +87,8 @@ const ORIGINAL_ENV = { ...process.env }
 beforeEach(() => {
   resetCooldownsForTests()
   resetPacingForTests()
+  resetToolExclusionLogForTests()
+  vi.mocked(logFallbackEvent).mockClear()
   built.length = 0
   activeProviderId.current = null
   process.env.GROQ_API_KEY = 'g'
@@ -181,6 +185,72 @@ describe('completeWithFallback — the capability-exhausted error, through the r
 
     expect(result.text).toBe('ok')
     expect(built).toEqual(['groq']) // fixture-incapable's provider (google) never attempted
+  })
+})
+
+// BUG-057 Phase 6 follow-up — the flag's own doc comment (model-catalog.ts)
+// names the staleness risk exactly: a `false` entry that's gone stale (the
+// provider now supports tools) stays "silently excluded with no error and no
+// log line." These prove the exclusion now surfaces in fallback-log.ts, the
+// same place every other fallback decision does, so a stale flag is
+// diagnosable from Settings → Model Assignment instead of invisible.
+describe('a tool-calling exclusion is logged (once) so a stale flag is diagnosable', () => {
+  it('logs the excluded model to the fallback event log when needsTool drops it', async () => {
+    vi.mocked(loadAppSettings).mockReturnValue(
+      assignments('summary', ['fixture-capable', 'fixture-incapable'])
+    )
+
+    await completeWithFallback({
+      purpose: 'summary',
+      tool: { name: 't', description: 'd', inputSchema: {} },
+      messages: []
+    } as never)
+
+    const exclusionLogs = vi
+      .mocked(logFallbackEvent)
+      .mock.calls.map((c) => c[0])
+      .filter((e) => e.reason.startsWith('skipped: tool-calling'))
+    expect(exclusionLogs).toHaveLength(1)
+    expect(exclusionLogs[0].fromCatalogId).toBe('fixture-incapable')
+    expect(exclusionLogs[0].purpose).toBe('summary')
+  })
+
+  it('does NOT log when needsTool is false — capability never applied, nothing was excluded', async () => {
+    vi.mocked(loadAppSettings).mockReturnValue(assignments('summary', ['fixture-incapable']))
+
+    await completeWithFallback({ purpose: 'summary', messages: [] } as never)
+
+    const exclusionLogs = vi
+      .mocked(logFallbackEvent)
+      .mock.calls.map((c) => c[0])
+      .filter((e) => e.reason.startsWith('skipped: tool-calling'))
+    expect(exclusionLogs).toHaveLength(0)
+  })
+
+  it('deduplicates — a second call excluding the same model in the same session logs nothing new', async () => {
+    vi.mocked(loadAppSettings).mockReturnValue(
+      assignments('summary', ['fixture-capable', 'fixture-incapable'])
+    )
+    const req = {
+      purpose: 'summary',
+      tool: { name: 't', description: 'd', inputSchema: {} },
+      messages: []
+    } as never
+
+    // The exclusion is logged at resolveChain time, BEFORE any pacing/cooldown
+    // decision — so the second call's outcome (the capable model is paced off
+    // by Phase 1 after the first call just used it, moments earlier in real
+    // time) is irrelevant to what's under test here; tolerate the throw.
+    await completeWithFallback(req).catch(() => {})
+    await completeWithFallback(req).catch(() => {})
+
+    const exclusionLogs = vi
+      .mocked(logFallbackEvent)
+      .mock.calls.map((c) => c[0])
+      .filter((e) => e.reason.startsWith('skipped: tool-calling'))
+    // Coaching-cue re-resolves every ~2.5s mid-call — this is what keeps the
+    // exclusion from spamming the 1000-entry cap and evicting real history.
+    expect(exclusionLogs).toHaveLength(1)
   })
 })
 

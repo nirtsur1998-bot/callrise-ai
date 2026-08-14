@@ -373,6 +373,61 @@ export function resolveChain(purpose: AIPurpose, opts?: { needsTool?: boolean })
   return { configured, capable }
 }
 
+// BUG-057 Phase 6 follow-up — the one deferred piece of that phase, closed.
+// `supportsToolCalling: false` (model-catalog.ts) is a static, hand-verified
+// flag with NO live re-check — unlike `knownStale`, which resolveCatalog()
+// re-confirms every ~10 min, listModels() returns ID strings only, no
+// capability data. Its own doc comment names the resulting staleness risk
+// exactly: if a provider ships tool-calling support later, a `false` entry
+// stays SILENTLY excluded from a needsTool chain — "no error and no log
+// line... worse than a wasted attempt, which at least surfaces in
+// fallback-log.ts." This closes precisely that gap: an exclusion is now
+// logged to the SAME fallback-event surface every other fallback decision
+// already uses (Settings → Model Assignment's recent-activity list), so a
+// stale flag is diagnosable there instead of invisible. It does NOT change
+// the filter's behavior — the model stays excluded (attempting it anyway
+// would waste a request per call on the correct-flag case, and eat the live
+// path's tight CHAIN_BUDGET); it only makes the already-correct exclusion
+// visible.
+//
+// Deduplicated per (purpose, catalogId) per process: the exclusion is a
+// static property of the catalog + needsTool, identical on every call, and
+// coaching-cue re-resolves this every ~2.5s mid-call — logging it every time
+// would both spam and evict real fallback history from fallback-log.ts's
+// 1000-entry cap. Once per model per session makes it visible; a restart
+// re-logs, which is correct — a process restart is exactly when a provider's
+// support (and thus the flag's staleness) may have changed.
+const loggedToolExclusions = new Set<string>()
+
+function logToolCapabilityExclusions(
+  purpose: AIPurpose,
+  configured: ResolvedStep[],
+  capable: ResolvedStep[]
+): void {
+  if (configured.length === capable.length) return // nothing was excluded
+  const capableIds = new Set(capable.map((s) => s.catalogId))
+  for (const step of configured) {
+    if (capableIds.has(step.catalogId)) continue
+    const key = `${purpose}:${step.catalogId}`
+    if (loggedToolExclusions.has(key)) continue
+    loggedToolExclusions.add(key)
+    void logFallbackEvent({
+      ts: new Date().toISOString(),
+      purpose,
+      fromCatalogId: step.catalogId,
+      toCatalogId: null,
+      reason: 'skipped: tool-calling not verified for this model',
+      detail:
+        'Excluded from a tool-calling request by the catalog flag supportsToolCalling:false. If this provider now supports forced tool calls, that flag is stale — see model-catalog.ts.'
+    })
+  }
+}
+
+/** Test-only — resets the once-per-session dedup set for logToolCapabilityExclusions. */
+export function resetToolExclusionLogForTests(): void {
+  loggedToolExclusions.clear()
+}
+
 /** BUG-058 Phase 2 — shared by both walks. Call once per rate-limit-classified
  *  failure (period-exhausted or plain); once the SAME provider has done this
  *  twice in one walk, on two different models (chain is deduped by catalogId,
@@ -494,6 +549,7 @@ async function completeWithSameModelRetry(
 export async function completeWithFallback(req: AICompletionRequest): Promise<AICompletionResult> {
   const purpose = req.purpose
   const { configured, capable } = resolveChain(purpose, { needsTool: Boolean(req.tool) })
+  logToolCapabilityExclusions(purpose, configured, capable)
   // BUG-057 Phase 5 — CHAIN_BUDGET is exactly the two live, latency-critical
   // purposes (coaching-cue, deal-tier1); everything else is 'durable'. See
   // model-cooldown.ts's CooldownTier doc comment for what this drives.
@@ -780,6 +836,7 @@ export interface StreamWithFallbackResult extends AsyncIterable<{ delta: string 
 export function streamWithFallback(req: AICompletionRequest): StreamWithFallbackResult {
   const purpose = req.purpose
   const { configured, capable } = resolveChain(purpose, { needsTool: Boolean(req.tool) })
+  logToolCapabilityExclusions(purpose, configured, capable)
   // BUG-057 Phase 5 — coaching-chat (the only consumer today) isn't in
   // CHAIN_BUDGET, so this is always 'durable' currently; computed the same
   // way as completeWithFallback rather than hardcoded, so a future live
