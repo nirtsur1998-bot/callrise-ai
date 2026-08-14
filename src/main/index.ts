@@ -182,6 +182,7 @@ import { registerFallbackLog } from './ai/fallback-log'
 import { registerPurposeHealthStore } from './ai/purpose-health-store'
 import { registerModelCatalog } from './ai/catalog-ipc'
 import { initSalesBrain, maybeRunNightlyConsolidation } from './memory/memory-runtime'
+import { scheduleSalesBrainStartup } from './memory/sales-brain-startup'
 import { registerOnboarding } from './memory/onboarding-ipc'
 import { registerBackfill } from './memory/backfill-ipc'
 import { registerMemoryCenter } from './memory/memory-center-ipc'
@@ -205,6 +206,12 @@ let jobManager: JobManager | undefined
 // before the renderer has loaded and registered its listener is simply lost,
 // so this can't just fire immediately regardless of mainWindow's state.
 let pendingDeepLinkEventId: string | null = null
+
+// M27 — set during the registration sequence, fired from 'ready-to-show'
+// below so Sales Brain init begins only once the window is actually painted.
+// Nullable because createWindow() is also reachable from the 'activate'
+// handler on a later relaunch, when startup has long since finished.
+let onWindowShown: (() => void) | null = null
 
 function deliverDeepLink(eventId: string): void {
   if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
@@ -252,6 +259,13 @@ function createWindow(): void {
       mainWindow?.webContents.send('prepBrief:openRequested', pendingDeepLinkEventId)
       pendingDeepLinkEventId = null
     }
+    // M27 — AFTER show(), deliberately. This is the trigger for Sales Brain
+    // init, whose first act (openMemoryDb) blocks the main process
+    // synchronously. Starting it any earlier than the paint it is waiting
+    // for would reintroduce exactly the stall this ordering exists to avoid.
+    const notify = onWindowShown
+    onWindowShown = null
+    notify?.()
   })
 
   // Open external links in the real browser — but only safe web schemes.
@@ -439,11 +453,15 @@ app.whenReady().then(async () => {
   registerUpdater()
 
   registerTranscription()
-  // Registers a job type only — no memory access of its own, so unlike
-  // registerOnboarding/registerBackfill/registerMemoryCenter it is NOT
-  // subject to the initSalesBrain() race below, and must NOT sit behind
-  // that await: registerCalls() below can enqueue against this the moment
-  // a call is saved, and enqueue() throws on an unregistered type.
+  // Registers a job type only — no memory access of its own. It must run
+  // before registerCalls() below, which can enqueue against it the moment a
+  // call is saved, and enqueue() throws on an unregistered type.
+  //
+  // M27 — this used to also warn that it must not sit behind the
+  // initSalesBrain() await further down. There is no longer an await there
+  // to sit behind: nothing in the startup sequence waits on Sales Brain at
+  // all. Kept here anyway for the enqueue-ordering reason, which stands on
+  // its own.
   registerMemoryExtractionJob()
   registerCalls()
   // M26 Phase 4.2 — journaled-call recovery. Registered right after
@@ -476,31 +494,42 @@ app.whenReady().then(async () => {
   registerOutlook()
   registerBackup()
 
-  // M25 — moved here (after auth/calls/everything else, not before ANY of
-  // it) following a real production incident: initSalesBrain() used to run
-  // right at the top of this function, awaited, before registerAuth() ever
-  // ran. On at least one real machine it stalled for tens of seconds
-  // (~48s observed) - most likely downloading the local embeddings model on
-  // first real use - which meant registerAuth() hadn't registered its IPC
-  // handler yet by the time the already-loaded renderer asked for auth
-  // status. The renderer's fallback for "no handler yet" reads identically
-  // to "Supabase isn't configured," so users saw a false "Accounts aren't
-  // set up yet" screen that had nothing to do with their actual account.
-  // Only registerOnboarding/registerBackfill/registerMemoryCenter below
-  // actually touch memory data - see their own race-prevention need in the
-  // Phase 0 notes - so this only needs to block THOSE three, never the rest
-  // of the app. Also wrapped defensively: the "never throws" promise in
-  // initSalesBrain()'s own doc comment wasn't actually enforced in code
-  // (better-sqlite3's Database constructor can throw synchronously on a
-  // native-module load failure) - belt-and-suspenders here so a Sales Brain
-  // failure genuinely can never take the rest of startup down with it,
-  // matching what was already documented as the intent.
-  try {
-    await Promise.race([initSalesBrain(), new Promise((resolve) => setTimeout(resolve, 15_000))])
-  } catch (err) {
-    console.error('[sales-brain] init failed at startup, disabled for this session:', err)
-  }
-  maybeRunNightlyConsolidation()
+  // M25 — Sales Brain init used to run right at the top of this function,
+  // awaited, before registerAuth() ever ran. On at least one real machine it
+  // stalled for tens of seconds (~48s observed) - most likely downloading the
+  // local embeddings model on first real use - which meant registerAuth()
+  // hadn't registered its IPC handler yet by the time the already-loaded
+  // renderer asked for auth status. The renderer's fallback for "no handler
+  // yet" reads identically to "Supabase isn't configured," so users saw a
+  // false "Accounts aren't set up yet" screen that had nothing to do with
+  // their actual account. It then moved here, behind everything else, capped
+  // by a 15s Promise.race.
+  //
+  // M27 — that cap could not fire (taxonomy species 15). Promise.race
+  // evaluates left to right, so initSalesBrain() ran to its first real await
+  // BEFORE the 15s timer was armed, and openMemoryDb() is fully synchronous:
+  // two native-module require()s, the DB open, a WAL pragma, an extension
+  // load. Since createWindow() sat below this await, the stall the cap
+  // existed to survive produced NO WINDOW AT ALL. Proven, not inferred: a
+  // 500ms cap around a 3000ms synchronous block takes the full 3000ms.
+  //
+  // Init is now scheduled to begin only once the window is actually on
+  // screen, and nightly consolidation chains behind it (it early-returns on a
+  // null db, so calling it any sooner would silently skip consolidation for
+  // the whole session). See sales-brain-startup.ts, which exists to make this
+  // ordering testable at all — nothing in the suite can import this file.
+  //
+  // The three registrations below no longer wait on it. They never actually
+  // needed to: `db` is assigned only AFTER migrate() succeeds, so a handler
+  // firing mid-migration reads null - never a half-upgraded database - and
+  // all three already handle a null db (onboarding and backfill via
+  // ensureMemoryDb(), which retries a failed/slow init at exactly these
+  // user-facing entry points). The old ordering was belt-and-braces; the
+  // late assignment of `db` is the real guarantee.
+  onWindowShown = scheduleSalesBrainStartup({
+    init: initSalesBrain,
+    afterInit: maybeRunNightlyConsolidation
+  }).windowReady
 
   registerOnboarding()
   registerBackfill()
