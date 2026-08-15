@@ -373,7 +373,13 @@ export function LiveView({
     // Standing consent still has to be written before capture can be armed —
     // the gate does not care WHERE the consent came from, only that a record
     // for this call exists on disk.
-    window.api.consent.persist(getSessionId() ?? -1, consent.recordRef.current)
+    // 1.2.6 hotfix (privacy) — ARM ONLY IF THE CONSENT ACTUALLY LANDED.
+    // This previously ran enableOtherParty() unconditionally, so a persist
+    // that failed (a missing session id sends the -1 sentinel, which main
+    // refuses) still armed capture — and the audio gate, which asks only
+    // whether ANY consent exists, could then open on a grant left over from
+    // an earlier call.
+    if (!window.api.consent.persist(getSessionId() ?? -1, consent.recordRef.current)) return
     void enableOtherParty()
   }, [
     status,
@@ -635,7 +641,12 @@ export function LiveView({
     // arm and the grant and refuses without it, so this is not bookkeeping —
     // it is the step that makes capture possible at all. Synchronous, so the
     // click's user activation survives into getDisplayMedia.
-    window.api.consent.persist(getSessionId() ?? -1, consent.recordRef.current)
+    // 1.2.6 hotfix (privacy) — same as the auto path above: no arming on a
+    // consent that was not stored. Silent, deliberately: the rep just told
+    // us to enable capture, and the honest outcome of a refused consent is
+    // that capture does not start, which the existing error surface already
+    // reports. Arming anyway is what made a stale grant reachable.
+    if (!window.api.consent.persist(getSessionId() ?? -1, consent.recordRef.current)) return
     void enableOtherParty()
   }
 
@@ -858,7 +869,17 @@ export function LiveView({
             )}
             <button
               type="button"
-              onClick={() => void enableOtherParty()}
+              onClick={() => {
+                // 1.2.6 hotfix (privacy) — the retry button used to call
+                // enableOtherParty() with no consent step at all, so it
+                // armed purely on whatever grant happened to be on disk.
+                // It now re-persists for the CURRENT call first and refuses
+                // to arm if that fails, exactly like the other two paths.
+                if (!window.api.consent.persist(getSessionId() ?? -1, consent.recordRef.current)) {
+                  return
+                }
+                void enableOtherParty()
+              }}
               className={cn(
                 'no-drag rounded-lg px-3 py-1.5 text-xs font-semibold',
                 otherPartyError === 'interrupted'

@@ -132,10 +132,25 @@ export function registerLoopbackCapture(): void {
     (_request, callback) => {
       // Re-checked here too (not just at arm time) so a toggle-off that lands
       // between arm and grant can't slip through on a stale armed flag.
-      // Re-checked at the GRANT, not just at the arm — including the consent
-      // record on disk. Anything that changed in between (a toggle-off, a
-      // revoke, the record being cleared as the call ended) closes the gate,
-      // and a stale `armed` flag on its own can no longer open it.
+      // Anything that changed in between — a toggle-off, a revoke, the call
+      // ending — closes the gate, and a stale `armed` flag on its own can no
+      // longer open it.
+      //
+      // 1.2.6 hotfix — the phrase "the record being cleared as the call
+      // ended" used to appear here as an established fact. It was not one:
+      // clearActiveConsent() ran at app start, on explicit revoke, and when
+      // a grant was persisted as "off", but never at call end. So the grant
+      // outlived its call, and this check — which asks whether ANY consent
+      // exists, not whose — would honour it during the NEXT call. The
+      // comment described the guarantee the code was relied upon to provide
+      // while the code did not provide it. endCall() now genuinely clears
+      // it, which is what makes this sentence true rather than aspirational.
+      //
+      // Still outstanding, deliberately: this check does not name the call it
+      // means. Every AI path passes its id and binds; the audio path cannot
+      // do that safely until consent is keyed on callId (1.3.0's E1) —
+      // binding to sessionId here would refuse capture after an ordinary
+      // mono<->multichannel restart, which mints a fresh session id mid-call.
       if (!armed || !loadAppSettings().allowOtherPartyRecording || !consentPermitsCapture()) {
         callback({}) // deny — not armed, switch off, or no persisted consent
         return
