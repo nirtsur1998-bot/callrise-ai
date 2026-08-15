@@ -141,6 +141,11 @@ chk_present "BUG-071 non-AI jobs never defer"        "NO_AI_PURPOSE"            
 chk_present "BUG-072 import resume ledger"           "backfill_attempts"               out/main
 chk_present "BUG-072 resumed-run wording"            "picks up from here next time"    out/main
 chk_absent  "BUG-073 raw-seconds wait gone"          'in about ${secs}s'               out/main
+# BUG-075 — both halves of the consent fix must be in what ships. The
+# lifetime half came from 1.2.6 via a merge, and a hotfix silently lost in a
+# merge is the classic way a shipped fix un-ships in the next release.
+chk_present "BUG-075 lifetime: consent cleared at call end" "clearActiveConsent"        out/main
+chk_present "BUG-075 binding: audio gate reads the live call" "liveCallInfo"             out/main
 
 echo "=== renderer ==="
 chk_present "draggable Activity button persistence"  "salesos.activityCenter.position" out/renderer
