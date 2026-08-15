@@ -50,9 +50,17 @@ fi
 # warning: a warning printed above a wall of PASS lines is the same species
 # of problem this whole file exists to prevent.
 artifact_ts=$(stat -c %Y "$ASAR" 2>/dev/null)
+# Only files that actually END UP in the bundle. Test files are excluded
+# deliberately: none are packaged, so their mtimes say nothing about whether
+# the artifact is current. Including them made the gate refuse a perfectly
+# good build merely because a test was edited while it ran — a refusal for
+# the wrong reason, which trains people to override the gate, which is how a
+# gate stops working at all.
 newest_src=$(find "$REPO/src" "$REPO/package.json" -type f \
   \( -name '*.ts' -o -name '*.tsx' -o -name '*.json' \) \
-  -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1)
+  -not -path '*/__tests__/*' -not -name '*.test.ts' -not -name '*.test.tsx' \
+  -printf '%T@ %p
+' 2>/dev/null | sort -n | tail -1)
 newest_src_ts=${newest_src%% *}
 newest_src_path=${newest_src#* }
 
