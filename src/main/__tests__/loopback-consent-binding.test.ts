@@ -85,7 +85,6 @@ const CONSENTED = {
   recordOtherParty: true
 }
 const CALL_A = 'call-aaaa'
-const CALL_B = 'call-bbbb'
 
 /** The renderer's real move: `window.api.consent.persist(callId, consent)`
  *  → sendSync('consent:persist', { callId, consent }). Entering here rather
@@ -161,7 +160,8 @@ describe('the audio gate, entered the way production enters it', () => {
     // Call B begins; the renderer's id is not ready yet, so it sends ''.
     expect(rendererPersists('', CONSENTED)).toBe(false)
 
-    // DOCUMENTED CURRENT BEHAVIOUR — NOT AN ENDORSEMENT. Awaiting a decision.
+    // DOCUMENTED CURRENT BEHAVIOUR — NOT AN ENDORSEMENT. The lifetime half
+    // shipped in 1.2.6; the binding half is the outstanding work here.
     //
     // These read `true`, and that is the finding. loopback.ts's handler does
     //     const ok = callId ? persistActiveConsent(callId, ...) : false
@@ -185,7 +185,18 @@ describe('abnormal flows — where "the effect always runs first" stops being tr
   // START, on explicit revoke, and inside persist-when-off — but NOT at call
   // end. So A's grant is still on disk, and the arm check does not ask which
   // call it belongs to.
-  it('a grant from a previous call still arms capture in the next one', async () => {
+  // POST-1.2.6 STATUS. The LEAK this documented is fixed and shipped: endCall()
+  // now clears the grant, so a real later call has nothing to inherit. What
+  // this test still pins is the part 1.2.6 deliberately did NOT fix — the two
+  // audio-path checks remain argument-less, so given a grant on disk they do
+  // not ask which call it belongs to. Note it never calls endCall(): that is
+  // the point. It isolates the BINDING gap from the LIFETIME fix.
+  //
+  // This is the next piece of work on this branch. Once the audio checks take
+  // the callId (safe here, where E1 re-keyed consent so it survives a
+  // mono<->multichannel restart), these assertions flip to false and this
+  // comment comes out.
+  it('still does not bind a grant to its call (the half 1.2.6 deferred to 1.3.0)', async () => {
     expect(rendererPersists(CALL_A, CONSENTED)).toBe(true)
     expect(rendererArms()).toBe(true)
     expect(await chromiumRequestsCapture()).toBe(true)

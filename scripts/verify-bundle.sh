@@ -116,6 +116,16 @@ chk_absent() {
   fi
 }
 
+# PORTABILITY WARNING, learned on the 1.2.6 hotfix. Several assertions below
+# grep for COMMENT text. That works here only because this build config does
+# not strip comments from out/main — the 1.2.5-based hotfix build DID strip
+# them, and the same assertions silently reported every fix as MISSING.
+#
+# If these start failing wholesale after a build-config change, suspect that
+# before suspecting the fixes. The durable form is structural: match compiled
+# code that only exists when the fix does (see the 1.2.6 script, which pairs
+# `current = null;` with `clearActiveConsent();` — either token alone appears
+# elsewhere, only the sequence is diagnostic).
 echo "=== main process ==="
 chk_present "BUG-063 consent keyed to callId"        "consentPermitsCapture"           out/main
 chk_present "BUG-069 Sales Brain startup scheduler"  "scheduleSalesBrainStartup"       out/main

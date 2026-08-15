@@ -35,6 +35,7 @@ import {
 import { diffFrom, type TranscriptPatch } from './transcript-patch'
 import type { ConsentRecord } from '../calls-fs'
 import { resetInterim } from './live-interim'
+import { clearActiveConsent } from '../consent-gate'
 
 interface LiveCall {
   id: string
@@ -300,6 +301,36 @@ export function endCall(opts: { saved: boolean }): void {
   if (!opts.saved && saveInFlight) return
   const call = current
   current = null
+
+  // 1.2.6 hotfix (privacy) — THE CALL'S CONSENT DIES WITH THE CALL.
+  //
+  // Buyer-capture consent was previously cleared only at app start, on an
+  // explicit revoke, and when a grant was persisted as "off". Never at call
+  // end. So a grant for THIS call stayed on disk afterwards, and the audio
+  // path's gate checks (loopback.ts's arm and grant) ask only "is there any
+  // active consent?" — not "consent for which call?". A later call in the
+  // same app session could therefore arm and be granted buyer capture on the
+  // previous call's consent. Confirmed end-to-end through the real IPC and
+  // display-media handlers, not inferred.
+  //
+  // Cleared HERE because endCall is the one lifecycle point every ending
+  // funnels through — a saved call, an abandoned one, and beginCall's own
+  // implicit endCall({saved:false}), which means a new call starting also
+  // clears a grant left behind by an abnormal end.
+  //
+  // Unconditional, and before the early return below: a call that ended with
+  // no journal at all must still drop its consent. Deliberately NOT
+  // dependent on `opts.saved` — an abandoned call's grant is exactly as
+  // dangerous as a saved one's.
+  //
+  // The binding half of this (making the audio checks name the call they
+  // mean, as every AI path already does) lands in 1.3.0, where consent is
+  // keyed on callId. Binding to sessionId here would refuse capture after an
+  // ordinary mono<->multichannel restart, which mints a fresh session id
+  // mid-call — trading an invisible leak for capture that visibly dies in
+  // front of a buyer.
+  clearActiveConsent()
+
   // M26 4.5.1 — real call-end is the one lifecycle point this and
   // beginCall's implicit endCall({saved:false}) both funnel through, so
   // this is the single place a poller's interim buffer must be cleared:
