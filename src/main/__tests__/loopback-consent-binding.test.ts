@@ -64,15 +64,14 @@ vi.mock('../app-settings', () => ({
   loadAppSettings: () => ({ allowOtherPartyRecording: allowOtherPartyRecording.value })
 }))
 
-// live-transcript is the journal side; row 16 is about the gate, so this is
-// stubbed to keep the test about one thing. Its own consent journaling is
-// covered by the call-journal tests.
-const recordedConsents: unknown[] = []
-vi.mock('../live/live-transcript', () => ({
-  recordConsent: (c: unknown) => void recordedConsents.push(c)
-}))
+// live-transcript is NOT mocked any more. It was, back when this file only
+// needed the gate — but binding reads the live call's id from
+// liveCallInfo(), so a stub would make every assertion here about the stub
+// rather than about the product. Entering through the real module is the
+// whole point of this file (species 21).
 
 const { registerLoopbackCapture } = await import('../loopback')
+const { beginCall, endCall, liveCallInfo } = await import('../live/live-transcript')
 const { setConsentGateDirForTests, clearActiveConsent } = await import('../consent-gate')
 
 // The same shape consent-gate.test.ts uses — sanitizeConsent rejects
@@ -84,7 +83,15 @@ const CONSENTED = {
   method: 'verbal-on-call',
   recordOtherParty: true
 }
-const CALL_A = 'call-aaaa'
+/** The id of the call actually in progress. The renderer DERIVES this
+ *  (getCallId()) rather than inventing one, and now that the gate binds, a
+ *  test that invents one is testing a call that does not exist — which is
+ *  species 21 all over again, in the file written to catch species 21. */
+function liveId(): string {
+  const info = liveCallInfo()
+  if (!info) throw new Error('no live call — the fixture is wrong, not the product')
+  return info.callId
+}
 
 /** The renderer's real move: `window.api.consent.persist(callId, consent)`
  *  → sendSync('consent:persist', { callId, consent }). Entering here rather
@@ -117,13 +124,14 @@ beforeEach(() => {
   setConsentGateDirForTests(dir)
   syncHandlers.clear()
   displayMediaHandler = null
-  recordedConsents.length = 0
   allowOtherPartyRecording.value = true
   vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
   registerLoopbackCapture()
+  beginCall({ restart: false }) // capture is only ever armed during a call
 })
 
 afterEach(() => {
+  endCall({ saved: false })
   vi.restoreAllMocks()
   setConsentGateDirForTests(null)
   rmSync(dir, { recursive: true, force: true })
@@ -136,7 +144,7 @@ describe('the audio gate, entered the way production enters it', () => {
   })
 
   it('arms and grants once the renderer has persisted consent for the call', async () => {
-    expect(rendererPersists(CALL_A, CONSENTED)).toBe(true)
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
     expect(rendererArms()).toBe(true)
     expect(await chromiumRequestsCapture()).toBe(true)
   })
@@ -154,25 +162,68 @@ describe('the audio gate, entered the way production enters it', () => {
   // id must not merely fail to store — it must not leave an EARLIER grant
   // standing that the argument-less check would then accept.
   it('an empty call id does not leave a previous call\'s grant usable', async () => {
-    expect(rendererPersists(CALL_A, CONSENTED)).toBe(true)
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
     expect(rendererArms()).toBe(true)
 
-    // Call B begins; the renderer's id is not ready yet, so it sends ''.
+    // Call B ACTUALLY begins — the test previously only said so. Before
+    // binding, that omission did not matter (the gate asked "any consent?"
+    // and the answer was the same either way); with binding it is the whole
+    // difference, because a grant for the *current* call legitimately still
+    // matches. A test whose scenario is narrower than its name is fine until
+    // the code learns to tell the difference.
+    endCall({ saved: true })
+    beginCall({ restart: false })
+
+    // The renderer's id is not ready yet, so it sends ''.
     expect(rendererPersists('', CONSENTED)).toBe(false)
 
-    // DOCUMENTED CURRENT BEHAVIOUR — NOT AN ENDORSEMENT. The lifetime half
-    // shipped in 1.2.6; the binding half is the outstanding work here.
+    // BOTH HALVES NOW CLOSED, and this test flipped from documenting the gap
+    // to asserting it is shut.
     //
-    // These read `true`, and that is the finding. loopback.ts's handler does
-    //     const ok = callId ? persistActiveConsent(callId, ...) : false
-    // so an empty id means persistActiveConsent is NEVER CALLED — it does not
-    // even overwrite the stale record with a useless one. Call A's grant is
-    // left intact, and the argument-less `consentPermitsCapture()` at arm and
-    // grant does not ask which call it belongs to.
+    // Lifetime (1.2.6): endCall() clears the grant, so a later call has
+    // nothing to inherit. Binding (1.3.0, here): the arm and grant checks
+    // pass the live call's id, so even a grant that IS on disk is refused
+    // unless it names this call.
     //
-    // Both LiveView call sites then run `void enableOtherParty()`
-    // UNCONDITIONALLY, without checking whether the persist above succeeded —
-    // so a failed persist still proceeds to arm.
+    // The empty-id path is what makes this worth asserting rather than
+    // assuming: loopback's handler does `callId ? persist(...) : false`, so an
+    // empty id never calls persist at all and cannot overwrite the stale
+    // record. Before binding, the argument-less check then accepted it.
+    expect(rendererArms()).toBe(false)
+    expect(await chromiumRequestsCapture()).toBe(false)
+  })
+})
+
+describe('what BINDING adds that the lifetime fix does not', () => {
+  // WHY THIS TEST HAD TO BE WRITTEN. Reverting the binding left all eight
+  // other tests in this file passing — with the revert verified as applied,
+  // so not species 20. The honest reading: 1.2.6's lifetime fix already
+  // covers every scenario the others construct. A grant is cleared whenever
+  // a call ends, so a MISMATCHED grant never naturally arises, and binding
+  // is invisible to them.
+  //
+  // That very nearly shipped a change whose own tests could not detect its
+  // removal. The scenario below is the one where binding is the ONLY thing
+  // standing between a stale grant and buyer audio: the renderer persists
+  // consent naming a call that is NOT the live one. That is reachable —
+  // getCallId() reads a mirror of main's state, and a mirror can lag a call
+  // boundary, which is precisely the window where an id is stale rather than
+  // empty. Empty is refused already; STALE is what binding is for.
+  it('refuses a grant that names a different call than the live one', async () => {
+    const stale = 'call-from-somewhere-else'
+    expect(rendererPersists(stale, CONSENTED)).toBe(true) // stored, and valid on its face
+
+    // A grant IS on disk and IS well-formed. Only the call it names is wrong.
+    // Without binding both of these are true, because the check asks "is
+    // there any consent?" and there certainly is.
+    expect(rendererArms()).toBe(false)
+    expect(await chromiumRequestsCapture()).toBe(false)
+  })
+
+  it('accepts the same grant once it names the live call', async () => {
+    // The control. Without it, the test above passes just as well against a
+    // gate that refuses everything.
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
     expect(rendererArms()).toBe(true)
     expect(await chromiumRequestsCapture()).toBe(true)
   })
@@ -196,8 +247,8 @@ describe('abnormal flows — where "the effect always runs first" stops being tr
   // the callId (safe here, where E1 re-keyed consent so it survives a
   // mono<->multichannel restart), these assertions flip to false and this
   // comment comes out.
-  it('still does not bind a grant to its call (the half 1.2.6 deferred to 1.3.0)', async () => {
-    expect(rendererPersists(CALL_A, CONSENTED)).toBe(true)
+  it('BINDS a grant to its call — the half 1.2.6 deferred, now closed', async () => {
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
     expect(rendererArms()).toBe(true)
     expect(await chromiumRequestsCapture()).toBe(true)
 
@@ -214,7 +265,7 @@ describe('abnormal flows — where "the effect always runs first" stops being tr
   })
 
   it('a revoke during call A does close it for call B', async () => {
-    expect(rendererPersists(CALL_A, CONSENTED)).toBe(true)
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
     const ev: { returnValue?: unknown } = {}
     syncHandlers.get('consent:clear')!(ev)
     expect(rendererArms()).toBe(false)
@@ -222,7 +273,7 @@ describe('abnormal flows — where "the effect always runs first" stops being tr
   })
 
   it('the master switch still overrides a stale grant', async () => {
-    expect(rendererPersists(CALL_A, CONSENTED)).toBe(true)
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
     allowOtherPartyRecording.value = false
     expect(rendererArms()).toBe(false)
     expect(await chromiumRequestsCapture()).toBe(false)
@@ -231,7 +282,7 @@ describe('abnormal flows — where "the effect always runs first" stops being tr
   // The startup clear is the backstop the code comments rely on. A crash
   // mid-call leaves the file behind; the next LAUNCH must not honour it.
   it('a grant surviving a crash is cleared at the next app start', async () => {
-    expect(rendererPersists(CALL_A, CONSENTED)).toBe(true)
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
     clearActiveConsent() // what index.ts does during startup
     expect(rendererArms()).toBe(false)
     expect(await chromiumRequestsCapture()).toBe(false)

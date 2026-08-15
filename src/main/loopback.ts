@@ -43,7 +43,7 @@ import {
   persistActiveConsent,
   readActiveConsent
 } from './consent-gate'
-import { recordConsent } from './live/live-transcript'
+import { liveCallInfo, recordConsent } from './live/live-transcript'
 
 // One-shot: set true by 'loopback:arm', consumed the moment a request is granted.
 let armed = false
@@ -122,8 +122,28 @@ export function registerLoopbackCapture(): void {
     // ...and the consent itself is read back FROM DISK, never taken from the
     // renderer's word for it. This is what makes the guarantee provable rather
     // than merely true: the record outlives the process that claims it.
+    // M27 — BOUND TO THE CALL. This asked `consentPermitsCapture()` with no
+    // argument, i.e. "is there ANY consent?", while every AI path passed its
+    // callId and bound properly. That is how a grant from a previous call
+    // could arm capture in the next one (BUG-075). 1.2.6 closed the leak by
+    // ending the grant with the call; this closes the other half by making
+    // the check name the call it means.
+    //
+    // Safe to do HERE and not in 1.2.6: consent is keyed on callId since E1,
+    // and a callId survives the mono<->multichannel restart that mints a
+    // fresh session id mid-call. Binding to sessionId in 1.2.6 would have
+    // refused capture after any such restart.
+    //
+    // No live call means no capture, full stop — a stricter answer than the
+    // old undefined-callId path, which skipped the binding comparison and
+    // accepted any stored grant. Buyer capture outside a call is not a thing
+    // this app should ever arm.
+    const live = liveCallInfo()
     armed =
-      platformSupported && loadAppSettings().allowOtherPartyRecording && consentPermitsCapture()
+      platformSupported &&
+      loadAppSettings().allowOtherPartyRecording &&
+      live !== null &&
+      consentPermitsCapture(live.callId)
     event.returnValue = armed
   })
   ipcMain.on('loopback:disarm', (event) => {
@@ -154,7 +174,16 @@ export function registerLoopbackCapture(): void {
       // do that safely until consent is keyed on callId (1.3.0's E1) —
       // binding to sessionId here would refuse capture after an ordinary
       // mono<->multichannel restart, which mints a fresh session id mid-call.
-      if (!armed || !loadAppSettings().allowOtherPartyRecording || !consentPermitsCapture()) {
+      // M27 — bound to the call here too. Re-read fresh rather than trusting
+      // the id captured at arm time: if the call ended between arm and grant,
+      // liveCallInfo() is null and this refuses, which is the correct answer.
+      const liveNow = liveCallInfo()
+      if (
+        !armed ||
+        !loadAppSettings().allowOtherPartyRecording ||
+        liveNow === null ||
+        !consentPermitsCapture(liveNow.callId)
+      ) {
         callback({}) // deny — not armed, switch off, or no persisted consent
         return
       }

@@ -62,7 +62,7 @@ vi.mock('../app-settings', () => ({
 
 const { registerLoopbackCapture } = await import('../loopback')
 const { setConsentGateDirForTests } = await import('../consent-gate')
-const { beginCall, endCall } = await import('../live/live-transcript')
+const { beginCall, endCall, liveCallInfo } = await import('../live/live-transcript')
 
 const CONSENTED = {
   status: 'consented',
@@ -83,8 +83,17 @@ const CONSENTED = {
 // going dark in the next release is the classic way a shipped fix quietly
 // un-ships. The suite caught it; a merge that only resolved textual
 // conflicts would not have.
-const CALL_A = 'call-aaaa'
-const CALL_B = 'call-bbbb'
+/** The id of the call actually in progress — DERIVED, exactly as the
+ *  renderer derives it via getCallId(). Written as a literal at first, which
+ *  worked right up until 1.3.0 made the gate check WHICH call a grant names;
+ *  five of these seven tests then failed at once. Species 21 in the hotfix's
+ *  own regression suite: constructing what production derives is invisible
+ *  until the product starts checking. */
+function liveId(): string {
+  const info = liveCallInfo()
+  if (!info) throw new Error('no live call — the fixture is wrong, not the product')
+  return info.callId
+}
 
 /** The renderer's real move — sendSync('consent:persist', {...}). Entering
  *  here rather than at persistActiveConsent() is the point: production
@@ -133,7 +142,7 @@ describe('the bug: a grant must not outlive its call', () => {
   it('refuses capture in a later call that never consented', async () => {
     // Call A, with consent.
     beginCall({ restart: false })
-    expect(rendererPersists(CALL_A, CONSENTED)).toBe(true)
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
     expect(rendererArms()).toBe(true)
     expect(await chromiumRequestsCapture()).toBe(true)
 
@@ -154,7 +163,7 @@ describe('the bug: a grant must not outlive its call', () => {
     // An abandoned call's grant is exactly as dangerous as a saved call's,
     // so the clear is unconditional rather than gated on opts.saved.
     beginCall({ restart: false })
-    expect(rendererPersists(CALL_A, CONSENTED)).toBe(true)
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
     endCall({ saved: false })
 
     beginCall({ restart: false })
@@ -166,7 +175,7 @@ describe('the bug: a grant must not outlive its call', () => {
     // beginCall's own implicit endCall({saved:false}) is the backstop for a
     // call that ended abnormally and never got a clean endCall of its own.
     beginCall({ restart: false })
-    expect(rendererPersists(CALL_A, CONSENTED)).toBe(true)
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
 
     beginCall({ restart: false }) // a brand-new call, no endCall in between
     expect(rendererArms()).toBe(false)
@@ -177,18 +186,18 @@ describe('the bug: a grant must not outlive its call', () => {
 describe('the normal flow must still work — no permissive-for-restrictive trade', () => {
   it('a legitimate consent on a fresh call still arms and grants', async () => {
     beginCall({ restart: false })
-    expect(rendererPersists(CALL_B, CONSENTED)).toBe(true)
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
     expect(rendererArms()).toBe(true)
     expect(await chromiumRequestsCapture()).toBe(true)
   })
 
   it('consent re-granted in a LATER call works normally', async () => {
     beginCall({ restart: false })
-    expect(rendererPersists(CALL_A, CONSENTED)).toBe(true)
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
     endCall({ saved: true })
 
     beginCall({ restart: false })
-    expect(rendererPersists(CALL_B, CONSENTED)).toBe(true)
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
     expect(rendererArms()).toBe(true)
     expect(await chromiumRequestsCapture()).toBe(true)
   })
@@ -202,7 +211,7 @@ describe('a mid-call mono<->multichannel restart must NOT drop consent', () => {
   // not evidence, so this asserts it against the real functions.
   it('keeps capture working across a restart', async () => {
     beginCall({ restart: false })
-    expect(rendererPersists(CALL_A, CONSENTED)).toBe(true)
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
     expect(rendererArms()).toBe(true)
     expect(await chromiumRequestsCapture()).toBe(true)
 
@@ -217,7 +226,7 @@ describe('a mid-call mono<->multichannel restart must NOT drop consent', () => {
 
   it('survives several restarts in a row', async () => {
     beginCall({ restart: false })
-    expect(rendererPersists(CALL_A, CONSENTED)).toBe(true)
+    expect(rendererPersists(liveId(), CONSENTED)).toBe(true)
     for (let i = 0; i < 3; i++) beginCall({ restart: true })
     expect(rendererArms()).toBe(true)
     expect(await chromiumRequestsCapture()).toBe(true)
