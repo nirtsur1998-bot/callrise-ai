@@ -84,3 +84,24 @@ It was not a paperwork exercise — writing it surfaced two real gaps and closed
 2. **Migration 003's backward-compatibility test had never been red-checked.** Now proven: a data-destroying migration makes it fail.
 
 Both were rows that would have read "verified" in a table written from memory.
+
+---
+
+## Re-audit closed (2026-08-15) — rows 5, 8, 9, 12, plus a systematic sweep
+
+| Row | Verdict | Action |
+|---|---|---|
+| **5** — consent across a mid-call restart | Same shape. Pre-existing tests call `persistActiveConsent(CALL_ID, …)` — constructing what production derives | **Closed by other means.** Two new files enter via the real IPC handler, and the 1.3.0 binding means a stale or empty derived id is now *refused* rather than accepted. The renderer's `getCallId() ?? ''` expression itself is still untested, but a failure there is now bounded by two independent guards: the arm paths refuse when the persist fails, and the gate refuses a grant not naming the live call. Left uncovered, deliberately — a LiveView render test is heavy and the failure mode is already safe |
+| **8** — import on an exhausted key | **Door is correct.** The tests drive the real executor registered by `registerBackfill()` | Nothing to do. Its gap is stub depth (extraction is mocked), which needs a real key, not a restructure |
+| **9** — window appears despite slow init | Same shape, **bounded** consequence | **Fixed** — `startup-wiring.test.ts`. Severity corrected: a cut wire degrades to a ~10s delay, not an absent feature, because of a fallback timer that a call-chain trace does not see |
+| **12** — draggable Activity button | Same shape, low stakes | **Fixed** — `ActivityCenter.drag.test.ts`, real pointer events on the real component |
+
+**The sweep found one genuine bug beyond the four rows:** `salesBrain:calls:setExcluded` assembles a privacy guarantee inline — excluding a call retroactively deletes what was learned from it — and no test entered that door. Prospective exclusion was covered; retroactive was not. Now covered, red-checked, plus the Memory Center's other six gates.
+
+**And it cleared job executors entirely:** nine registered types have no test naming them, and every one is a thin delegate whose gate lives in a tested function, or business logic enforcing no permission. Recording that is as valuable as recording the gaps — a sweep that only ever finds problems is confirming, not measuring.
+
+### What remains uncovered, and why that is a decision rather than an omission
+
+- The renderer's `getCallId()` derivation (row 5) — bounded by two guards, heavy to test.
+- Five job executors with business logic and no permission gating — ordinary coverage debt, not promise-enforcement debt.
+- Extraction quality against a real rate-limited provider (row 8) — needs a real key; queued behind the eval-harness baseline.
