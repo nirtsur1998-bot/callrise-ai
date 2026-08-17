@@ -281,7 +281,19 @@ export async function runBackfill(
       // so the summary can say "84 already done" instead of silently showing
       // a shrinking total that looks like calls went missing.
       alreadyScanned = eligible.length - withTranscripts.length
-      onProgress({ running: true, stage: 'calls', processed: 0, total: withTranscripts.length })
+      // M27 — CUMULATIVE against the whole call library, not just this run's
+      // remaining set. Before this, `total` was withTranscripts.length — the
+      // REMAINING subset — so a resumed run's progress bar reset to "0 / 103"
+      // instead of showing "10 / 113", the exact visibility the resume fix
+      // was built for but never surfaced: the mechanism worked, nothing on
+      // screen showed it working. `processed` starts at `alreadyScanned`
+      // rather than 0 for the identical reason.
+      onProgress({
+        running: true,
+        stage: 'calls',
+        processed: alreadyScanned,
+        total: eligible.length
+      })
       // BUG-057 — the same tally the objection scan uses, for the same reason:
       // it already encodes "a skip is not a failure" and "3 consecutive
       // failures means the API is down, stop burning a doomed request per
@@ -335,7 +347,12 @@ export async function runBackfill(
             /* the ledger is an optimisation, never a reason to abort a run */
           }
         }
-        onProgress({ running: true, stage: 'calls', processed: i + 1, total: withTranscripts.length })
+        onProgress({
+          running: true,
+          stage: 'calls',
+          processed: alreadyScanned + i + 1,
+          total: eligible.length
+        })
         if (verdict === 'stop') {
           remainingCalls = withTranscripts.length - (i + 1)
           break
