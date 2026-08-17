@@ -146,6 +146,20 @@ chk_absent  "BUG-073 raw-seconds wait gone"          'in about ${secs}s'        
 # merge is the classic way a shipped fix un-ships in the next release.
 chk_present "BUG-075 lifetime: consent cleared at call end" "clearActiveConsent"        out/main
 chk_present "BUG-075 binding: audio gate reads the live call" "liveCallInfo"             out/main
+# A string literal, not a comment — safe against this build config stripping
+# comments from out/main. Confirmed zero occurrences anywhere before this fix.
+chk_present "malformed tool-call JSON classified transient" "tool_use_failed"           out/main
+
+# The cumulative-progress fix reuses an identifier (alreadyScanned) that
+# already existed for the summary text, so presence/absence of that name
+# proves nothing. Same shape as BUG-075's own structural check above: match
+# the compiled STATEMENT that only exists when the fix does — the fixed code
+# reads `processed: alreadyScanned`; the old code always read `processed: 0`.
+if grep -Pzoq 'processed:\s*alreadyScanned' "$OUT/out/main/index.js" 2>/dev/null; then
+  echo "  PASS  present: cumulative import progress (starts from alreadyScanned, not 0)"
+else
+  echo "  FAIL  MISSING: cumulative import progress"; fail=1
+fi
 
 echo "=== renderer ==="
 chk_present "draggable Activity button persistence"  "salesos.activityCenter.position" out/renderer
