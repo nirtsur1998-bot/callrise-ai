@@ -9,6 +9,7 @@ const KEY_AUTO_POST_CALL_BRIEF = 'salesos.settings.autoPostCallBrief'
 const KEY_EXCLUDED_APPS = 'salesos.settings.excludedApps'
 const KEY_SEEN_APPS = 'salesos.settings.seenApps'
 const KEY_AUTO_TRANSCRIBE_CALLS = 'salesos.settings.autoTranscribeCalls'
+const KEY_TIER1_ENABLED = 'salesos.settings.tier1Enabled'
 
 function read(key: string): string | null {
   try {
@@ -121,4 +122,23 @@ export function getAutoTranscribeCalls(): boolean {
 
 export function setAutoTranscribeCalls(value: boolean): void {
   write(KEY_AUTO_TRANSCRIBE_CALLS, String(value))
+}
+
+// Default OFF: a first run that silently reroutes someone's microphone
+// through a new engine is a support ticket, not a nicety. Same reasoning as
+// every other opt-in above — this is a real behavior change (which audio a
+// stranger's engine processes), not a harmless default.
+//
+// recorder.ts reads this at the START of each call, not continuously —
+// Tier 1 is per-call (spawned and torn down with the call itself), unlike
+// macOS's Tier 2 virtual-mic driver which is a persistent system device.
+// Flipping this ON while no call is active has nothing to start yet; it
+// takes effect on the NEXT call. The settings card's copy must say this
+// plainly rather than implying an on/off switch with instant effect.
+export function getTier1Enabled(): boolean {
+  return read(KEY_TIER1_ENABLED) === 'true'
+}
+
+export function setTier1Enabled(value: boolean): void {
+  write(KEY_TIER1_ENABLED, String(value))
 }

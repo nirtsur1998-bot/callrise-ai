@@ -191,6 +191,7 @@ let fakeTier1Api: ReturnType<typeof makeFakeTier1Api>
 let fakeStream: ReturnType<typeof makeFakeStream>
 
 const { startRecorder, resolveTier1MicName } = await import('../recorder')
+const { setTier1Enabled } = await import('@renderer/features/settings/prefs')
 
 beforeEach(() => {
   createdWorkletNodes = []
@@ -199,6 +200,13 @@ beforeEach(() => {
   createdMergers = []
   addedModuleUrls = []
   destinationNode = new FakeAudioNode()
+
+  // Every test below is about Tier 1 BEHAVIOR once a user has opted in — the
+  // opt-in gate itself (default OFF) gets its own describe block further
+  // down, which explicitly clears this. Setting it here, once, keeps every
+  // other test from having to know this preference exists at all.
+  localStorage.clear()
+  setTier1Enabled(true)
 
   vi.stubGlobal('AudioContext', FakeAudioContext)
   vi.stubGlobal(
@@ -287,6 +295,43 @@ describe('resolveTier1MicName', () => {
     expect(resolveTier1MicName('VoiceMeeter Output (VB-Audio VoiceMeeter VAIO)')).toBeNull()
     expect(resolveTier1MicName('NVIDIA Broadcast')).toBeNull()
     expect(resolveTier1MicName('Discord Virtual Microphone')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// THE OPT-IN GATE. Off by default: a first run that silently reroutes
+// someone's microphone through a new engine is a support ticket, not a
+// nicety. Every other test in this file explicitly opts in via beforeEach —
+// this block is the only one that tests the gate itself, on a real engine,
+// real mic name, everything else present and correct.
+describe('tier1 preference — off by default, opt-in required', () => {
+  it('never starts Tier 1 when the preference has never been set', async () => {
+    setTier1Enabled(false) // explicit, though clearing localStorage already implies it
+    await startRecorder(vi.fn(), vi.fn())
+
+    expect(fakeTier1Api.start).not.toHaveBeenCalled()
+    expect(denoisedSourceNode()).toBeUndefined()
+  })
+
+  it('starts Tier 1 once the preference is explicitly turned on', async () => {
+    setTier1Enabled(true)
+    await startRecorder(vi.fn(), vi.fn())
+
+    expect(fakeTier1Api.start).toHaveBeenCalledWith('Microphone Array (Realtek(R) Audio)')
+  })
+
+  it('reads the preference once at call start, not live mid-call', async () => {
+    // Flipping the setting mid-call must not retroactively start or stop an
+    // already-running call's engine — that would be a live toggle, which
+    // this explicitly is not (see getTier1Enabled's own doc comment).
+    setTier1Enabled(true)
+    await startRecorder(vi.fn(), vi.fn())
+    expect(fakeTier1Api.start).toHaveBeenCalledTimes(1)
+
+    setTier1Enabled(false)
+    // No second call, no stop triggered by the preference change alone.
+    expect(fakeTier1Api.start).toHaveBeenCalledTimes(1)
+    expect(fakeTier1Api.stop).not.toHaveBeenCalled()
   })
 })
 

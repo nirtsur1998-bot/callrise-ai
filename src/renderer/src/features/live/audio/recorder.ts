@@ -11,6 +11,7 @@ import {
 import { startAudioPump, type AudioPump } from './pump'
 import { shouldUseDenoisedSource } from './tier1-source'
 import type { Tier1Status } from './tier1-types'
+import { getTier1Enabled } from '@renderer/features/settings/prefs'
 
 /**
  * The name Tier 1's engine must be told to capture. Returns the real device
@@ -204,6 +205,13 @@ export async function startRecorder(
 
   const tier1Api = typeof window !== 'undefined' ? window.api?.tier1 : undefined
   const tier1MicName = resolveTier1MicName(micTrack?.label ?? '')
+  // OFF BY DEFAULT. A first run that silently reroutes someone's microphone
+  // through a new engine is a support ticket, not a nicety — see
+  // getTier1Enabled's own doc comment. Read once, at call start: this is a
+  // per-call decision, not a live-toggle mid-call (the settings card that
+  // flips this takes effect on the NEXT call it starts, exactly like every
+  // other read-at-connect setting in this function).
+  const tier1Wanted = getTier1Enabled()
 
   const useTier1Source = (): void => {
     if (!tier1Node || tier1Active) return
@@ -232,7 +240,7 @@ export async function startRecorder(
     tier1Active = false
   }
 
-  if (tier1Api && tier1MicName) {
+  if (tier1Api && tier1MicName && tier1Wanted) {
     try {
       await context.audioWorklet.addModule(denoisedSourceUrl)
       tier1Node = new AudioWorkletNode(context, 'denoised-source', {
