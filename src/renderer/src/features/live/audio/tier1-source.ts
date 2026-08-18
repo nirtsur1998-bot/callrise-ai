@@ -83,6 +83,94 @@ export function tier1UiState(status: Tier1Status | null, wanted: boolean): Tier1
  * degrades permanently. Overflow is a real event, so it is COUNTED rather
  * than swallowed: a silent drop is indistinguishable from working.
  */
+/** The rate kern_bridge always delivers at — CANONICAL_RATE in
+ *  kern_bridge.cpp. Not negotiable and not reported per-stream, so it is a
+ *  constant on both sides. */
+export const TIER1_SOURCE_RATE = 48000
+
+/**
+ * Converts the engine's 48kHz stream to whatever rate the AudioContext is
+ * actually running at.
+ *
+ * THIS EXISTS BECAUSE ITS ABSENCE SHIPPED, TWICE. recorder.ts builds its
+ * AudioContext at TRANSCRIPTION_SAMPLE_RATE (16000) while kern_bridge sends
+ * 48000, and nothing converted between them. The ring then filled three times
+ * faster than it drained: two thirds of every second was discarded as
+ * overflow, and what survived was played back at a third of its true speed.
+ * The result is not "denoising that underperforms" — it is the microphone
+ * being replaced by unintelligible audio, so Deepgram returns nothing and the
+ * rep's own side of the call simply never transcribes.
+ *
+ * It slipped through because every ring test pushed and pulled through the
+ * SAME implied rate, so the mismatch was unobservable: the unit was correct
+ * and the contract between units was never asserted. The measurement that
+ * would have caught it was even taken — a live probe recorded 48,096
+ * samples/sec — and then compared against nothing.
+ *
+ * Linear interpolation, deliberately: it is cheap enough for the audio thread
+ * at any block size, introduces no latency (no filter delay), and the
+ * downstream consumer is a 16kHz speech recogniser, not a listener. A
+ * polyphase/windowed-sinc resampler would be measurably better for MUSIC and
+ * is not worth the complexity or the added delay here.
+ *
+ * Stateful across blocks on purpose. `phase` carries the fractional read
+ * position and `last` carries the final sample of the previous block, so
+ * interpolation spans block boundaries seamlessly. Dropping either would put
+ * a discontinuity at every 480-sample frame edge — 100 clicks a second, which
+ * is audibly worse than the problem being fixed.
+ */
+export class Tier1Resampler {
+  /**
+   * Starts at 1, not 0, and the tests are what forced this.
+   *
+   * The virtual buffer is [last, ...input], so input[j] lives at virtual
+   * index j+1. Starting at 0 makes the very first output sample an
+   * interpolation from `last`'s initial 0 — i.e. the stream opens on a value
+   * that was never in the signal, and every subsequent read is off by one
+   * input sample. On a constant 0.5 tone the first emitted sample came out 0;
+   * on a linear ramp the first step was 6 where every later step was 9.
+   * Starting at 1 reads input[0] directly and keeps the spacing honest.
+   */
+  private phase = 1
+  private last = 0
+
+  constructor(private readonly sourceRate: number = TIER1_SOURCE_RATE) {}
+
+  /** Returns `input` untouched when the rates already match — the common
+   *  case on a 48kHz context, and worth not allocating for. */
+  process(input: Float32Array, targetRate: number): Float32Array {
+    if (!targetRate || targetRate === this.sourceRate) return input
+    if (input.length === 0) return input
+
+    const step = this.sourceRate / targetRate
+    // Virtual buffer is [last, ...input]: index 0 is the carried sample, so
+    // index k >= 1 is input[k - 1]. This is what makes the seam between
+    // blocks interpolate correctly instead of restarting at zero.
+    const at = (i: number): number => (i <= 0 ? this.last : (input[i - 1] as number))
+
+    const out: number[] = []
+    let pos = this.phase
+    // Need both at(i) and at(i+1) to exist, i.e. i + 1 <= input.length.
+    while (pos + 1 <= input.length) {
+      const i = Math.floor(pos)
+      const frac = pos - i
+      out.push(at(i) * (1 - frac) + at(i + 1) * frac)
+      pos += step
+    }
+
+    // Re-base the position for the next block: old virtual index
+    // `input.length` becomes new virtual index 0.
+    this.phase = pos - input.length
+    this.last = input[input.length - 1] as number
+    return Float32Array.from(out)
+  }
+
+  reset(): void {
+    this.phase = 1
+    this.last = 0
+  }
+}
+
 export class Tier1Ring {
   private buf: Float32Array
   private readPos = 0

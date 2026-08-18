@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { shouldUseDenoisedSource, tier1UiState, Tier1Ring } from '../tier1-source'
+import {
+  shouldUseDenoisedSource,
+  tier1UiState,
+  Tier1Ring,
+  Tier1Resampler,
+  TIER1_SOURCE_RATE
+} from '../tier1-source'
 import type { Tier1Status } from '../tier1-types'
 
 function status(over: Partial<Tier1Status> = {}): Tier1Status {
@@ -141,5 +147,85 @@ describe('Tier1Ring — the pipe and the audio graph run on different clocks', (
     }
     expect(r.overflowSamples).toBe(0)
     expect(r.underrunSamples).toBe(0)
+  })
+})
+
+// THE BUG THIS FILE FAILED TO CATCH THE FIRST TIME.
+//
+// kern_bridge sends 48000Hz. recorder.ts builds its AudioContext at
+// TRANSCRIPTION_SAMPLE_RATE (16000). Nothing converted between them, so the
+// ring filled 3x faster than it drained — two thirds of every second thrown
+// away as overflow, the rest played at a third speed. Deepgram received
+// unintelligible audio and the rep's own side of the call never transcribed.
+//
+// Every ring test above pushes and pulls at the same implied rate, which is
+// exactly why none of them could see it: the unit was right, the CONTRACT
+// BETWEEN units was never asserted. These tests assert the contract.
+describe('Tier1Resampler — the 48kHz-into-16kHz contract that shipped broken', () => {
+  it('produces one third as many samples going 48kHz -> 16kHz', () => {
+    const r = new Tier1Resampler()
+    const out = r.process(Float32Array.from([1, 2, 3, 4, 5, 6]), 16000)
+    // RED without any resampling: 6 samples in would stay 6 samples out, and
+    // the graph would consume them 3x too slowly.
+    expect(out.length).toBe(2)
+  })
+
+  it('keeps a full second of audio a full second long across many blocks', () => {
+    // The property that actually matters: 48000 input samples must become
+    // exactly one second at the target rate, or audio drifts out of sync with
+    // reality for the whole call.
+    const r = new Tier1Resampler()
+    let total = 0
+    for (let i = 0; i < 100; i++) {
+      // 100 frames of 480 samples = 48000 = 1s at source rate
+      total += r.process(new Float32Array(480), 16000).length
+    }
+    expect(total).toBeGreaterThanOrEqual(15990)
+    expect(total).toBeLessThanOrEqual(16010)
+  })
+
+  it('interpolates ACROSS block boundaries, not restarting each frame', () => {
+    // A resampler that reset per block would emit a discontinuity at every
+    // 480-sample frame edge — 100 clicks a second, audibly worse than the
+    // problem being fixed.
+    const r = new Tier1Resampler()
+    const first = r.process(Float32Array.from([0, 3, 6, 9, 12, 15]), 16000)
+    const second = r.process(Float32Array.from([18, 21, 24, 27, 30, 33]), 16000)
+    // A perfectly linear ramp must stay linear across the seam.
+    const all = [...Array.from(first), ...Array.from(second)]
+    for (let i = 1; i < all.length; i++) {
+      expect(all[i]! - all[i - 1]!).toBeCloseTo(9, 5)
+    }
+  })
+
+  it('passes the buffer through untouched when rates already match (48kHz context)', () => {
+    const r = new Tier1Resampler()
+    const input = Float32Array.from([0.1, 0.2, 0.3])
+    // Identity, and the SAME object — no needless allocation on the audio path.
+    expect(r.process(input, TIER1_SOURCE_RATE)).toBe(input)
+  })
+
+  it('handles a non-integer ratio (44.1kHz context) without drifting', () => {
+    const r = new Tier1Resampler()
+    let total = 0
+    for (let i = 0; i < 100; i++) total += r.process(new Float32Array(480), 44100).length
+    // 48000 source samples -> ~44100 at 44.1kHz.
+    expect(total).toBeGreaterThanOrEqual(44080)
+    expect(total).toBeLessThanOrEqual(44120)
+  })
+
+  it('preserves a constant signal exactly, at any rate', () => {
+    // Interpolating between equal values must not introduce ripple.
+    const r = new Tier1Resampler()
+    const out = r.process(new Float32Array(48).fill(0.5), 16000)
+    for (const v of out) expect(v).toBeCloseTo(0.5, 6)
+  })
+
+  it('survives an empty block without corrupting its phase', () => {
+    const r = new Tier1Resampler()
+    r.process(Float32Array.from([1, 2, 3, 4, 5, 6]), 16000)
+    expect(r.process(new Float32Array(0), 16000).length).toBe(0)
+    const after = r.process(Float32Array.from([7, 8, 9, 10, 11, 12]), 16000)
+    expect(after.length).toBe(2)
   })
 })

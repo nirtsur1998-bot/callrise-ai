@@ -29,6 +29,19 @@
 
 const RING_CAPACITY = 48000 // 1s at 48kHz — bounds worst-case added latency
 
+// The rate kern_bridge ALWAYS sends at (CANONICAL_RATE in kern_bridge.cpp).
+// `sampleRate` is an AudioWorkletGlobalScope global holding the rate THIS
+// graph runs at — recorder.ts sets it to 16000 for transcription.
+//
+// THE MISMATCH BETWEEN THESE TWO SHIPPED BROKEN, TWICE. Without conversion
+// the ring filled 3x faster than it drained: two thirds of every second was
+// discarded as overflow and the remainder played at a third speed, so
+// Deepgram received unintelligible audio and the rep's own side of the call
+// never transcribed at all. Mirrors Tier1Resampler in tier1-source.ts, which
+// is the TESTED copy (a worklet cannot import from the app bundle) — change
+// the behaviour of one and you must change both.
+const SOURCE_RATE = 48000
+
 class DenoisedSourceProcessor extends AudioWorkletProcessor {
   constructor() {
     super()
@@ -36,6 +49,12 @@ class DenoisedSourceProcessor extends AudioWorkletProcessor {
     this.readPos = 0
     this.writePos = 0
     this.filled = 0
+    // Resampler state. phase starts at 1, not 0: the virtual buffer is
+    // [last, ...input], so input[j] sits at virtual index j+1 and starting
+    // at 0 would open the stream on a value never present in the signal and
+    // leave every later read off by one input sample.
+    this.phase = 1
+    this.last = 0
     // Counted, not swallowed: a silent drop is indistinguishable from working.
     this.overflowSamples = 0
     this.underrunSamples = 0
@@ -51,6 +70,10 @@ class DenoisedSourceProcessor extends AudioWorkletProcessor {
         this.readPos = 0
         this.writePos = 0
         this.filled = 0
+        // Resampler state too — a restarted stream inheriting a stale phase
+        // and last-sample would open on a discontinuity from the old call.
+        this.phase = 1
+        this.last = 0
         return
       }
       if (msg.type === 'stats') {
@@ -74,8 +97,34 @@ class DenoisedSourceProcessor extends AudioWorkletProcessor {
     }
   }
 
-  push(frame) {
+  /** 48kHz in, this graph's rate out. Identical algorithm to Tier1Resampler
+   *  in tier1-source.ts, which carries the tests. */
+  resample(input) {
+    if (!sampleRate || sampleRate === SOURCE_RATE) return input
+    if (input.length === 0) return input
+    const step = SOURCE_RATE / sampleRate
+    // Virtual buffer [last, ...input]: index 0 is the carried sample, so
+    // index k >= 1 is input[k - 1]. This is what makes the seam between
+    // frames interpolate instead of restarting — without it there would be a
+    // discontinuity every 480 samples, i.e. 100 clicks a second.
+    const at = (i) => (i <= 0 ? this.last : input[i - 1])
+    const out = []
+    let pos = this.phase
+    while (pos + 1 <= input.length) {
+      const i = Math.floor(pos)
+      const frac = pos - i
+      out.push(at(i) * (1 - frac) + at(i + 1) * frac)
+      pos += step
+    }
+    this.phase = pos - input.length
+    this.last = input[input.length - 1]
+    return Float32Array.from(out)
+  }
+
+  push(rawFrame) {
     if (!this.active) return
+    const frame = this.resample(rawFrame)
+    if (frame.length === 0) return
     const cap = this.buf.length
     // A frame bigger than the whole ring can only be satisfied by its TAIL —
     // keeping the head would play audio we are about to overwrite.
