@@ -159,6 +159,7 @@ import { registerGoogle } from './google'
 import { registerOutlook } from './outlook'
 import { registerBackup } from './backup'
 import { registerVirtualMic, disposeVirtualMic } from './virtualmic'
+import { registerTier1, disposeTier1 } from './tier1'
 import { registerKnowledge } from './knowledge'
 import { registerObjectionQueue } from './objection-queue'
 import {
@@ -547,6 +548,12 @@ app.whenReady().then(async () => {
   registerBackfill()
   registerMemoryCenter()
   registerVirtualMic()
+  // M27 — Tier 1: driver-free noise cancellation for CallRise's own call
+  // audio (Windows). Deliberately separate from registerVirtualMic() above,
+  // which is the macOS Core-Audio-driver design — different platform,
+  // different architecture (an out-of-band named pipe here, not a capture
+  // device), no shared state between them.
+  registerTier1()
   registerKnowledge()
   registerObjectionQueue()
   registerAppSettings()
@@ -589,6 +596,7 @@ app.on('before-quit', (event) => {
   if (quitConfirmed) {
     disposeTranscription()
     disposeVirtualMic()
+    disposeTier1()
     disposeDetectionService()
     disposeOverlay()
     disposeTray()
