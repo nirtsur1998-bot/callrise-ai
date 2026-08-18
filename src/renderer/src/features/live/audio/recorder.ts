@@ -2,7 +2,12 @@
 // which is required for audioWorklet.addModule().
 import pcmProcessorUrl from './pcm-processor.js?url'
 import denoisedSourceUrl from './denoised-source.js?url'
-import { getMicConstraints, TRANSCRIPTION_SAMPLE_RATE, isCallRiseMic } from '@renderer/features/audio/devices'
+import {
+  getMicConstraints,
+  TRANSCRIPTION_SAMPLE_RATE,
+  isCallRiseMic,
+  isThirdPartyVirtualMic
+} from '@renderer/features/audio/devices'
 import { startAudioPump, type AudioPump } from './pump'
 import { shouldUseDenoisedSource } from './tier1-source'
 import type { Tier1Status } from './tier1-types'
@@ -22,10 +27,24 @@ import type { Tier1Status } from './tier1-types'
  * devices available must get "Tier 1 skipped for this call", never "Tier 1
  * auto-picked something" — so the caller treats `null` as "do not start
  * Tier 1 at all," not as "start it with no argument."
+ *
+ * ALSO excludes THIRD-PARTY virtual/denoising mics (F-08 — see
+ * isThirdPartyVirtualMic's own doc). kern_bridge.cpp's own comment states,
+ * as fact, that "the renderer applies the same rule when it chooses a name
+ * to hand us" before this function's Krisp exclusion existed, that claim
+ * was false: only isCallRiseMic was checked, so a machine whose resolved
+ * input device is a competitor's virtual mic (e.g. Krisp, set as the
+ * Windows default by its own installer) would have Tier 1 tell kern_bridge
+ * to capture and denoise that mic's ALREADY-denoised output as real
+ * hardware — the exact double-processing bug F-08 exists to prevent,
+ * reachable through the one path kern_bridge's own auto-pick guard
+ * explicitly does not cover (an explicitly-passed name, which it treats as
+ * a legitimate deliberate choice and honours without question).
  */
 export function resolveTier1MicName(trackLabel: string): string | null {
   if (!trackLabel) return null
   if (isCallRiseMic(trackLabel)) return null
+  if (isThirdPartyVirtualMic(trackLabel)) return null
   return trackLabel
 }
 

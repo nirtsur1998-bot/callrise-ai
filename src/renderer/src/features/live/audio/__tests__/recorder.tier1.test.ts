@@ -270,6 +270,24 @@ describe('resolveTier1MicName', () => {
   it('returns null for an empty label rather than passing "" through', () => {
     expect(resolveTier1MicName('')).toBeNull()
   })
+
+  // F-08 (renderer half). kern_bridge.cpp's own comment asserts the renderer
+  // already does this exclusion before ever calling it — this is that half
+  // of the contract actually existing. Without it: a machine whose resolved
+  // input device is a competitor's virtual/denoising mic gets Tier 1 telling
+  // kern_bridge to capture and re-denoise ALREADY-denoised audio as if it
+  // were real hardware — the exact double-processing bug F-08 was named for,
+  // observed live with this exact device string.
+  it('returns null for a third-party virtual/denoising mic — the observed live case', () => {
+    expect(resolveTier1MicName('Krisp Microphone (Krisp Audio)')).toBeNull()
+  })
+
+  it('returns null for other known third-party virtual mics, mirroring kern_bridge.cpp\'s vendor list', () => {
+    expect(resolveTier1MicName('CABLE Output (VB-Audio Virtual Cable)')).toBeNull()
+    expect(resolveTier1MicName('VoiceMeeter Output (VB-Audio VoiceMeeter VAIO)')).toBeNull()
+    expect(resolveTier1MicName('NVIDIA Broadcast')).toBeNull()
+    expect(resolveTier1MicName('Discord Virtual Microphone')).toBeNull()
+  })
 })
 
 // ---------------------------------------------------------------------------

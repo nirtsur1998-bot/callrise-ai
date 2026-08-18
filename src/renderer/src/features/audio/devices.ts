@@ -34,6 +34,46 @@ export function isCallRiseMic(label: string): boolean {
 }
 
 /**
+ * F-08 (renderer half). Mirrors `IsThirdPartyVirtualMic` in kern_bridge.cpp —
+ * the SAME vendor list, kept in sync by hand across the two repos/languages.
+ * Do not add a name to one without adding it to the other.
+ *
+ * kern_bridge's own comment on that function states as fact that "the
+ * renderer applies the same rule when it chooses a name to hand us" — this
+ * is that half of the contract. Before this existed, `resolveTier1MicName`
+ * only excluded OUR OWN virtual mic (isCallRiseMic), so a machine whose
+ * resolved input device was a competitor's virtual/denoising mic (observed
+ * live: Krisp) would have Tier 1 tell kern_bridge to capture and denoise
+ * that mic's ALREADY-denoised output as if it were real hardware — the
+ * exact double-processing bug F-08 exists to prevent, reachable through the
+ * one path kern_bridge's own auto-pick guard explicitly does not cover
+ * (an explicitly-passed name, which it treats as "a legitimate deliberate
+ * choice" and honours).
+ */
+const THIRD_PARTY_VIRTUAL_MIC_PATTERNS: RegExp[] = [
+  /krisp/i,
+  /vb-audio/i,
+  /vb-cable/i,
+  /cable output/i,
+  /voicemeeter/i,
+  /nvidia broadcast/i,
+  /rtx voice/i,
+  /virtual audio/i,
+  /virtual cable/i,
+  /virtual microphone/i,
+  /obs virtual/i,
+  /elgato wave/i,
+  /steelseries sonar/i,
+  /discord/i,
+  /blackhole/i,
+  /soundflower/i
+]
+
+export function isThirdPartyVirtualMic(label: string): boolean {
+  return THIRD_PARTY_VIRTUAL_MIC_PATTERNS.some((re) => re.test(label))
+}
+
+/**
  * Target capture rate for transcription — NOT a quality knob, a bandwidth
  * one. `new AudioContext()` with no options runs at whatever the OS negotiates
  * for the default audio device, commonly 44.1/48kHz on Windows; nothing
