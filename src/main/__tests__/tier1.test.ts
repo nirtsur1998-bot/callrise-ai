@@ -31,10 +31,24 @@ let engineExists = true
 /** Every path resolveEnginePath() probed, in order — so a test can assert
  *  WHICH locations are searched, not merely that something was found. */
 const probedPaths: string[] = []
+/** Stands in for %LOCALAPPDATA%\CallRiseAI\kern_bridge_status.json. null =
+ *  the file does not exist (readFileSync throws, exactly as the real one
+ *  does); a string is its raw contents, valid JSON or otherwise. */
+let statusFileContents: string | null = null
+const statusReadPaths: string[] = []
 vi.mock('fs', () => ({
   existsSync: (p: string) => {
     probedPaths.push(p)
     return engineExists
+  },
+  readFileSync: (p: string) => {
+    statusReadPaths.push(String(p))
+    if (statusFileContents === null) {
+      const err = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException
+      err.code = 'ENOENT'
+      throw err
+    }
+    return statusFileContents
   }
 }))
 
@@ -56,6 +70,8 @@ vi.mock('net', () => ({
 
 class FakeChild extends EventEmitter {
   killed = false
+  // The status file is matched against this — see resolveDenoisingActive().
+  pid = 4242
   kill(): void {
     this.killed = true
     this.emit('exit')
@@ -71,7 +87,19 @@ vi.mock('child_process', () => ({
   }
 }))
 
-const { start, stop, getStatus, registerTier1, parsePcmChunk } = await import('../tier1')
+const { start, stop, getStatus, registerTier1, parsePcmChunk, readEngineStatus } =
+  await import('../tier1')
+
+/** A well-formed status file for the pid FakeChild reports. */
+function statusJson(over: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    pid: 4242,
+    modelLoaded: true,
+    mic: 'USB Microphone',
+    modelPath: 'C:\\ProgramData\\CallRiseAI\\Models\\DeepFilterNet3_onnx.tar.gz',
+    ...over
+  })
+}
 
 /** 16-bit signed PCM for a value in [-1, 1], little-endian — the exact byte
  *  shape kern_bridge writes and this module has to decode correctly. */
@@ -89,6 +117,8 @@ beforeEach(() => {
   lastChild = null
   sentToWindows.length = 0
   probedPaths.length = 0
+  statusFileContents = null
+  statusReadPaths.length = 0
   handlers.clear()
   vi.useFakeTimers()
 })
@@ -275,6 +305,131 @@ describe('data received while not the current socket is ignored', () => {
     // Nothing should have been forwarded to any window — the socket is no
     // longer the active one by the time this fires.
     expect(sentToWindows.filter((m) => m.channel === 'tier1:pcm')).toHaveLength(0)
+  })
+})
+
+// THE PASSTHROUGH HOLE. kern_bridge loads DeepFilterNet3 from a compiled-in
+// absolute path and, if that file is absent, logs a warning and runs anyway —
+// pushing captured audio through UNCHANGED. From the client's side that is
+// indistinguishable from success: the pipe connects, full-rate audio flows,
+// every other status field reads healthy. The user is told their microphone is
+// being cleaned while it is not, and is worse off than doing nothing, because
+// this path bypasses Chromium's echo cancellation to deliver raw audio.
+//
+// denoisingActive is the only field that closes it, and it must be pessimistic
+// in every uncertain case.
+describe('denoisingActive — passthrough must be visible, never assumed away', () => {
+  it('is true only when the engine reports its model loaded, for THIS pid', () => {
+    statusFileContents = statusJson({ modelLoaded: true })
+    start('USB Microphone')
+    expect(getStatus().denoisingActive).toBe(true)
+  })
+
+  it('is FALSE when the engine reports passthrough, while connected stays true', () => {
+    statusFileContents = statusJson({ modelLoaded: false })
+    start('USB Microphone')
+    lastSocket!.emit('connect')
+    // The whole point: a healthy-looking connection that is not denoising.
+    expect(getStatus().connected).toBe(true)
+    expect(getStatus().denoisingActive).toBe(false)
+  })
+
+  it('is null when the engine is not running at all', () => {
+    statusFileContents = statusJson({ modelLoaded: true })
+    // RED without the child check: a leftover status file would let a stopped
+    // engine report active denoising.
+    expect(getStatus().engineRunning).toBe(false)
+    expect(getStatus().denoisingActive).toBeNull()
+  })
+
+  // STALENESS IS THE SUBTLE ONE. The status file outlives the process that
+  // wrote it. A run that loaded its model leaves modelLoaded:true on disk; if
+  // the model is then deleted and the engine restarts into passthrough, a read
+  // without the pid check returns the OLD run's true — the exact hollow-green
+  // this field exists to close, merely relocated onto disk.
+  it('ignores a status file left behind by a DIFFERENT engine run', () => {
+    statusFileContents = statusJson({ pid: 999, modelLoaded: true })
+    start('USB Microphone')
+    expect(lastChild!.pid).toBe(4242)
+    expect(getStatus().denoisingActive).toBeNull()
+  })
+
+  it('is null when no status file exists — an older engine build', () => {
+    statusFileContents = null
+    start('USB Microphone')
+    expect(getStatus().denoisingActive).toBeNull()
+  })
+
+  it('is null on malformed JSON rather than throwing out of getStatus()', () => {
+    statusFileContents = '{"pid": 4242, "modelLoa'
+    start('USB Microphone')
+    expect(() => getStatus()).not.toThrow()
+    expect(getStatus().denoisingActive).toBeNull()
+  })
+
+  // A half-written file can parse yet be missing the one field that matters.
+  // Absence must read as unknown, never as false: false is a claim ABOUT the
+  // engine, null is the absence of one, and only one of those is honest here.
+  it('is null when modelLoaded is absent or not a boolean', () => {
+    start('USB Microphone')
+    statusFileContents = JSON.stringify({ pid: 4242, mic: 'x' })
+    expect(getStatus().denoisingActive).toBeNull()
+    statusFileContents = JSON.stringify({ pid: 4242, modelLoaded: 'true' })
+    expect(getStatus().denoisingActive).toBeNull()
+  })
+
+  it('reads from %LOCALAPPDATA%\\CallRiseAI, where the engine actually writes', () => {
+    process.env['LOCALAPPDATA'] = 'C:\\Users\\Someone\\AppData\\Local'
+    statusFileContents = statusJson()
+    start('USB Microphone')
+    getStatus()
+    const p = statusReadPaths[0]
+    expect(p).toContain('CallRiseAI')
+    expect(p).toContain('kern_bridge_status.json')
+  })
+
+  it('re-checks after connect, so a status file that lands late is still seen', () => {
+    statusFileContents = null // engine has not written it yet
+    start('USB Microphone')
+    lastSocket!.emit('connect')
+    expect(getStatus().denoisingActive).toBeNull()
+
+    // The engine finishes starting up and writes its file.
+    statusFileContents = statusJson({ modelLoaded: true })
+    vi.advanceTimersByTime(500)
+
+    // RED without the re-check: the renderer would hold that first null for
+    // the entire session and permanently refuse a perfectly healthy engine —
+    // a fallback so conservative it disables the feature it protects.
+    expect(getStatus().denoisingActive).toBe(true)
+    const broadcasts = sentToWindows.filter((m) => m.channel === 'tier1:status')
+    expect(broadcasts.some((m) => (m.payload as { denoisingActive: unknown }).denoisingActive === true)).toBe(true)
+  })
+
+  it('stops re-checking instead of polling forever when no file ever appears', () => {
+    statusFileContents = null
+    start('USB Microphone')
+    lastSocket!.emit('connect')
+    vi.advanceTimersByTime(60_000)
+    expect(vi.getTimerCount()).toBeLessThanOrEqual(1) // only the pipe retry, if any
+    expect(getStatus().denoisingActive).toBeNull()
+  })
+})
+
+describe('readEngineStatus parses the engine sidecar directly', () => {
+  it('returns every field for a well-formed file', () => {
+    statusFileContents = statusJson({ modelLoaded: false, mic: 'Realtek' })
+    expect(readEngineStatus()).toEqual({
+      pid: 4242,
+      modelLoaded: false,
+      mic: 'Realtek',
+      modelPath: 'C:\\ProgramData\\CallRiseAI\\Models\\DeepFilterNet3_onnx.tar.gz'
+    })
+  })
+
+  it('returns null when pid is missing — the file cannot be attributed', () => {
+    statusFileContents = JSON.stringify({ modelLoaded: true })
+    expect(readEngineStatus()).toBeNull()
   })
 })
 

@@ -23,7 +23,7 @@
 // silence forwarded as if it were real audio.
 import { ipcMain, BrowserWindow, app } from 'electron'
 import { spawn, type ChildProcess } from 'child_process'
-import { existsSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import * as net from 'net'
 
@@ -60,14 +60,82 @@ export interface Tier1Status {
    *  from working: the pipe connects, full-rate audio flows, every status
    *  field reads healthy, and the user's audio is simply not being cleaned.
    *
-   *  That is a genuine hollow-green shape and it is NOT closed by this
-   *  field — closing it needs a signal from the engine about whether the
-   *  model actually loaded (it already logs the distinction), which is a
-   *  protocol change, not something the client can infer. Recorded here so
-   *  nobody reads `connected: true` as proof of denoising. */
+   *  That is a genuine hollow-green shape, and it is closed by
+   *  `denoisingActive` below, NOT by this field. Never read
+   *  `connected: true` as proof of denoising. */
   connected: boolean
+  /**
+   * Whether the engine actually loaded its denoising model — the ONLY field
+   * that means "audio coming through the pipe is being cleaned".
+   *
+   *  true  — model loaded; the pipe carries genuinely denoised audio.
+   *  false — the engine is in PASSTHROUGH (model missing or df_create
+   *          failed). The pipe carries real, unprocessed audio, which makes
+   *          it strictly WORSE than the raw microphone: raw at least gets
+   *          Chromium's echo cancellation and gain control, and this path
+   *          bypasses both. A false here is a real error state, not a
+   *          degraded-but-fine one.
+   *  null  — unknown: the engine has not written its status yet, or it is an
+   *          older build with no status file. Treated identically to false
+   *          by every consumer. An unverifiable claim of denoising is
+   *          precisely what this field exists to stop the app from making.
+   */
+  denoisingActive: boolean | null
   /** Absolute path to the engine binary we resolved, or null (diagnostics). */
   enginePath: string | null
+}
+
+/**
+ * What kern_bridge.exe writes once at startup, before its audio loop begins.
+ *
+ * WHY A FILE AND NOT THE PIPE PROTOCOL. The pipe's own contract (documented
+ * in kern_bridge.cpp) is that the push path must never block, stall or fail;
+ * prefixing a header or interleaving control frames puts new parsing on the
+ * hot path for one boolean that never changes after startup. A second pipe
+ * would mean a second overlapped-IO server in the engine for that same
+ * boolean. A file written once, before any audio moves, touches the audio
+ * path zero times and keeps the PCM stream byte-for-byte backward compatible
+ * with engines that predate it.
+ */
+interface EngineStatusFile {
+  pid: number
+  modelLoaded: boolean
+  mic: string
+  modelPath: string
+}
+
+function statusFilePath(): string {
+  // The %LOCALAPPDATA%\CallRiseAI root the engine's own logs already use.
+  return join(process.env['LOCALAPPDATA'] ?? '', 'CallRiseAI', 'kern_bridge_status.json')
+}
+
+/**
+ * Reads the engine's self-reported denoise state, or null when it cannot be
+ * established: no file, unreadable file, malformed JSON, or a `modelLoaded`
+ * that is not actually a boolean.
+ *
+ * Every uncertain case returns null rather than guessing, and callers treat
+ * null as "do not prefer the pipe" — so the failure direction is toward the
+ * raw microphone, which is the safe one. In particular a partially-written
+ * file (engine killed mid-write) must read as unknown, never as false:
+ * `false` is a claim about the engine, `null` is the absence of one.
+ *
+ * Exported for direct testing against fixture files.
+ */
+export function readEngineStatus(): EngineStatusFile | null {
+  try {
+    const parsed = JSON.parse(readFileSync(statusFilePath(), 'utf8')) as Partial<EngineStatusFile>
+    if (typeof parsed?.modelLoaded !== 'boolean') return null
+    if (typeof parsed?.pid !== 'number') return null
+    return {
+      pid: parsed.pid,
+      modelLoaded: parsed.modelLoaded,
+      mic: typeof parsed.mic === 'string' ? parsed.mic : '',
+      modelPath: typeof parsed.modelPath === 'string' ? parsed.modelPath : ''
+    }
+  } catch {
+    return null
+  }
 }
 
 let child: ChildProcess | null = null
@@ -138,12 +206,33 @@ function resolveEnginePath(): string | null {
   return null
 }
 
+/**
+ * Resolves denoisingActive for the CURRENTLY running engine.
+ *
+ * The pid check is the whole point of this function and not a formality. The
+ * status file outlives the process that wrote it, so a run that loaded its
+ * model successfully leaves behind `modelLoaded: true` on disk; if the model
+ * is then deleted and the engine restarted into passthrough, a naive read
+ * returns the OLD run's `true` and the app confidently reports denoising that
+ * has stopped happening — the same hollow-green shape this field was added to
+ * close, merely relocated. Matching the file's pid against our own child's is
+ * what makes the answer about this engine rather than some engine.
+ */
+function resolveDenoisingActive(): boolean | null {
+  if (!child?.pid) return null // nothing running: nothing to claim
+  const status = readEngineStatus()
+  if (!status) return null // no file, or unreadable/malformed: unknown
+  if (status.pid !== child.pid) return null // some other run's file: unknown
+  return status.modelLoaded
+}
+
 export function getStatus(): Tier1Status {
   const enginePath = resolveEnginePath()
   return {
     engineAvailable: enginePath !== null,
     engineRunning: child !== null,
     connected,
+    denoisingActive: resolveDenoisingActive(),
     enginePath
   }
 }
@@ -159,6 +248,39 @@ function setConnected(value: boolean): void {
   if (connected === value) return
   connected = value
   broadcast()
+}
+
+// Bounded, and deliberately so. If the status file hasn't appeared within
+// this many polls the answer really is "this engine does not report" — an
+// older build, or a locked-down %LOCALAPPDATA% — and null is the correct,
+// permanent answer for it. An unbounded poll would instead keep a timer alive
+// for the life of the app to keep re-asking a question already answered.
+const STATUS_RECHECK_MS = 400
+const STATUS_RECHECK_MAX = 10
+let statusRecheckTimer: NodeJS.Timeout | null = null
+let statusRechecksLeft = 0
+
+function scheduleStatusRecheck(): void {
+  if (statusRecheckTimer) return
+  statusRechecksLeft = STATUS_RECHECK_MAX
+  const tick = (): void => {
+    statusRecheckTimer = null
+    if (!wanted || !child) return
+    if (resolveDenoisingActive() !== null) {
+      broadcast() // the answer arrived — publish it and stop asking
+      return
+    }
+    if (--statusRechecksLeft <= 0) return
+    statusRecheckTimer = setTimeout(tick, STATUS_RECHECK_MS)
+  }
+  statusRecheckTimer = setTimeout(tick, STATUS_RECHECK_MS)
+}
+
+function cancelStatusRecheck(): void {
+  if (statusRecheckTimer) {
+    clearTimeout(statusRecheckTimer)
+    statusRecheckTimer = null
+  }
 }
 
 function scheduleRetry(): void {
@@ -186,6 +308,13 @@ function connectPipe(): void {
       return
     }
     setConnected(true)
+    // The engine writes its status file during startup, which can land after
+    // this connect fires — so the broadcast above may carry
+    // denoisingActive: null purely because we asked too early. Without this
+    // re-check the renderer would sit on that null for the whole session and
+    // permanently refuse the pipe on a perfectly healthy engine: a fallback
+    // so conservative it disables the feature it was protecting.
+    scheduleStatusRecheck()
   })
 
   sock.on('data', (buf: Buffer) => {
@@ -212,6 +341,7 @@ function connectPipe(): void {
 }
 
 function disconnectPipe(): void {
+  cancelStatusRecheck()
   if (retryTimer) {
     clearTimeout(retryTimer)
     retryTimer = null
