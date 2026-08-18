@@ -94,6 +94,54 @@ extraFiles:
 
 win:
   executableName: CallRiseAI
+  # TIER 1 NOISE CANCELLATION — the engine and its model, shipped together.
+  #
+  # THIS BLOCK'S ABSENCE WAS A SHIPPED-TO-EVERYONE FAILURE. It lived only
+  # under `mac:` (below), so no Windows build ever produced
+  # resources/virtualmic-win/ — verified by listing the directory inside a
+  # real artifact, not by reading a log. resolveEnginePath() in
+  # src/main/tier1.ts therefore found nothing, engineAvailable was false, and
+  # Tier 1 was silently absent for every Windows user. It worked on exactly
+  # one machine on earth: the dev box, because _bundle_kern_bridge.ps1
+  # hardcodes that machine's install path and patches the INSTALLED app in
+  # place. A machine patched in place proves nothing about the build.
+  #
+  # THE MODEL SHIPS HERE, BESIDE THE BINARY, AND THAT IS THE WHOLE POINT.
+  # kern_bridge resolves its model beside its own .exe first (ResolveModelPath,
+  # kern_bridge.cpp), falling back to C:\ProgramData\CallRiseAI\Models only
+  # for continuity with machines that ran the driver installer. Before that
+  # change the ProgramData path was the ONLY one, and the only thing that ever
+  # wrote there was install-denoiser.ps1 — the elevated DRIVER installer. So a
+  # feature whose premise is "no driver required" had its model delivered by
+  # the driver installer, and every user who took that premise at face value
+  # got df_create failure and silent PASSTHROUGH: engine up, pipe connected,
+  # audio flowing, UI reporting clean, nothing denoised.
+  #
+  # Shipping both files here is what makes "works with no driver" true. Do not
+  # drop the model to save the ~8MB: without it this block delivers an engine
+  # that runs and cleans nothing, which is worse than shipping neither.
+  #
+  # If the staging directory is missing at build time this FAILS the build
+  # rather than quietly producing an installer without a denoiser — same
+  # posture as the mac block, and for the same reason.
+  # SOURCED FROM INSIDE THE REPO, ON PURPOSE. The obvious spelling of this is
+  # a sibling-checkout path (`../CALLRISE AI/_virtualmic_win_stage/...`), the
+  # way the mac block below reads. That spelling resolves on exactly one
+  # machine: the dev box. release.yml builds on a `windows-latest` runner with
+  # a plain actions/checkout, where no sibling tree exists — so the published
+  # installer would ship with no denoiser while every local build looked
+  # perfect. That is the same "works on my machine" failure this whole block
+  # exists to fix, just relocated from the deploy script into CI.
+  #
+  # Committing ~24MB of binaries is a real cost and it is the deliberate
+  # trade: the build becomes hermetic and produces byte-identical resources
+  # locally and in CI. If this is ever swapped for a fetch step, the fetch
+  # must FAIL the build when it cannot get the files — never skip them.
+  extraResources:
+    - from: build/virtualmic-win/kern_bridge.exe
+      to: virtualmic-win/kern_bridge.exe
+    - from: build/virtualmic-win/DeepFilterNet3_onnx.tar.gz
+      to: virtualmic-win/DeepFilterNet3_onnx.tar.gz
   # The "portable" target was added as a debugging alternative to the NSIS
   # installer, then reportedly confirmed on real hardware to never launch, and
   # was dropped for a time. RESTORED (M21+M20 merge, 2026-08-04): launch-tested
