@@ -1563,6 +1563,35 @@ export interface PurposeHealthApi {
   getAll: () => Promise<Record<AiPurpose, PurposeHealthView>>
 }
 
+/** M27 Tier 1 — driver-free noise cancellation for CallRise's OWN audio.
+ *  Separate from VirtualMicApi: that one publishes a system-wide capture
+ *  DEVICE for Zoom/Teams and needs a signed driver; this one delivers
+ *  denoised PCM to this app over a named pipe and needs nothing installed.
+ *  Shape must match Tier1Status in src/main/tier1.ts and
+ *  src/renderer/src/features/live/audio/tier1-types.ts. */
+export interface Tier1Api {
+  start: (micName: string) => Promise<{ ok: boolean; error?: string }>
+  stop: () => Promise<{ ok: boolean }>
+  getStatus: () => Promise<{
+    engineAvailable: boolean
+    engineRunning: boolean
+    connected: boolean
+    denoisingActive: boolean | null
+    enginePath: string | null
+  }>
+  onStatus: (
+    cb: (status: {
+      engineAvailable: boolean
+      engineRunning: boolean
+      connected: boolean
+      denoisingActive: boolean | null
+      enginePath: string | null
+    }) => void
+  ) => () => void
+  /** Denoised PCM frames, ~100/s, as transferred ArrayBuffers of Float32 samples. */
+  onPcm: (cb: (frame: ArrayBuffer) => void) => () => void
+}
+
 export interface VirtualMicApi {
   /** Current driver/helper/denoise status. */
   getStatus: () => Promise<VirtualMicStatus>
@@ -2467,6 +2496,7 @@ declare global {
       outlook: OutlookApi
       backup: BackupApi
       virtualmic: VirtualMicApi
+      tier1: Tier1Api
       knowledge: KnowledgeApi
       objectionQueue: ObjectionQueueApi
       settings: AppSettingsApi

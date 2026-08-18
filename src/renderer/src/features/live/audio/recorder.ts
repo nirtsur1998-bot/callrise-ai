@@ -1,8 +1,33 @@
 // `?url` makes Vite emit the worklet as a standalone asset (not bundled),
 // which is required for audioWorklet.addModule().
 import pcmProcessorUrl from './pcm-processor.js?url'
-import { getMicConstraints, TRANSCRIPTION_SAMPLE_RATE } from '@renderer/features/audio/devices'
+import denoisedSourceUrl from './denoised-source.js?url'
+import { getMicConstraints, TRANSCRIPTION_SAMPLE_RATE, isCallRiseMic } from '@renderer/features/audio/devices'
 import { startAudioPump, type AudioPump } from './pump'
+import { shouldUseDenoisedSource } from './tier1-source'
+import type { Tier1Status } from './tier1-types'
+
+/**
+ * The name Tier 1's engine must be told to capture. Returns the real device
+ * label unchanged, or `null` — never `''` — when it isn't safe to use.
+ *
+ * WHY NULL AND NOT EMPTY STRING. An empty argument does not mean "no
+ * preference" to kern_bridge; it falls through to the engine's OWN
+ * auto-pick. `isCallRiseMic` is this app's self-capture guard, which already
+ * keeps our own virtual device out of `getUserMedia` in the ordinary case —
+ * but this is checked again here, on the label getUserMedia actually
+ * granted, because trusting that upstream guard and passing '' on the rare
+ * path where it doesn't apply would hand kern_bridge's auto-pick the exact
+ * job this function exists to keep away from it. A user with only virtual
+ * devices available must get "Tier 1 skipped for this call", never "Tier 1
+ * auto-picked something" — so the caller treats `null` as "do not start
+ * Tier 1 at all," not as "start it with no argument."
+ */
+export function resolveTier1MicName(trackLabel: string): string | null {
+  if (!trackLabel) return null
+  if (isCallRiseMic(trackLabel)) return null
+  return trackLabel
+}
 
 export interface Recorder {
   /** Analyser node for drawing the live waveform (mic only). */
@@ -37,6 +62,16 @@ export interface Recorder {
    * is actually on rather than which one it was supposed to be on.
    */
   usingDirectPath: () => boolean
+  /**
+   * True only while Tier 1's denoised audio is genuinely feeding this call —
+   * never true merely because the engine is running or the pipe is
+   * connected (see shouldUseDenoisedSource). False covers unavailable, off,
+   * starting, AND passthrough alike, on purpose: from the caller's side
+   * those are all "raw audio is what's actually being sent" and deserve the
+   * same answer. Surfaced for the same `--diagnose` reason as
+   * usingDirectPath.
+   */
+  isTier1Active: () => boolean
 }
 
 /**
@@ -133,6 +168,100 @@ export async function startRecorder(
   const handleEnded = (): void => onDeviceLost()
   micTrack?.addEventListener('ended', handleEnded)
 
+  // --- Tier 1 (M27): driver-free noise cancellation for THIS call's audio ---
+  //
+  // Substitutes only the SOURCE feeding merger channel 0. `micSource` itself
+  // is never disconnected here, never mind `micTrack`/`stream` — the targeted
+  // 3-argument `disconnect(merger, 0, 0)` below removes exactly one edge and
+  // leaves `micSource → analyser` (the waveform) intact the whole time, so the
+  // real microphone capture never goes dark regardless of which source is
+  // feeding transcription. See docs/M27-tier1-recorder-handoff.md for why this
+  // shape — switching edges, not tracks — is what makes "raw mic never
+  // disconnected" achievable at all, rather than an assertion of hope.
+  let tier1Node: AudioWorkletNode | null = null
+  let tier1Active = false // true iff tier1Node currently feeds merger ch0
+  let unsubTier1Status: (() => void) | null = null
+  let unsubTier1Pcm: (() => void) | null = null
+
+  const tier1Api = typeof window !== 'undefined' ? window.api?.tier1 : undefined
+  const tier1MicName = resolveTier1MicName(micTrack?.label ?? '')
+
+  const useTier1Source = (): void => {
+    if (!tier1Node || tier1Active) return
+    try {
+      micSource.disconnect(merger, 0, 0)
+    } catch {
+      /* already not connected — nothing to undo */
+    }
+    tier1Node.connect(merger, 0, 0)
+    tier1Active = true
+  }
+
+  const useRawSource = (): void => {
+    if (tier1Active && tier1Node) {
+      try {
+        tier1Node.disconnect(merger, 0, 0)
+      } catch {
+        /* already not connected — nothing to undo */
+      }
+    }
+    // connect() to an already-connected (destination, output, input) is a
+    // spec-defined no-op, so this is safe to call unconditionally — it makes
+    // this function idempotent from any starting state, including the very
+    // first call before Tier 1 has ever become eligible.
+    micSource.connect(merger, 0, 0)
+    tier1Active = false
+  }
+
+  if (tier1Api && tier1MicName) {
+    try {
+      await context.audioWorklet.addModule(denoisedSourceUrl)
+      tier1Node = new AudioWorkletNode(context, 'denoised-source', {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [1]
+      })
+      // Keeps tier1Node processing continuously — draining its ring on
+      // schedule, so it is never stale the moment it's switched in — WITHOUT
+      // ever being audible on its own. A direct connection to `destination`
+      // would let the user hear their own denoised voice back as an echo; a
+      // zero-gain node is the standard Web Audio keep-alive, the same
+      // mechanism the existing `worklet.connect(context.destination)` below
+      // uses for the chunker (which stays silent by construction instead).
+      const tier1Silencer = context.createGain()
+      tier1Silencer.gain.value = 0
+      tier1Node.connect(tier1Silencer)
+      tier1Silencer.connect(context.destination)
+
+      const node = tier1Node
+      unsubTier1Pcm = tier1Api.onPcm((frame) => {
+        node.port.postMessage({ type: 'pcm', buffer: frame }, [frame])
+      })
+      unsubTier1Status = tier1Api.onStatus((status: Tier1Status) => {
+        if (shouldUseDenoisedSource(status)) useTier1Source()
+        else useRawSource()
+      })
+      // Covers the gap between "engine started" and the first broadcast: if
+      // it's already denoising by the time we ask, don't wait for the next
+      // status push to catch up.
+      tier1Api
+        .getStatus()
+        .then((status: Tier1Status) => {
+          if (shouldUseDenoisedSource(status)) useTier1Source()
+        })
+        .catch(() => {
+          /* stays on raw — the safe direction */
+        })
+
+      void tier1Api.start(tier1MicName)
+    } catch {
+      // The worklet module failed to load or the node failed to construct.
+      // FAIL OPEN: nothing above this point has touched micSource/merger, so
+      // raw audio keeps working exactly as it always has.
+      tier1Node = null
+    }
+  }
+
   // --- Loopback (the other party), attached only after consent ---------------
   let loopStream: MediaStream | null = null
   let loopSource: MediaStreamAudioSourceNode | null = null
@@ -189,6 +318,7 @@ export async function startRecorder(
     setStereo,
     isLoopbackAttached: (): boolean => loopSource !== null,
     usingDirectPath: (): boolean => pump !== null,
+    isTier1Active: (): boolean => tier1Active,
     stop: (): void => {
       if (stopped) return
       stopped = true
@@ -208,6 +338,16 @@ export async function startRecorder(
         pump.stop()
         pump = null
       }
+      // Same reasoning as the pump above, and same ordering concern as the
+      // comment at the top of stop(): unsubscribe before anything that can
+      // throw, so a live IPC callback can never outlive this call and keep
+      // an AudioContext (and a spawned kern_bridge.exe) alive with nothing
+      // left holding a reference to stop either one.
+      unsubTier1Pcm?.()
+      unsubTier1Pcm = null
+      unsubTier1Status?.()
+      unsubTier1Status = null
+      if (tier1Api) void tier1Api.stop()
       detachLoopback()
       micTrack?.removeEventListener('ended', handleEnded)
       try {
@@ -215,6 +355,7 @@ export async function startRecorder(
         merger.disconnect()
         worklet.disconnect()
         analyser.disconnect()
+        tier1Node?.disconnect()
       } catch {
         /* ignore */
       }
