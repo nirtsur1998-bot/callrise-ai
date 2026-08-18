@@ -5,6 +5,13 @@ Paste-and-go. Written 2026-08-18 so nothing has to be reconstructed.
 Read [`M27-tier1-recorder-handoff.md`](M27-tier1-recorder-handoff.md) first for
 *why*; this file is only *what to run*.
 
+**Every command below runs in a normal, non-elevated shell.** The clean-slate
+verification (removing the old install/model/driver, installing fresh, a real
+call on nothing pre-staged) needs elevation and lives in a separate file —
+[`M27-ELEVATED-STEPS.md`](M27-ELEVATED-STEPS.md) — with ready-to-paste blocks,
+per project rule: elevated operations run in your own elevated terminal, never
+from the assistant's shell.
+
 **A rule that applies to every command below:** never append anything after the
 command whose exit code you care about. No `| tail`, no `; echo "EXIT: $?"`, no
 `> log 2>&1; echo`. Species 14 has recurred three times on this project, twice

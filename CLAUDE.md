@@ -9,7 +9,10 @@
 >   — settled interfaces, the four properties with what "not vacuous" means for
 >   each, and the ship sequence.
 > - **Commands to paste:** [`docs/M27-RUNBOOK.md`](docs/M27-RUNBOOK.md) — checkpoint,
->   merge, verify, publish. Nothing needs reconstructing.
+>   merge, verify, publish. **Elevated steps** (clean-slate install/driver
+>   verification) are separate, ready-to-paste blocks in
+>   [`docs/M27-ELEVATED-STEPS.md`](docs/M27-ELEVATED-STEPS.md) — run those in
+>   your own Administrator shell, never asked of the assistant.
 > - **Branch:** `claude/m27-field-hardening` (pushed). Working tree clean.
 > - **Edit exactly one file's wiring:**
 >   `src/renderer/src/features/live/audio/recorder.ts`. Everything it needs
