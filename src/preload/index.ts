@@ -471,6 +471,29 @@ const api = {
     // Fires when the helper's running/denoise state changes (started, stopped, crashed).
     onChanged: (cb: (status: unknown) => void) => subscribe('virtualmic:changed', cb)
   },
+  tier1: {
+    // M27 Tier 1 — driver-free noise cancellation for CallRise's OWN audio.
+    // Separate from `virtualmic` above on purpose: that one publishes a
+    // system-wide capture DEVICE for Zoom/Teams and needs a signed driver;
+    // this one delivers denoised PCM to this app over a named pipe and needs
+    // nothing installed.
+    start: (micName: string) => ipcRenderer.invoke('tier1:start', micName),
+    stop: () => ipcRenderer.invoke('tier1:stop'),
+    getStatus: () => ipcRenderer.invoke('tier1:getStatus'),
+    onStatus: (cb: (status: unknown) => void) => subscribe('tier1:status', cb),
+    // Audio frames. Deliberately NOT routed through `subscribe`'s generic
+    // path: this fires ~100x/second and the payload is a transferred
+    // ArrayBuffer, so it gets its own minimal listener with no wrapping,
+    // logging or JSON work in between. Returns an unsubscribe, same contract
+    // as every other listener here, because a live audio callback outliving
+    // the call that created it is a leak that keeps a whole AudioContext
+    // alive.
+    onPcm: (cb: (frame: ArrayBuffer) => void) => {
+      const handler = (_e: unknown, frame: ArrayBuffer): void => cb(frame)
+      ipcRenderer.on('tier1:pcm', handler)
+      return () => ipcRenderer.removeListener('tier1:pcm', handler)
+    }
+  },
   knowledge: {
     list: () => ipcRenderer.invoke('knowledge:list'),
     create: (input: unknown) => ipcRenderer.invoke('knowledge:create', input),
