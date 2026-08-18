@@ -32,7 +32,9 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { DEFAULT_CONFIG } from './default-config'
 import { clearActiveConsent } from './consent-gate'
 import { registerCrashLogging, registerLog } from './log'
-import { JobManager } from './jobs/JobManager'
+import { JobManager, reportPersistFailure } from './jobs/JobManager'
+import { hasUsableAiCapacity, hasUsableCapacityForPurpose } from './ai/capacity'
+import type { AIPurpose } from './ai/types'
 import { registerJobsIpc } from './jobs/ipc'
 import { registerFakeJobTypes } from './jobs/fakeJobs'
 import { wireJobActivity } from './jobs/activity'
@@ -157,6 +159,7 @@ import { registerGoogle } from './google'
 import { registerOutlook } from './outlook'
 import { registerBackup } from './backup'
 import { registerVirtualMic, disposeVirtualMic } from './virtualmic'
+import { registerTier1, disposeTier1 } from './tier1'
 import { registerKnowledge } from './knowledge'
 import { registerObjectionQueue } from './objection-queue'
 import {
@@ -181,6 +184,7 @@ import { registerFallbackLog } from './ai/fallback-log'
 import { registerPurposeHealthStore } from './ai/purpose-health-store'
 import { registerModelCatalog } from './ai/catalog-ipc'
 import { initSalesBrain, maybeRunNightlyConsolidation } from './memory/memory-runtime'
+import { scheduleSalesBrainStartup } from './memory/sales-brain-startup'
 import { registerOnboarding } from './memory/onboarding-ipc'
 import { registerBackfill } from './memory/backfill-ipc'
 import { registerMemoryCenter } from './memory/memory-center-ipc'
@@ -204,6 +208,12 @@ let jobManager: JobManager | undefined
 // before the renderer has loaded and registered its listener is simply lost,
 // so this can't just fire immediately regardless of mainWindow's state.
 let pendingDeepLinkEventId: string | null = null
+
+// M27 — set during the registration sequence, fired from 'ready-to-show'
+// below so Sales Brain init begins only once the window is actually painted.
+// Nullable because createWindow() is also reachable from the 'activate'
+// handler on a later relaunch, when startup has long since finished.
+let onWindowShown: (() => void) | null = null
 
 function deliverDeepLink(eventId: string): void {
   if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
@@ -251,6 +261,13 @@ function createWindow(): void {
       mainWindow?.webContents.send('prepBrief:openRequested', pendingDeepLinkEventId)
       pendingDeepLinkEventId = null
     }
+    // M27 — AFTER show(), deliberately. This is the trigger for Sales Brain
+    // init, whose first act (openMemoryDb) blocks the main process
+    // synchronously. Starting it any earlier than the paint it is waiting
+    // for would reintroduce exactly the stall this ordering exists to avoid.
+    const notify = onWindowShown
+    onWindowShown = null
+    notify?.()
   })
 
   // Open external links in the real browser — but only safe web schemes.
@@ -322,6 +339,24 @@ app.whenReady().then(async () => {
   // the manager has to exist and be set first, not merely before
   // createWindow() (Phase 1/2's original, now too-late, placement).
   jobManager = new JobManager()
+  // M27 — quota-pressure deferral. Wired HERE rather than imported inside
+  // JobManager, so the job system keeps zero dependency on the AI layer (see
+  // setCapacityGate's own doc comment). Holds BATCH/MAINTENANCE work while
+  // nothing usable is left to serve it: starting it then would only walk a
+  // doomed fallback chain and add retry pressure to a key that live coaching
+  // is competing for.
+  //
+  // The purpose branch is the whole point. A job that declared one is asking
+  // about the chain it will really walk; without it, an exhausted
+  // memory-extract chain looked like capacity because some unrelated keyed
+  // model was fine, and Sales Brain's import ran straight into the scan
+  // breaker. Undeclared purposes keep the whole-catalog question.
+  jobManager.setCapacityGate((purpose) => {
+    // NO_AI_PURPOSE never reaches here — JobManager honours it itself, so
+    // the guarantee doesn't depend on this wiring remembering to.
+    if (purpose) return hasUsableCapacityForPurpose(purpose as AIPurpose, Date.now())
+    return hasUsableAiCapacity(Date.now())
+  })
   setJobManager(jobManager)
   registerJobsIpc(jobManager)
   if (is.dev) registerFakeJobTypes(jobManager)
@@ -431,11 +466,15 @@ app.whenReady().then(async () => {
   registerUpdater()
 
   registerTranscription()
-  // Registers a job type only — no memory access of its own, so unlike
-  // registerOnboarding/registerBackfill/registerMemoryCenter it is NOT
-  // subject to the initSalesBrain() race below, and must NOT sit behind
-  // that await: registerCalls() below can enqueue against this the moment
-  // a call is saved, and enqueue() throws on an unregistered type.
+  // Registers a job type only — no memory access of its own. It must run
+  // before registerCalls() below, which can enqueue against it the moment a
+  // call is saved, and enqueue() throws on an unregistered type.
+  //
+  // M27 — this used to also warn that it must not sit behind the
+  // initSalesBrain() await further down. There is no longer an await there
+  // to sit behind: nothing in the startup sequence waits on Sales Brain at
+  // all. Kept here anyway for the enqueue-ordering reason, which stands on
+  // its own.
   registerMemoryExtractionJob()
   registerCalls()
   // M26 Phase 4.2 — journaled-call recovery. Registered right after
@@ -468,36 +507,53 @@ app.whenReady().then(async () => {
   registerOutlook()
   registerBackup()
 
-  // M25 — moved here (after auth/calls/everything else, not before ANY of
-  // it) following a real production incident: initSalesBrain() used to run
-  // right at the top of this function, awaited, before registerAuth() ever
-  // ran. On at least one real machine it stalled for tens of seconds
-  // (~48s observed) - most likely downloading the local embeddings model on
-  // first real use - which meant registerAuth() hadn't registered its IPC
-  // handler yet by the time the already-loaded renderer asked for auth
-  // status. The renderer's fallback for "no handler yet" reads identically
-  // to "Supabase isn't configured," so users saw a false "Accounts aren't
-  // set up yet" screen that had nothing to do with their actual account.
-  // Only registerOnboarding/registerBackfill/registerMemoryCenter below
-  // actually touch memory data - see their own race-prevention need in the
-  // Phase 0 notes - so this only needs to block THOSE three, never the rest
-  // of the app. Also wrapped defensively: the "never throws" promise in
-  // initSalesBrain()'s own doc comment wasn't actually enforced in code
-  // (better-sqlite3's Database constructor can throw synchronously on a
-  // native-module load failure) - belt-and-suspenders here so a Sales Brain
-  // failure genuinely can never take the rest of startup down with it,
-  // matching what was already documented as the intent.
-  try {
-    await Promise.race([initSalesBrain(), new Promise((resolve) => setTimeout(resolve, 15_000))])
-  } catch (err) {
-    console.error('[sales-brain] init failed at startup, disabled for this session:', err)
-  }
-  maybeRunNightlyConsolidation()
+  // M25 — Sales Brain init used to run right at the top of this function,
+  // awaited, before registerAuth() ever ran. On at least one real machine it
+  // stalled for tens of seconds (~48s observed) - most likely downloading the
+  // local embeddings model on first real use - which meant registerAuth()
+  // hadn't registered its IPC handler yet by the time the already-loaded
+  // renderer asked for auth status. The renderer's fallback for "no handler
+  // yet" reads identically to "Supabase isn't configured," so users saw a
+  // false "Accounts aren't set up yet" screen that had nothing to do with
+  // their actual account. It then moved here, behind everything else, capped
+  // by a 15s Promise.race.
+  //
+  // M27 — that cap could not fire (taxonomy species 15). Promise.race
+  // evaluates left to right, so initSalesBrain() ran to its first real await
+  // BEFORE the 15s timer was armed, and openMemoryDb() is fully synchronous:
+  // two native-module require()s, the DB open, a WAL pragma, an extension
+  // load. Since createWindow() sat below this await, the stall the cap
+  // existed to survive produced NO WINDOW AT ALL. Proven, not inferred: a
+  // 500ms cap around a 3000ms synchronous block takes the full 3000ms.
+  //
+  // Init is now scheduled to begin only once the window is actually on
+  // screen, and nightly consolidation chains behind it (it early-returns on a
+  // null db, so calling it any sooner would silently skip consolidation for
+  // the whole session). See sales-brain-startup.ts, which exists to make this
+  // ordering testable at all — nothing in the suite can import this file.
+  //
+  // The three registrations below no longer wait on it. They never actually
+  // needed to: `db` is assigned only AFTER migrate() succeeds, so a handler
+  // firing mid-migration reads null - never a half-upgraded database - and
+  // all three already handle a null db (onboarding and backfill via
+  // ensureMemoryDb(), which retries a failed/slow init at exactly these
+  // user-facing entry points). The old ordering was belt-and-braces; the
+  // late assignment of `db` is the real guarantee.
+  onWindowShown = scheduleSalesBrainStartup({
+    init: initSalesBrain,
+    afterInit: maybeRunNightlyConsolidation
+  }).windowReady
 
   registerOnboarding()
   registerBackfill()
   registerMemoryCenter()
   registerVirtualMic()
+  // M27 — Tier 1: driver-free noise cancellation for CallRise's own call
+  // audio (Windows). Deliberately separate from registerVirtualMic() above,
+  // which is the macOS Core-Audio-driver design — different platform,
+  // different architecture (an out-of-band named pipe here, not a capture
+  // device), no shared state between them.
+  registerTier1()
   registerKnowledge()
   registerObjectionQueue()
   registerAppSettings()
@@ -540,11 +596,16 @@ app.on('before-quit', (event) => {
   if (quitConfirmed) {
     disposeTranscription()
     disposeVirtualMic()
+    disposeTier1()
     disposeDetectionService()
     disposeOverlay()
     disposeTray()
     jobManager?.dispose()
-    void jobManager?.flush()
+    // Same reason as the throttled auto-save inside JobManager: nobody awaits
+    // this, so an unhandled rejection here is the only thing a failed
+    // final write would produce. Quit proceeds either way — a job queue we
+    // couldn't persist must never block the app from closing (BUG-070).
+    void jobManager?.flush().catch(reportPersistFailure)
     return
   }
 

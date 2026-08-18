@@ -8,9 +8,17 @@
 // and per the founder's own ordering requirement, it had to land in the SAME
 // commit as the hoist — not a follow-up.
 //
-// These drive the real analyzeDealTier1/analyzeDealTier2/liveCue functions,
-// with only the network-bound AI call itself mocked, so the assertion is
-// about the actual gate wired into each function, not a description of it.
+// M27 E1 — re-keyed from sessionId to callId throughout. A mono<->
+// multichannel restart mid-call (turning buyer-capture on) mints a brand-new
+// session id in main, but it is still the same call — sessionId-keying meant
+// every consent check after that exact restart silently failed for the rest
+// of the call. callId is stable across it. See main/consent-gate.ts's own
+// doc comment for the full reasoning.
+//
+// These drive the real analyzeDealTier1/analyzeDealTier2/liveCue/askCoach
+// functions, with only the network-bound AI call itself mocked, so the
+// assertion is about the actual gate wired into each function, not a
+// description of it.
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -54,6 +62,12 @@ const CONSENTED = {
 const LONG_TEXT =
   'Rep: thanks for taking the time today, I wanted to walk through pricing. Buyer: sure, go ahead, I have some questions about the contract terms too.'
 
+// A single call's stable id — the identifier that survives a mono<->
+// multichannel restart mid-call. CALL_OTHER stands in for "some other,
+// unrelated call" (the case consent must never carry across).
+const CALL_ID = 'call-a'
+const CALL_OTHER = 'call-b'
+
 let dir: string
 
 beforeEach(() => {
@@ -73,7 +87,7 @@ describe('Tier 1 refuses buyer content without a current consent grant', () => {
     const result = await analyzeDealTier1({
       transcriptDelta: LONG_TEXT,
       compactState: 'stage=discovery',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(result).toEqual({ ok: false, blockedReason: 'consent' })
@@ -81,24 +95,24 @@ describe('Tier 1 refuses buyer content without a current consent grant', () => {
     expect(completeWithFallback).not.toHaveBeenCalled()
   })
 
-  it('proceeds when consent is currently active for that session', async () => {
-    persistActiveConsent(1, CONSENTED)
+  it('proceeds when consent is currently active for that call', async () => {
+    persistActiveConsent(CALL_ID, CONSENTED)
     const result = await analyzeDealTier1({
       transcriptDelta: LONG_TEXT,
       compactState: 'stage=discovery',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(result.ok).toBe(true)
     expect(completeWithFallback).toHaveBeenCalledTimes(1)
   })
 
-  it('a grant for a DIFFERENT session does not authorise this one', async () => {
-    persistActiveConsent(2, CONSENTED) // some other, unrelated call
+  it('a grant for a DIFFERENT call does not authorise this one', async () => {
+    persistActiveConsent(CALL_OTHER, CONSENTED) // some other, unrelated call
     const result = await analyzeDealTier1({
       transcriptDelta: LONG_TEXT,
       compactState: 'stage=discovery',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(result).toEqual({ ok: false, blockedReason: 'consent' })
@@ -112,7 +126,7 @@ describe('Tier 1 refuses buyer content without a current consent grant', () => {
     const result = await analyzeDealTier1({
       transcriptDelta: LONG_TEXT,
       compactState: 'stage=discovery',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: false
     })
     expect(result.ok).toBe(true)
@@ -120,11 +134,11 @@ describe('Tier 1 refuses buyer content without a current consent grant', () => {
   })
 
   it('consent revoked mid-call is honoured on the very next call — no stale grace period', async () => {
-    persistActiveConsent(1, CONSENTED)
+    persistActiveConsent(CALL_ID, CONSENTED)
     const before = await analyzeDealTier1({
       transcriptDelta: LONG_TEXT,
       compactState: '',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(before.ok).toBe(true)
@@ -133,10 +147,40 @@ describe('Tier 1 refuses buyer content without a current consent grant', () => {
     const after = await analyzeDealTier1({
       transcriptDelta: LONG_TEXT,
       compactState: '',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(after).toEqual({ ok: false, blockedReason: 'consent' })
+  })
+
+  // M27 E1 — THE bug. Before this fix, consent was persisted and checked
+  // against the transcription SESSION id, which a mono<->multichannel
+  // restart mid-call (turning buyer-capture on) mints fresh — so a grant
+  // written moments earlier for the SAME call stopped matching the instant
+  // the restart happened, and every buyer-attributed pass silently refused
+  // for the rest of the call. callId never changes across that restart,
+  // which is exactly what this proves: one persist, then a check against the
+  // same call id, succeeds — regardless of how many session restarts
+  // happened in between (this level doesn't need to simulate the restart
+  // itself to prove it: the fix is that sessionId no longer appears
+  // ANYWHERE in this path at all, so it structurally cannot drift from what
+  // was persisted).
+  it('survives a mid-call session restart — consent is keyed to the call, not the session', async () => {
+    persistActiveConsent(CALL_ID, CONSENTED)
+    // Simulates checking AFTER a mono<->multichannel restart: the call id is
+    // unchanged (it's what LiveView.tsx now threads through from
+    // useTranscription's getCallId(), which BUG-055 already established is
+    // restart-stable), even though the session id main minted for the
+    // restarted connection is not the one consent was originally persisted
+    // against.
+    const result = await analyzeDealTier1({
+      transcriptDelta: LONG_TEXT,
+      compactState: 'stage=discovery',
+      callId: CALL_ID,
+      includesBuyerContent: true
+    })
+    expect(result.ok).toBe(true)
+    expect(completeWithFallback).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -145,17 +189,17 @@ describe('Tier 2 — the same gate, same behaviour', () => {
     const blocked = await analyzeDealTier2({
       transcriptDelta: LONG_TEXT,
       compactState: '',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(blocked).toEqual({ ok: false, blockedReason: 'consent' })
     expect(completeWithFallback).not.toHaveBeenCalled()
 
-    persistActiveConsent(1, CONSENTED)
+    persistActiveConsent(CALL_ID, CONSENTED)
     const allowed = await analyzeDealTier2({
       transcriptDelta: LONG_TEXT,
       compactState: '',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(allowed.ok).toBe(true)
@@ -165,7 +209,7 @@ describe('Tier 2 — the same gate, same behaviour', () => {
     const result = await analyzeDealTier2({
       transcriptDelta: LONG_TEXT,
       compactState: '',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: false
     })
     expect(result.ok).toBe(true)
@@ -179,17 +223,17 @@ describe('liveCue — the same gate, same behaviour', () => {
     const blocked = await liveCue({
       transcript: WINDOW,
       repSpeaker: 0,
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(blocked).toEqual({ ok: false, blockedReason: 'consent' })
     expect(completeWithFallback).not.toHaveBeenCalled()
 
-    persistActiveConsent(1, CONSENTED)
+    persistActiveConsent(CALL_ID, CONSENTED)
     const allowed = await liveCue({
       transcript: WINDOW,
       repSpeaker: 0,
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(allowed.ok).toBe(true)
@@ -199,7 +243,7 @@ describe('liveCue — the same gate, same behaviour', () => {
     const result = await liveCue({
       transcript: WINDOW,
       repSpeaker: 0,
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: false
     })
     expect(result.ok).toBe(true)
@@ -212,7 +256,7 @@ describe('liveCue — the same gate, same behaviour', () => {
     const result = await liveCue({
       transcript: WINDOW,
       repSpeaker: 0,
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(result.ok).toBe(false)
@@ -221,6 +265,18 @@ describe('liveCue — the same gate, same behaviour', () => {
       expect(result.blockedReason).toBe('consent')
     }
   })
+
+  // M27 E1 — see Tier 1's identical test above for the full rationale.
+  it('survives a mid-call session restart — consent is keyed to the call, not the session', async () => {
+    persistActiveConsent(CALL_ID, CONSENTED)
+    const result = await liveCue({
+      transcript: WINDOW,
+      repSpeaker: 0,
+      callId: CALL_ID,
+      includesBuyerContent: true
+    })
+    expect(result.ok).toBe(true)
+  })
 })
 
 describe('askCoach — 1.2.5 hotfix, the same gate as liveCue/tier1/tier2', () => {
@@ -228,7 +284,7 @@ describe('askCoach — 1.2.5 hotfix, the same gate as liveCue/tier1/tier2', () =
     const blocked = await askCoach({
       transcript: LONG_TEXT,
       question: 'they said it is too expensive',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(blocked.ok).toBe(false)
@@ -236,11 +292,11 @@ describe('askCoach — 1.2.5 hotfix, the same gate as liveCue/tier1/tier2', () =
     // The whole point: refused BEFORE any AI spend, not after.
     expect(completeWithFallback).not.toHaveBeenCalled()
 
-    persistActiveConsent(1, CONSENTED)
+    persistActiveConsent(CALL_ID, CONSENTED)
     await askCoach({
       transcript: LONG_TEXT,
       question: 'they said it is too expensive',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(completeWithFallback).toHaveBeenCalledTimes(1)
@@ -250,18 +306,18 @@ describe('askCoach — 1.2.5 hotfix, the same gate as liveCue/tier1/tier2', () =
     await askCoach({
       transcript: LONG_TEXT,
       question: 'they said it is too expensive',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: false
     })
     expect(completeWithFallback).toHaveBeenCalledTimes(1)
   })
 
   it('consent revoked mid-call is honoured on the very next ask — no stale grace period', async () => {
-    persistActiveConsent(1, CONSENTED)
+    persistActiveConsent(CALL_ID, CONSENTED)
     await askCoach({
       transcript: LONG_TEXT,
       question: 'first question',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(completeWithFallback).toHaveBeenCalledTimes(1)
@@ -270,22 +326,39 @@ describe('askCoach — 1.2.5 hotfix, the same gate as liveCue/tier1/tier2', () =
     const after = await askCoach({
       transcript: LONG_TEXT,
       question: 'second question, after revoke',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(after).toMatchObject({ ok: false, blockedReason: 'consent' })
     expect(completeWithFallback).toHaveBeenCalledTimes(1) // unchanged — no second AI call
   })
 
-  it('a grant for a DIFFERENT session does not authorise this one', async () => {
-    persistActiveConsent(2, CONSENTED) // some other, unrelated call
+  it('a grant for a DIFFERENT call does not authorise this one', async () => {
+    persistActiveConsent(CALL_OTHER, CONSENTED) // some other, unrelated call
     const result = await askCoach({
       transcript: LONG_TEXT,
       question: 'they said it is too expensive',
-      sessionId: 1,
+      callId: CALL_ID,
       includesBuyerContent: true
     })
     expect(result).toMatchObject({ ok: false, blockedReason: 'consent' })
     expect(completeWithFallback).not.toHaveBeenCalled()
+  })
+
+  // M27 E1 — see Tier 1's identical test above for the full rationale. Checks
+  // completeWithFallback was actually invoked, not result.ok — the shared
+  // mock's toolInput has no headline/tips, so askCoach's own "no suggestion
+  // came back" branch always makes ok:false regardless of consent; the
+  // proceeds-vs-blocked distinction for this function is whether the AI was
+  // reached at all, same as this file's other askCoach "proceeds" cases.
+  it('survives a mid-call session restart — consent is keyed to the call, not the session', async () => {
+    persistActiveConsent(CALL_ID, CONSENTED)
+    await askCoach({
+      transcript: LONG_TEXT,
+      question: 'they said it is too expensive',
+      callId: CALL_ID,
+      includesBuyerContent: true
+    })
+    expect(completeWithFallback).toHaveBeenCalledTimes(1)
   })
 })

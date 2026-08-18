@@ -24,6 +24,13 @@ export function SalesBrainSection(): React.JSX.Element {
   const [showInterview, setShowInterview] = useState(false)
   const [status, setStatus] = useState<OnboardingStatusResult | null>(null)
   const [includeCalls, setIncludeCalls] = useState(false)
+  // M27 — off by default, deliberately. A normal run now RESUMES (it keeps a
+  // record of which calls it already tried), which is what makes the import
+  // finishable at all on a rate-limited key. Re-scanning everything is the
+  // rare, explicit case — after the extraction prompt improves, say — and it
+  // costs a fresh AI call per call, so it must never be the accidental
+  // default.
+  const [rescanAll, setRescanAll] = useState(false)
   const [backfillJob, setBackfillJob] = useState<Job | null>(null)
   const [startError, setStartError] = useState<string | null>(null)
   const mountedRef = useRef(true)
@@ -97,7 +104,8 @@ export function SalesBrainSection(): React.JSX.Element {
       const result = await window.api.salesBrain.backfill.start({
         includeContacts: true,
         includeDeals: true,
-        includeCalls
+        includeCalls,
+        rescanAll
       })
       if (!mountedRef.current) return
       if (result.ok && result.jobId) {
@@ -114,9 +122,24 @@ export function SalesBrainSection(): React.JSX.Element {
       if (!mountedRef.current) return
       setStartError(err instanceof Error ? err.message : String(err))
     }
-  }, [includeCalls])
+  }, [includeCalls, rescanAll])
 
+  // `importing` gates the controls: the run is claimed and must not be
+  // double-started, whether it's actually running or still waiting its turn.
   const importing = backfillJob?.state === 'running' || backfillJob?.state === 'queued'
+  // M27 — but the LABEL must not claim work is happening when it isn't.
+  // Quota-pressure deferral (JobManager.setCapacityGate) can hold a BATCH job
+  // queued for hours when every configured AI model is unusable; without
+  // this, the button would read "Importing…" that entire time with no stage
+  // line underneath it (the stage row below requires progress.mode ===
+  // 'stages', which a queued job never has), so the only feedback the rep got
+  // would be a word that wasn't true.
+  const waitingForCapacity = backfillJob?.deferredForCapacity === true
+  const importLabel = waitingForCapacity
+    ? 'Waiting for AI capacity…'
+    : importing
+      ? 'Importing…'
+      : 'Import now'
 
   return (
     <>
@@ -190,6 +213,17 @@ export function SalesBrainSection(): React.JSX.Element {
                 />
                 Also scan past calls
               </label>
+              {includeCalls && (
+                <label className="mt-1 flex items-center gap-2 text-[11px] text-muted">
+                  <input
+                    type="checkbox"
+                    checked={rescanAll}
+                    onChange={(e) => setRescanAll(e.target.checked)}
+                    disabled={importing}
+                  />
+                  Start over — re-read calls it has already been through
+                </label>
+              )}
               {importing && backfillJob?.progress.mode === 'stages' && (
                 <p className="mt-1 text-[11px] text-accent">
                   {backfillJob.progress.stageLabel} — safe to leave this screen, tracked in Activity too.
@@ -214,7 +248,7 @@ export function SalesBrainSection(): React.JSX.Element {
               onClick={() => void startBackfill()}
               disabled={importing}
             >
-              {importing ? 'Importing…' : 'Import now'}
+              {importLabel}
             </Button>
           </div>
         </Card>

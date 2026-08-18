@@ -67,8 +67,10 @@ export type PostCallBriefEvent =
 /** The durable consent gate: main reads capture permission from disk, never
  *  from the renderer's word for it (acceptance criterion 11). */
 export interface ConsentGateApi {
-  /** Write this call's consent. Returns false when it does not permit capture. */
-  persist: (sessionId: number, consent: ConsentRecord) => boolean
+  /** Write this call's consent. Returns false when it does not permit
+   *  capture. Keyed on callId, not sessionId — M27 E1, see
+   *  main/consent-gate.ts's own doc comment for why. */
+  persist: (callId: string, consent: ConsentRecord) => boolean
   /** Drop the record — call ended, or consent revoked. */
   clear: () => void
 }
@@ -167,10 +169,11 @@ export interface TranscriptionApi {
   askCoach: (
     transcript: string,
     question: string,
-    /** 1.2.5 hotfix — see main/live-cue.ts's own doc comment: lets main check
-     *  fresh consent before a pass that may include buyer-attributed content
-     *  ever reaches an AI prompt. */
-    sessionId?: number,
+    /** 1.2.5 hotfix, M27 E1 — see main/live-cue.ts's own doc comment: lets
+     *  main check fresh consent before a pass that may include
+     *  buyer-attributed content ever reaches an AI prompt. Keyed on callId,
+     *  not sessionId (see main/consent-gate.ts's own doc comment for why). */
+    callId?: string,
     includesBuyerContent?: boolean
   ) => Promise<
     | { ok: true; headline: string; tips: string[] }
@@ -180,10 +183,11 @@ export interface TranscriptionApi {
   liveCue: (
     transcript: string,
     repSpeaker: number | null,
-    /** M26 4.5 (BUG-055) — see main/live-cue.ts's own doc comment: lets main
-     *  check fresh consent before a pass that may include buyer-attributed
-     *  content ever reaches an AI prompt. */
-    sessionId?: number,
+    /** M26 4.5 (BUG-055) / M27 E1 — see main/live-cue.ts's own doc comment:
+     *  lets main check fresh consent before a pass that may include
+     *  buyer-attributed content ever reaches an AI prompt. Keyed on callId,
+     *  not sessionId. */
+    callId?: string,
     includesBuyerContent?: boolean
   ) => Promise<
     | {
@@ -283,8 +287,9 @@ export interface DealIntelligenceApi {
     compactState: string
     dealContext?: string
     triggerReason?: string
-    /** M26 4.5 (BUG-055) — see main/deal-tier1.ts's own doc comment. */
-    sessionId?: number
+    /** M26 4.5 (BUG-055) / M27 E1 — see main/deal-tier1.ts's own doc
+     *  comment. Keyed on callId, not sessionId. */
+    callId?: string
     includesBuyerContent?: boolean
   }) => Promise<DealTier1Result>
   analyzeTier2: (input: {
@@ -292,7 +297,7 @@ export interface DealIntelligenceApi {
     compactState: string
     dealContext?: string
     triggerReason?: string
-    sessionId?: number
+    callId?: string
     includesBuyerContent?: boolean
   }) => Promise<DealTier2Result>
   /** M24 §8 — the feedback loop. */
@@ -1558,6 +1563,35 @@ export interface PurposeHealthApi {
   getAll: () => Promise<Record<AiPurpose, PurposeHealthView>>
 }
 
+/** M27 Tier 1 — driver-free noise cancellation for CallRise's OWN audio.
+ *  Separate from VirtualMicApi: that one publishes a system-wide capture
+ *  DEVICE for Zoom/Teams and needs a signed driver; this one delivers
+ *  denoised PCM to this app over a named pipe and needs nothing installed.
+ *  Shape must match Tier1Status in src/main/tier1.ts and
+ *  src/renderer/src/features/live/audio/tier1-types.ts. */
+export interface Tier1Api {
+  start: (micName: string) => Promise<{ ok: boolean; error?: string }>
+  stop: () => Promise<{ ok: boolean }>
+  getStatus: () => Promise<{
+    engineAvailable: boolean
+    engineRunning: boolean
+    connected: boolean
+    denoisingActive: boolean | null
+    enginePath: string | null
+  }>
+  onStatus: (
+    cb: (status: {
+      engineAvailable: boolean
+      engineRunning: boolean
+      connected: boolean
+      denoisingActive: boolean | null
+      enginePath: string | null
+    }) => void
+  ) => () => void
+  /** Denoised PCM frames, ~100/s, as transferred ArrayBuffers of Float32 samples. */
+  onPcm: (cb: (frame: ArrayBuffer) => void) => () => void
+}
+
 export interface VirtualMicApi {
   /** Current driver/helper/denoise status. */
   getStatus: () => Promise<VirtualMicStatus>
@@ -2090,6 +2124,14 @@ export interface Job {
   retainUntilConsumed?: boolean
   input: unknown
   checkpoint?: unknown
+  /** M27 — DERIVED, never persisted: true when this job is queued and the
+   *  only thing keeping it from starting is that every configured AI model
+   *  is currently unusable (rate-limited / daily quota spent / cooling down).
+   *  Computed fresh in main at each send (see main/jobs/ipc.ts's jobViews and
+   *  JobManager.deferredJobIds); absent when the job is merely waiting its
+   *  turn behind another job in the same lane. Lets the UI say "waiting for
+   *  AI capacity" instead of implying work is underway. */
+  deferredForCapacity?: boolean
 }
 
 /** Mirrors src/main/jobs/activity.ts's ActivityEvent. */
@@ -2368,6 +2410,10 @@ export interface SalesBrainBackfillApi {
     includeContacts?: boolean
     includeDeals?: boolean
     includeCalls?: boolean
+    /** Forget past attempts and reconsider every call. Normal runs resume —
+     *  that is what makes the import completable at all on a rate-limited
+     *  key — so this is the explicit "learn from everything again". */
+    rescanAll?: boolean
   }) => Promise<{ ok: boolean; message?: string; jobId?: string }>
 }
 
@@ -2450,6 +2496,7 @@ declare global {
       outlook: OutlookApi
       backup: BackupApi
       virtualmic: VirtualMicApi
+      tier1: Tier1Api
       knowledge: KnowledgeApi
       objectionQueue: ObjectionQueueApi
       settings: AppSettingsApi

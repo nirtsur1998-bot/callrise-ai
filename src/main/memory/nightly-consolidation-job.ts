@@ -11,6 +11,7 @@
 // 500-job retention cap — nothing like the every-10-minutes sync heartbeat
 // that was deliberately left off the job system for noise reasons.
 import { getJobManager } from '../jobs/instance'
+import { NO_AI_PURPOSE } from '../jobs/types'
 
 export const NIGHTLY_CONSOLIDATION_JOB_TYPE = 'salesBrain:nightlyConsolidation'
 
@@ -29,6 +30,9 @@ export function registerNightlyConsolidationJob(run: () => Promise<void>): void 
     // MAINTENANCE, per the approved Phase 0 lane assignment: idle-time
     // housekeeping that must never compete with anything the rep clicked.
     lane: 'MAINTENANCE',
+    // M27 — the chain whose exhaustion makes this run pointless. It also
+    // reflects (memory-reflect) later, but consolidation is what gates it.
+    aiPurpose: 'memory-consolidate',
     titleFor: () => 'Sales Brain: nightly tidy-up',
     // runNightlyConsolidation has no AbortSignal support, and adding one
     // would mean rewriting M25 internals — out of scope for an adapter.
@@ -48,10 +52,31 @@ export function registerNightlyConsolidationJob(run: () => Promise<void>): void 
 }
 
 /** Queue the nightly pass. Never throws into its caller — this fires during
- *  startup, and a job-system problem must not take the app down with it. */
+ *  startup, and a job-system problem must not take the app down with it.
+ *
+ *  M27 — dedupes against an already-pending run, the same shape 8 other
+ *  adapters already use (backup.ts, calls.ts, deals.ts, ...). Previously this
+ *  enqueued unconditionally, which was harmless only because the queue always
+ *  drained long before the next nightly trigger. Quota-pressure deferral
+ *  (JobManager.setCapacityGate) breaks that assumption: with every AI model
+ *  unusable, a held consolidation can still be sitting queued when the NEXT
+ *  night's trigger fires, and the scheduler's own dedup can't help — it
+ *  correctly considers the run due again (see scheduler.ts's checkOne, which
+ *  stamps lastRuns at trigger time). Two identical consolidations would then
+ *  both run the moment capacity returned, doubling the AI spend of a pass
+ *  whose whole job is housekeeping. */
 export function enqueueNightlyConsolidation(): void {
   try {
-    getJobManager().enqueue(NIGHTLY_CONSOLIDATION_JOB_TYPE, {})
+    const manager = getJobManager()
+    const pending = manager
+      .list()
+      .find(
+        (j) =>
+          j.type === NIGHTLY_CONSOLIDATION_JOB_TYPE &&
+          (j.state === 'running' || j.state === 'queued')
+      )
+    if (pending) return
+    manager.enqueue(NIGHTLY_CONSOLIDATION_JOB_TYPE, {})
   } catch (err) {
     console.error('[sales-brain] could not enqueue nightly consolidation:', err)
   }
@@ -83,6 +108,11 @@ export function registerWarmUpEmbeddingsJob(run: () => Promise<void>): void {
   getJobManager().registerType<Record<string, never>, string>({
     type: WARM_UP_EMBEDDINGS_JOB_TYPE,
     lane: 'MAINTENANCE',
+    // M27 — downloads the LOCAL embedding model (@xenova/transformers). No
+    // provider, no key, no quota. Deferring it on AI pressure would leave
+    // on-device search permanently unset up for exactly the users whose keys
+    // are exhausted — the ones who most need the local path to work.
+    aiPurpose: NO_AI_PURPOSE,
     titleFor: () => 'Setting up on-device search',
     cancellable: false,
     executor: {

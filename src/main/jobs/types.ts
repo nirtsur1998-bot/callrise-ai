@@ -96,6 +96,25 @@ export interface Job {
   checkpoint?: unknown
 }
 
+/**
+ * M27 — what the RENDERER receives: a Job plus purely-derived view state.
+ *
+ * `deferredForCapacity` is computed fresh at each IPC send from live
+ * scheduler state (see JobManager.deferredJobIds) and is deliberately NOT a
+ * field on Job itself — storing it would drag a new value through
+ * persistence, migration, retention, the quit guard and resume for something
+ * fully recomputable from facts already in hand, and would go stale the
+ * moment capacity changed without a write.
+ */
+export interface JobView extends Job {
+  /** True when this job is queued and the ONLY thing keeping it from starting
+   *  is that every configured AI model is currently unusable. False/absent
+   *  when it is merely waiting its turn behind another job in the same lane —
+   *  the two look identical to a user otherwise, which is exactly why this
+   *  distinction is surfaced. */
+  deferredForCapacity?: boolean
+}
+
 export interface JobHandle {
   /** Aborts the instant the job is cancelled — thread this straight into
    *  every fetch/AI-call this job's work makes (src/main/ai's
@@ -146,9 +165,41 @@ export type JobExecutorSpec<TInput = unknown, TResult = unknown> =
       workerSource: string
     } // spawned as `new Worker(workerSource, { eval: true, workerData: { input, lastCheckpoint } })`
 
+/** Reserved `aiPurpose` value: this job type touches no AI provider, so
+ *  quota pressure must never hold it. See JobTypeDefinition.aiPurpose. */
+export const NO_AI_PURPOSE = 'none'
+
 export interface JobTypeDefinition<TInput = unknown, TResult = unknown> {
   type: string
   lane: JobLane
+  /**
+   * M27 — the AI purpose that decides whether this job can make progress AT
+   * ALL. Not "every purpose it touches": Sales Brain's import, for instance,
+   * extracts (memory-extract) and then consolidates what it extracted
+   * (memory-consolidate), but an exhausted extract chain makes the whole run
+   * pointless while the consolidate step simply never gets reached. Name the
+   * blocking one.
+   *
+   * Used ONLY by the quota-pressure gate, to ask whether *that chain* has
+   * anything usable rather than whether any model anywhere does.
+   *
+   * A plain string, not the AI layer's AIPurpose union, on purpose: the job
+   * system stays free of any dependency on the AI layer (same separation
+   * errorCode() keeps for feature error types), and the gate that interprets
+   * it is injected from index.ts.
+   *
+   * Set `NO_AI_PURPOSE` for a job that uses no AI provider at all — it then
+   * never defers on quota pressure. This is NOT cosmetic: backup, calendar
+   * reminders, the auto-updater and the on-device embeddings warm-up are all
+   * MAINTENANCE-lane and use no provider, so under the first version of the
+   * gate an exhausted AI key silently stopped the app backing up, reminding,
+   * updating, and finishing its local-search setup. A quota condition none of
+   * them depend on took out four unrelated subsystems.
+   *
+   * Omitting it means "ask about the whole configured set" — the conservative
+   * default, correct for a job whose AI work genuinely spans purposes.
+   */
+  aiPurpose?: string
   executor: JobExecutorSpec<TInput, TResult>
   /**
    * Default **FALSE** (BUG-060 inverted this — it used to default true).

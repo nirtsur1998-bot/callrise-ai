@@ -108,11 +108,17 @@ Phase 3 added:
   regardless of whether the feature is enabled) instead of lazily on first
   `showOverlay()` — window creation + first content load is far slower than
   the <100ms show budget on its own.
-- **Native translucent material** — `vibrancy: 'under-window'` on macOS,
-  `backgroundMaterial: 'acrylic'` on Windows, alongside the existing CSS
-  `backdrop-blur`.
-- **Shadow room** — the window is 32px larger than the visible card in each
-  dimension (`CARD_INSET` in `detection-overlay.ts`), with matching
+- **Native translucent material** — `vibrancy: 'under-window'` on macOS only.
+  *(M27 docs audit, 2026-08-14: this used to also claim `backgroundMaterial:
+  'acrylic'` on Windows. That WAS tried and then **reverted** — confirmed on
+  real Windows hardware, it painted an OS-compositor backdrop that ignored the
+  card's own rounded-corner CSS, showing through as an ugly square behind it
+  (BUG-006). Windows now relies solely on the CSS `backdrop-blur`; see
+  `detection-overlay.ts`'s own comment. Corrected here so nobody re-attempts
+  acrylic believing it already works.)*
+- **Shadow room** — the window is 16px larger than the visible card in each
+  dimension (`CARD_INSET` in `detection-overlay.ts` — the doc previously said
+  32px; the shipped value is 16), with matching
   transparent padding in `OverlayShell` — without this the card's own drop
   shadow was clipped flush at the window's edge and simply didn't render.
 - **Source identity as the hero element** — `SourceMonogram` (a

@@ -1,5 +1,29 @@
 # M26 Phase 4.5 — Live Engine Decoupling: design proposal
 
+> ⛔ **NOT BUILT — closed at 4.5.2, deliberately. Do not "finish" this.**
+> *(Flagged by the M27 Phase 4 docs audit, 2026-08-14.)*
+>
+> **The architecture proposed below — moving cue/deal-intelligence engine state
+> into main-process singletons, with new `dealIntelligence:attach` /
+> `liveCue:attach` IPC handlers mirroring `transcription:attach` — was never
+> built, and the founder's decision (recorded in `M26-release-checklist.md`) is
+> that 4.5.3 onward WILL NOT be built.**
+>
+> What shipped instead was a smaller, lower-risk fix for the same bugs
+> (BUG-055): `useLiveCues` and `useDealIntelligence` remain ordinary renderer
+> hooks, hoisted into `LiveCallProvider.tsx` alongside the transcript so they
+> sit above the navigation boundary, with reset scoped to a genuine new
+> `callId` rather than to `active` blipping. Verified against current code —
+> no `dealIntelligence:attach` or `liveCue:attach` handler exists anywhere in
+> `src/main`.
+>
+> **Why this warning is more than an ordinary stale-doc note:** the analysis
+> below is genuinely good — hundreds of lines of careful storm/replay/
+> consent-gap failure-mode work — which makes it *more* likely, not less, that
+> a future reader treats it as the current plan and either redoes abandoned
+> work or reopens a decision that was closed on purpose. The failure-mode
+> analysis is still worth reading; the proposed architecture is not the plan.
+
 Status: **proposal, no code written.** Same method as Phase 4: read the actual source
 (`useLiveCues.ts` 676 lines, `useDealIntelligence.ts` 492, `nudgeEngine.ts` 261, `engine.ts`,
 `deal-tier1.ts` 260, `deal-tier2.ts` 228, `live-cue.ts` 502, `contextFusion.ts`, `consent-gate.ts`,

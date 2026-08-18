@@ -310,6 +310,39 @@ export function toProviderError(
     // schema-field bugs: both were structural 400s on every single request,
     // and both were found only once someone read the real error text.
     const detail = typeof err.message === 'string' ? err.message.trim() : ''
+
+    // M27 — the case the comment above named but never wired up. Confirmed
+    // live: Sales Brain's import hit "400 Failed to parse tool call
+    // arguments as JSON" from Groq (code `tool_use_failed`) and it got
+    // classified 'structural' — the generic status>=400 fallthrough below —
+    // which excludes the model for STRUCTURAL_BREAK_MS (4h) on a single
+    // occurrence.
+    //
+    // That classification fits a request the provider will ALWAYS reject
+    // (a bad parameter, an unsupported field). This isn't that: it's the
+    // MODEL's own generation coming out malformed, which is sampling-
+    // dependent — the identical request retried a moment later plausibly
+    // produces valid JSON. Treating a nondeterministic hiccup as a
+    // deterministic rejection is what let one flaky generation take out a
+    // whole link in an already-thin free-tier chain, compounding exactly
+    // the "everything falls through to the one surviving model" problem
+    // BUG-066/B2 exist to prevent.
+    //
+    // `err.code`, not a message-text match: the OpenAI-compatible SDK
+    // parses the provider's own JSON error code into this field, so this is
+    // exact rather than a fragile substring guess on wording that could
+    // change.
+    if (err.code === 'tool_use_failed') {
+      return new AIProviderError(
+        'failed',
+        detail
+          ? `${displayName} could not format a valid response for this request (usually resolves on retry): ${detail.slice(0, 300)}`
+          : `${displayName} could not format a valid response for this request (usually resolves on retry).`,
+        undefined,
+        'transient'
+      )
+    }
+
     return new AIProviderError(
       'failed',
       detail

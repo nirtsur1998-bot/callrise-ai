@@ -190,6 +190,7 @@ export function LiveView({
     dismissMultichannelFallbackNotice,
     start,
     getSessionId,
+    getCallId,
     stop,
     togglePause,
     enableOtherParty,
@@ -372,14 +373,20 @@ export function LiveView({
     autoBuyerAttemptedRef.current = true
     // Standing consent still has to be written before capture can be armed —
     // the gate does not care WHERE the consent came from, only that a record
-    // for this call exists on disk.
-    // 1.2.6 hotfix (privacy) — ARM ONLY IF THE CONSENT ACTUALLY LANDED.
-    // This previously ran enableOtherParty() unconditionally, so a persist
-    // that failed (a missing session id sends the -1 sentinel, which main
-    // refuses) still armed capture — and the audio gate, which asks only
-    // whether ANY consent exists, could then open on a grant left over from
-    // an earlier call.
-    if (!window.api.consent.persist(getSessionId() ?? -1, consent.recordRef.current)) return
+    // for this call exists on disk. M27 E1 — keyed on callId, not sessionId
+    // (see main/consent-gate.ts's own doc comment for why).
+    //
+    // 1.2.6 hotfix (privacy) — ARM ONLY IF THE CONSENT ACTUALLY LANDED. This
+    // ran enableOtherParty() unconditionally, so a persist that failed still
+    // armed capture — and the audio gate, which asks only whether ANY consent
+    // exists, could then open on a grant left over from an earlier call.
+    //
+    // MERGE NOTE: both halves are load-bearing and neither version alone is
+    // correct. 1.3.0 supplies the right KEY (callId, which survives a
+    // mono<->multichannel restart; sessionId does not — that was BUG-063),
+    // and 1.2.6 supplies the GUARD. Taking either side wholesale would have
+    // silently dropped the other.
+    if (!window.api.consent.persist(getCallId() ?? '', consent.recordRef.current)) return
     void enableOtherParty()
   }, [
     status,
@@ -387,7 +394,7 @@ export function LiveView({
     otherPartyLive,
     otherPartyError,
     enableOtherParty,
-    getSessionId,
+    getCallId,
     consent.recordRef
   ])
 
@@ -640,13 +647,15 @@ export function LiveView({
     // Persist BEFORE arming. Main reads the consent back from disk at both the
     // arm and the grant and refuses without it, so this is not bookkeeping —
     // it is the step that makes capture possible at all. Synchronous, so the
-    // click's user activation survives into getDisplayMedia.
+    // click's user activation survives into getDisplayMedia. M27 E1 — keyed
+    // on callId, not sessionId (see main/consent-gate.ts's own doc comment).
+    //
     // 1.2.6 hotfix (privacy) — same as the auto path above: no arming on a
-    // consent that was not stored. Silent, deliberately: the rep just told
-    // us to enable capture, and the honest outcome of a refused consent is
-    // that capture does not start, which the existing error surface already
+    // consent that was not stored. Silent, deliberately: the rep just told us
+    // to enable capture, and the honest outcome of a refused consent is that
+    // capture does not start, which the existing error surface already
     // reports. Arming anyway is what made a stale grant reachable.
-    if (!window.api.consent.persist(getSessionId() ?? -1, consent.recordRef.current)) return
+    if (!window.api.consent.persist(getCallId() ?? '', consent.recordRef.current)) return
     void enableOtherParty()
   }
 
@@ -875,7 +884,11 @@ export function LiveView({
                 // armed purely on whatever grant happened to be on disk.
                 // It now re-persists for the CURRENT call first and refuses
                 // to arm if that fails, exactly like the other two paths.
-                if (!window.api.consent.persist(getSessionId() ?? -1, consent.recordRef.current)) {
+                // MERGE NOTE: arrived from the 1.2.6 hotfix with NO conflict,
+                // because 1.3.0 never touched this line — so it kept the old
+                // sessionId key while the two paths above moved to callId.
+                // Re-keyed by hand. A clean merge is not a correct one.
+                if (!window.api.consent.persist(getCallId() ?? '', consent.recordRef.current)) {
                   return
                 }
                 void enableOtherParty()
@@ -1131,7 +1144,7 @@ export function LiveView({
         )}
       </div>
 
-      <AskCoach segments={segments} interimText={interimText} getSessionId={getSessionId} />
+      <AskCoach segments={segments} interimText={interimText} getCallId={getCallId} />
 
       {consentOpen && allowOtherPartyRecording && (
         <ConsentModal

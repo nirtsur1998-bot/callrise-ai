@@ -214,21 +214,31 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     // implementation). resolveCatalog() confirms once a real key is entered.
   },
   {
-    id: 'openrouter-nemotron-3-ultra',
-    displayName: 'Nemotron 3 Ultra',
+    id: 'openrouter-nemotron-3.5-lightning',
+    displayName: 'Nemotron 3.5 Lightning',
     brand: 'nvidia',
     providerId: 'openrouter',
     lane: 'quality',
-    modelId: 'nvidia/nemotron-3-ultra:free',
+    modelId: 'nvidia/nemotron-3.5-lightning:free',
     contextWindow: 1_000_000,
     retentionPosture: 'unknown',
     retentionUrl: 'https://openrouter.ai/docs/features/privacy-and-logging',
     keyUrl: 'https://openrouter.ai/keys'
-    // OpenRouter's own docs confirm training posture varies PER BACKEND
-    // PROVIDER it routes to, not a single OpenRouter-wide answer - 'unknown'
-    // is the honest answer here, not a placeholder. Not independently
-    // re-verified against OpenRouter's live model list (page fetch returned
-    // only nav/footer, no model data) - resolveCatalog() confirms live.
+    // M27 B2 — REPLACES the prior 'openrouter-nemotron-3-ultra' entry, whose
+    // modelId 'nvidia/nemotron-3-ultra:free' returned a 400 on 100% of the 23
+    // times it was tried in this app's own fallback log. Verified 2026-08-14
+    // against OpenRouter's live /api/v1/models: 'nvidia/nemotron-3-ultra:free'
+    // no longer exists at all (which is exactly the 400), and the current
+    // Nemotron on OpenRouter's free tier is 'nvidia/nemotron-3.5-lightning:free'
+    // — confirmed present, with tools/tool_choice in its supported_parameters
+    // and a 1M context window. Retention stays 'unknown', same as the entry it
+    // replaces and for the same reason: OpenRouter's training posture varies
+    // per backend provider it routes to, not one OpenRouter-wide answer.
+    // A specific free-tier id is inherently churn-prone (the catalog header
+    // notes OpenRouter delisted its whole free Llama/Qwen tier in nine days) —
+    // resolveCatalog() re-checks this id live once a real key is configured,
+    // and knownStale is the mechanism if it goes dead the way its predecessor
+    // did.
   },
   {
     id: 'nvidia-glm-5.2',
@@ -271,10 +281,30 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     contextWindow: null,
     retentionPosture: 'unknown',
     retentionUrl: 'https://openrouter.ai/docs/features/privacy-and-logging',
-    keyUrl: 'https://openrouter.ai/keys'
+    keyUrl: 'https://openrouter.ai/keys',
     // Varies by whichever free model OpenRouter routes to at request time -
     // 'unknown' retention and null context window are both correct, not
     // missing data.
+    //
+    // M27 B2 — supportsToolCalling:false. This app's own fallback log
+    // recorded 39 attempts of this entry, every one a failure; 28 of them
+    // (24 "did not return the expected structured output" + 4 "malformed
+    // structured output") were tool-call parse failures from parseToolInput
+    // (openai-compatible.ts) — the free models the auto-router lands on
+    // frequently can't produce a valid forced function call. It sat as the
+    // last-resort quality-chain entry for tool-using purposes, so on those it
+    // burned a request and the wait to fail before the chain exhausted —
+    // worse than having no last resort at all (the founder's own framing).
+    // This flag removes it from needsTool chains ONLY (resolveChain's
+    // capability filter); it stays a genuine last resort for plain-text
+    // purposes (coaching-chat streaming, a tool-less summary/prep-brief),
+    // where the router's output is usable. Unlike a per-MODEL flag this is a
+    // per-ROUTER judgment — auto sometimes lands on a tool-capable model —
+    // but 28/39 real failures is a clear enough signal not to TRY it for
+    // tools, and logToolCapabilityExclusions() records the exclusion so a
+    // future improvement in OpenRouter's free routing surfaces as a stale
+    // flag rather than staying invisible.
+    supportsToolCalling: false
   }
 ]
 

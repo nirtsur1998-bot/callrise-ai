@@ -23,10 +23,20 @@ function withState(job: Job, state: JobState): Job {
   return { ...job, state }
 }
 
+// M27 — two expectations in this file were CORRECTED, not relaxed. They were
+// written against makeJob()'s default `state: 'queued'` and asserted that a
+// merely-QUEUED job announces "Started: X". That was always inaccurate; it
+// went unnoticed because queues drained in milliseconds, so the claim was
+// only ever briefly wrong. Quota-pressure deferral (JobManager's capacity
+// gate) can now hold a background job queued for hours, which would turn that
+// into a flatly false toast. The fix moved the announcement to the moment the
+// job actually starts running; these tests are updated to assert the real
+// guarantee ("a job announces itself exactly once, when it truly begins")
+// rather than the old moment. See jobs/__tests__/deferralHonesty.test.ts.
 describe('ActivityNotifier — starts', () => {
-  it('fires a started event for a brand-new job outside a live call', () => {
+  it('fires a started event when a job actually begins running, outside a live call', () => {
     const notifier = new ActivityNotifier()
-    const job = makeJob({ title: 'Scanning 143 calls' })
+    const job = makeJob({ title: 'Scanning 143 calls', state: 'running' })
     const events = notifier.next([job])
     expect(events).toEqual([
       { kind: 'started', job, message: 'Started: Scanning 143 calls — track in Activity' }
@@ -48,12 +58,17 @@ describe('ActivityNotifier — starts', () => {
     expect(laterEvents.some((e) => e.kind === 'started')).toBe(false)
   })
 
-  it('does not re-fire a started event for a job already seen (e.g. queued -> running)', () => {
+  it('announces a job exactly once across queued -> running -> running', () => {
+    // The guarantee this has always protected — one announcement per job —
+    // is unchanged. What moved is WHEN: the queued snapshot is now silent
+    // (nothing has started), the transition to running is the single
+    // announcement, and staying running never re-fires.
     const notifier = new ActivityNotifier()
-    const job = makeJob()
-    notifier.next([job])
-    const events = notifier.next([withState(job, 'running')])
-    expect(events).toEqual([])
+    const job = makeJob() // queued
+    expect(notifier.next([job])).toEqual([])
+    const started = notifier.next([withState(job, 'running')])
+    expect(started.filter((e) => e.kind === 'started')).toHaveLength(1)
+    expect(notifier.next([withState(job, 'running')])).toEqual([])
   })
 })
 

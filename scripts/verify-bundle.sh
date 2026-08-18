@@ -51,15 +51,16 @@ fi
 # of problem this whole file exists to prevent.
 artifact_ts=$(stat -c %Y "$ASAR" 2>/dev/null)
 # Only files that actually END UP in the bundle. Test files are excluded
-# deliberately: none of them are packaged, so their mtimes say nothing about
-# whether the artifact is current. Including them made the gate refuse a
-# perfectly good build merely because a test was edited while it ran — a
-# refusal for the wrong reason, which trains people to override the gate,
-# which is how a gate stops working at all.
+# deliberately: none are packaged, so their mtimes say nothing about whether
+# the artifact is current. Including them made the gate refuse a perfectly
+# good build merely because a test was edited while it ran — a refusal for
+# the wrong reason, which trains people to override the gate, which is how a
+# gate stops working at all.
 newest_src=$(find "$REPO/src" "$REPO/package.json" -type f \
   \( -name '*.ts' -o -name '*.tsx' -o -name '*.json' \) \
   -not -path '*/__tests__/*' -not -name '*.test.ts' -not -name '*.test.tsx' \
-  -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1)
+  -printf '%T@ %p
+' 2>/dev/null | sort -n | tail -1)
 newest_src_ts=${newest_src%% *}
 newest_src_path=${newest_src#* }
 
@@ -115,42 +116,54 @@ chk_absent() {
   fi
 }
 
+# PORTABILITY WARNING, learned on the 1.2.6 hotfix. Several assertions below
+# grep for COMMENT text. That works here only because this build config does
+# not strip comments from out/main — the 1.2.5-based hotfix build DID strip
+# them, and the same assertions silently reported every fix as MISSING.
+#
+# If these start failing wholesale after a build-config change, suspect that
+# before suspecting the fixes. The durable form is structural: match compiled
+# code that only exists when the fix does (see the 1.2.6 script, which pairs
+# `current = null;` with `clearActiveConsent();` — either token alone appears
+# elsewhere, only the sequence is diagnostic).
 echo "=== main process ==="
-# The 1.2.6 fix itself: consent cleared at call end.
-chk_present "1.2.6 clears consent at call end"      "clearActiveConsent"          out/main
-# STRUCTURAL, not comment-based. This build config strips comments from
-# out/main (the 1.3.0 build did not, which is exactly why an assertion that
-# greps for comment text is not portable between them). The compiled endCall
-# reads `current = null;` then `clearActiveConsent();` — a sequence that
-# survives bundling and genuinely distinguishes fixed from unfixed, since
-# clearActiveConsent on its own was always present elsewhere in the file.
-if grep -Pzoq 'current = null;\n  clearActiveConsent\(\);' "$OUT/out/main/index.js" 2>/dev/null; then
-  echo "  PASS  present: 1.2.6 clear is INSIDE the call-end path"
+chk_present "BUG-063 consent keyed to callId"        "consentPermitsCapture"           out/main
+chk_present "BUG-069 Sales Brain startup scheduler"  "scheduleSalesBrainStartup"       out/main
+chk_absent  "BUG-069 old uncapped 15s race gone"     "15_000)])"                       out/main
+chk_present "BUG-070 persist failure is reported"    "[jobs] failed to persist"        out/main
+chk_present "BUG-066 period-exhausted cooldown"      "period-exhausted"                out/main
+chk_present "B2 replacement model present"           "nemotron-3.5-lightning"          out/main
+chk_absent  "B2 dead model removed"                  "nemotron-3-ultra"                out/main
+chk_present "M27 quota-pressure gate"                "capacityGate"                    out/main
+chk_present "BUG-062 journal redaction sweep"        "redactPendingClosedJournals"     out/main
+chk_present "BUG-071 purpose-aware capacity"         "hasUsableCapacityForPurpose"     out/main
+chk_present "BUG-071 non-AI jobs never defer"        "NO_AI_PURPOSE"                   out/main
+chk_present "BUG-072 import resume ledger"           "backfill_attempts"               out/main
+chk_present "BUG-072 resumed-run wording"            "picks up from here next time"    out/main
+chk_absent  "BUG-073 raw-seconds wait gone"          'in about ${secs}s'               out/main
+# BUG-075 — both halves of the consent fix must be in what ships. The
+# lifetime half came from 1.2.6 via a merge, and a hotfix silently lost in a
+# merge is the classic way a shipped fix un-ships in the next release.
+chk_present "BUG-075 lifetime: consent cleared at call end" "clearActiveConsent"        out/main
+chk_present "BUG-075 binding: audio gate reads the live call" "liveCallInfo"             out/main
+# A string literal, not a comment — safe against this build config stripping
+# comments from out/main. Confirmed zero occurrences anywhere before this fix.
+chk_present "malformed tool-call JSON classified transient" "tool_use_failed"           out/main
+
+# The cumulative-progress fix reuses an identifier (alreadyScanned) that
+# already existed for the summary text, so presence/absence of that name
+# proves nothing. Same shape as BUG-075's own structural check above: match
+# the compiled STATEMENT that only exists when the fix does — the fixed code
+# reads `processed: alreadyScanned`; the old code always read `processed: 0`.
+if grep -Pzoq 'processed:\s*alreadyScanned' "$OUT/out/main/index.js" 2>/dev/null; then
+  echo "  PASS  present: cumulative import progress (starts from alreadyScanned, not 0)"
 else
-  echo "  FAIL  MISSING: 1.2.6 clear is not in the call-end path"; fail=1
+  echo "  FAIL  MISSING: cumulative import progress"; fail=1
 fi
-# The corrected comment — proves the false claim is gone from what ships.
-chk_absent  "1.2.6 false 'cleared as the call ended' claim gone" "the record being cleared as the call ended" out/main
-# 1.2.5's own privacy fixes must still be present — this is a hotfix ON TOP
-# of them, and a branch cut from the wrong base would silently drop them.
-chk_present "1.2.5 journal redaction sweep still present" "redactPendingClosedJournals" out/main
-chk_present "1.2.5 askCoach consent gate still present"   "consentPermitsCapture"       out/main
 
 echo "=== renderer ==="
-# NOT ASSERTED, and stated rather than quietly omitted.
-#
-# The renderer half of this fix — all three arm paths refusing to arm when
-# the consent persist failed — is a control-flow change with no new string
-# literal, and the renderer bundle IS minified. There is nothing to grep for
-# that would distinguish the fixed build from the broken one. Asserting on
-# something incidental that happens to survive minification would be a check
-# that passes either way, which is worse than no check.
-#
-# It is covered instead by src/main/__tests__/consent-lifetime.test.ts, which
-# drives the real IPC handlers and the real display-media grant callback, and
-# was red-checked: reverting the fix fails exactly the three leak tests while
-# the normal-flow and restart tests keep passing.
-echo "  SKIP  renderer arm-path guards - minified, no greppable signature (see note in this script)"
+chk_present "draggable Activity button persistence"  "salesos.activityCenter.position" out/renderer
+chk_present "BUG-072 re-scan control"                "Start over"                      out/renderer
 
 echo
 if [ "$fail" -eq 0 ]; then

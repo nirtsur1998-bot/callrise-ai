@@ -9,6 +9,7 @@ import { Worker } from 'node:worker_threads'
 import {
   DEFAULT_LANE_CONFIG,
   INDETERMINATE_PROGRESS,
+  NO_AI_PURPOSE,
   type EnqueueOptions,
   type Job,
   type JobHandle,
@@ -26,6 +27,24 @@ import {
 } from './retention'
 import { throttle } from './throttle'
 
+/**
+ * The single place a failed job-state write is reported, shared by both
+ * fire-and-forget persist paths (the throttled auto-save here, and the
+ * save-on-quit in index.ts) so they can't drift into describing the same
+ * failure two different ways.
+ *
+ * Deliberately log-only, and deliberately not surfaced to the user: there is
+ * no action a rep could take, and the queue self-heals on the next successful
+ * write. What was NOT acceptable was the previous behaviour — no handler at
+ * all, so the failure existed only as an unhandled rejection.
+ */
+export function reportPersistFailure(err: unknown): void {
+  console.error(
+    '[jobs] failed to persist job state — the queue on disk is stale until the next successful write:',
+    err
+  )
+}
+
 const LANES: JobLane[] = ['LIVE', 'INTERACTIVE', 'BATCH', 'MAINTENANCE']
 /** How often job-list state is actually written to disk, at most — cheap
  *  in-memory updates (progress ticks, etc.) can happen far more often
@@ -33,6 +52,15 @@ const LANES: JobLane[] = ['LIVE', 'INTERACTIVE', 'BATCH', 'MAINTENANCE']
  *  broadcast throttle in jobs/ipc.ts, which throttles renderer traffic, not
  *  disk I/O. */
 const PERSIST_THROTTLE_MS = 250
+
+/** M27 — how often to re-check whether AI capacity has returned while
+ *  background jobs are being held (see setCapacityGate). CHOSEN, not derived:
+ *  the condition it waits on is minutes-to-hours long (a period-exhausted
+ *  cooldown is capped at 24h and typically ends at the provider's daily
+ *  reset), so anything faster buys nothing, and the cost of being up to a
+ *  minute late resuming background work is nil. Cheap enough to be
+ *  unconditional: a few in-memory map lookups, no network, no disk. */
+const CAPACITY_POLL_MS = 60_000
 
 interface RunningEntry {
   controller: AbortController
@@ -67,9 +95,26 @@ export class JobManager {
   // leading: false — see throttle()'s own doc comment: this makes dispose()'s
   // cancel() a real guarantee (no write can already be mid-flight when it
   // runs), which matters more here than shaving the first write's latency.
-  private persistThrottled = throttle(() => void this.flush(), PERSIST_THROTTLE_MS, {
+  private persistThrottled = throttle(() => this.persistInBackground(), PERSIST_THROTTLE_MS, {
     leading: false
   })
+
+  /** The auto-save path: nobody is awaiting this, so its rejection has to be
+   *  handled HERE. It previously wasn't (`void this.flush()`), which meant a
+   *  failed write became an unhandled rejection caught only by the
+   *  process-wide net in index.ts/log.ts — a real failure reported as a
+   *  generic crash-log line, indistinguishable from anything else that goes
+   *  wrong anywhere in the app.
+   *
+   *  That is also how it stayed hidden: it surfaced in CI only as an
+   *  intermittent "known flake" (a test's temp directory removed while a
+   *  throttled write was still in flight), and a suite that sometimes exits
+   *  non-zero for a benign reason teaches everyone to stop reading the exit
+   *  code — which is exactly the habit that let a real failure hide behind
+   *  it. See BUG-070. */
+  private persistInBackground(): void {
+    void this.flush().catch(reportPersistFailure)
+  }
 
   /** Cap on retained history. Overridable so tests can exercise pruning
    *  with a handful of jobs instead of 500+ — building fixtures that large
@@ -78,12 +123,64 @@ export class JobManager {
    *  uses the default. */
   private maxRetainedJobs: number
 
-  constructor(initialJobs: Job[] = loadJobs(), opts: { maxRetainedJobs?: number } = {}) {
+  /**
+   * M27 — quota-pressure gate. Returns false when nothing usable is left to
+   * serve the work, in which case background (BATCH/MAINTENANCE) jobs are held
+   * queued rather than started: they would walk their whole fallback chain and
+   * fail anyway, burning retry pressure on an already-exhausted key that live
+   * coaching is also competing for.
+   *
+   * Takes the job type's declared `aiPurpose` (an opaque string here) so the
+   * answer is about the chain the job will ACTUALLY walk. It first shipped
+   * taking no argument, asking only "is any configured model usable" — which
+   * green-lit Sales Brain's import straight into a fully-exhausted
+   * memory-extract chain while an unrelated keyed model looked fine. Undefined
+   * purpose still means the whole-catalog question, which is right for a job
+   * whose AI work spans purposes or does none.
+   *
+   * INJECTED, not imported: JobManager stays free of any dependency on the AI
+   * layer (the same separation errorCode() above keeps for feature error
+   * types), and every existing test gets the default — always-available, so
+   * job semantics are completely unchanged unless something wires a real gate.
+   * Production wires ai/capacity.ts's two capacity functions in index.ts.
+   */
+  private capacityGate: (purpose?: string) => boolean
+
+  constructor(
+    initialJobs: Job[] = loadJobs(),
+    opts: { maxRetainedJobs?: number; capacityGate?: (purpose?: string) => boolean } = {}
+  ) {
     this.maxRetainedJobs = opts.maxRetainedJobs ?? MAX_RETAINED_JOBS
+    this.capacityGate = opts.capacityGate ?? ((): boolean => true)
     for (const j of initialJobs) {
       this.jobs.set(j.id, j)
       this.order.push(j.id)
     }
+  }
+
+  /** The un-defer poll. Only ever running in production (started by
+   *  setCapacityGate), so no test leaks a timer. */
+  private capacityPoll: ReturnType<typeof setInterval> | null = null
+
+  /** M27 — swap the gate after construction. Production calls this from
+   *  jobs/instance.ts once the AI layer is available, so JobManager itself
+   *  never has to import it.
+   *
+   *  Also starts the un-defer poll: the ordinary triggers (a job finishing,
+   *  a new enqueue) don't fire while everything is held, so without this a
+   *  deferred job would wait for unrelated activity to wake it. A quota
+   *  window is minutes-to-hours long (period-exhausted is capped at 24h and
+   *  usually ends at the provider's daily reset), so this is deliberately
+   *  slow — it costs a handful of in-memory map lookups per minute and never
+   *  touches the network. */
+  setCapacityGate(gate: (purpose?: string) => boolean): void {
+    this.capacityGate = gate
+    if (this.capacityPoll === null) {
+      this.capacityPoll = setInterval(() => this.tick(), CAPACITY_POLL_MS)
+      // Never hold the process open just to poll a queue.
+      this.capacityPoll.unref?.()
+    }
+    this.tick()
   }
 
   // The internal registry is necessarily heterogeneous (every job type has
@@ -284,6 +381,10 @@ export class JobManager {
    *  anything itself. */
   dispose(): void {
     this.persistThrottled.cancel()
+    if (this.capacityPoll !== null) {
+      clearInterval(this.capacityPoll)
+      this.capacityPoll = null
+    }
     for (const entry of this.running.values()) {
       entry.controller.abort()
       void entry.worker?.terminate()
@@ -305,19 +406,123 @@ export class JobManager {
    *  capacity is never shared with or blocked by the other three, which is
    *  what actually guarantees "nothing else may starve it" rather than
    *  relying on priority numbers alone. */
+  /** M27 — which lanes hold back under quota pressure. LIVE is the call
+   *  itself; INTERACTIVE is something the rep clicked and is actively waiting
+   *  on, so it should still try (and fail with a real, visible error) rather
+   *  than silently stall. Only genuine background work defers. */
+  private static readonly PRESSURE_DEFERRABLE_LANES: ReadonlySet<JobLane> = new Set<JobLane>([
+    'BATCH',
+    'MAINTENANCE'
+  ])
+
+  /** The AI purpose a job type's work runs on, if it declared one. Kept as a
+   *  plain string here: JobManager deliberately knows nothing about the AI
+   *  layer (same separation errorCode() keeps for feature error types), so
+   *  the purpose is an opaque token it forwards to an injected gate. */
+  private aiPurposeOf(job: Job): string | undefined {
+    return this.types.get(job.type)?.aiPurpose
+  }
+
+  /** The single definition of "is quota pressure holding this job back",
+   *  shared by tick() and deferredJobIds() so the scheduler's decision and
+   *  the label the user reads can never disagree.
+   *
+   *  NO_AI_PURPOSE is honoured HERE, not in whatever gate gets injected: it
+   *  is the job system's own vocabulary, and a job that touches no provider
+   *  must never wait on one regardless of how the gate is implemented or
+   *  who wired it. Putting this in the caller made the guarantee only as
+   *  good as each gate implementation remembering it.
+   */
+  private deferredByCapacity(job: Job, hasCapacity: (p: string | undefined) => boolean): boolean {
+    const purpose = this.aiPurposeOf(job)
+    if (purpose === NO_AI_PURPOSE) return false
+    return !hasCapacity(purpose)
+  }
+
   private tick(): void {
+    // Memoised PER PURPOSE, not once per tick: the gate hits the cooldown maps
+    // for a whole chain, and two jobs asking about the SAME purpose at the
+    // same instant get the same answer — but two jobs on DIFFERENT purposes
+    // genuinely have different answers, and collapsing them is the bug this
+    // replaced. `''` stands for "no declared purpose" (the whole-catalog
+    // question), which is still the right question for a job whose work
+    // isn't tied to one chain.
+    const answers = new Map<string, boolean>()
+    const hasCapacity = (purpose: string | undefined): boolean => {
+      const key = purpose ?? ''
+      let a = answers.get(key)
+      if (a === undefined) {
+        a = this.capacityGate(purpose)
+        answers.set(key, a)
+      }
+      return a
+    }
+
     for (const lane of LANES) {
       let capacity = this.laneConfig[lane].maxConcurrent - this.runningCountInLane(lane)
       if (!(capacity > 0)) continue
       const queued = this.list()
         .filter((j) => j.lane === lane && j.state === 'queued')
         .sort((a, b) => b.priority - a.priority || a.createdAt - b.createdAt)
+      // M27 — hold background work while there is no usable AI capacity for
+      // the chain it will actually walk. Deliberately a SKIP of the start,
+      // not a state change: the job stays plain `queued`, so nothing about
+      // persistence, retention, the quit guard, or resume has to learn a new
+      // state. See deferredJobIds() for the user-visible side.
+      //
+      // Checked PER JOB rather than per lane (as it first shipped): jobs in
+      // one lane can run different purposes, and one exhausted chain must
+      // not stall unrelated background work sharing the lane.
+      const deferrable = JobManager.PRESSURE_DEFERRABLE_LANES.has(lane)
       for (const job of queued) {
         if (capacity <= 0) break
+        if (deferrable && this.deferredByCapacity(job, hasCapacity)) continue
         this.start(job)
         capacity--
       }
     }
+  }
+
+  /**
+   * M27 — the ids currently being held back by quota pressure specifically,
+   * as opposed to merely waiting their turn behind a busy lane. Derived on
+   * demand from live state, never stored on the Job (which would drag a new
+   * field through persistence, migration, retention and resume for something
+   * fully computable from facts already in hand).
+   *
+   * Deliberately computed from the SAME three conditions tick() skips on —
+   * deferrable lane, no capacity, and the lane genuinely having room this job
+   * would otherwise take — so the label can never claim "waiting for provider
+   * capacity" about a job that is really just queued behind another BATCH job.
+   */
+  deferredJobIds(): Set<string> {
+    const out = new Set<string>()
+    // Asked per purpose, exactly as tick() now does. The single global
+    // `if (this.capacityGate()) return out` that used to sit here was the
+    // matching half of the same bug: with one chain exhausted and another
+    // fine, it returned "nothing is deferred" while tick() was in fact
+    // holding jobs — so the Activity Center showed them as plain queued with
+    // no reason given.
+    const answers = new Map<string, boolean>()
+    const hasCapacity = (purpose: string | undefined): boolean => {
+      const key = purpose ?? ''
+      let a = answers.get(key)
+      if (a === undefined) {
+        a = this.capacityGate(purpose)
+        answers.set(key, a)
+      }
+      return a
+    }
+    for (const lane of JobManager.PRESSURE_DEFERRABLE_LANES) {
+      const room = this.laneConfig[lane].maxConcurrent - this.runningCountInLane(lane)
+      if (!(room > 0)) continue // queued behind a running job, not behind capacity
+      for (const job of this.list()) {
+        if (job.lane !== lane || job.state !== 'queued') continue
+        if (!this.deferredByCapacity(job, hasCapacity)) continue
+        out.add(job.id)
+      }
+    }
+    return out
   }
 
   private start(job: Job): void {

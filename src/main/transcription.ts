@@ -851,6 +851,30 @@ function connect(s: Session): void {
           multichannel: s.multichannel
         })
 
+        // M27 — DELIBERATELY UNTHROTTLED, unlike every other high-frequency
+        // IPC channel in this app (jobs/ipc.ts throttles its broadcast to
+        // CLAUDE.md's "~4/sec max so a hot loop can't flood IPC"). Recorded
+        // here as an explicit decision because a silent exception to a stated
+        // policy is indistinguishable from an oversight — and a Phase 0 audit
+        // correctly flagged it as exactly that.
+        //
+        // Why this one is exempt: these are LIVE CAPTIONS. Every message is a
+        // Deepgram result, including word-by-word interim partials
+        // (`interim_results: true`), and the whole product promise of the
+        // live-call screen is that text appears as the words are spoken.
+        // Throttling to 4/sec would batch caption updates into visible ~250ms
+        // steps — turning smooth transcription into a stutter, on the one
+        // screen where responsiveness IS the feature. The frequency is also
+        // bounded by real speech (a few messages/second while someone is
+        // actually talking, zero while nobody is), not by a hot loop, which is
+        // the failure mode that policy exists to prevent.
+        //
+        // What makes that affordable: both renderer consumers do genuinely
+        // cheap per-message work — useTranscription sets interim text, and
+        // useLiveCues does a regex match against battlecards plus turn-buffer
+        // bookkeeping. Neither hits disk, network, or an AI call. If a future
+        // consumer subscribes here and does something expensive, THAT consumer
+        // should throttle itself; this channel must stay live.
         emit(s, 'transcription:transcript', {
           transcript,
           words,

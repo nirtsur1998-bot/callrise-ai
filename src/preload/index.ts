@@ -69,24 +69,26 @@ const api = {
     onMultichannelFallback: (cb: (payload: unknown) => void) =>
       subscribe('transcription:multichannelFallback', cb),
     suggestQuestion: (text: string) => ipcRenderer.invoke('live:suggestQuestion', text),
-    // 1.2.5 hotfix — sessionId + includesBuyerContent, same shape as liveCue
-    // below, let main check fresh consent before a pass that may include
-    // buyer-attributed content ever reaches an AI prompt.
+    // 1.2.5 hotfix, M27 E1 — callId + includesBuyerContent, same shape as
+    // liveCue below, let main check fresh consent before a pass that may
+    // include buyer-attributed content ever reaches an AI prompt. Keyed on
+    // callId, not sessionId (see main/consent-gate.ts's own doc comment).
     askCoach: (
       transcript: string,
       question: string,
-      sessionId?: number,
+      callId?: string,
       includesBuyerContent?: boolean
-    ) => ipcRenderer.invoke('live:askCoach', { transcript, question, sessionId, includesBuyerContent }),
-    // M26 4.5 (BUG-055) — sessionId + includesBuyerContent let main check
-    // fresh consent before a pass that may include buyer-attributed content
-    // ever reaches an AI prompt. See main/live-cue.ts's own doc comment.
+    ) => ipcRenderer.invoke('live:askCoach', { transcript, question, callId, includesBuyerContent }),
+    // M26 4.5 (BUG-055) / M27 E1 — callId + includesBuyerContent let main
+    // check fresh consent before a pass that may include buyer-attributed
+    // content ever reaches an AI prompt. See main/live-cue.ts's own doc
+    // comment.
     liveCue: (
       transcript: string,
       repSpeaker: number | null,
-      sessionId?: number,
+      callId?: string,
       includesBuyerContent?: boolean
-    ) => ipcRenderer.invoke('live:cue', { transcript, repSpeaker, sessionId, includesBuyerContent })
+    ) => ipcRenderer.invoke('live:cue', { transcript, repSpeaker, callId, includesBuyerContent })
   },
   trackers: {
     /** Turn a rep's plain-English request into a candidate tracker (§4.8).
@@ -105,8 +107,9 @@ const api = {
       compactState: string
       dealContext?: string
       triggerReason?: string
-      /** M26 4.5 (BUG-055) — see main/deal-tier1.ts's own doc comment. */
-      sessionId?: number
+      /** M26 4.5 (BUG-055) / M27 E1 — see main/deal-tier1.ts's own doc
+       *  comment. Keyed on callId, not sessionId. */
+      callId?: string
       includesBuyerContent?: boolean
     }) => ipcRenderer.invoke('dealIntelligence:analyzeTier1', input),
     /** M24 §4 — Tier 2 strategic analysis: a wider transcript delta +
@@ -117,7 +120,7 @@ const api = {
       compactState: string
       dealContext?: string
       triggerReason?: string
-      sessionId?: number
+      callId?: string
       includesBuyerContent?: boolean
     }) => ipcRenderer.invoke('dealIntelligence:analyzeTier2', input),
     /** M24 §8 — the feedback loop. recordFeedback fires immediately per
@@ -276,6 +279,9 @@ const api = {
         includeContacts?: boolean
         includeDeals?: boolean
         includeCalls?: boolean
+        /** Forget past attempts and reconsider every call. Normal runs
+         *  resume; this is the explicit "learn from everything again". */
+        rescanAll?: boolean
       }) => ipcRenderer.invoke('salesBrain:backfill:start', opts)
     },
     memories: {
@@ -350,8 +356,10 @@ const api = {
   consent: {
     // Synchronous, like arm/disarm: this runs inside the click that opens
     // getDisplayMedia, and an async hop would spend the user activation.
-    persist: (sessionId: number, consent: unknown): boolean =>
-      ipcRenderer.sendSync('consent:persist', { sessionId, consent }) === true,
+    // M27 E1 — keyed on callId, not sessionId (see main/consent-gate.ts's
+    // own doc comment for why).
+    persist: (callId: string, consent: unknown): boolean =>
+      ipcRenderer.sendSync('consent:persist', { callId, consent }) === true,
     clear: (): void => {
       ipcRenderer.sendSync('consent:clear')
     }
@@ -462,6 +470,29 @@ const api = {
     installDriver: () => ipcRenderer.invoke('virtualmic:installDriver'),
     // Fires when the helper's running/denoise state changes (started, stopped, crashed).
     onChanged: (cb: (status: unknown) => void) => subscribe('virtualmic:changed', cb)
+  },
+  tier1: {
+    // M27 Tier 1 — driver-free noise cancellation for CallRise's OWN audio.
+    // Separate from `virtualmic` above on purpose: that one publishes a
+    // system-wide capture DEVICE for Zoom/Teams and needs a signed driver;
+    // this one delivers denoised PCM to this app over a named pipe and needs
+    // nothing installed.
+    start: (micName: string) => ipcRenderer.invoke('tier1:start', micName),
+    stop: () => ipcRenderer.invoke('tier1:stop'),
+    getStatus: () => ipcRenderer.invoke('tier1:getStatus'),
+    onStatus: (cb: (status: unknown) => void) => subscribe('tier1:status', cb),
+    // Audio frames. Deliberately NOT routed through `subscribe`'s generic
+    // path: this fires ~100x/second and the payload is a transferred
+    // ArrayBuffer, so it gets its own minimal listener with no wrapping,
+    // logging or JSON work in between. Returns an unsubscribe, same contract
+    // as every other listener here, because a live audio callback outliving
+    // the call that created it is a leak that keeps a whole AudioContext
+    // alive.
+    onPcm: (cb: (frame: ArrayBuffer) => void) => {
+      const handler = (_e: unknown, frame: ArrayBuffer): void => cb(frame)
+      ipcRenderer.on('tier1:pcm', handler)
+      return () => ipcRenderer.removeListener('tier1:pcm', handler)
+    }
   },
   knowledge: {
     list: () => ipcRenderer.invoke('knowledge:list'),

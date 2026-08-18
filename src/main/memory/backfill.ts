@@ -26,6 +26,12 @@ import { clientScope, type MemoryCandidate, type MemoryEvidence, type MemoryScop
 import { isSalesBrainEnabled } from '../app-settings'
 import { createScanTally, type ScanTally } from '../objection-scan-tally'
 import type Database from 'better-sqlite3'
+import {
+  attemptedCallIds,
+  clearAttempts,
+  recordAttempt,
+  retryFailedAttempts
+} from './backfill-ledger'
 
 /** BUG-057 — "every AI call failed" must not be able to render as success.
  *  Only true when the calls stage actually ran, attempted at least one
@@ -58,7 +64,12 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
  * Health has to be asserted ("0 failed"), not implied by silence; implying it
  * by silence is the entire bug this fix exists for.
  */
-function buildSummary(tally: ScanTally | null, failureReason: string | undefined): string {
+function buildSummary(
+  tally: ScanTally | null,
+  failureReason: string | undefined,
+  alreadyScanned: number,
+  remaining: number
+): string {
   // No calls stage requested — the contacts/deals passes are structured-data
   // mapping with no AI call at all, so there is nothing that can silently fail.
   if (!tally) return 'Import complete.'
@@ -70,8 +81,20 @@ function buildSummary(tally: ScanTally | null, failureReason: string | undefined
     `${s.skipped} skipped (no transcript, or excluded from Sales Brain). ` +
     `Learned ${plural(s.candidatesAdded, 'new thing')}.`
 
-  if (s.stopped === 'errors') out += ' Stopped early after 3 failures in a row.'
-  else if (s.stopped === 'disabled') out += ' Stopped — Sales Brain was turned off.'
+  // M27 — stated whenever a previous run did some of the work, so a run
+  // reporting "checked 4 calls" out of a library of 104 reads as resumed
+  // progress rather than as the import mysteriously ignoring everything else.
+  if (alreadyScanned > 0) out += ` ${alreadyScanned} already done earlier.`
+
+  if (s.stopped === 'errors') {
+    out += ' Paused after 3 failures in a row.'
+    // The single most important sentence for the bug this fixes: the run that
+    // stops is no longer a run that achieved nothing. Say so explicitly,
+    // because "stopped early" previously read as "give up".
+    if (remaining > 0) {
+      out += ` ${plural(remaining, 'call')} still to go — it picks up from here next time, not from the start.`
+    }
+  } else if (s.stopped === 'disabled') out += ' Stopped — Sales Brain was turned off.'
   // The provider's own words, once — "why" and "how much" belong together.
   if (s.failed > 0 && failureReason) out += ` (${failureReason})`
   return out
@@ -168,6 +191,12 @@ export interface BackfillOptions {
   /** The slow, AI-cost-incurring part — off by default in the UI (see
    *  backfill-ipc.ts), opted into explicitly. */
   includeCalls: boolean
+  /** M27 — forget every past attempt and reconsider the whole library,
+   *  including calls that legitimately produced nothing last time. Normal
+   *  runs resume, which is what makes the import completable at all on a
+   *  rate-limited key; this is the deliberate escape hatch for "learn from
+   *  everything again" (e.g. after the extraction prompt itself improves). */
+  rescanAll?: boolean
   callsDir: string
   contactsDir: string
   dealsDir: string
@@ -194,6 +223,12 @@ export async function runBackfill(
   // nothing", two things a bare zero cannot tell apart.
   let tally: ScanTally | null = null
   let firstFailureReason: string | undefined
+  /** How many eligible calls a previous run had already handled — reported so
+   *  a resumed run's shrinking `total` reads as progress, not loss. */
+  let alreadyScanned = 0
+  /** Eligible calls this run never got to — the breaker stopped it, or Sales
+   *  Brain was switched off. Drives the "picks up from here next time" line. */
+  let remainingCalls = 0
 
   try {
     assertStillEnabled()
@@ -226,8 +261,39 @@ export async function runBackfill(
 
     if (opts.includeCalls) {
       const calls = await listCalls(opts.callsDir)
-      const withTranscripts = calls.filter((c) => c.hasSummary || c.hasCoaching || c.durationMs > 0)
-      onProgress({ running: true, stage: 'calls', processed: 0, total: withTranscripts.length })
+      const eligible = calls.filter((c) => c.hasSummary || c.hasCoaching || c.durationMs > 0)
+
+      // M27 — RESUME. Previously this iterated `eligible` from index 0 on
+      // every run, with no record of what a prior run had done. With an
+      // exhausted key the breaker below stops a run about four calls in, so
+      // the next run redid the same four and stopped again: pressing the
+      // button a hundred times could never reach call five. See
+      // backfill-ledger.ts for why the key is ATTEMPTED rather than
+      // SUCCEEDED.
+      //
+      // Failed attempts are cleared FIRST: a call that failed because the key
+      // was spent deserves another go now that someone is asking again.
+      if (opts.rescanAll) clearAttempts(db)
+      retryFailedAttempts(db)
+      const alreadyDone = attemptedCallIds(db)
+      const withTranscripts = eligible.filter((c) => !alreadyDone.has(c.id))
+      // `total` is the remaining work, and `alreadyScanned` carries the rest,
+      // so the summary can say "84 already done" instead of silently showing
+      // a shrinking total that looks like calls went missing.
+      alreadyScanned = eligible.length - withTranscripts.length
+      // M27 — CUMULATIVE against the whole call library, not just this run's
+      // remaining set. Before this, `total` was withTranscripts.length — the
+      // REMAINING subset — so a resumed run's progress bar reset to "0 / 103"
+      // instead of showing "10 / 113", the exact visibility the resume fix
+      // was built for but never surfaced: the mechanism worked, nothing on
+      // screen showed it working. `processed` starts at `alreadyScanned`
+      // rather than 0 for the identical reason.
+      onProgress({
+        running: true,
+        stage: 'calls',
+        processed: alreadyScanned,
+        total: eligible.length
+      })
       // BUG-057 — the same tally the objection scan uses, for the same reason:
       // it already encodes "a skip is not a failure" and "3 consecutive
       // failures means the API is down, stop burning a doomed request per
@@ -245,17 +311,29 @@ export async function runBackfill(
           // not just on the live-call path.
           if (!full?.segments?.length || full.salesBrainExcluded) {
             verdict = tally.record({ kind: 'skipped' })
+            // Recorded so a resumed run doesn't re-read it. Both reasons (no
+            // transcript, explicitly excluded) are stable properties of the
+            // call, not transient, so retryFailedAttempts leaves these alone.
+            recordAttempt(db, withTranscripts[i].id, 'skipped')
           } else {
             const outcome = await extractMemoriesFromCall(full.segments, full.id, full.contactId ?? null)
             if (outcome.aiFailed) {
               if (!firstFailureReason) firstFailureReason = outcome.failureReason
               verdict = tally.record({ kind: 'failed' })
+              // Recorded so a RESUMED run inside the same session doesn't
+              // immediately re-attempt what just failed and re-trip the
+              // breaker; cleared again at the start of the next run.
+              recordAttempt(db, withTranscripts[i].id, 'failed')
             } else {
               for (const candidate of outcome.candidates) {
                 await consolidateNewCandidate(db, candidate)
                 touchedScopes.add(candidate.scope)
               }
               verdict = tally.record({ kind: 'ok', added: outcome.candidates.length })
+              // ATTEMPTED, not "produced memories": zero candidates is a
+              // legitimate result for a short call or a voicemail, and keying
+              // off memories-exist would re-scan every such call forever.
+              recordAttempt(db, withTranscripts[i].id, 'ok')
             }
           }
         } catch {
@@ -263,9 +341,22 @@ export async function runBackfill(
              backfill — but it IS a failure, not a silent no-op, so it counts
              toward the breaker like any other. */
           verdict = tally.record({ kind: 'failed' })
+          try {
+            recordAttempt(db, withTranscripts[i].id, 'failed')
+          } catch {
+            /* the ledger is an optimisation, never a reason to abort a run */
+          }
         }
-        onProgress({ running: true, stage: 'calls', processed: i + 1, total: withTranscripts.length })
-        if (verdict === 'stop') break
+        onProgress({
+          running: true,
+          stage: 'calls',
+          processed: alreadyScanned + i + 1,
+          total: eligible.length
+        })
+        if (verdict === 'stop') {
+          remainingCalls = withTranscripts.length - (i + 1)
+          break
+        }
       }
     }
 
@@ -278,7 +369,7 @@ export async function runBackfill(
       stage: 'done',
       processed: 0,
       total: 0,
-      summary: buildSummary(tally, firstFailureReason),
+      summary: buildSummary(tally, firstFailureReason, alreadyScanned, remainingCalls),
       callsTotalFailure: isTotalCallsFailure(tally)
     })
   } catch (e) {

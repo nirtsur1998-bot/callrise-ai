@@ -27,7 +27,10 @@ function dealsDir(): string {
 
 const BACKFILL_JOB_TYPE = 'salesBrain:backfill'
 
-type BackfillJobInput = Pick<BackfillOptions, 'includeContacts' | 'includeDeals' | 'includeCalls'>
+type BackfillJobInput = Pick<
+  BackfillOptions,
+  'includeContacts' | 'includeDeals' | 'includeCalls' | 'rescanAll'
+>
 
 function stageLabel(p: BackfillProgress): string {
   const noun = p.stage === 'contacts' ? 'contacts' : p.stage === 'deals' ? 'deals' : 'calls'
@@ -51,6 +54,8 @@ export function registerBackfill(): void {
   getJobManager().registerType<BackfillJobInput, string>({
     type: BACKFILL_JOB_TYPE,
     lane: 'BATCH',
+    // M27 — the chain whose exhaustion makes this job pointless to start.
+    aiPurpose: 'memory-extract',
     titleFor: () => 'Importing your past history into Sales Brain',
     // runBackfill has no AbortSignal support, and adding one would mean
     // editing M25-owned code — out of scope for an adapter-only migration
@@ -79,6 +84,7 @@ export function registerBackfill(): void {
             includeContacts: input.includeContacts,
             includeDeals: input.includeDeals,
             includeCalls: input.includeCalls,
+            rescanAll: input.rescanAll === true,
             callsDir: callsDir(),
             contactsDir: contactsDir(),
             dealsDir: dealsDir()
@@ -148,7 +154,8 @@ export function registerBackfill(): void {
       const job = manager.enqueue(BACKFILL_JOB_TYPE, {
         includeContacts: o.includeContacts !== false,
         includeDeals: o.includeDeals !== false,
-        includeCalls: o.includeCalls === true // opt-in, off unless explicitly requested — the slow/costly part
+        includeCalls: o.includeCalls === true, // opt-in, off unless explicitly requested — the slow/costly part
+        rescanAll: o.rescanAll === true // opt-in: normal runs resume
       })
       return { ok: true, jobId: job.id }
     }

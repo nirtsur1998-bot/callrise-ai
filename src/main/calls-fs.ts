@@ -657,7 +657,10 @@ export function sanitizeSummary(value: unknown): Summary | null {
   }
 }
 
-function toSummary(call: Call): CallSummary {
+// M27 E2 — exported so live-transcript-ipc.ts's crash-recovery idempotency
+// check can build a CallSummary for an already-recovered call without
+// re-deriving this mapping.
+export function toSummary(call: Call): CallSummary {
   return {
     id: call.id,
     title: call.title,

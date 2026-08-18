@@ -87,7 +87,6 @@ export function LiveCallProvider({ children }: { children: ReactNode }): React.J
     transcription.status === 'listening',
     cueSettings.enabled,
     transcription.getCallId,
-    transcription.getSessionId,
     cueSettings.sensitivity,
     transcription.otherPartyLive ? 0 : null,
     transcription.identifyRep
@@ -105,7 +104,6 @@ export function LiveCallProvider({ children }: { children: ReactNode }): React.J
     transcription.status === 'listening',
     dealIntelligenceSettings.enabled,
     transcription.getCallId,
-    transcription.getSessionId,
     dealIntelligenceSettings.sensitivity,
     [],
     currentMeeting,

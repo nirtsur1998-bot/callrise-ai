@@ -23,6 +23,7 @@ import { githubRepoFromFeed, isTrustedFeed, validateUpdate } from './policy'
 import { isAutoUpdateEnabled, setAutoUpdateEnabledChangedListener } from '../app-settings'
 import { getJobManager } from '../jobs/instance'
 import type { Job } from '../jobs/types'
+import { NO_AI_PURPOSE } from '../jobs/types'
 
 // How often the background check runs when auto-update is on. Not too eager
 // (this is a network request against GitHub's API on every user's machine)
@@ -170,6 +171,8 @@ export function registerUpdater(): void {
   getJobManager().registerType<Record<string, never>, string>({
     type: DOWNLOAD_JOB_TYPE,
     lane: 'MAINTENANCE',
+    // M27 — auto-update download — no AI provider, so AI quota pressure must never hold it.
+    aiPurpose: NO_AI_PURPOSE,
     titleFor: () => 'Downloading update',
     cancellable: false,
     executor: {

@@ -31,7 +31,9 @@ const {
   replayJournal,
   discardJournal,
   redactJournalConsentIfNeeded,
-  redactPendingClosedJournals
+  redactPendingClosedJournals,
+  markJournalRecoveredAsCall,
+  readRecoveredCallId
 } = await import('../live/call-journal')
 
 const {
@@ -46,7 +48,7 @@ const {
 } = await import('../live/live-transcript')
 
 const { listRecoverableCalls, recoverCall } = await import('../live/live-transcript-ipc')
-const { getCall, listCalls } = await import('../calls-fs')
+const { getCall, listCalls, saveCall } = await import('../calls-fs')
 
 let dir: string
 let callsDir: string
@@ -402,6 +404,56 @@ describe('the recovered call carries a real duration', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('M27 E2 — recovery survives a crash between saving and retiring the journal', () => {
+  // The race: recoverCall() calls saveCall() (a real, permanent Call record),
+  // THEN retireJournal() to mark the journal spent — two separate steps. A
+  // crash in the gap leaves a journal that still looks untouched (no .done,
+  // not renamed) even though its Call already exists. This simulates landing
+  // exactly there: do what an interrupted recoverCall() would have done up
+  // to and including markJournalRecoveredAsCall(), then deliberately do NOT
+  // retire the journal — the crash the real code defends against.
+  it('recovering a second time returns the SAME call instead of minting a duplicate', async () => {
+    beginCall({ restart: false })
+    recordResult(result([{ speaker: 0, text: 'said before the crash' }]))
+    crash()
+
+    const [found] = await afterRelaunch()
+    const firstAttempt = await saveCall(callsDir, {
+      startedAt: found.startedAt,
+      durationMs: found.durationMs,
+      segments: (await readJournal(found.id).then((j) => (j ? replayJournal(j) : null)))!
+        .segments
+    })
+    await markJournalRecoveredAsCall(found.id, firstAttempt.id)
+    // Deliberately no retireJournal() call here — this is the crash.
+
+    // Still offered: the journal's .jsonl name never changed.
+    expect(await afterRelaunch()).toHaveLength(1)
+
+    // The retry: the real recovery path, exactly as the rep clicking
+    // "Recover" a second time would trigger it.
+    const secondAttempt = await recoverCall(found.id, callsDir)
+
+    expect(secondAttempt?.id).toBe(firstAttempt.id) // same call, not a new one
+    expect(await listCalls(callsDir)).toHaveLength(1) // never duplicated
+    expect(await afterRelaunch()).toHaveLength(0) // properly retired now
+  })
+
+  it('the recovered-call marker itself is cleaned up once retirement actually succeeds', async () => {
+    beginCall({ restart: false })
+    recordResult(result([{ speaker: 0, text: 'normal recovery' }]))
+    crash()
+
+    const [found] = await afterRelaunch()
+    await recoverCall(found.id, callsDir)
+
+    // The marker's only job was bridging the crash window above — once a
+    // real recoverCall() completes normally (marker write, then retire, in
+    // the same call), nothing should be left over to accumulate forever.
+    expect(await readRecoveredCallId(found.id)).toBeNull()
   })
 })
 

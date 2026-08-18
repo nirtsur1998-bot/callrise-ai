@@ -35,8 +35,12 @@
 // this app stored before Sales Brain existed) is completely untouched —
 // this module only ever reads/writes the separate memory.db file.
 import { copyFileSync, existsSync, rmSync } from 'node:fs'
-import Database from 'better-sqlite3'
-import * as sqliteVec from 'sqlite-vec'
+// M27 J3 — type-only. better-sqlite3's actual native module is loaded lazily
+// inside openMemoryDb(), below, not here — see that function's own doc
+// comment for why. A type-only import is erased entirely at compile time
+// (no runtime require, no native load), so every `Database.Database`
+// annotation in this file costs nothing until Sales Brain is actually used.
+import type Database from 'better-sqlite3'
 import { MIGRATIONS, LATEST_SCHEMA_VERSION } from './migrations'
 
 export function memoryDbPath(userDataDir: string): string {
@@ -86,9 +90,31 @@ export function resolveVecExtensionPath(resolved: string): string {
   return resolved
 }
 
+/**
+ * M27 J3 — better-sqlite3 and sqlite-vec are require()'d HERE, lazily, not
+ * imported at module scope. Every user's process used to load both native
+ * modules at startup regardless of whether Sales Brain was even enabled
+ * (isSalesBrainEnabled() is only checked inside initSalesBrain(), one layer
+ * up in memory-runtime.ts — by the time execution reaches this function,
+ * that gate has already passed). embeddings.ts's loadTransformers()
+ * established this exact pattern first, for the identical reason
+ * (onnxruntime-node's native binding), and WindowsAdapter.ts's
+ * loadNativeAddon() is the same pattern again for a different native addon
+ * — this brings db.ts in line with both rather than being the one holdout.
+ *
+ * Deliberately still SYNCHRONOUS (require(), not a dynamic import()) rather
+ * than making this function — and its 7 existing call sites across
+ * memory-runtime.ts and this module's own tests — async for no functional
+ * benefit: require() inside a function body already defers the load to
+ * first call exactly as well as a dynamic import would, without the ripple.
+ */
 export function openMemoryDb(dbPath: string): Database.Database {
-  const db = new Database(dbPath)
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const DatabaseCtor = require('better-sqlite3') as typeof Database
+  const db = new DatabaseCtor(dbPath)
   db.pragma('journal_mode = WAL') // same durability/perf tradeoff every other SQLite app on desktop makes
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const sqliteVec = require('sqlite-vec') as typeof import('sqlite-vec')
   // NOT sqliteVec.load(db) — that uses the raw require.resolve path, which
   // is broken inside a packaged app. See resolveVecExtensionPath above.
   db.loadExtension(resolveVecExtensionPath(sqliteVec.getLoadablePath()))

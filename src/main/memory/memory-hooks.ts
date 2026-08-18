@@ -4,10 +4,12 @@
 // consolidation (consolidation.ts) together, gated on the master flag
 // throughout — every function here is a safe no-op when Sales Brain is
 // off, so callers never need their own gate check.
-import { app, BrowserWindow, Notification } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { getCall } from '../calls-fs'
-import { isSalesBrainEnabled } from '../app-settings'
+import { isJobNativeNotificationsEnabled, isSalesBrainEnabled } from '../app-settings'
+import { showNativeNotification } from '../notifications'
+import { liveCallInfo } from '../live/live-transcript'
 import { getMemoryDb } from './memory-runtime'
 import { extractMemoriesFromCall, extractMemoriesFromChatMessage } from './extraction'
 import { consolidateNewCandidate, runLightConsolidation } from './consolidation'
@@ -26,20 +28,41 @@ function callsDir(): string {
  *  memories — "learned nothing" isn't worth an interruption. */
 function notifyLearnedFromCall(callId: string, newCount: number): void {
   if (newCount === 0) return
-  const win = BrowserWindow.getAllWindows()[0]
-  const notification = new Notification({
+
+  // M27 — this used to build its own `new Notification(...)` directly, which
+  // meant it bypassed BOTH gates every job-system notification respects. Two
+  // reasons that had to change now:
+  //
+  //  1. CALL-AWARE DO-NOT-DISTURB is the job system's own stated HARD RULE
+  //     ("while a live call is active, NO OS popups" — see jobs/activity.ts's
+  //     header). Post-call extraction for call A routinely finishes while the
+  //     rep is already on call B, so this could always have popped mid-call.
+  //  2. Quota-pressure deferral (JobManager's capacity gate) makes it
+  //     materially worse: a backlog of held extractions all release together
+  //     when capacity returns, so what was one stray popup becomes a burst of
+  //     them — possibly during a call.
+  //
+  // Suppressed rather than buffered, deliberately. The job system buffers
+  // completions into an end-of-call digest, but this notification's whole
+  // job is "click to review what was learned" — a digest can't carry the
+  // per-call deep link, and nothing is lost by dropping it: the memories are
+  // already saved, visible in Memory Center and on the call's own review
+  // screen whenever the rep chooses to look. Losing an interruption is
+  // acceptable; interrupting a live sales call is not.
+  if (liveCallInfo() !== null) return
+
+  // The job behind this is registered `silent: true` precisely so THIS
+  // better-worded notification replaces the generic "…— done" one — which
+  // makes the job-notification setting the right gate for it, exactly as if
+  // the job had fired its own.
+  if (!isJobNativeNotificationsEnabled()) return
+
+  showNativeNotification({
     title: 'Sales Brain learned something',
-    body: `Learned ${newCount} thing${newCount === 1 ? '' : 's'} from this call — click to review.`
+    body: `Learned ${newCount} thing${newCount === 1 ? '' : 's'} from this call — click to review.`,
+    // The helper has already restored/shown/focused the window by now.
+    onClick: () => BrowserWindow.getAllWindows()[0]?.webContents.send('salesBrain:reviewRequested', callId)
   })
-  if (win) {
-    notification.on('click', () => {
-      if (win.isMinimized()) win.restore()
-      win.show()
-      win.focus()
-      win.webContents.send('salesBrain:reviewRequested', callId)
-    })
-  }
-  notification.show()
 }
 
 /**

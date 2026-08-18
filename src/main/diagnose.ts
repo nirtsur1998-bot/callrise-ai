@@ -19,7 +19,6 @@
 
 import { app } from 'electron'
 import { existsSync } from 'node:fs'
-import { getLoadablePath as getVecLoadablePath } from 'sqlite-vec'
 import { resolveVecExtensionPath } from './memory/db'
 import { getLastInitResult, getMemoryDb } from './memory/memory-runtime'
 import { runChannelSelfTest } from './session-health/channel-test'
@@ -164,7 +163,7 @@ export function buildDiagnoseReport(): string {
   if (!consent) {
     push('  active grant      : none on disk — buyer capture cannot start')
   } else {
-    push(`  active grant      : session ${consent.sessionId}, status ${consent.consent.status}`)
+    push(`  active grant      : call ${consent.callId}, status ${consent.consent.status}`)
     push(`  permits capture   : ${yesNo(consent.consent.recordOtherParty)}`)
     push(`  method            : ${consent.consent.method ?? 'unrecorded'}`)
   }
@@ -196,7 +195,17 @@ export function buildDiagnoseReport(): string {
   push(`  enabled           : ${yesNo(brainEnabled)}`)
   const vec = safe(
     () => {
-      const raw = getVecLoadablePath()
+      // M27 J3 — this file is statically imported by index.ts at every
+      // startup (so --diagnose can run before anything else registers, per
+      // this file's own header), regardless of whether --diagnose was
+      // actually passed. A top-level `import ... from 'sqlite-vec'` here
+      // would load that native module for every user on every launch —
+      // the exact bug this fix targets, one import hop removed from
+      // db.ts's own. Lazy require, only reached when this diagnostic
+      // actually runs.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const sqliteVec = require('sqlite-vec') as typeof import('sqlite-vec')
+      const raw = sqliteVec.getLoadablePath()
       const corrected = resolveVecExtensionPath(raw)
       return { raw, corrected, exists: existsSync(corrected) }
     },

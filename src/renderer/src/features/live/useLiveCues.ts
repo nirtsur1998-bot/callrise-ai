@@ -70,7 +70,18 @@ export const SENSITIVITY_THRESHOLDS: Record<Sensitivity, Thresholds> = {
 const WINDOW_TURNS = 24 // recent speaker turns sent to the brain (fixed size)
 const MAX_TURNS = 80 // cap the in-memory turn buffer
 const PACE_WINDOW_MS = 15_000 // window for the rep-only words/min estimate
-const CALL_GAP_MS = 2_500 // minimum gap between brain (LLM) calls
+// M27 H1 — DERIVED, not chosen: matches model-pacing.ts's PACING_GAP_MS,
+// which is 60_000 / 10 (Gemini 2.5 Flash's conservative documented free-tier
+// floor, 10-15 RPM). `live`-tier purposes (coaching-cue is one) are
+// deliberately exempt from that cross-purpose pacing gate for latency — but
+// that means THIS is the only thing standing between coaching-cue and
+// exceeding a low-RPM provider's own limit, on its own, with zero help from
+// any other purpose. The previous value (2_500ms) allowed up to 24
+// requests/minute from this purpose alone — 1.6-2.4x over Gemini's floor
+// before anything else even contributes, a plausible direct cause of
+// "coaching cues temporarily unavailable" mid-call. Same floor, same
+// reasoning, applied where the pacing gate can't reach.
+const CALL_GAP_MS = 6_000 // minimum gap between brain (LLM) calls
 const DEBOUNCE_MS = 400 // wait after a client turn-end before calling the brain
 /** How long an interrupt cue stays before fading. Exported because the card's
  *  countdown bar animates against it — two copies of this number drift the
@@ -241,11 +252,6 @@ export function useLiveCues(
    *  navigate-away-and-back — or, mid-call, a buyer-capture toggle — silently
    *  wipe the interrupt channel's cooldown/dedupe state. */
   getCallId: () => string | null,
-  /** M26 4.5 (BUG-055) — from useTranscription's getSessionId(). Passed with
-   *  every liveCue() call so main can check FRESH consent (never a
-   *  renderer-held snapshot) before any buyer-attributed content in the
-   *  window reaches an AI prompt. */
-  getSessionId: () => number | null,
   sensitivity: Sensitivity,
   knownRepSpeaker: number | null = null,
   /** Told to the transcript the moment the rep is identified, so already-
@@ -570,7 +576,7 @@ export function useLiveCues(
         .slice(-WINDOW_TURNS)
         .some((t) => t.channel !== undefined && t.channel !== knownRepRef.current)
       void window.api.transcription
-        .liveCue(transcript, repSpeakerRef.current, getSessionId() ?? undefined, includesBuyerContent)
+        .liveCue(transcript, repSpeakerRef.current, getCallId() ?? undefined, includesBuyerContent)
         .then((res) => {
           if (!mountedRef.current || generation !== generationRef.current) return
           if (!res.ok) {
@@ -738,7 +744,7 @@ export function useLiveCues(
       offUtteranceEnd()
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [active, enabled, clearCue, getCallId, getSessionId])
+  }, [active, enabled, clearCue, getCallId])
 
   return {
     cue,

@@ -31,6 +31,8 @@ export function registerMemoryExtractionJob(): void {
     // pass/contactId decision is frozen at trigger time, which is exactly
     // what makes the lane choice safe to make on its merits.
     lane: 'BATCH',
+    // M27 — the chain whose exhaustion makes this job pointless to start.
+    aiPurpose: 'memory-extract',
     titleFor: () => 'Sales Brain: learning from this call',
     targetRefFor: (i) => i.callId,
     // extraction.ts/consolidation.ts have no AbortSignal support, and adding

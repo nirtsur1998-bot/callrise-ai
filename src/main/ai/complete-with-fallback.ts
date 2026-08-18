@@ -120,9 +120,13 @@ const SPEED_CHAIN = [
 const QUALITY_CHAIN = [
   'google-gemini-flash',
   'nvidia-deepseek-v3.2',
-  'openrouter-nemotron-3-ultra',
+  'openrouter-nemotron-3.5-lightning', // M27 B2 — was 'openrouter-nemotron-3-ultra' (dead id, 100% 400s)
   'nvidia-glm-5.2',
   'mistral-small',
+  // M27 B2 — openrouter-auto-free stays in the chain but is now
+  // supportsToolCalling:false in the catalog, so on a tool-using purpose it
+  // is filtered out (it failed 28/39 real attempts on tool-call output); on
+  // a plain-text purpose it remains the last-resort entry it always was.
   'openrouter-auto-free',
   'groq-llama-3.3-70b-versatile',
   'groq-gpt-oss-120b',
@@ -365,6 +369,49 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
  *  tool-calling capability filter. `capable` equals `configured` when
  *  `needsTool` is false/omitted, so every existing caller that never passes
  *  `opts` sees identical behavior to before this phase. */
+/**
+ * BUG-057 Phase 5 — CHAIN_BUDGET is exactly the two live, latency-critical
+ * purposes (coaching-cue, deal-tier1); everything else is 'durable'. See
+ * model-cooldown.ts's CooldownTier doc comment for what this drives.
+ *
+ * M27 — exported and made the SINGLE definition. It was previously inlined
+ * identically at both fallback walks, and ai/capacity.ts now needs the same
+ * answer to decide whether a background job's chain has anything usable. A
+ * third hand-copy of `purpose in CHAIN_BUDGET` is exactly the shape that let
+ * DealIntelligenceStatus drift into two declarations with only one fixed.
+ */
+/**
+ * M27 — a wait, said the way a person says it.
+ *
+ * This message is read by a rep in the middle of their working day, and it
+ * used to render as "Try again in about 3578s." Nobody converts that in their
+ * head; it reads as a machine talking to itself, and it hides the one fact
+ * that matters (it's an hour, so go and do something else).
+ *
+ * Deliberately vague at the top end. The underlying number is a CHOSEN
+ * default (PERIOD_EXHAUSTED_DEFAULT_MS), not a provider-stated reset time, so
+ * "about an hour" is exactly as precise as the data actually is — and
+ * "3578s" implied a precision that never existed.
+ */
+export function humanWait(ms: number): string {
+  const secs = Math.max(1, Math.ceil(ms / 1000))
+  // A cooldown that expired between the check and the message renders as
+  // "in a moment" rather than "about 1 seconds" — which is both ungrammatical
+  // and reads as broken rather than ready.
+  if (secs <= 2) return 'a moment'
+  if (secs < 90) return `about ${secs} seconds`
+  const mins = Math.round(secs / 60)
+  if (mins < 45) return `about ${mins} minute${mins === 1 ? '' : 's'}`
+  const hours = Math.round(mins / 60)
+  if (hours <= 1) return 'about an hour'
+  if (hours < 24) return `about ${hours} hours`
+  return 'about a day'
+}
+
+export function purposeTier(purpose: AIPurpose): CooldownTier {
+  return purpose in CHAIN_BUDGET ? 'live' : 'durable'
+}
+
 export function resolveChain(purpose: AIPurpose, opts?: { needsTool?: boolean }): ResolvedChain {
   const configured = resolveConfiguredChain(purpose)
   const capable = opts?.needsTool
@@ -550,10 +597,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   const purpose = req.purpose
   const { configured, capable } = resolveChain(purpose, { needsTool: Boolean(req.tool) })
   logToolCapabilityExclusions(purpose, configured, capable)
-  // BUG-057 Phase 5 — CHAIN_BUDGET is exactly the two live, latency-critical
-  // purposes (coaching-cue, deal-tier1); everything else is 'durable'. See
-  // model-cooldown.ts's CooldownTier doc comment for what this drives.
-  const tier: CooldownTier = purpose in CHAIN_BUDGET ? 'live' : 'durable'
+  const tier: CooldownTier = purposeTier(purpose)
 
   if (configured.length === 0) {
     void recordAiFailure(purpose, { reason: 'no-key', providerId: null })
@@ -599,7 +643,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     void recordAiFailure(purpose, { reason: 'rate-limit', providerId: null })
     throw new AIProviderError(
       'rate-limit',
-      `Every model set up for this is rate-limited right now. Try again in about ${secs}s.`,
+      `Every model set up for this is rate-limited right now. Try again in ${humanWait(secs * 1000)}.`,
       until ? until - startedNow : undefined
     )
   }
@@ -715,11 +759,29 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
       // BUG-058 — honour the provider's own "come back in N seconds" so the
       // next call skips this model instead of re-burning it. Without this,
       // every subsequent call restarted at position 1 and hit the same 429.
-      // BUG-057 Phase 2 — a period-exhausted 429 (quota/billing, not an
+      // BUG-057 Phase 2 — a period-exhausted failure (quota/billing, not an
       // ordinary throttle) gets the longer period-exhausted default instead
       // of the ordinary 60s guess; retrying inside a quota window is pure
       // waste, not just impolite.
-      if (reason === 'rate-limit' && failureClass === 'period-exhausted') {
+      //
+      // M27 B3 — gated on failureClass ALONE, not `reason === 'rate-limit'
+      // && failureClass === 'period-exhausted'` as this used to read. That
+      // extra reason check was written to keep an ordinary structural/generic
+      // error from cooling a model down on no real evidence — a reasonable
+      // goal, but it happened to also exclude the one case failureClass was
+      // built to catch: openai-compatible.ts's toProviderError() already
+      // hardcodes failureClass:'period-exhausted' on its "out of quota/
+      // credits" branch, but that branch's `reason` is 'failed', not
+      // 'rate-limit' (Groq/OpenAI-compatible providers don't send a 429 for
+      // this — it's a plain error whose MESSAGE says quota, not its status
+      // code). The old condition threw that classification away right after
+      // computing it: 14% of this app's own real fallback-log events were
+      // exactly this shape, and every one got zero cooldown, retried on the
+      // very next call. failureClass is already the richer, correctly-
+      // derived signal (see failure-class.ts's classifyFailureClass) — reason
+      // is still recorded below for logging, it just shouldn't re-gate a
+      // conclusion failureClass already reached.
+      if (failureClass === 'period-exhausted') {
         markPeriodExhausted(
           step.catalogId,
           err instanceof AIProviderError ? err.retryAfterMs : undefined,
@@ -727,14 +789,9 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
           tier,
           resetsAt
         )
-        // BUG-058 remainder — pacing marks alongside cooldown, deliberately
-        // ONLY on a rate-limit-classified failure (same condition as this
-        // branch and the sibling one below), never on a plain 'failed' —
-        // "only rate limits cool down... applying it to every failure would
-        // sideline healthy models after one blip" is model-cooldown.ts's own
-        // established rule for cooldown; pacing follows the identical rule
-        // for the identical reason. A structural/generic error tells us
-        // nothing about this model being near a shared capacity limit.
+        // BUG-058 remainder — pacing marks alongside cooldown, on the same
+        // period-exhausted classification as the branch above (never on a
+        // plain transient 'failed' with no real capacity signal at all).
         markUsed(step.catalogId, Date.now(), tier)
         noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
       } else if (reason === 'rate-limit') {
@@ -837,11 +894,10 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
   const purpose = req.purpose
   const { configured, capable } = resolveChain(purpose, { needsTool: Boolean(req.tool) })
   logToolCapabilityExclusions(purpose, configured, capable)
-  // BUG-057 Phase 5 — coaching-chat (the only consumer today) isn't in
-  // CHAIN_BUDGET, so this is always 'durable' currently; computed the same
-  // way as completeWithFallback rather than hardcoded, so a future live
+  // coaching-chat (the only consumer today) isn't in CHAIN_BUDGET, so this is
+  // always 'durable' currently; asked rather than hardcoded, so a future live
   // streaming consumer gets the right tier automatically.
-  const tier: CooldownTier = purpose in CHAIN_BUDGET ? 'live' : 'durable'
+  const tier: CooldownTier = purposeTier(purpose)
   // BUG-058 — same cooldown filter as completeWithFallback: a model that just
   // 429'd must not be re-burned here either. coaching-chat is the only
   // consumer, and it is interactive, so spending its first attempt on a model
@@ -900,7 +956,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       void recordAiFailure(purpose, { reason: 'rate-limit', providerId: null })
       const err = new AIProviderError(
         'rate-limit',
-        `Every model set up for this is rate-limited right now. Try again in about ${secs}s.`,
+        `Every model set up for this is rate-limited right now. Try again in ${humanWait(secs * 1000)}.`,
         until ? until - startedNow : undefined
       )
       rejectFinal(err)
@@ -933,12 +989,31 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     const deadProviders = new Set<AIProviderId>()
     const rateLimitCountByProvider = new Map<AIProviderId, number>()
 
+    // M27 A1 — one hard wall-clock ceiling across the ENTIRE stream walk,
+    // mirroring completeWithFallback's BUG-059 fix exactly. Without this,
+    // coaching-chat (this function's only consumer) had NO ceiling at all:
+    // worst case was the full fallback chain (up to the uncapped 9-entry
+    // QUALITY_CHAIN, reachable whenever a user's default provider key lapses
+    // but others remain configured) x LATENCY_POLICY's per-attempt timeout,
+    // unboundedly, with no way for the caller to cancel out of it — up to
+    // ~13.5 minutes confirmed against the real chain-resolution logic. The
+    // ceiling is always in the combined signal so it bounds the SDK's own
+    // retries too, not just this loop's iteration.
+    const ceiling = new AbortController()
+    const ceilingTimer = setTimeout(() => ceiling.abort(), HARD_CEILING_MS[purpose])
+
+    try {
     for (let i = 0; i < chain.length; i++) {
+      if (ceiling.signal.aborted) break
       const step = chain[i]
       if (deadProviders.has(step.providerId)) continue
       const key = process.env[PROVIDER_REGISTRY[step.providerId].keyEnvName]?.trim()
       if (!key) continue
       const provider = PROVIDER_REGISTRY[step.providerId].build(key)
+
+      const parts: AbortSignal[] = [ceiling.signal]
+      if (req.signal) parts.push(req.signal)
+      const attemptSignal = parts.length === 1 ? parts[0] : AbortSignal.any(parts)
 
       // BUG-058/BUG-059 — the SDK's own retry is now always off (maxRetries:
       // 0, see providers/*.ts's stream()): its sleep was unabortable and
@@ -954,10 +1029,20 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       let stepStartedStreaming = false
 
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        // M27 A1 — matches completeWithSameModelRetry's identical guard: once
+        // the combined signal is aborted (the ceiling fired, or the caller
+        // cancelled), a same-model retry can only fail the same way again —
+        // skip straight to the failure handling below instead of burning a
+        // pointless extra attempt.
+        if (attemptSignal.aborted) {
+          stepErr = stepErr ?? new AIProviderError('timeout', 'Aborted.')
+          break
+        }
         try {
           const streamResult = provider.stream({
             ...req,
-            model: step.modelId || undefined
+            model: step.modelId || undefined,
+            signal: attemptSignal
           })
           for await (const chunk of streamResult) {
             startedStreaming = true
@@ -979,7 +1064,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           const reason = classifyReason(err)
           const retryable = reason === 'network' || reason === 'timeout'
           if (retryable && attempt < maxAttempts - 1) {
-            await abortableSleep(Math.min(200 * 2 ** attempt, 2_000), req.signal)
+            await abortableSleep(Math.min(200 * 2 ** attempt, 2_000), attemptSignal)
             continue
           }
           break
@@ -995,7 +1080,11 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         const resetsAt = err instanceof AIProviderError ? err.resetsAt : undefined
         lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail, failureClass, resetsAt }
         if (reason === 'auth') deadProviders.add(step.providerId)
-        if (reason === 'rate-limit' && failureClass === 'period-exhausted') {
+        // M27 B3 — gated on failureClass alone; see completeWithFallback's
+        // identical branch for the full reasoning (a 'failed'-coded quota
+        // exhaustion, e.g. Groq's own "out of quota/credits" message, was
+        // being thrown away here for the same reason).
+        if (failureClass === 'period-exhausted') {
           markPeriodExhausted(
             step.catalogId,
             err instanceof AIProviderError ? err.retryAfterMs : undefined,
@@ -1003,9 +1092,8 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
             tier,
             resetsAt
           )
-          // BUG-058 remainder — same reasoning as completeWithFallback's
-          // identical branch: pacing marks alongside cooldown only on a
-          // rate-limit-classified failure, never a plain one.
+          // BUG-058 remainder — pacing marks alongside cooldown, on the same
+          // period-exhausted classification as the branch above.
           markUsed(step.catalogId, Date.now(), tier)
           noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
         } else if (reason === 'rate-limit') {
@@ -1057,6 +1145,27 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         }
         // Nothing shown yet — safe to fall through and try the next entry.
       }
+    }
+    } finally {
+      clearTimeout(ceilingTimer)
+    }
+
+    if (ceiling.signal.aborted) {
+      // M27 A1 — same distinction completeWithFallback's identical check
+      // makes: "we ran out of time" vs. "every model rejected us" are
+      // different problems with different user actions, and collapsing them
+      // is how the unbounded hang stayed invisible in the first place.
+      void recordAiFailure(purpose, {
+        reason: 'timeout',
+        providerId: lastAttempt?.providerId ?? null,
+        detail: lastAttempt?.detail
+      })
+      const timeoutErr = new AIProviderError(
+        'timeout',
+        `This took too long and was stopped after ${Math.round(HARD_CEILING_MS[purpose] / 1000)}s. Your AI provider may be rate-limiting or slow right now — try again shortly.`
+      )
+      rejectFinal(timeoutErr)
+      throw timeoutErr
     }
 
     // Unconditional, matching completeWithFallback()'s own exhaustion

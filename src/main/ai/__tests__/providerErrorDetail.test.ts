@@ -19,6 +19,15 @@ function apiError(status: number, message: string): APIError {
   return new APIError(status, undefined, message, undefined)
 }
 
+/** Same shape a REAL Groq 400 arrives in: the SDK reads `.code` off the
+ *  parsed JSON body's `error.code` field (see openai/core/error.js), never
+ *  off the message text. apiError() above passes `undefined` for that body,
+ *  so it can never carry a code — a test built on it could not exercise the
+ *  `err.code === 'tool_use_failed'` branch no matter what the message said. */
+function apiErrorWithCode(status: number, code: string, message: string): APIError {
+  return new APIError(status, { code, message }, undefined, undefined)
+}
+
 // A REAL 429 arrives as the SDK's own RateLimitError subclass (with a real
 // Headers object), never the bare APIError apiError() above constructs —
 // that distinction matters for BUG-058 Phase 3's resetsAt tests below,
@@ -37,6 +46,8 @@ function anthropicRateLimitError(
 
 describe('toProviderError keeps the provider\'s own message', () => {
   it('a 400 carries the real reason, not just the status code', () => {
+    // No .code on this one (see apiError()'s own doc comment) — this test is
+    // about the MESSAGE surviving, not the code-based branch below.
     const err = toProviderError(
       'Groq',
       'groq',
@@ -73,6 +84,52 @@ describe('toProviderError keeps the provider\'s own message', () => {
     expect(toProviderError('Groq', 'groq', apiError(400, 'You are out of credits')).message).toContain(
       'quota/credits'
     )
+  })
+})
+
+describe('M27 — a malformed tool-call generation is TRANSIENT, not structural', () => {
+  // Confirmed live: Sales Brain's import hit "400 Failed to parse tool call
+  // arguments as JSON" from Groq (code tool_use_failed), and the generic
+  // status>=400 branch classified it 'structural' — a 4-hour exclusion for
+  // ONE bad generation. That fits a request the provider will always reject
+  // (a bad parameter); it does not fit a model's own output coming out
+  // malformed, which is sampling-dependent and plausibly succeeds on retry.
+  it("Groq's tool_use_failed code overrides the generic 400 classification", () => {
+    const err = toProviderError(
+      'Groq',
+      'groq',
+      apiErrorWithCode(400, 'tool_use_failed', 'Failed to parse tool call arguments as JSON')
+    )
+
+    // RED without the fix: the generic branch gives 'structural', which
+    // markStructurallyBroken() (complete-with-fallback.ts) then turns into a
+    // 4h exclusion on a single occurrence.
+    expect(err.failureClass).toBe('transient')
+    expect(err.code).toBe('failed')
+    // The provider's own text still has to survive — this is not a silent
+    // reclassification, a rep reading the fallback log still sees why.
+    expect(err.message).toContain('Failed to parse tool call arguments as JSON')
+  })
+
+  it('an ordinary 400 with no tool_use_failed code is unaffected — the control', () => {
+    // Without this, a version of the fix that classified EVERY 400 as
+    // transient (rather than checking the specific code) would pass the
+    // test above just as well, and would wrongly soften a genuinely
+    // deterministic rejection — an invalid parameter, an unsupported model
+    // feature — into something the fallback walk keeps retrying forever.
+    const err = toProviderError('Groq', 'groq', apiError(400, 'invalid_request: bad parameter'))
+    expect(err.failureClass).toBe('structural')
+  })
+
+  it('a DIFFERENT provider code is not mistaken for tool_use_failed', () => {
+    // Guards against a careless broadening later (e.g. "any code present ->
+    // transient") that would swallow other, genuinely structural, coded 400s.
+    const err = toProviderError(
+      'Groq',
+      'groq',
+      apiErrorWithCode(400, 'context_length_exceeded', 'too many tokens')
+    )
+    expect(err.failureClass).toBe('structural')
   })
 })
 

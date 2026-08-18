@@ -293,7 +293,13 @@ describe('the spiral, through the real chain walk', () => {
     expect(err).toBeInstanceOf(AIProviderError)
     expect(err.code).toBe('rate-limit')
     // A number the user can act on — "chain exhausted" told them nothing.
-    expect(err.message).toMatch(/try again in about \d+s/i)
+    // M27 D — CORRECTED, not relaxed. This asserted the raw-seconds format
+    // ("try again in about 3578s"), which was deliberately changed: that
+    // exact string reached a real user, and nobody converts 3578 seconds to
+    // "an hour" in their head. The guarantee this test protects is unchanged
+    // and still asserted — the refusal must carry an ACTIONABLE WAIT TIME
+    // rather than a generic failure — only its rendering moved.
+    expect(err.message).toMatch(/try again in (a moment|about \d+ (seconds|minutes?|hours?)|about an hour|about a day)/i)
     expect(built).toEqual([]) // and it cost zero requests
   })
 
@@ -484,6 +490,32 @@ describe('the taxonomy, through the real chain walk', () => {
       vi.useFakeTimers().clearAllTimers()
       vi.useRealTimers()
     }
+  })
+
+  it('a "failed"-coded quota exhaustion cools down exactly like a rate-limited one — M27 B3', async () => {
+    // Reproduces openai-compatible.ts's real "out of quota/credits" branch:
+    // toProviderError() hardcodes failureClass:'period-exhausted' there, but
+    // the raw code is 'failed', not 'rate-limit' — this provider never sends
+    // a 429 for it, only a plain error whose MESSAGE says quota. Before this
+    // fix, the gating condition required BOTH reason==='rate-limit' AND
+    // failureClass==='period-exhausted', so this exact real combination fell
+    // through every branch and got zero cooldown — confirmed against this
+    // app's own real fallback log, 14% of all logged events were this shape.
+    behavior.throwCode = 'failed'
+    behavior.failureClass = 'period-exhausted'
+
+    await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
+    const exhaustedId = built[0]
+    expect(exhaustedId).toBeTruthy()
+
+    built.length = 0
+    await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
+    // Refused before any attempt — same "refuse before spending a request"
+    // shape as the structural-failure test above. Before this fix, the model
+    // would appear in `built` again here, identical to a plain 'failed' with
+    // no quota signal (the "only rate limits cool down" test earlier in this
+    // file) — that's the exact bug this test catches.
+    expect(built).toEqual([])
   })
 
   it('an auth failure does NOT also get marked structurally broken — deadProviders already excludes it, avoiding two independent encodings drifting apart', async () => {

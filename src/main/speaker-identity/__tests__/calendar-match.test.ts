@@ -70,6 +70,12 @@ describe('findOverlappingAttendees', () => {
         })
       ]
     )
+    // M27 G — `[].every(...)` is trivially true (taxonomy species 6), so
+    // without this length check a regression that dropped the group event
+    // from the results entirely would still pass a test whose whole point is
+    // "a group meeting is correctly NOT flagged one-on-one". Two attendees
+    // overlap the window, so both must actually come back.
+    expect(matches).toHaveLength(2)
     expect(matches.every((m) => !m.isOneOnOne)).toBe(true)
   })
 

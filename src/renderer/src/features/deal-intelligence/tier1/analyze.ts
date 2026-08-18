@@ -11,8 +11,9 @@ export interface Tier1AnalyzeInput {
   compactState: string
   dealContext?: string
   triggerReason?: string
-  /** M26 4.5 (BUG-055) — see main/deal-tier1.ts's own doc comment. */
-  sessionId?: number
+  /** M26 4.5 (BUG-055) / M27 E1 — see main/deal-tier1.ts's own doc comment.
+   *  Keyed on callId, not sessionId. */
+  callId?: string
   includesBuyerContent?: boolean
 }
 
