@@ -49,7 +49,22 @@ export interface Tier1Status {
   /** The pipe client currently has a live connection to the engine. Can be
    *  true only when engineRunning is also true, but is tracked separately —
    *  the engine can be running and still mid-connect, or the pipe can drop
-   *  without the process itself exiting. */
+   *  without the process itself exiting.
+   *
+   *  DOES NOT MEAN "audio is being denoised". kern_bridge loads its model
+   *  from a compiled-in absolute path
+   *  (C:\ProgramData\CallRiseAI\Models\DeepFilterNet3_onnx.tar.gz) and, if
+   *  df_create fails because that file is absent, logs a warning and runs in
+   *  PASSTHROUGH — pushing the captured audio through unchanged rather than
+   *  refusing to start. From this module's side that is indistinguishable
+   *  from working: the pipe connects, full-rate audio flows, every status
+   *  field reads healthy, and the user's audio is simply not being cleaned.
+   *
+   *  That is a genuine hollow-green shape and it is NOT closed by this
+   *  field — closing it needs a signal from the engine about whether the
+   *  model actually loaded (it already logs the distinction), which is a
+   *  protocol change, not something the client can infer. Recorded here so
+   *  nobody reads `connected: true` as proof of denoising. */
   connected: boolean
   /** Absolute path to the engine binary we resolved, or null (diagnostics). */
   enginePath: string | null
@@ -93,16 +108,29 @@ export function parsePcmChunk(
   return { floats, nextCarry }
 }
 
-// Same resolution order as virtualmic.ts's resolveHelperPath: explicit env
-// override for dev, then the packaged app's own resources, then a sibling
-// dev repo built in place. kern_bridge.exe resolves df.lib's model file
-// relative to its own binary location, so (like michelper) it must be run
-// from a tree carrying its runtime dependencies alongside it.
+// The packaged location is `<resources>\virtualmic-win\kern_bridge.exe` — a
+// SIBLING of app.asar, not inside it. That is electron-builder's
+// extraResources mechanism, and it is load-bearing rather than stylistic:
+// Node cannot spawn an .exe that only exists inside a packed asar
+// (existsSync returns false for it), so a bundle packed into the archive
+// resolves to "engine not found" every single time even though the file is
+// genuinely present. The existing _bundle_kern_bridge.ps1 in the driver
+// workspace stages exactly this layout and documents that same root cause
+// from when it was got wrong before — this path matches it deliberately.
+//
+// NOT the model's location. kern_bridge compiles in an absolute
+// DF_MODEL_PATH of C:\ProgramData\CallRiseAI\Models\DeepFilterNet3_onnx.tar.gz
+// and does not look beside its own binary for it (unlike macOS's michelper,
+// which does). See the passthrough note on Tier1Status.connected for why
+// that distinction has a user-visible consequence.
 function resolveEnginePath(): string | null {
   const candidates = [
     process.env['CALLRISE_KERN_BRIDGE_PATH'],
-    join(process.resourcesPath ?? '', 'tier1', 'kern_bridge.exe'),
-    join(app.getAppPath(), '..', 'kern-bridge', 'kern_bridge.exe')
+    // Packaged: staged next to app.asar by the bundling script.
+    join(process.resourcesPath ?? '', 'virtualmic-win', 'kern_bridge.exe'),
+    // Dev: the driver workspace's own staging tree, a sibling checkout of
+    // this repo.
+    join(app.getAppPath(), '..', 'CALLRISE AI', '_virtualmic_win_stage', 'kern_bridge.exe')
   ].filter((p): p is string => typeof p === 'string' && p.length > 0)
   for (const p of candidates) {
     if (existsSync(p)) return p

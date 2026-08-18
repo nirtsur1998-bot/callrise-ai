@@ -28,7 +28,15 @@ vi.mock('electron', () => ({
 }))
 
 let engineExists = true
-vi.mock('fs', () => ({ existsSync: () => engineExists }))
+/** Every path resolveEnginePath() probed, in order — so a test can assert
+ *  WHICH locations are searched, not merely that something was found. */
+const probedPaths: string[] = []
+vi.mock('fs', () => ({
+  existsSync: (p: string) => {
+    probedPaths.push(p)
+    return engineExists
+  }
+}))
 
 class FakeSocket extends EventEmitter {
   destroyed = false
@@ -80,6 +88,7 @@ beforeEach(() => {
   lastSocket = null
   lastChild = null
   sentToWindows.length = 0
+  probedPaths.length = 0
   handlers.clear()
   vi.useFakeTimers()
 })
@@ -141,6 +150,39 @@ describe('engineAvailable is the ONLY gate, and it is engine-binary-exists', () 
     expect(result.ok).toBe(false)
     expect(getStatus().engineAvailable).toBe(false)
     expect(getStatus().engineRunning).toBe(false)
+  })
+
+  // THE PACKAGED PATH IS LOAD-BEARING AND WAS INITIALLY WRONG. The first
+  // version of this module looked in <resources>/tier1/ — a plausible-
+  // sounding guess that resolves to nothing in a real packaged build, so
+  // engineAvailable would have been false for every shipped user while
+  // being true in dev. A silent total failure of the whole feature, with a
+  // green suite.
+  //
+  // The real convention (established by the driver workspace's own
+  // _bundle_kern_bridge.ps1, which documents having got this wrong once
+  // already) is <resources>/virtualmic-win/ — a SIBLING of app.asar via
+  // electron-builder's extraResources, because Node cannot spawn an .exe
+  // that only exists inside a packed asar.
+  it('probes the packaged extraResources location, not a guessed one', () => {
+    engineExists = false // force it to walk every candidate
+    getStatus()
+    const packaged = probedPaths.find((p) => p.includes('virtualmic-win'))
+    expect(packaged).toBeDefined()
+    expect(packaged).toContain('kern_bridge.exe')
+    // Guards the specific wrong guess from coming back.
+    expect(probedPaths.some((p) => /[/\\]tier1[/\\]/.test(p))).toBe(false)
+  })
+
+  it('honours the env override ahead of every other candidate', () => {
+    engineExists = false
+    process.env['CALLRISE_KERN_BRIDGE_PATH'] = 'C:/custom/kern_bridge.exe'
+    try {
+      getStatus()
+      expect(probedPaths[0]).toBe('C:/custom/kern_bridge.exe')
+    } finally {
+      delete process.env['CALLRISE_KERN_BRIDGE_PATH']
+    }
   })
 })
 
