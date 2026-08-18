@@ -1,5 +1,32 @@
 ﻿# CallRise AI — Project Guide
 
+> ## ▶ NEXT SESSION STARTS HERE — 2026-08-18
+>
+> **One task is queued; everything else is done, committed and pushed:
+> wire `recorder.ts` for Tier 1, verify four properties, then ship 1.3.0.**
+>
+> - **Read first:** [`docs/M27-tier1-recorder-handoff.md`](docs/M27-tier1-recorder-handoff.md)
+>   — settled interfaces, the four properties with what "not vacuous" means for
+>   each, and the ship sequence.
+> - **Commands to paste:** [`docs/M27-RUNBOOK.md`](docs/M27-RUNBOOK.md) — checkpoint,
+>   merge, verify, publish. Nothing needs reconstructing.
+> - **Branch:** `claude/m27-field-hardening` (pushed). Working tree clean.
+> - **Edit exactly one file's wiring:**
+>   `src/renderer/src/features/live/audio/recorder.ts`. Everything it needs
+>   already exists and is tested (`tier1-source.ts`, `denoised-source.js`,
+>   `window.api.tier1`).
+>
+> **The property that matters most: _raw mic never disconnected._** It is the
+> only failure in this release that costs a **recorded call** rather than
+> degraded audio — and it is exactly the shape that gets asserted vacuously.
+> Assert on `micTrack.readyState`, `stream.active`, and a spy proving `stop()`
+> was never called. Then break the code on purpose and watch **that specific
+> assertion** go red before trusting it.
+>
+> **State of the feature right now:** the engine is verified correct and the
+> preload API exists — but **nothing calls it**. Until `recorder.ts` is wired,
+> Tier 1 does nothing for a user. That is the whole remaining gap.
+
 ## What we're building
 
 CallRise AI is a desktop application that acts as an AI assistant for sales calls. Today it is a thin, static UI shell. Over time it will grow into a tool that listens to live calls, transcribes them in real time, and coaches the rep with in-the-moment suggestions — alongside a CRM, tasks, calendar, analytics, coaching, and a knowledge base. The long-form product vision lives in [`docs/VISION.md`](docs/VISION.md).
