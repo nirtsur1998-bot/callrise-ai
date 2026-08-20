@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { AudioLines, Loader2, AlertTriangle, CheckCircle2, FileDown } from 'lucide-react'
+import { AudioLines, Loader2, AlertTriangle, CheckCircle2, FileDown, Mic } from 'lucide-react'
+import { useMicTest } from './useMicTest'
 import { Card } from '@renderer/components/Card'
 import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { cn } from '@renderer/lib/cn'
@@ -97,8 +98,23 @@ export function Tier1DiagnosticsCard(): React.JSX.Element | null {
   )
 }
 
+function micTestLabel(phase: ReturnType<typeof useMicTest>['phase']): string {
+  switch (phase.id) {
+    case 'recording':
+      return `Recording… ${phase.secondsLeft}`
+    case 'playing-raw':
+      return 'Playing: before'
+    case 'playing-clean':
+      return 'Playing: cleaned'
+    default:
+      return 'Test my microphone'
+  }
+}
+
 export function Tier1SettingsCard(): React.JSX.Element | null {
   const { status, enabled, setEnabled, strength, setStrength, uiState } = useTier1()
+  const micTest = useMicTest()
+  const testBusy = micTest.phase.id !== 'idle' && micTest.phase.id !== 'done' && micTest.phase.id !== 'error'
 
   // Tier 1 is Windows-only — the engine is a Windows binary (kern_bridge.exe)
   // with no macOS equivalent (that's NoiseCancellationCard/Tier 2 instead).
@@ -127,22 +143,50 @@ export function Tier1SettingsCard(): React.JSX.Element | null {
         </div>
 
         {uiState !== 'unavailable' && (
-          <button
-            type="button"
-            role="switch"
-            aria-checked={enabled}
-            onClick={() => setEnabled(!enabled)}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition',
-              enabled
-                ? 'border border-line bg-surface text-ink hover:bg-elevated'
-                : 'bg-accent text-white hover:opacity-90'
-            )}
-          >
-            {enabled ? 'Turn off' : 'Turn on'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={testBusy}
+              onClick={micTest.runTest}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1.5 text-[13px] font-medium text-ink transition hover:bg-elevated disabled:opacity-60"
+            >
+              {testBusy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Mic className="h-3.5 w-3.5" />
+              )}
+              {micTestLabel(micTest.phase)}
+            </button>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={enabled}
+              onClick={() => setEnabled(!enabled)}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition',
+                enabled
+                  ? 'border border-line bg-surface text-ink hover:bg-elevated'
+                  : 'bg-accent text-white hover:opacity-90'
+              )}
+            >
+              {enabled ? 'Turn off' : 'Turn on'}
+            </button>
+          </div>
         )}
       </div>
+
+      {micTest.phase.id === 'done' && !micTest.phase.cleanPlayed && (
+        <p className="mb-3 flex items-start gap-1.5 text-[11px] text-warning">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          Played your raw microphone only — {micTest.phase.reason}.
+        </p>
+      )}
+      {micTest.phase.id === 'error' && (
+        <p className="mb-3 flex items-start gap-1.5 text-[11px] text-warning">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          Microphone test failed: {micTest.phase.message}
+        </p>
+      )}
 
       {uiState === 'unavailable' && (
         <p className="flex items-start gap-1.5 text-[11px] text-warning">
