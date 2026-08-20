@@ -9,13 +9,14 @@ import {
   PhoneCall
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
-import { isMac } from '@renderer/lib/platform'
+import { isMac, isWindows } from '@renderer/lib/platform'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
 import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { fieldClass } from '@renderer/components/field'
 import { useAutoStartListening } from '@renderer/features/settings/useAutoStartListening'
 import { useAutoTranscribeCalls } from '@renderer/features/settings/useAutoTranscribeCalls'
 import { useVirtualMic } from '@renderer/features/audio/useVirtualMic'
+import { useTier1 } from '@renderer/features/audio/useTier1'
 import { useAudioDevices } from '@renderer/features/audio/useAudioDevices'
 import { useCueSettings } from '@renderer/features/live/useCueSettings'
 import type { Sensitivity } from '@renderer/features/live/useLiveCues'
@@ -56,6 +57,14 @@ export function CopilotPanel({
     void (micStatus?.helperRunning ? stopMic() : startMic())
   }
 
+  // Windows Tier 1 — same section title, DIFFERENT semantics from the mac
+  // toggle above, on purpose: mac's is a live start/stop of a persistent
+  // helper; this one writes a preference that recorder.ts reads at the start
+  // of the NEXT call (Tier 1 has no standalone process to start or stop
+  // outside a call — see useTier1's own doc). The status line keeps that
+  // honest instead of implying an instant switch.
+  const tier1 = useTier1()
+
   if (collapsed) {
     return (
       <div className="flex h-full flex-col items-center py-3">
@@ -89,6 +98,15 @@ export function CopilotPanel({
               label="Noise cancellation"
               disabled={!noiseCancellationSetUp || micBusy}
               onClick={toggleNoiseCancellation}
+            />
+          )}
+          {isWindows && (
+            <RailToggle
+              icon={AudioLines}
+              active={tier1.enabled}
+              label="Noise cancellation"
+              disabled={tier1.uiState === 'unavailable'}
+              onClick={() => tier1.setEnabled(!tier1.enabled)}
             />
           )}
           <RailToggle
@@ -165,6 +183,39 @@ export function CopilotPanel({
               <p className="text-[12px] text-faint">
                 Set up from the Home screen&rsquo;s Noise cancellation card first.
               </p>
+            )}
+          </Section>
+        )}
+
+        {/* Noise cancellation — Windows Tier 1. Reads/writes the SAME
+            preference as Settings → Audio's card (this panel's whole contract:
+            a second surface, never a duplicate store). */}
+        {isWindows && (
+          <Section icon={AudioLines} title="Noise cancellation">
+            {tier1.uiState === 'unavailable' ? (
+              <p className="text-[12px] text-faint">
+                The noise-cancellation engine wasn&rsquo;t found on this install.
+              </p>
+            ) : (
+              <>
+                <ToggleRow
+                  label="Clean my microphone"
+                  checked={tier1.enabled}
+                  onChange={() => tier1.setEnabled(!tier1.enabled)}
+                />
+                <p
+                  className={cn(
+                    'mt-2 text-[12px]',
+                    tier1.uiState === 'model-missing' ? 'text-warning' : 'text-faint'
+                  )}
+                >
+                  {tier1.uiState === 'active' && 'On — your voice is being cleaned.'}
+                  {tier1.uiState === 'starting' && 'On — takes effect when your next call starts.'}
+                  {tier1.uiState === 'model-missing' &&
+                    'On, but the model wasn’t found — audio is passing through uncleaned.'}
+                  {tier1.uiState === 'off' && 'Cleans your microphone on your next call.'}
+                </p>
+              </>
             )}
           </Section>
         )}

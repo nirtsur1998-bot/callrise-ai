@@ -1570,7 +1570,9 @@ export interface PurposeHealthApi {
  *  Shape must match Tier1Status in src/main/tier1.ts and
  *  src/renderer/src/features/live/audio/tier1-types.ts. */
 export interface Tier1Api {
-  start: (micName: string) => Promise<{ ok: boolean; error?: string }>
+  /** attenDb: denoise attenuation limit in dB; omit for the engine's
+   *  compiled-in default (the "high" strength). */
+  start: (micName: string, attenDb?: number) => Promise<{ ok: boolean; error?: string }>
   stop: () => Promise<{ ok: boolean }>
   getStatus: () => Promise<{
     engineAvailable: boolean

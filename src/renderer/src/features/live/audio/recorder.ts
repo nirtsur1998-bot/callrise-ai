@@ -11,7 +11,7 @@ import {
 import { startAudioPump, type AudioPump } from './pump'
 import { shouldUseDenoisedSource } from './tier1-source'
 import type { Tier1Status } from './tier1-types'
-import { getTier1Enabled } from '@renderer/features/settings/prefs'
+import { getTier1Enabled, getDenoiseStrength, DENOISE_ATTEN_DB } from '@renderer/features/settings/prefs'
 
 /**
  * The name Tier 1's engine must be told to capture. Returns the real device
@@ -280,7 +280,10 @@ export async function startRecorder(
           /* stays on raw — the safe direction */
         })
 
-      void tier1Api.start(tier1MicName)
+      // Strength, read at call start like the enabled flag: {low:12,
+      // medium:20} dB, or undefined for "high" so `--atten` is omitted and
+      // the engine's compiled-in 100dB default stands.
+      void tier1Api.start(tier1MicName, DENOISE_ATTEN_DB[getDenoiseStrength()] ?? undefined)
     } catch {
       // The worklet module failed to load or the node failed to construct.
       // FAIL OPEN: nothing above this point has touched micSource/merger, so

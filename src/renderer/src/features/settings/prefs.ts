@@ -142,3 +142,35 @@ export function getTier1Enabled(): boolean {
 export function setTier1Enabled(value: boolean): void {
   write(KEY_TIER1_ENABLED, String(value))
 }
+
+export type DenoiseStrength = 'low' | 'medium' | 'high'
+
+/**
+ * How hard Tier 1 denoises, as the attenuation limit handed to kern_bridge
+ * (`--atten <db>`). Values extracted from the prototype build and kept:
+ * 12/20 sit well above the ~3dB floor where libDF mixes back >70% of the
+ * noisy signal, so all three settings are genuinely distinct. `high` maps to
+ * NO argument at all — the engine's compiled-in 100dB ("no mix-back") stays
+ * the single source of truth rather than being restated here where it could
+ * drift.
+ */
+export const DENOISE_ATTEN_DB: Record<DenoiseStrength, number | null> = {
+  low: 12,
+  medium: 20,
+  high: null
+}
+
+const KEY_TIER1_STRENGTH = 'salesos.settings.tier1Strength'
+
+// Default HIGH, unlike the feature toggle's default-off: strength only
+// matters once the user has already opted in, and someone who turned noise
+// cancellation ON wants it to work — a timid default here would read as "the
+// feature barely does anything" rather than as caution.
+export function getDenoiseStrength(): DenoiseStrength {
+  const v = read(KEY_TIER1_STRENGTH)
+  return v === 'low' || v === 'medium' || v === 'high' ? v : 'high'
+}
+
+export function setDenoiseStrength(value: DenoiseStrength): void {
+  write(KEY_TIER1_STRENGTH, value)
+}

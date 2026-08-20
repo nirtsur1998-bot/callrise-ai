@@ -1,8 +1,22 @@
 import { AudioLines, Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { cn } from '@renderer/lib/cn'
 import { isWindows } from '@renderer/lib/platform'
+import type { DenoiseStrength } from '@renderer/features/settings/prefs'
 import { useTier1 } from './useTier1'
+
+const STRENGTH_LEVELS: { id: DenoiseStrength; label: string }[] = [
+  { id: 'low', label: 'Low' },
+  { id: 'medium', label: 'Medium' },
+  { id: 'high', label: 'High' }
+]
+
+const STRENGTH_COPY: Record<DenoiseStrength, string> = {
+  low: 'Gentle. Takes the edge off steady noise while keeping the room sounding natural.',
+  medium: 'Balanced. Removes most background noise without touching your voice.',
+  high: 'Strongest. Removes the most background noise — typing, fans, traffic, people talking nearby.'
+}
 
 /**
  * Windows settings card for Tier 1 — driver-free noise cancellation for
@@ -27,7 +41,7 @@ import { useTier1 } from './useTier1'
  * The copy below says so plainly rather than implying an instant switch.
  */
 export function Tier1SettingsCard(): React.JSX.Element | null {
-  const { status, enabled, setEnabled, uiState } = useTier1()
+  const { status, enabled, setEnabled, strength, setStrength, uiState } = useTier1()
 
   // Tier 1 is Windows-only — the engine is a Windows binary (kern_bridge.exe)
   // with no macOS equivalent (that's NoiseCancellationCard/Tier 2 instead).
@@ -119,6 +133,19 @@ export function Tier1SettingsCard(): React.JSX.Element | null {
             On, but the noise-cancellation model wasn&rsquo;t found — your audio is passing
             through unprocessed right now.
           </p>
+        </div>
+      )}
+
+      {/* Strength. Shown whenever the engine exists (even switched off, so a
+       *  user can set it up before opting in). Takes effect on the NEXT call,
+       *  same read-at-call-start contract as the toggle itself. */}
+      {uiState !== 'unavailable' && (
+        <div className="mt-4 border-t border-line-soft pt-4">
+          <div className="flex items-center justify-between gap-3">
+            <h4 className="text-[13px] font-medium">How much noise to remove</h4>
+            <SegmentedControl options={STRENGTH_LEVELS} value={strength} onChange={setStrength} />
+          </div>
+          <p className="mt-1.5 text-[11px] text-faint">{STRENGTH_COPY[strength]}</p>
         </div>
       )}
     </Card>

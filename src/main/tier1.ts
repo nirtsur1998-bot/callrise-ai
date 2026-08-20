@@ -362,13 +362,26 @@ function disconnectPipe(): void {
  *  auto-pick path) and begins the pipe client. A no-op, not an error, if
  *  Tier 1 is already running: the caller (the renderer toggle) doesn't need
  *  to know whether this is the first start of the session. */
-export function start(micName: string): { ok: boolean; error?: string } {
+export function start(micName: string, attenDb?: number): { ok: boolean; error?: string } {
   if (child) return { ok: true }
   const enginePath = resolveEnginePath()
   if (!enginePath) return { ok: false, error: 'noise-cancellation engine not found' }
 
+  // Denoise strength. `--atten <db>` is omitted entirely when the caller
+  // doesn't send a number ("high") — the engine's compiled-in 100dB default
+  // ("no mix-back of the noisy signal") stays the single source of truth
+  // rather than being restated here where it could drift. kern_bridge
+  // validates and clamps the value itself, so this only guards the type:
+  // shipping NaN as an argv string would trip the engine's "not a number"
+  // path and silently run at default, which is a claim ("medium") the audio
+  // wouldn't honour.
+  const args = [micName]
+  if (typeof attenDb === 'number' && Number.isFinite(attenDb)) {
+    args.push('--atten', String(attenDb))
+  }
+
   try {
-    child = spawn(enginePath, [micName], { stdio: 'ignore' })
+    child = spawn(enginePath, args, { stdio: 'ignore' })
   } catch (err) {
     child = null
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -416,9 +429,9 @@ export function stop(): void {
 
 export function registerTier1(): void {
   ipcMain.handle('tier1:getStatus', () => getStatus())
-  ipcMain.handle('tier1:start', (_e, micName: unknown) =>
+  ipcMain.handle('tier1:start', (_e, micName: unknown, attenDb: unknown) =>
     typeof micName === 'string' && micName.length > 0
-      ? start(micName)
+      ? start(micName, typeof attenDb === 'number' ? attenDb : undefined)
       : { ok: false, error: 'no microphone name given' }
   )
   ipcMain.handle('tier1:stop', () => {

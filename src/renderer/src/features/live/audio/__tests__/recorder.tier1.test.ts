@@ -317,7 +317,42 @@ describe('tier1 preference — off by default, opt-in required', () => {
     setTier1Enabled(true)
     await startRecorder(vi.fn(), vi.fn())
 
-    expect(fakeTier1Api.start).toHaveBeenCalledWith('Microphone Array (Realtek(R) Audio)')
+    // Second arg undefined = strength "high": --atten omitted so the
+    // engine's compiled-in default stands. The mapping itself is covered in
+    // the strength block below.
+    expect(fakeTier1Api.start).toHaveBeenCalledWith(
+      'Microphone Array (Realtek(R) Audio)',
+      undefined
+    )
+  })
+
+  // Strength → attenDb mapping, read at call start exactly like `enabled`.
+  it('passes 12dB for low and 20dB for medium, by name not by guess', async () => {
+    const { setDenoiseStrength } = await import('@renderer/features/settings/prefs')
+    setTier1Enabled(true)
+
+    setDenoiseStrength('low')
+    await startRecorder(vi.fn(), vi.fn())
+    expect(fakeTier1Api.start).toHaveBeenLastCalledWith('Microphone Array (Realtek(R) Audio)', 12)
+  })
+
+  it('passes 20dB for medium', async () => {
+    const { setDenoiseStrength } = await import('@renderer/features/settings/prefs')
+    setTier1Enabled(true)
+    setDenoiseStrength('medium')
+    await startRecorder(vi.fn(), vi.fn())
+    expect(fakeTier1Api.start).toHaveBeenLastCalledWith('Microphone Array (Realtek(R) Audio)', 20)
+  })
+
+  it('passes undefined (not 100) for high — the engine default must stay the source of truth', async () => {
+    const { setDenoiseStrength } = await import('@renderer/features/settings/prefs')
+    setTier1Enabled(true)
+    setDenoiseStrength('high')
+    await startRecorder(vi.fn(), vi.fn())
+    expect(fakeTier1Api.start).toHaveBeenLastCalledWith(
+      'Microphone Array (Realtek(R) Audio)',
+      undefined
+    )
   })
 
   it('reads the preference once at call start, not live mid-call', async () => {

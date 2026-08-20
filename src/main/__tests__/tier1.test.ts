@@ -79,9 +79,13 @@ class FakeChild extends EventEmitter {
 }
 let lastChild: FakeChild | null = null
 let spawnShouldThrow = false
+/** Exact argv handed to the engine — so tests assert WHAT is launched, not
+ *  merely that something was. */
+let lastSpawnArgs: string[] | null = null
 vi.mock('child_process', () => ({
-  spawn: () => {
+  spawn: (_exe: string, args: string[]) => {
     if (spawnShouldThrow) throw new Error('spawn failed')
+    lastSpawnArgs = args
     lastChild = new FakeChild()
     return lastChild
   }
@@ -115,6 +119,7 @@ beforeEach(() => {
   connectionAttempts = 0
   lastSocket = null
   lastChild = null
+  lastSpawnArgs = null
   sentToWindows.length = 0
   probedPaths.length = 0
   statusFileContents = null
@@ -213,6 +218,30 @@ describe('engineAvailable is the ONLY gate, and it is engine-binary-exists', () 
     } finally {
       delete process.env['CALLRISE_KERN_BRIDGE_PATH']
     }
+  })
+})
+
+// Strength → argv. The engine's `--atten <db>` is the ONLY knob, and "high"
+// must OMIT it entirely so kern_bridge's compiled-in 100dB default stays the
+// single source of truth. Passing 100 explicitly would work today and drift
+// silently the day the engine's default changes.
+describe('denoise strength becomes --atten, or deliberately nothing', () => {
+  it('passes --atten with the given dB for low/medium', () => {
+    start('USB Microphone', 12)
+    expect(lastSpawnArgs).toEqual(['USB Microphone', '--atten', '12'])
+  })
+
+  it('omits --atten entirely when no strength is given (high)', () => {
+    start('USB Microphone')
+    expect(lastSpawnArgs).toEqual(['USB Microphone'])
+  })
+
+  it('omits --atten for a non-finite number rather than shipping "NaN" as argv', () => {
+    // kern_bridge would reject "NaN" and run at default anyway — but then the
+    // app believes "medium" while the audio runs at "high": a claim the
+    // audio doesn't honour. Omitting keeps the claim and the behaviour equal.
+    start('USB Microphone', Number.NaN)
+    expect(lastSpawnArgs).toEqual(['USB Microphone'])
   })
 })
 

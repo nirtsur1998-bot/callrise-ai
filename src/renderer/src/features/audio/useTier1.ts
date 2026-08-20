@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { tier1UiState, type Tier1UiState } from '@renderer/features/live/audio/tier1-source'
 import type { Tier1Status } from '@renderer/features/live/audio/tier1-types'
-import { getTier1Enabled, setTier1Enabled } from '@renderer/features/settings/prefs'
+import {
+  getTier1Enabled,
+  setTier1Enabled,
+  getDenoiseStrength,
+  setDenoiseStrength,
+  type DenoiseStrength
+} from '@renderer/features/settings/prefs'
 
 export interface UseTier1 {
   /** Raw status from the pipe client, or null before the first read. */
@@ -10,6 +16,10 @@ export interface UseTier1 {
    *  on prefs.ts — off by default, read once per call, not a live switch). */
   enabled: boolean
   setEnabled: (value: boolean) => void
+  /** Denoise strength preference. Like `enabled`, read by recorder.ts at
+   *  call start — changing it mid-call affects the NEXT call. */
+  strength: DenoiseStrength
+  setStrength: (value: DenoiseStrength) => void
   /** Exactly what the pipeline reports — 'unavailable' | 'off' | 'starting'
    *  | 'active' | 'model-missing'. Do not derive a different taxonomy from
    *  `status` elsewhere; this is the one place that computes it. */
@@ -60,5 +70,18 @@ export function useTier1(): UseTier1 {
     setEnabledState(value)
   }, [])
 
-  return { status, enabled, setEnabled, uiState: tier1UiState(status, enabled) }
+  const [strength, setStrengthState] = useState<DenoiseStrength>(() => getDenoiseStrength())
+  const setStrength = useCallback((value: DenoiseStrength): void => {
+    setDenoiseStrength(value)
+    setStrengthState(value)
+  }, [])
+
+  return {
+    status,
+    enabled,
+    setEnabled,
+    strength,
+    setStrength,
+    uiState: tier1UiState(status, enabled)
+  }
 }

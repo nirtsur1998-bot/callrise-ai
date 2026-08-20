@@ -477,7 +477,11 @@ const api = {
     // system-wide capture DEVICE for Zoom/Teams and needs a signed driver;
     // this one delivers denoised PCM to this app over a named pipe and needs
     // nothing installed.
-    start: (micName: string) => ipcRenderer.invoke('tier1:start', micName),
+    // attenDb: denoise attenuation limit in dB; omitted = the engine's
+    // compiled-in default (the "high" strength). The engine validates and
+    // clamps the value itself.
+    start: (micName: string, attenDb?: number) =>
+      ipcRenderer.invoke('tier1:start', micName, attenDb),
     stop: () => ipcRenderer.invoke('tier1:stop'),
     getStatus: () => ipcRenderer.invoke('tier1:getStatus'),
     onStatus: (cb: (status: unknown) => void) => subscribe('tier1:status', cb),
