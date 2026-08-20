@@ -537,6 +537,104 @@ export interface CoachChatApi {
   onError: (cb: (payload: CoachChatStreamError) => void) => () => void
 }
 
+// --- M28: the Rise assistant (top-level AI chat section) --------------------
+
+export interface AssistantCitation {
+  kind: 'memory' | 'call'
+  id: string
+  label: string
+}
+
+export interface AssistantMessage {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+  createdAt: string
+  citations?: AssistantCitation[]
+  suggestions?: CoachChatContextSuggestion[]
+  appliedSuggestionIds?: string[]
+}
+
+export interface AssistantConversation {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messages: AssistantMessage[]
+}
+
+export interface AssistantConversationMeta {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messageCount: number
+  preview: string
+}
+
+export interface AssistantSendResult {
+  ok: boolean
+  error?: 'not-found' | 'busy' | 'empty' | 'ai-failed' | 'cancelled'
+  message?: string
+  reply?: string
+  citations?: AssistantCitation[]
+  suggestions?: CoachChatContextSuggestion[]
+  stopped?: boolean
+  userMessageId?: string
+}
+
+export interface AssistantAttachSnapshot {
+  streaming: boolean
+  accumulated: string
+  pendingUserText: string
+}
+
+export interface AssistantDelta {
+  conversationId: string
+  delta: string
+}
+
+export interface AssistantStreamError {
+  conversationId: string
+  message: string
+}
+
+export interface AssistantMemoryEvidence {
+  id: string
+  statement: string
+  status: 'active' | 'hypothesis' | 'invalidated' | 'archived'
+  confidence: number
+  category: string
+  scope: string
+  evidence: Array<
+    | { type: 'transcript'; callId: string; chatMessageId?: string; quote: string }
+    | { type: 'reflection'; memoryIds: string[] }
+  >
+}
+
+/** Same streaming shape as CoachChatApi (delta pushes during the in-flight
+ *  invoke), plus two M28 additions: `attach` recovers an in-flight turn's
+ *  accumulated text after a remount, and `cancel` genuinely aborts the
+ *  provider walk (a real Stop, not a UI dismissal). */
+export interface AssistantApi {
+  listConversations: () => Promise<AssistantConversationMeta[]>
+  getConversation: (id: string) => Promise<AssistantConversation | null>
+  createConversation: () => Promise<AssistantConversation>
+  renameConversation: (id: string, title: string) => Promise<AssistantConversation | null>
+  deleteConversation: (id: string) => Promise<boolean>
+  send: (conversationId: string, message: string) => Promise<AssistantSendResult>
+  cancel: (conversationId: string) => Promise<boolean>
+  attach: (conversationId: string) => Promise<AssistantAttachSnapshot>
+  applySuggestion: (
+    conversationId: string,
+    messageId: string,
+    suggestion: CoachChatContextSuggestion
+  ) => Promise<{ ok: boolean }>
+  getMemoryEvidence: (memoryId: string) => Promise<AssistantMemoryEvidence | null>
+  onDelta: (cb: (payload: AssistantDelta) => void) => () => void
+  onError: (cb: (payload: AssistantStreamError) => void) => () => void
+}
+
 export interface SkillHistoryPoint {
   callId: string
   createdAt: string
@@ -2492,6 +2590,7 @@ declare global {
       calls: CallsApi
       coach2: Coach2Api
       coachChat: CoachChatApi
+      assistant: AssistantApi
       crmNoteGenerator: CrmNoteGeneratorApi
       contactIntelligence: ContactIntelligenceApi
       tasks: TasksApi

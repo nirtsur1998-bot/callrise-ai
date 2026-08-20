@@ -197,6 +197,25 @@ const api = {
     onDelta: (cb: (payload: unknown) => void) => subscribe('coachChat:delta', cb),
     onError: (cb: (payload: unknown) => void) => subscribe('coachChat:error', cb)
   },
+  // M28 — the Rise assistant (top-level AI chat section).
+  assistant: {
+    listConversations: () => ipcRenderer.invoke('assistant:listConversations'),
+    getConversation: (id: string) => ipcRenderer.invoke('assistant:getConversation', id),
+    createConversation: () => ipcRenderer.invoke('assistant:createConversation'),
+    renameConversation: (id: string, title: string) =>
+      ipcRenderer.invoke('assistant:renameConversation', id, title),
+    deleteConversation: (id: string) => ipcRenderer.invoke('assistant:deleteConversation', id),
+    send: (conversationId: string, message: string) =>
+      ipcRenderer.invoke('assistant:send', conversationId, message),
+    cancel: (conversationId: string) => ipcRenderer.invoke('assistant:cancel', conversationId),
+    attach: (conversationId: string) => ipcRenderer.invoke('assistant:attach', conversationId),
+    applySuggestion: (conversationId: string, messageId: string, suggestion: unknown) =>
+      ipcRenderer.invoke('assistant:applySuggestion', conversationId, messageId, suggestion),
+    getMemoryEvidence: (memoryId: string) =>
+      ipcRenderer.invoke('assistant:getMemoryEvidence', memoryId),
+    onDelta: (cb: (payload: unknown) => void) => subscribe('assistant:delta', cb),
+    onError: (cb: (payload: unknown) => void) => subscribe('assistant:error', cb)
+  },
   crmNoteGenerator: {
     generate: (contactId: string, length: string, opts?: { force?: boolean }) =>
       ipcRenderer.invoke('crmNoteGenerator:generate', contactId, length, opts),
