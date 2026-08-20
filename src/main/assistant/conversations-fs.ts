@@ -1,0 +1,336 @@
+// M28 — persistence for the Rise assistant's conversations. One JSON file per
+// conversation under userData/assistant-conversations, mirroring calls-fs.ts's
+// proven shape: writeJsonAtomic for crash-safe writes, a per-id lock so
+// concurrent mutations of the SAME conversation serialize while different
+// conversations stay fully concurrent, and sanitize-on-read so a hand-edited
+// or partially-corrupt file degrades to something valid instead of throwing.
+//
+// Deliberately NOT in memory.db: the assistant must work with Sales Brain OFF,
+// and memory.db is native-module-gated (better-sqlite3 + sqlite-vec — the
+// exact modules behind the 1.2.1–1.2.4 clean-Windows hotfix saga). Flat JSON
+// keeps chat availability independent of that whole failure class.
+//
+// Like the coaching chat (calls-fs.ts's CoachChatMessage), a turn is persisted
+// only once COMPLETE — user message + the assistant's full final reply — so an
+// interrupted stream never leaves a half-written turn on disk. Unlike the
+// coaching chat, suggestions/citations ARE persisted on the message: the M26
+// lesson (BUG-048/BUG-050) is that AI output living only in component state
+// gets destroyed by a navigation the user had every right to make.
+import { promises as fs } from 'node:fs'
+import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { writeJsonAtomic } from '../atomic-write'
+import type { CoachChatContextSuggestion } from '../calls-fs'
+
+export type AssistantRole = 'user' | 'assistant'
+
+/** A grounded reference from an assistant reply back to its evidence — the
+ *  Memory Center trust rule ("every claim traceable") made visible in chat.
+ *  `label` is denormalized at cite time so the chip still renders meaningfully
+ *  if the underlying memory/call is later deleted or superseded. */
+export interface AssistantCitation {
+  kind: 'memory' | 'call'
+  id: string
+  label: string
+}
+
+export interface AssistantMessage {
+  id: string
+  role: AssistantRole
+  text: string
+  createdAt: string
+  /** Only on assistant messages that grounded themselves in retrieved
+   *  memories/calls. Order matches the [n] markers in `text`, when present. */
+  citations?: AssistantCitation[]
+  /** Only on user messages — the M23 chip pattern: facts the assistant
+   *  offered to save. Never applied without a tap (no silent writes). */
+  suggestions?: CoachChatContextSuggestion[]
+  /** Ids from `suggestions` the user has applied — persisted so a chip can't
+   *  be double-applied after a reload. */
+  appliedSuggestionIds?: string[]
+}
+
+export interface AssistantConversation {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messages: AssistantMessage[]
+}
+
+/** List-row projection — everything the conversation list needs without
+ *  loading full message arrays for every conversation. */
+export interface AssistantConversationMeta {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messageCount: number
+  /** First line of the latest message, for the list row's preview. */
+  preview: string
+}
+
+export const MAX_MESSAGES = 500
+export const MAX_MESSAGE_TEXT = 16_000
+export const MAX_TITLE_CHARS = 120
+const MAX_CITATIONS = 20
+const MAX_SUGGESTIONS = 5
+const PREVIEW_CHARS = 140
+const ID_RE = /^[A-Za-z0-9-]{1,64}$/
+
+export function isSafeConversationId(id: unknown): id is string {
+  return typeof id === 'string' && ID_RE.test(id)
+}
+
+export function conversationsDir(userDataDir: string): string {
+  return join(userDataDir, 'assistant-conversations')
+}
+
+// Same per-id chaining pattern as calls-fs.ts's withCallLock — see its doc
+// comment for why a prior failure must not block the queue.
+const locks = new Map<string, Promise<unknown>>()
+
+async function withConversationLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const prev = locks.get(id) ?? Promise.resolve()
+  const next = prev.catch(() => {}).then(fn)
+  const settled = next.catch(() => {})
+  locks.set(id, settled)
+  settled.then(() => {
+    if (locks.get(id) === settled) locks.delete(id)
+  })
+  return next
+}
+
+function clampText(value: unknown, max: number): string {
+  return typeof value === 'string' ? value.slice(0, max) : ''
+}
+
+function sanitizeCitations(value: unknown): AssistantCitation[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: AssistantCitation[] = []
+  for (const v of value.slice(0, MAX_CITATIONS)) {
+    const c = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
+    if ((c.kind === 'memory' || c.kind === 'call') && isSafeConversationId(c.id)) {
+      out.push({ kind: c.kind, id: c.id, label: clampText(c.label, 300) })
+    }
+  }
+  return out.length > 0 ? out : undefined
+}
+
+function sanitizeSuggestions(value: unknown): CoachChatContextSuggestion[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: CoachChatContextSuggestion[] = []
+  for (const v of value.slice(0, MAX_SUGGESTIONS)) {
+    const s = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
+    const type = s.type
+    if (type !== 'kyc' && type !== 'next-steps' && type !== 'call-notes' && type !== 'memory') {
+      continue
+    }
+    const text = clampText(s.text, 1000)
+    if (!text || !isSafeConversationId(s.id)) continue
+    out.push({
+      id: s.id,
+      type,
+      field: typeof s.field === 'string' ? s.field.slice(0, 100) : undefined,
+      text,
+      confidence: s.confidence === 'high' ? 'high' : 'medium',
+      memoryScope: typeof s.memoryScope === 'string' ? s.memoryScope.slice(0, 100) : undefined,
+      memoryCategory:
+        typeof s.memoryCategory === 'string' ? s.memoryCategory.slice(0, 100) : undefined
+    })
+  }
+  return out.length > 0 ? out : undefined
+}
+
+function sanitizeMessage(value: unknown): AssistantMessage | null {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  if (v.role !== 'user' && v.role !== 'assistant') return null
+  const text = clampText(v.text, MAX_MESSAGE_TEXT)
+  if (!text) return null
+  const applied = Array.isArray(v.appliedSuggestionIds)
+    ? v.appliedSuggestionIds.filter(isSafeConversationId)
+    : []
+  return {
+    id: isSafeConversationId(v.id) ? v.id : randomUUID(),
+    role: v.role,
+    text,
+    createdAt: typeof v.createdAt === 'string' ? v.createdAt : new Date().toISOString(),
+    citations: v.role === 'assistant' ? sanitizeCitations(v.citations) : undefined,
+    suggestions: v.role === 'user' ? sanitizeSuggestions(v.suggestions) : undefined,
+    appliedSuggestionIds: applied.length > 0 ? applied : undefined
+  }
+}
+
+export function sanitizeConversation(value: unknown): AssistantConversation | null {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  if (!isSafeConversationId(v.id)) return null
+  const messages = Array.isArray(v.messages)
+    ? v.messages
+        .map(sanitizeMessage)
+        .filter((m): m is AssistantMessage => m !== null)
+        .slice(-MAX_MESSAGES)
+    : []
+  const now = new Date().toISOString()
+  return {
+    id: v.id,
+    title: clampText(v.title, MAX_TITLE_CHARS) || 'New conversation',
+    createdAt: typeof v.createdAt === 'string' ? v.createdAt : now,
+    updatedAt: typeof v.updatedAt === 'string' ? v.updatedAt : now,
+    messages
+  }
+}
+
+async function readConversationFile(path: string): Promise<AssistantConversation | null> {
+  try {
+    const raw = await fs.readFile(path, 'utf8')
+    return sanitizeConversation(JSON.parse(raw))
+  } catch {
+    // Unreadable/corrupt file: skip rather than throw — writeJsonAtomic
+    // guarantees we never PRODUCE one, but disk history is not ours to trust.
+    return null
+  }
+}
+
+async function writeConversation(dir: string, conversation: AssistantConversation): Promise<void> {
+  await fs.mkdir(dir, { recursive: true })
+  await writeJsonAtomic(join(dir, `${conversation.id}.json`), conversation)
+}
+
+export async function getConversation(
+  dir: string,
+  id: string
+): Promise<AssistantConversation | null> {
+  if (!isSafeConversationId(id)) return null
+  return readConversationFile(join(dir, `${id}.json`))
+}
+
+export async function listConversations(dir: string): Promise<AssistantConversationMeta[]> {
+  let names: string[]
+  try {
+    names = await fs.readdir(dir)
+  } catch {
+    return [] // dir doesn't exist yet — no conversations, not an error
+  }
+  const metas: AssistantConversationMeta[] = []
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue
+    const conv = await readConversationFile(join(dir, name))
+    if (!conv) continue
+    const last = conv.messages[conv.messages.length - 1]
+    metas.push({
+      id: conv.id,
+      title: conv.title,
+      createdAt: conv.createdAt,
+      updatedAt: conv.updatedAt,
+      messageCount: conv.messages.length,
+      preview: last ? last.text.split('\n')[0].slice(0, PREVIEW_CHARS) : ''
+    })
+  }
+  metas.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  return metas
+}
+
+export async function createConversation(
+  dir: string,
+  title?: string
+): Promise<AssistantConversation> {
+  const now = new Date().toISOString()
+  const conversation: AssistantConversation = {
+    id: randomUUID(),
+    title: clampText(title, MAX_TITLE_CHARS) || 'New conversation',
+    createdAt: now,
+    updatedAt: now,
+    messages: []
+  }
+  await writeConversation(dir, conversation)
+  return conversation
+}
+
+export async function renameConversation(
+  dir: string,
+  id: string,
+  title: string
+): Promise<AssistantConversation | null> {
+  const clean = clampText(title, MAX_TITLE_CHARS).trim()
+  if (!clean) return null
+  return withConversationLock(id, async () => {
+    const conv = await getConversation(dir, id)
+    if (!conv) return null
+    conv.title = clean
+    conv.updatedAt = new Date().toISOString()
+    await writeConversation(dir, conv)
+    return conv
+  })
+}
+
+/** Hard delete — conversations are local-only (never in the cloud-backup
+ *  allowlist, same posture as the coaching chat), so delete means delete. */
+export async function deleteConversation(dir: string, id: string): Promise<boolean> {
+  if (!isSafeConversationId(id)) return false
+  return withConversationLock(id, async () => {
+    try {
+      await fs.unlink(join(dir, `${id}.json`))
+      return true
+    } catch {
+      return false
+    }
+  })
+}
+
+/** Append one COMPLETE turn (user + final assistant reply) under the lock.
+ *  Also auto-titles a still-default conversation from the first user message
+ *  so the list is scannable without the user ever renaming anything. */
+export async function appendTurn(
+  dir: string,
+  id: string,
+  userMessage: Omit<AssistantMessage, 'id' | 'createdAt' | 'role'>,
+  assistantMessage: Omit<AssistantMessage, 'id' | 'createdAt' | 'role'>
+): Promise<AssistantConversation | null> {
+  return withConversationLock(id, async () => {
+    const conv = await getConversation(dir, id)
+    if (!conv) return null
+    const now = new Date().toISOString()
+    const user: AssistantMessage = {
+      id: randomUUID(),
+      role: 'user',
+      createdAt: now,
+      text: clampText(userMessage.text, MAX_MESSAGE_TEXT),
+      suggestions: sanitizeSuggestions(userMessage.suggestions)
+    }
+    const assistant: AssistantMessage = {
+      id: randomUUID(),
+      role: 'assistant',
+      createdAt: now,
+      text: clampText(assistantMessage.text, MAX_MESSAGE_TEXT),
+      citations: sanitizeCitations(assistantMessage.citations)
+    }
+    conv.messages = [...conv.messages, user, assistant].slice(-MAX_MESSAGES)
+    if (conv.title === 'New conversation' && user.text) {
+      conv.title = user.text.split('\n')[0].slice(0, MAX_TITLE_CHARS)
+    }
+    conv.updatedAt = now
+    await writeConversation(dir, conv)
+    return conv
+  })
+}
+
+/** Mark a chip applied — persisted so a reload can't re-offer it. */
+export async function markSuggestionApplied(
+  dir: string,
+  conversationId: string,
+  messageId: string,
+  suggestionId: string
+): Promise<AssistantConversation | null> {
+  return withConversationLock(conversationId, async () => {
+    const conv = await getConversation(dir, conversationId)
+    if (!conv) return null
+    const msg = conv.messages.find((m) => m.id === messageId)
+    if (!msg) return null
+    const applied = new Set(msg.appliedSuggestionIds ?? [])
+    applied.add(suggestionId)
+    msg.appliedSuggestionIds = [...applied]
+    conv.updatedAt = new Date().toISOString()
+    await writeConversation(dir, conv)
+    return conv
+  })
+}
