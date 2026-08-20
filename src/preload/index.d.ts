@@ -1792,6 +1792,7 @@ export type AiPurpose =
   | 'deal-tier2'
   | 'coaching-chat'
   | 'memory-extract'
+  | 'assistant-chat'
 
 export interface ModelAssignment {
   /** Ordered model-catalog entry IDs — see main/ai/model-catalog.ts. Empty

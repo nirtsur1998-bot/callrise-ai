@@ -14,7 +14,11 @@ const ASSIGNABLE_PURPOSES: AIPurpose[] = [
   'tasks',
   'prep-brief',
   'deal-tier1',
-  'deal-tier2'
+  'deal-tier2',
+  // M28 — the Rise assistant chat. NOTE: BUG-079 (fixed in its own hotfix off
+  // main) is this exact list drifting behind the Settings UI's job cards —
+  // every purpose with a card in ModelAssignmentSection.tsx must be here.
+  'assistant-chat'
 ]
 
 export function registerModelCatalog(): void {

@@ -178,7 +178,10 @@ export const DEFAULT_CATALOG_CHAIN: Record<AIPurpose, string[]> = {
   'memory-extract': [...new Set([...SPEED_CHAIN, ...QUALITY_CHAIN])],
   // Judgment work, quality-lane precedent same as summary/scorecard.
   'memory-consolidate': QUALITY_CHAIN,
-  'memory-reflect': QUALITY_CHAIN
+  'memory-reflect': QUALITY_CHAIN,
+  // M28 - the Rise assistant chat. Quality-lane precedent, same as
+  // coaching-chat: a real conversation the rep reads, never latency-critical.
+  'assistant-chat': QUALITY_CHAIN
 }
 
 interface ResolvedStep {
@@ -238,6 +241,9 @@ const LEGACY_TAIL_MAX: Record<AIPurpose, number> = {
   'deal-tier1': 0,
   other: 1,
   'coaching-chat': 1,
+  // M28 - same reasoning as coaching-chat: an interactive streamed surface
+  // where a long tail means a human watching hops they didn't ask for.
+  'assistant-chat': 1,
   summary: 3,
   scorecard: 3,
   tasks: 3,

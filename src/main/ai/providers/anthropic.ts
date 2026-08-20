@@ -33,7 +33,10 @@ const MODEL_BY_PURPOSE: Record<AIPurpose, string> = {
   'memory-extract': 'claude-haiku-4-5',
   // M25 Phase 2 - judgment work, quality tier same as summary/scorecard.
   'memory-consolidate': 'claude-sonnet-4-6',
-  'memory-reflect': 'claude-sonnet-4-6'
+  'memory-reflect': 'claude-sonnet-4-6',
+  // M28 - the Rise assistant; quality tier, a real conversation same as
+  // coaching-chat.
+  'assistant-chat': 'claude-sonnet-4-6'
 }
 
 // Rough per-million-token pricing for usage/cost display (Settings -> AI).

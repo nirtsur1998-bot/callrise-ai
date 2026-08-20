@@ -39,7 +39,10 @@ const MODEL_BY_PURPOSE: Record<AIPurpose, string> = {
   'memory-extract': 'gpt-5.4-mini',
   // M25 Phase 2 - judgment work, quality tier same as summary/scorecard.
   'memory-consolidate': 'gpt-5.4',
-  'memory-reflect': 'gpt-5.4'
+  'memory-reflect': 'gpt-5.4',
+  // M28 - the Rise assistant; quality tier, a real conversation same as
+  // coaching-chat.
+  'assistant-chat': 'gpt-5.4'
 }
 
 // Rough per-million-token pricing for usage/cost display. Update here only.

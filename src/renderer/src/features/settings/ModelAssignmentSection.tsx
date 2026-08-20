@@ -4,6 +4,7 @@ import { Card } from '@renderer/components/Card'
 import { cn } from '@renderer/lib/cn'
 import { ModelLogo, type ModelBrand } from '@renderer/components/ModelLogo'
 import { useAppSettings } from './useAppSettings'
+import { ASSISTANT_SECTION_NAME } from '../assistant/config'
 
 type AiResolvedCatalogEntry = Awaited<ReturnType<typeof window.api.aiCatalog.resolve>>[number]
 type AiPurpose = Parameters<typeof window.api.aiCatalog.assignPrimaryModel>[0]
@@ -68,6 +69,12 @@ const JOBS: JobConfig[] = [
     purpose: 'memory-extract',
     title: 'Sales Brain — fact extraction',
     blurb: 'Pulls candidate memories out of a call or chat — a small, fixed-shape job, benefits from speed over depth.'
+  },
+  {
+    purpose: 'assistant-chat',
+    title: `${ASSISTANT_SECTION_NAME} — your AI assistant`,
+    blurb:
+      'The main chat with the AI that knows your whole business — streamed live, grounded in your Sales Brain. Benefits from the strongest model you have.'
   }
 ]
 

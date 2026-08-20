@@ -69,6 +69,11 @@ export type AIPurpose =
   // blocking anything the user is watching.
   | 'memory-consolidate'
   | 'memory-reflect'
+  // M28 — the Rise assistant chat (the top-level AI section). Same
+  // interactive-streaming shape as 'coaching-chat' but a distinct purpose on
+  // purpose: its own Settings card, its own health row, its own budget knobs,
+  // and a chain that can diverge from the per-call coach's without coupling.
+  | 'assistant-chat'
 
 /** A single tool the model is FORCED to call — every real call site today
  *  needs structured JSON back, never free text. `inputSchema` is a plain
@@ -269,7 +274,11 @@ export const LATENCY_POLICY: Record<AIPurpose, LatencyPolicyEntry> = {
   // real conversation-quality decision (is this a duplicate? a
   // contradiction? a genuine cross-memory pattern?), never watched live.
   'memory-consolidate': { timeoutMs: 60_000 },
-  'memory-reflect': { timeoutMs: 60_000 }
+  'memory-reflect': { timeoutMs: 60_000 },
+  // M28 — same interactive-streaming tier as 'coaching-chat', same reasoning:
+  // the rep watches a stream fill in, so a per-attempt timeout below
+  // summary/scorecard's plus streamWithFallback's pre-first-delta retry.
+  'assistant-chat': { timeoutMs: 45_000 }
 }
 
 /**
@@ -312,7 +321,8 @@ export const SAME_MODEL_RETRY_LIMIT: Record<AIPurpose, number> = {
   'coaching-chat': 1,
   'memory-extract': 1,
   'memory-consolidate': 1,
-  'memory-reflect': 1
+  'memory-reflect': 1,
+  'assistant-chat': 1
 }
 
 /** Total wall-clock budget for a whole completeWithFallback() chain on this
@@ -375,6 +385,10 @@ export const HARD_CEILING_MS: Record<AIPurpose, number> = {
   // A human is blocked on these.
   other: 90_000,
   'coaching-chat': 120_000,
+  // M28 — a human is blocked on this, same tier as coaching-chat. Checked the
+  // same way SAME_MODEL_RETRY_LIMIT's comment demands: (1+1) × 45s worst-case
+  // single step against a 120s ceiling leaves 30s of cross-model margin.
+  'assistant-chat': 120_000,
   tasks: 120_000,
   'memory-extract': 120_000,
   // Background/post-call: a progress chip is watching, nobody is blocked.
