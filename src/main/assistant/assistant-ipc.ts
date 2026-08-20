@@ -217,6 +217,12 @@ async function handleSend(conversationId: string, rawMessage: string): Promise<A
     }
   } finally {
     inFlight.delete(conversationId)
+    // Terminal signal for renderers that mounted mid-stream: THEIR invoke()
+    // promise belongs to a dead component instance, so this broadcast is how
+    // a recovered view learns the turn settled (it re-reads the conversation;
+    // deltas alone can't distinguish "quiet" from "done"). Fired on every
+    // outcome — success, stop, cancel, failure — after any persistence.
+    broadcast('assistant:turnComplete', { conversationId })
   }
 }
 

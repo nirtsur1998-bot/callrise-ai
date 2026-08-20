@@ -633,6 +633,10 @@ export interface AssistantApi {
   getMemoryEvidence: (memoryId: string) => Promise<AssistantMemoryEvidence | null>
   onDelta: (cb: (payload: AssistantDelta) => void) => () => void
   onError: (cb: (payload: AssistantStreamError) => void) => () => void
+  /** Fires on EVERY terminal outcome of a turn (success/stop/cancel/failure),
+   *  after persistence — the recovery signal for a renderer that mounted
+   *  mid-stream and does not own the original invoke() promise. */
+  onTurnComplete: (cb: (payload: { conversationId: string }) => void) => () => void
 }
 
 export interface SkillHistoryPoint {

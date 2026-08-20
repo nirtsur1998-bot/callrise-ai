@@ -214,7 +214,8 @@ const api = {
     getMemoryEvidence: (memoryId: string) =>
       ipcRenderer.invoke('assistant:getMemoryEvidence', memoryId),
     onDelta: (cb: (payload: unknown) => void) => subscribe('assistant:delta', cb),
-    onError: (cb: (payload: unknown) => void) => subscribe('assistant:error', cb)
+    onError: (cb: (payload: unknown) => void) => subscribe('assistant:error', cb),
+    onTurnComplete: (cb: (payload: unknown) => void) => subscribe('assistant:turnComplete', cb)
   },
   crmNoteGenerator: {
     generate: (contactId: string, length: string, opts?: { force?: boolean }) =>

@@ -38,6 +38,9 @@ const TasksView = lazy(() =>
   import('@renderer/features/tasks/TasksView').then((m) => ({ default: m.TasksView }))
 )
 const CrmView = lazy(() => import('./CrmView').then((m) => ({ default: m.CrmView })))
+const AssistantView = lazy(() =>
+  import('../features/assistant/AssistantView').then((m) => ({ default: m.AssistantView }))
+)
 const CalendarView = lazy(() =>
   import('@renderer/features/calendar/CalendarView').then((m) => ({ default: m.CalendarView }))
 )
@@ -353,6 +356,8 @@ export function MainApp({
               remoteStopToken={remoteStopToken}
               remotePauseToken={remotePauseToken}
             />
+          ) : active === 'assistant' ? (
+            <AssistantView onOpenCall={openCallFromPalette} />
           ) : active === 'past-calls' ? (
             <PastCallsView
               initialSelectedId={openCallId}
