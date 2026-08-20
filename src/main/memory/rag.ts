@@ -22,7 +22,19 @@ import { searchMemoriesByVector, type VectorSearchResult } from './memories-stor
 import { clientScope, type MemoryScope, type MemoryStatus } from './types'
 
 const MAX_RESULTS = 5
-const MAX_DISTANCE = 0.6 // looser than consolidation.ts's dedupe threshold — retrieval wants "plausibly relevant", not "probably the same fact"
+
+/** M28 measured fix — vec_memories is a plain `vec0` table, so distances are
+ *  EUCLIDEAN (L2), not cosine: on MiniLM's unit vectors a natural-language
+ *  paraphrase of a stored fact lands around L2 1.0–1.25 (cos-sim ~0.2–0.5).
+ *  The original 0.6 here was written in cosine terms and, in L2 reality,
+ *  demanded ~82% cosine similarity — so retrieval returned NOTHING for
+ *  essentially every real question (retrieval-quality-eval baseline:
+ *  recall 0/14 across two configs). 1.3 is the harness-chosen operating
+ *  point from a 7-value sweep (recall 13/14, MRR 0.79, zero empty answers,
+ *  zero scope violations; 1.4 added nothing). Consolidation's 0.35 dedupe
+ *  threshold is the same L2 scale but deliberately unchanged — "probably
+ *  the same fact" SHOULD demand near-identity. */
+const MAX_DISTANCE = 1.3
 
 /** Foreground bound on the embedding step. embedText() has no timeout of its
  *  own and a cold start can block on the one-time ~23MB model download — a
@@ -38,6 +50,9 @@ export interface RetrieveStructuredOptions {
    *  false: profile-parity with the original behavior. */
   includeHypotheses?: boolean
   limit?: number
+  /** L2 relevance cut, default MAX_DISTANCE. Exists so the retrieval-quality
+   *  eval can sweep operating points — production callers should not set it. */
+  maxDistance?: number
   /** Foreground surfaces (a human clicked and is watching): retry a failed
    *  startup init via ensureMemoryDb() instead of silently returning [] for
    *  the whole session, and bound the embedding step. Background hooks keep
@@ -84,12 +99,13 @@ export async function retrieveRelevantMemoriesStructured(
   }
 
   const limit = opts.limit ?? MAX_RESULTS
+  const maxDistance = opts.maxDistance ?? MAX_DISTANCE
   const statuses: MemoryStatus[] = opts.includeHypotheses ? ['active', 'hypothesis'] : ['active']
   const contactId = opts.contactId ?? null
   const scopes: MemoryScope[] = ['rep', 'business', ...(contactId ? [clientScope(contactId)] : [])]
   return scopes
     .flatMap((scope) => searchMemoriesByVector(db, embedding, { scope, limit, statuses }))
-    .filter((r) => r.distance <= MAX_DISTANCE)
+    .filter((r) => r.distance <= maxDistance)
     .sort((a, b) => a.distance - b.distance)
     .slice(0, limit)
 }

@@ -70,7 +70,7 @@ describe('retrieveRelevantMemoriesStructured', () => {
       if (opts.scope === 'rep') {
         return [
           { memory: mem('near', 'near fact'), distance: 0.1 },
-          { memory: mem('far', 'far fact'), distance: 0.9 } // over MAX_DISTANCE
+          { memory: mem('far', 'far fact'), distance: 1.9 } // over MAX_DISTANCE (L2 = 1.3)
         ]
       }
       if (opts.scope === 'business') return [{ memory: mem('mid', 'mid fact'), distance: 0.3 }]
