@@ -29,6 +29,9 @@ export interface UseAssistantChat {
   loading: boolean
   sending: boolean
   error: string | null
+  /** "Don't learn from this conversation" state (fresh from the record). */
+  learningExcluded: boolean
+  setLearningExcluded: (excluded: boolean) => Promise<boolean>
   send: (text: string) => Promise<void>
   stop: () => Promise<void>
   applySuggestion: (
@@ -50,6 +53,7 @@ export function useAssistantChat(conversationId: string | null): UseAssistantCha
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [learningExcluded, setLearningExcludedState] = useState(false)
   const streamingIdRef = useRef<string | null>(null)
   // True while THIS instance's send() invoke is pending — its resolution
   // handles the final state, so turnComplete is ignored. False for a
@@ -64,6 +68,7 @@ export function useAssistantChat(conversationId: string | null): UseAssistantCha
     streamingIdRef.current = null
     setSending(false)
     setMessages(conv?.messages ?? [])
+    setLearningExcludedState(conv?.salesBrainExcluded === true)
   }, [conversationId])
 
   useEffect(() => {
@@ -82,6 +87,7 @@ export function useAssistantChat(conversationId: string | null): UseAssistantCha
         window.api.assistant.attach(conversationId)
       ])
       if (!mountedRef.current) return
+      setLearningExcludedState(conv?.salesBrainExcluded === true)
       const base: DisplayMessage[] = conv?.messages ?? []
       if (snapshot.streaming) {
         // Recover the in-flight turn: rebuild the two live bubbles from
@@ -229,11 +235,23 @@ export function useAssistantChat(conversationId: string | null): UseAssistantCha
     [conversationId]
   )
 
+  const setLearningExcluded = useCallback(
+    async (excluded: boolean): Promise<boolean> => {
+      if (!conversationId) return false
+      const res = await window.api.assistant.setSalesBrainExcluded(conversationId, excluded)
+      if (res.ok && mountedRef.current) setLearningExcludedState(excluded)
+      return res.ok
+    },
+    [conversationId]
+  )
+
   return {
     messages,
     loading,
     sending,
     error,
+    learningExcluded,
+    setLearningExcluded,
     send,
     stop,
     applySuggestion,

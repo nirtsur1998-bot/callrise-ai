@@ -570,6 +570,8 @@ export interface AssistantConversation {
   createdAt: string
   updatedAt: string
   messages: AssistantMessage[]
+  /** "Don't learn from this conversation" — see AssistantApi.setSalesBrainExcluded. */
+  salesBrainExcluded?: boolean
 }
 
 export interface AssistantConversationMeta {
@@ -646,6 +648,10 @@ export interface AssistantApi {
     messageId: string,
     proposalId: string
   ) => Promise<{ ok: boolean }>
+  /** "Don't learn from this conversation." Excluding ALSO retroactively
+   *  deletes every memory the conversation taught (zero trace, same rule as
+   *  the per-call toggle); re-enabling does not re-extract. */
+  setSalesBrainExcluded: (conversationId: string, excluded: boolean) => Promise<{ ok: boolean }>
   getMemoryEvidence: (memoryId: string) => Promise<AssistantMemoryEvidence | null>
   onDelta: (cb: (payload: AssistantDelta) => void) => () => void
   onError: (cb: (payload: AssistantStreamError) => void) => () => void

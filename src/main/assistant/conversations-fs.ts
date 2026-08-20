@@ -70,6 +70,11 @@ export interface AssistantConversation {
   createdAt: string
   updatedAt: string
   messages: AssistantMessage[]
+  /** M28 Phase 2 — "don't learn from this conversation". Mirrors the call
+   *  record's salesBrainExcluded: read FRESH by the extraction hook every
+   *  time (a permission, never snapshotted), and setting it retroactively
+   *  forgets what the conversation already taught (assistant-ipc.ts). */
+  salesBrainExcluded?: boolean
 }
 
 /** List-row projection — everything the conversation list needs without
@@ -215,7 +220,8 @@ export function sanitizeConversation(value: unknown): AssistantConversation | nu
     title: clampText(v.title, MAX_TITLE_CHARS) || 'New conversation',
     createdAt: typeof v.createdAt === 'string' ? v.createdAt : now,
     updatedAt: typeof v.updatedAt === 'string' ? v.updatedAt : now,
-    messages
+    messages,
+    salesBrainExcluded: v.salesBrainExcluded === true ? true : undefined
   }
 }
 
@@ -373,6 +379,24 @@ export async function acceptTaskProposal(
     conv.updatedAt = new Date().toISOString()
     await writeConversation(dir, conv)
     return proposal
+  })
+}
+
+/** Set the per-conversation "don't learn from this" flag. The retroactive
+ *  forget of already-extracted memories is the CALLER's job (assistant-ipc
+ *  owns the memory db) — this only persists the permission. */
+export async function setConversationSalesBrainExcluded(
+  dir: string,
+  id: string,
+  excluded: boolean
+): Promise<AssistantConversation | null> {
+  return withConversationLock(id, async () => {
+    const conv = await getConversation(dir, id)
+    if (!conv) return null
+    conv.salesBrainExcluded = excluded ? true : undefined
+    conv.updatedAt = new Date().toISOString()
+    await writeConversation(dir, conv)
+    return conv
   })
 }
 

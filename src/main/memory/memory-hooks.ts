@@ -7,6 +7,7 @@
 import { app, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { getCall } from '../calls-fs'
+import { conversationsDir, getConversation } from '../assistant/conversations-fs'
 import { isJobNativeNotificationsEnabled, isSalesBrainEnabled } from '../app-settings'
 import { showNativeNotification } from '../notifications'
 import { liveCallInfo } from '../live/live-transcript'
@@ -149,6 +150,48 @@ export async function runMemoryExtractionForCall(
  *  saved (per-message extraction — see extraction.ts's own doc comment for
  *  why there's no "session end" hook to use instead). Same consolidation
  *  path as runMemoryExtractionForCall above. */
+/** M28 Phase 2 — the Rise assistant's conversations feed extraction the same
+ *  way calls and the coaching chat do. Same consolidation funnel, same
+ *  fresh-read permission gates (master flag + this conversation's own
+ *  salesBrainExcluded — permissions, never snapshotted, exactly the rule
+ *  runMemoryExtractionForCall documents above). contactId is null
+ *  UNCONDITIONALLY — the global chat has no bound contact, so client-scoped
+ *  candidates are structurally impossible here, same posture as the
+ *  post-save pass. Evidence callId uses the `assistant:<conversationId>`
+ *  convention (like onboarding's `onboarding:<topic>`), so Memory Center's
+ *  by-source lookup and the retroactive forget both work unchanged. No
+ *  per-message toast, matching the coaching chat's precedent. */
+export async function runMemoryExtractionForAssistantMessage(
+  conversationId: string,
+  messageId: string,
+  message: string
+): Promise<void> {
+  if (!isSalesBrainEnabled()) return
+  const db = getMemoryDb()
+  if (!db) return
+
+  const conversation = await getConversation(
+    conversationsDir(app.getPath('userData')),
+    conversationId
+  )
+  if (!conversation || conversation.salesBrainExcluded) return
+
+  const { candidates } = await extractMemoriesFromChatMessage(
+    message,
+    `assistant:${conversationId}`,
+    messageId,
+    null
+  )
+  const touchedScopes = new Set<MemoryScope>()
+  for (const candidate of candidates) {
+    await consolidateNewCandidate(db, candidate)
+    touchedScopes.add(candidate.scope)
+  }
+  for (const scope of touchedScopes) {
+    await runLightConsolidation(db, scope)
+  }
+}
+
 export async function runMemoryExtractionForChatMessage(
   callId: string,
   chatMessageId: string,

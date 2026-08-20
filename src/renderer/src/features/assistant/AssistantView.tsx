@@ -14,7 +14,9 @@ import {
   Trash2,
   X,
   Check,
-  BookOpenCheck
+  BookOpenCheck,
+  Brain,
+  BrainCog
 } from 'lucide-react'
 import { Button } from '@renderer/components/Button'
 import { IconButton } from '@renderer/components/IconButton'
@@ -493,7 +495,49 @@ export function AssistantView({
             </div>
           </div>
         ) : (
-          <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+          <>
+            {activeId && (
+              <div className="flex items-center justify-between border-b border-line-soft px-4 py-2">
+                <p className="truncate text-[12.5px] font-medium text-muted">
+                  {metas.find((m) => m.id === activeId)?.title ?? ''}
+                </p>
+                <button
+                  type="button"
+                  title={
+                    chat.learningExcluded
+                      ? `${ASSISTANT_SECTION_NAME} is not learning from this conversation. Click to turn learning back on (it will not re-learn past messages).`
+                      : `${ASSISTANT_SECTION_NAME} can save facts from this conversation to your Sales Brain (always with your confirmation, or via the reviewed auto-learning that calls also use). Click to exclude this conversation and forget what it already taught.`
+                  }
+                  onClick={() => {
+                    if (!chat.learningExcluded) {
+                      if (
+                        window.confirm(
+                          'Stop learning from this conversation? Anything it already taught the Sales Brain will be forgotten. This cannot be undone.'
+                        )
+                      ) {
+                        void chat.setLearningExcluded(true)
+                      }
+                    } else {
+                      void chat.setLearningExcluded(false)
+                    }
+                  }}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px]',
+                    chat.learningExcluded
+                      ? 'border-line text-faint'
+                      : 'border-accent/40 text-accent'
+                  )}
+                >
+                  {chat.learningExcluded ? (
+                    <BrainCog className="h-3.5 w-3.5" />
+                  ) : (
+                    <Brain className="h-3.5 w-3.5" />
+                  )}
+                  {chat.learningExcluded ? 'Not learning' : 'Learning'}
+                </button>
+              </div>
+            )}
+            <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
             {chat.loading && (
               <div className="flex items-center gap-2 text-[12.5px] text-faint">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
@@ -510,7 +554,8 @@ export function AssistantView({
                 }
               />
             ))}
-          </div>
+            </div>
+          </>
         )}
 
         {chat.error && (

@@ -114,10 +114,26 @@ vi.mock('../../memory/rag', () => ({
 }))
 vi.mock('../../memory/consolidation', () => ({ consolidateNewCandidate: vi.fn(async () => 'created') }))
 vi.mock('../../memory/memory-runtime', () => ({
-  getMemoryDb: () => null,
-  ensureMemoryDb: async () => ({ db: null, detail: 'disabled' })
+  getMemoryDb: () => ({ fake: 'db' }),
+  ensureMemoryDb: async () => ({ db: { fake: 'db' }, detail: 'ok' })
 }))
-vi.mock('../../memory/memories-store', () => ({ getMemoryById: () => null }))
+const memStore = vi.hoisted(() => ({
+  byCall: [] as { id: string }[],
+  deleted: [] as string[],
+  extraction: vi.fn(async (): Promise<void> => {})
+}))
+vi.mock('../../memory/memories-store', () => ({
+  getMemoryById: () => null,
+  listMemoriesByCallId: (_db: unknown, callId: string) =>
+    callId.startsWith('assistant:') ? memStore.byCall : [],
+  deleteMemory: (_db: unknown, id: string) => {
+    memStore.deleted.push(id)
+    return true
+  }
+}))
+vi.mock('../../memory/memory-hooks', () => ({
+  runMemoryExtractionForAssistantMessage: memStore.extraction
+}))
 vi.mock('../../app-settings', () => ({ isSalesBrainEnabled: () => true }))
 const toolsMock = vi.hoisted(() => ({
   plan: vi.fn(async (): Promise<unknown[]> => []),
@@ -174,6 +190,9 @@ beforeEach(async () => {
   toolsMock.execute.mockResolvedValue({ sections: [], taskProposals: [] })
   taskMock.create.mockClear()
   taskMock.create.mockResolvedValue({ id: 'task-1' })
+  memStore.byCall = []
+  memStore.deleted = []
+  memStore.extraction.mockClear()
   vi.resetModules()
 })
 
@@ -303,6 +322,48 @@ describe('task proposals — writes are confirmed, never executed by the turn', 
     expect((await getConversation(convDir(), convId))?.messages[1].taskProposals?.[0].status).toBe(
       'pending'
     )
+  })
+})
+
+describe('chat as a memory source — wiring + retroactive forget', () => {
+  it('a successful turn fires the extraction hook with the persisted user-message id', async () => {
+    const { convId, invoke } = await setup()
+    const pending = invoke('assistant:send', convId, 'we use HubSpot for CRM')
+    streamControl.push('Noted.')
+    streamControl.end()
+    await pending
+    expect(memStore.extraction).toHaveBeenCalledOnce()
+    const [gotConvId, gotMsgId, gotMessage] = memStore.extraction.mock.calls[0] as unknown as [
+      string,
+      string,
+      string
+    ]
+    expect(gotConvId).toBe(convId)
+    expect(gotMessage).toBe('we use HubSpot for CRM')
+    const conv = await getConversation(convDir(), convId)
+    expect(gotMsgId).toBe(conv?.messages[0].id) // the REAL persisted id, not a local one
+  })
+
+  it('a failed turn fires no extraction', async () => {
+    const { convId, invoke } = await setup()
+    const pending = invoke('assistant:send', convId, 'q')
+    streamControl.fail(new Error('boom'))
+    await pending
+    expect(memStore.extraction).not.toHaveBeenCalled()
+  })
+
+  it('excluding a conversation persists the flag and deletes everything it taught', async () => {
+    const { convId, invoke } = await setup()
+    memStore.byCall = [{ id: 'mem-1' }, { id: 'mem-2' }]
+    const res = (await invoke('assistant:setSalesBrainExcluded', convId, true)) as { ok: boolean }
+    expect(res.ok).toBe(true)
+    expect(memStore.deleted).toEqual(['mem-1', 'mem-2'])
+    expect((await getConversation(convDir(), convId))?.salesBrainExcluded).toBe(true)
+    // Re-enabling clears the flag and does NOT resurrect anything.
+    memStore.deleted = []
+    await invoke('assistant:setSalesBrainExcluded', convId, false)
+    expect((await getConversation(convDir(), convId))?.salesBrainExcluded).toBeUndefined()
+    expect(memStore.deleted).toEqual([])
   })
 })
 

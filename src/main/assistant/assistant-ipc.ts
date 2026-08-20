@@ -20,7 +20,8 @@ import { businessProfileSection, repProfileSection } from '../memory/profile-inj
 import { retrieveRelevantMemoriesStructured } from '../memory/rag'
 import { consolidateNewCandidate } from '../memory/consolidation'
 import { getMemoryDb, ensureMemoryDb } from '../memory/memory-runtime'
-import { getMemoryById } from '../memory/memories-store'
+import { deleteMemory, getMemoryById, listMemoriesByCallId } from '../memory/memories-store'
+import { runMemoryExtractionForAssistantMessage } from '../memory/memory-hooks'
 import { isSalesBrainEnabled } from '../app-settings'
 import { extractContextSuggestions } from '../coaching-chat'
 import type { CoachChatContextSuggestion } from '../calls-fs'
@@ -41,6 +42,7 @@ import {
   markSuggestionApplied,
   renameConversation,
   revertTaskProposal,
+  setConversationSalesBrainExcluded,
   type AssistantCitation,
   type PersistedTaskProposal
 } from './conversations-fs'
@@ -240,6 +242,16 @@ async function handleSend(conversationId: string, rawMessage: string): Promise<A
     )
     const savedUser = saved?.messages[saved.messages.length - 2]
 
+    // M28 Phase 2 — the conversation feeds the Sales Brain like calls do.
+    // Fire-and-forget (the coaching chat's exact precedent); the hook
+    // re-reads BOTH permissions fresh (master flag + this conversation's
+    // exclusion) at execution time, never from here.
+    if (savedUser) {
+      void runMemoryExtractionForAssistantMessage(conversationId, savedUser.id, message).catch(
+        () => {}
+      )
+    }
+
     return {
       ok: true,
       reply,
@@ -383,6 +395,28 @@ export function registerAssistant(): void {
         await revertTaskProposal(dir(), conversationId, messageId, proposalId)
         return { ok: false }
       }
+    }
+  )
+
+  // "Don't learn from this conversation" — mirrors the call-level exclusion
+  // exactly (memory-center-ipc.ts's salesBrain:calls:setExcluded): setting it
+  // ALSO retroactively deletes every memory this conversation taught, so
+  // exclusion leaves zero trace. Turning it back off does not re-extract.
+  ipcMain.handle(
+    'assistant:setSalesBrainExcluded',
+    async (_e, conversationId: unknown, excluded: unknown): Promise<{ ok: boolean }> => {
+      if (typeof conversationId !== 'string' || typeof excluded !== 'boolean') return { ok: false }
+      const conv = await setConversationSalesBrainExcluded(dir(), conversationId, excluded)
+      if (!conv) return { ok: false }
+      if (excluded) {
+        const db = getMemoryDb()
+        if (db) {
+          for (const memory of listMemoriesByCallId(db, `assistant:${conversationId}`)) {
+            deleteMemory(db, memory.id)
+          }
+        }
+      }
+      return { ok: true }
     }
   )
 
