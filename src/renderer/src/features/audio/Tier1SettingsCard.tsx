@@ -1,4 +1,5 @@
-import { AudioLines, Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { useState } from 'react'
+import { AudioLines, Loader2, AlertTriangle, CheckCircle2, FileDown } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { cn } from '@renderer/lib/cn'
@@ -40,6 +41,62 @@ const STRENGTH_COPY: Record<DenoiseStrength, string> = {
  * comment) — flipping it takes effect on the next call, not immediately.
  * The copy below says so plainly rather than implying an instant switch.
  */
+/** Standalone card below the main one: collect logs + audio state into a
+ *  support zip. Its own component so its state (exporting/result) can't
+ *  tangle with the toggle's. */
+export function Tier1DiagnosticsCard(): React.JSX.Element | null {
+  const [exporting, setExporting] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+
+  if (!isWindows) return null
+
+  const doExport = async (): Promise<void> => {
+    setExporting(true)
+    setResult(null)
+    try {
+      // Labels only — the names the user already sees in mic dropdowns.
+      const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [])
+      const { getTier1Enabled, getDenoiseStrength } = await import(
+        '@renderer/features/settings/prefs'
+      )
+      const res = await window.api.tier1.exportDiagnostics({
+        deviceLabels: devices.filter((d) => d.kind === 'audioinput').map((d) => d.label),
+        tier1Enabled: getTier1Enabled(),
+        denoiseStrength: getDenoiseStrength()
+      })
+      if (res.ok && res.path) setResult(`Saved to ${res.path}`)
+      else if (!res.canceled) setResult(res.error ? `Export failed: ${res.error}` : 'Export failed.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  return (
+    <Card className="mb-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-medium">Export diagnostics</h3>
+          <p className="mt-1 text-[12px] text-faint">
+            Collects the noise-cancellation logs and this PC&rsquo;s audio device state into a
+            single zip you can attach to a support email. No call audio, recordings or
+            transcripts are included.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={exporting}
+          onClick={() => void doExport()}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1.5 text-[13px] font-medium text-ink transition hover:bg-elevated disabled:opacity-60"
+        >
+          {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileDown className="h-3.5 w-3.5" />}
+          Export
+        </button>
+      </div>
+      {result && <p className="mt-2 text-[11px] text-faint">{result}</p>}
+    </Card>
+  )
+}
+
 export function Tier1SettingsCard(): React.JSX.Element | null {
   const { status, enabled, setEnabled, strength, setStrength, uiState } = useTier1()
 

@@ -160,6 +160,7 @@ import { registerOutlook } from './outlook'
 import { registerBackup } from './backup'
 import { registerVirtualMic, disposeVirtualMic } from './virtualmic'
 import { registerTier1, disposeTier1 } from './tier1'
+import { registerTier1Diagnostics } from './tier1-diagnostics'
 import { registerKnowledge } from './knowledge'
 import { registerObjectionQueue } from './objection-queue'
 import {
@@ -554,6 +555,7 @@ app.whenReady().then(async () => {
   // different architecture (an out-of-band named pipe here, not a capture
   // device), no shared state between them.
   registerTier1()
+  registerTier1Diagnostics()
   registerKnowledge()
   registerObjectionQueue()
   registerAppSettings()

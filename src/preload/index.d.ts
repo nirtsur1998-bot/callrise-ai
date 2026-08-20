@@ -1574,6 +1574,13 @@ export interface Tier1Api {
    *  compiled-in default (the "high" strength). */
   start: (micName: string, attenDb?: number) => Promise<{ ok: boolean; error?: string }>
   stop: () => Promise<{ ok: boolean }>
+  /** Collects noise-cancellation logs + audio state into one zip (save
+   *  dialog). No call audio, recordings or transcripts are included. */
+  exportDiagnostics: (info: {
+    deviceLabels?: string[]
+    tier1Enabled?: boolean
+    denoiseStrength?: string
+  }) => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
   getStatus: () => Promise<{
     engineAvailable: boolean
     engineRunning: boolean

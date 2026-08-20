@@ -484,6 +484,11 @@ const api = {
       ipcRenderer.invoke('tier1:start', micName, attenDb),
     stop: () => ipcRenderer.invoke('tier1:stop'),
     getStatus: () => ipcRenderer.invoke('tier1:getStatus'),
+    // Collects engine logs + status + app state into one zip via a save
+    // dialog. The renderer passes device LABELS (names only) because
+    // enumerateDevices() only exists on its side of the bridge.
+    exportDiagnostics: (info: { deviceLabels?: string[]; tier1Enabled?: boolean; denoiseStrength?: string }) =>
+      ipcRenderer.invoke('tier1:exportDiagnostics', info),
     onStatus: (cb: (status: unknown) => void) => subscribe('tier1:status', cb),
     // Audio frames. Deliberately NOT routed through `subscribe`'s generic
     // path: this fires ~100x/second and the payload is a transferred

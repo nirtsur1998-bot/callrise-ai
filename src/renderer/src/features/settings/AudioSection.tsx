@@ -1,5 +1,5 @@
 import { NoiseCancellationCard } from '@renderer/features/audio/NoiseCancellationCard'
-import { Tier1SettingsCard } from '@renderer/features/audio/Tier1SettingsCard'
+import { Tier1SettingsCard, Tier1DiagnosticsCard } from '@renderer/features/audio/Tier1SettingsCard'
 
 // Both cards self-gate by platform (NoiseCancellationCard: isMac,
 // Tier1SettingsCard: isWindows) and return null on the wrong one — the
@@ -11,6 +11,7 @@ export function AudioSection(): React.JSX.Element {
     <>
       <NoiseCancellationCard />
       <Tier1SettingsCard />
+      <Tier1DiagnosticsCard />
     </>
   )
 }
