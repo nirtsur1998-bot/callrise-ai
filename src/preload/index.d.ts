@@ -545,6 +545,14 @@ export interface AssistantCitation {
   label: string
 }
 
+export interface AssistantTaskProposal {
+  id: string
+  title: string
+  type: 'follow-up' | 'email' | 'meeting' | 'research' | 'general'
+  priority: 'low' | 'medium' | 'high'
+  status: 'pending' | 'accepted'
+}
+
 export interface AssistantMessage {
   id: string
   role: 'user' | 'assistant'
@@ -553,6 +561,7 @@ export interface AssistantMessage {
   citations?: AssistantCitation[]
   suggestions?: CoachChatContextSuggestion[]
   appliedSuggestionIds?: string[]
+  taskProposals?: AssistantTaskProposal[]
 }
 
 export interface AssistantConversation {
@@ -629,6 +638,13 @@ export interface AssistantApi {
     conversationId: string,
     messageId: string,
     suggestion: CoachChatContextSuggestion
+  ) => Promise<{ ok: boolean }>
+  /** Confirm a pending task proposal — the task is created only here, never
+   *  during the turn (writes are confirmed, reads are free). */
+  confirmTask: (
+    conversationId: string,
+    messageId: string,
+    proposalId: string
   ) => Promise<{ ok: boolean }>
   getMemoryEvidence: (memoryId: string) => Promise<AssistantMemoryEvidence | null>
   onDelta: (cb: (payload: AssistantDelta) => void) => () => void

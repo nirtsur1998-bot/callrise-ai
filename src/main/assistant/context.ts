@@ -7,6 +7,7 @@
 // the Memory Center trust rule ("every claim traceable") made visible in chat.
 import type { VectorSearchResult } from '../memory/memories-store'
 import type { AssistantCitation } from './conversations-fs'
+import type { LookupSection } from './tools'
 
 /** Same prompt-injection defense the coaching chat ships (SHARED_GROUNDING in
  *  coaching-chat.ts): everything retrieved is data, never instructions. */
@@ -32,6 +33,10 @@ export interface AssistantContextInput {
   businessProfile: string
   /** Question-scoped retrieval, already ranked (rag.ts structured output). */
   retrieved: VectorSearchResult[]
+  /** Tool-lookup results (tools.ts). Lines carrying a `cite` continue the
+   *  [n] numbering after the memories, so a call result is citable exactly
+   *  like a memory. */
+  lookupSections?: LookupSection[]
 }
 
 export interface AssistantContext {
@@ -64,6 +69,18 @@ export function buildAssistantContext(input: AssistantContextInput): AssistantCo
     sections.push(
       `--- CONTEXT: MEMORIES RELEVANT TO THIS QUESTION (numbered for citation) ---\n${lines.join('\n')}${hasHypotheses ? `\n\n${HEDGE_RULE}` : ''}`
     )
+  }
+
+  let nextMarker = input.retrieved.length + 1
+  for (const section of input.lookupSections ?? []) {
+    const lines = section.lines.map((line) => {
+      if (!line.cite) return `- ${line.text}`
+      const n = nextMarker
+      nextMarker += 1
+      citationsByMarker.set(n, line.cite)
+      return `[${n}] ${line.text}`
+    })
+    sections.push(`--- CONTEXT: ${section.title} ---\n${lines.join('\n')}`)
   }
 
   return { system: sections.join('\n\n'), citationsByMarker }

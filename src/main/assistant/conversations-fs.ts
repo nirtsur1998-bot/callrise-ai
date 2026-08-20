@@ -34,6 +34,16 @@ export interface AssistantCitation {
   label: string
 }
 
+export interface PersistedTaskProposal {
+  id: string
+  title: string
+  type: 'follow-up' | 'email' | 'meeting' | 'research' | 'general'
+  priority: 'low' | 'medium' | 'high'
+  /** 'accepted' once the user confirmed and the task was really created —
+   *  persisted so a reopened conversation can't re-offer or double-create. */
+  status: 'pending' | 'accepted'
+}
+
 export interface AssistantMessage {
   id: string
   role: AssistantRole
@@ -48,6 +58,10 @@ export interface AssistantMessage {
   /** Ids from `suggestions` the user has applied — persisted so a chip can't
    *  be double-applied after a reload. */
   appliedSuggestionIds?: string[]
+  /** Only on assistant messages — write actions proposed by the turn's tool
+   *  dispatch. Persisted WITH the message (the BUG-048 lesson: AI output
+   *  living only in component state gets destroyed by navigation). */
+  taskProposals?: PersistedTaskProposal[]
 }
 
 export interface AssistantConversation {
@@ -142,6 +156,30 @@ function sanitizeSuggestions(value: unknown): CoachChatContextSuggestion[] | und
   return out.length > 0 ? out : undefined
 }
 
+const TASK_TYPES = new Set(['follow-up', 'email', 'meeting', 'research', 'general'])
+const TASK_PRIORITIES = new Set(['low', 'medium', 'high'])
+const MAX_TASK_PROPOSALS = 5
+
+function sanitizeTaskProposals(value: unknown): PersistedTaskProposal[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: PersistedTaskProposal[] = []
+  for (const v of value.slice(0, MAX_TASK_PROPOSALS)) {
+    const p = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
+    const title = clampText(p.title, 200)
+    if (!title || !isSafeConversationId(p.id)) continue
+    out.push({
+      id: p.id,
+      title,
+      type: (TASK_TYPES.has(p.type as string) ? p.type : 'general') as PersistedTaskProposal['type'],
+      priority: (TASK_PRIORITIES.has(p.priority as string)
+        ? p.priority
+        : 'medium') as PersistedTaskProposal['priority'],
+      status: p.status === 'accepted' ? 'accepted' : 'pending'
+    })
+  }
+  return out.length > 0 ? out : undefined
+}
+
 function sanitizeMessage(value: unknown): AssistantMessage | null {
   const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
   if (v.role !== 'user' && v.role !== 'assistant') return null
@@ -157,7 +195,8 @@ function sanitizeMessage(value: unknown): AssistantMessage | null {
     createdAt: typeof v.createdAt === 'string' ? v.createdAt : new Date().toISOString(),
     citations: v.role === 'assistant' ? sanitizeCitations(v.citations) : undefined,
     suggestions: v.role === 'user' ? sanitizeSuggestions(v.suggestions) : undefined,
-    appliedSuggestionIds: applied.length > 0 ? applied : undefined
+    appliedSuggestionIds: applied.length > 0 ? applied : undefined,
+    taskProposals: v.role === 'assistant' ? sanitizeTaskProposals(v.taskProposals) : undefined
   }
 }
 
@@ -302,7 +341,8 @@ export async function appendTurn(
       role: 'assistant',
       createdAt: now,
       text: clampText(assistantMessage.text, MAX_MESSAGE_TEXT),
-      citations: sanitizeCitations(assistantMessage.citations)
+      citations: sanitizeCitations(assistantMessage.citations),
+      taskProposals: sanitizeTaskProposals(assistantMessage.taskProposals)
     }
     conv.messages = [...conv.messages, user, assistant].slice(-MAX_MESSAGES)
     if (conv.title === 'New conversation' && user.text) {
@@ -311,6 +351,47 @@ export async function appendTurn(
     conv.updatedAt = now
     await writeConversation(dir, conv)
     return conv
+  })
+}
+
+/** Flip a task proposal to accepted — persisted so a reopened conversation
+ *  can't double-create the task. Returns the proposal, or null when missing
+ *  or ALREADY accepted (the caller must treat that as "do not create"). */
+export async function acceptTaskProposal(
+  dir: string,
+  conversationId: string,
+  messageId: string,
+  proposalId: string
+): Promise<PersistedTaskProposal | null> {
+  return withConversationLock(conversationId, async () => {
+    const conv = await getConversation(dir, conversationId)
+    if (!conv) return null
+    const msg = conv.messages.find((m) => m.id === messageId)
+    const proposal = msg?.taskProposals?.find((p) => p.id === proposalId)
+    if (!proposal || proposal.status === 'accepted') return null
+    proposal.status = 'accepted'
+    conv.updatedAt = new Date().toISOString()
+    await writeConversation(dir, conv)
+    return proposal
+  })
+}
+
+/** Roll an accepted proposal back to pending — the compensation path when
+ *  the task creation that followed acceptance failed. */
+export async function revertTaskProposal(
+  dir: string,
+  conversationId: string,
+  messageId: string,
+  proposalId: string
+): Promise<void> {
+  await withConversationLock(conversationId, async () => {
+    const conv = await getConversation(dir, conversationId)
+    const proposal = conv?.messages
+      .find((m) => m.id === messageId)
+      ?.taskProposals?.find((p) => p.id === proposalId)
+    if (!conv || !proposal) return
+    proposal.status = 'pending'
+    await writeConversation(dir, conv)
   })
 }
 

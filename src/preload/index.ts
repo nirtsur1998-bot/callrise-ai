@@ -211,6 +211,8 @@ const api = {
     attach: (conversationId: string) => ipcRenderer.invoke('assistant:attach', conversationId),
     applySuggestion: (conversationId: string, messageId: string, suggestion: unknown) =>
       ipcRenderer.invoke('assistant:applySuggestion', conversationId, messageId, suggestion),
+    confirmTask: (conversationId: string, messageId: string, proposalId: string) =>
+      ipcRenderer.invoke('assistant:confirmTask', conversationId, messageId, proposalId),
     getMemoryEvidence: (memoryId: string) =>
       ipcRenderer.invoke('assistant:getMemoryEvidence', memoryId),
     onDelta: (cb: (payload: unknown) => void) => subscribe('assistant:delta', cb),

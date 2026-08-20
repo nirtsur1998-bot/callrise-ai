@@ -105,11 +105,13 @@ function CitedText({
 function Bubble({
   message,
   onCite,
-  onApplySuggestion
+  onApplySuggestion,
+  onConfirmTask
 }: {
   message: DisplayMessage
   onCite: (c: AssistantCitation) => void
   onApplySuggestion: (messageId: string, s: AssistantSuggestion) => void
+  onConfirmTask: (messageId: string, proposalId: string) => void
 }): React.JSX.Element {
   const isUser = message.role === 'user'
   const applied = new Set(message.appliedSuggestionIds ?? [])
@@ -132,6 +134,32 @@ function Bubble({
               <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-sm bg-accent align-middle" />
             )}
           </>
+        )}
+        {!isUser && message.taskProposals && message.taskProposals.length > 0 && (
+          <div className="mt-2.5 space-y-2">
+            {message.taskProposals.map((p) => (
+              <div
+                key={p.id}
+                className="flex items-center justify-between gap-3 rounded-xl border border-line-soft bg-elevated px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-[12.5px] font-medium text-ink">{p.title}</p>
+                  <p className="text-[11px] text-faint">
+                    {p.type} · {p.priority} priority
+                  </p>
+                </div>
+                {p.status === 'accepted' ? (
+                  <span className="flex shrink-0 items-center gap-1 text-[11.5px] text-positive">
+                    <Check className="h-3.5 w-3.5" /> Added
+                  </span>
+                ) : (
+                  <Button size="sm" onClick={() => onConfirmTask(message.id, p.id)}>
+                    Add task
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
         )}
         {isUser && message.suggestions && message.suggestions.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -477,6 +505,9 @@ export function AssistantView({
                 message={m}
                 onCite={setCitation}
                 onApplySuggestion={(messageId, s) => void chat.applySuggestion(messageId, s)}
+                onConfirmTask={(messageId, proposalId) =>
+                  void chat.confirmTask(messageId, proposalId)
+                }
               />
             ))}
           </div>

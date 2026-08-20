@@ -12,6 +12,7 @@
 //    partial text persists the partial turn — already-streamed words the
 //    user read are work product, not garbage (the BUG-048 lesson).
 import { app, ipcMain, BrowserWindow } from 'electron'
+import { join } from 'node:path'
 import { AIProviderError } from '../ai'
 import { streamWithFallback, AllModelsExhaustedError } from '../ai/complete-with-fallback'
 import type { AIMessage } from '../ai/types'
@@ -25,7 +26,11 @@ import { extractContextSuggestions } from '../coaching-chat'
 import type { CoachChatContextSuggestion } from '../calls-fs'
 import type { MemoryCategory, MemoryScope } from '../memory/types'
 import { buildAssistantContext, citationsUsedIn } from './context'
+import { defaultToolDirs, executeLookups, planLookups, type TaskProposal } from './tools'
+import { createTask } from '../tasks-fs'
+import { scheduleBackup } from '../backup'
 import {
+  acceptTaskProposal,
   appendTurn,
   conversationsDir,
   createConversation,
@@ -35,7 +40,9 @@ import {
   listConversations,
   markSuggestionApplied,
   renameConversation,
-  type AssistantCitation
+  revertTaskProposal,
+  type AssistantCitation,
+  type PersistedTaskProposal
 } from './conversations-fs'
 
 /** Replay window per turn — storage keeps up to MAX_MESSAGES (500), but the
@@ -47,6 +54,10 @@ const MAX_TOKENS = 2_048
 
 function dir(): string {
   return conversationsDir(app.getPath('userData'))
+}
+
+function tasksDirPath(): string {
+  return join(app.getPath('userData'), 'tasks')
 }
 
 function broadcast(channel: string, payload: unknown): void {
@@ -129,14 +140,21 @@ async function handleSend(conversationId: string, rawMessage: string): Promise<A
   // included ON PURPOSE: a young install's Sales Brain is all hypotheses, and
   // "I don't know anything" next to a visibly full Memory Center is the
   // credibility trap Phase 0 flagged — context.ts hedges their phrasing.
-  const retrieved = await retrieveRelevantMemoriesStructured(message, {
-    foreground: true,
-    includeHypotheses: true
-  })
+  // Retrieval and lookup PLANNING run concurrently (both need only the
+  // message); planning degrades to [] when no tool-capable model exists.
+  const [retrieved, planned] = await Promise.all([
+    retrieveRelevantMemoriesStructured(message, {
+      foreground: true,
+      includeHypotheses: true
+    }),
+    planLookups(message)
+  ])
+  const lookups = await executeLookups(planned, defaultToolDirs(app.getPath('userData')))
   const context = buildAssistantContext({
     repProfile: repProfileSection('full'),
     businessProfile: businessProfileSection('full'),
-    retrieved
+    retrieved,
+    lookupSections: lookups.sections
   })
 
   const history: AIMessage[] = conv.messages
@@ -185,6 +203,13 @@ async function handleSend(conversationId: string, rawMessage: string): Promise<A
     }
 
     const reply = turn.accumulated
+    if (!reply.trim()) {
+      // A model can "succeed" with zero tokens; persisting that would write a
+      // turn whose empty assistant message sanitize-on-read silently drops.
+      const msg = 'The model returned an empty reply. Please try again.'
+      broadcast('assistant:error', { conversationId, message: msg })
+      return { ok: false, error: 'ai-failed', message: msg }
+    }
     const citations = citationsUsedIn(reply, context.citationsByMarker)
 
     // Save-chips: reuse the M23/M25 extraction on ONLY the user's message.
@@ -199,11 +224,19 @@ async function handleSend(conversationId: string, rawMessage: string): Promise<A
       )
     ).filter((s) => s.type === 'memory')
 
+    const taskProposals: PersistedTaskProposal[] = lookups.taskProposals.map((p: TaskProposal) => ({
+      ...p,
+      status: 'pending'
+    }))
     const saved = await appendTurn(
       dir(),
       conversationId,
       { text: message, suggestions: suggestions.length > 0 ? suggestions : undefined },
-      { text: reply, citations: citations.length > 0 ? citations : undefined }
+      {
+        text: reply,
+        citations: citations.length > 0 ? citations : undefined,
+        taskProposals: taskProposals.length > 0 ? taskProposals : undefined
+      }
     )
     const savedUser = saved?.messages[saved.messages.length - 2]
 
@@ -311,6 +344,43 @@ export function registerAssistant(): void {
         await markSuggestionApplied(dir(), conversationId, messageId, suggestion.id)
         return { ok: true }
       } catch {
+        return { ok: false }
+      }
+    }
+  )
+
+  // Confirm chip → the task is REALLY created (the only write this surface
+  // performs besides memory chips, both user-confirmed). Accept-then-create:
+  // acceptTaskProposal atomically claims the proposal under the conversation
+  // lock (a double-click can't create twice); a create failure rolls it back.
+  ipcMain.handle(
+    'assistant:confirmTask',
+    async (
+      _e,
+      conversationId: unknown,
+      messageId: unknown,
+      proposalId: unknown
+    ): Promise<{ ok: boolean }> => {
+      if (
+        typeof conversationId !== 'string' ||
+        typeof messageId !== 'string' ||
+        typeof proposalId !== 'string'
+      ) {
+        return { ok: false }
+      }
+      const proposal = await acceptTaskProposal(dir(), conversationId, messageId, proposalId)
+      if (!proposal) return { ok: false }
+      try {
+        await createTask(tasksDirPath(), {
+          title: proposal.title,
+          type: proposal.type,
+          priority: proposal.priority,
+          source: 'ai'
+        })
+        scheduleBackup()
+        return { ok: true }
+      } catch {
+        await revertTaskProposal(dir(), conversationId, messageId, proposalId)
         return { ok: false }
       }
     }

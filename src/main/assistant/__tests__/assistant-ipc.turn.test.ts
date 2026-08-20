@@ -119,6 +119,25 @@ vi.mock('../../memory/memory-runtime', () => ({
 }))
 vi.mock('../../memory/memories-store', () => ({ getMemoryById: () => null }))
 vi.mock('../../app-settings', () => ({ isSalesBrainEnabled: () => true }))
+const toolsMock = vi.hoisted(() => ({
+  plan: vi.fn(async (): Promise<unknown[]> => []),
+  execute: vi.fn(
+    async (): Promise<{ sections: unknown[]; taskProposals: unknown[] }> => ({
+      sections: [],
+      taskProposals: []
+    })
+  )
+}))
+vi.mock('../tools', () => ({
+  planLookups: toolsMock.plan,
+  executeLookups: toolsMock.execute,
+  defaultToolDirs: () => ({ callsDir: '', contactsDir: '', dealsDir: '', eventsDir: '' })
+}))
+const taskMock = vi.hoisted(() => ({
+  create: vi.fn(async (): Promise<{ id: string }> => ({ id: 'task-1' }))
+}))
+vi.mock('../../tasks-fs', () => ({ createTask: taskMock.create }))
+vi.mock('../../backup', () => ({ scheduleBackup: vi.fn() }))
 vi.mock('../../coaching-chat', () => ({
   extractContextSuggestions: vi.fn(async () => [
     { id: 'sug-mem', type: 'memory', text: 'fact', confidence: 'high', memoryScope: 'rep', memoryCategory: 'preference' },
@@ -150,6 +169,11 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'assistant-ipc-test-'))
   broadcasts.length = 0
   streamControl.reset()
+  toolsMock.plan.mockClear()
+  toolsMock.execute.mockClear()
+  toolsMock.execute.mockResolvedValue({ sections: [], taskProposals: [] })
+  taskMock.create.mockClear()
+  taskMock.create.mockResolvedValue({ id: 'task-1' })
   vi.resetModules()
 })
 
@@ -197,6 +221,16 @@ describe('assistant:send', () => {
     expect(inFlightCountForTests()).toBe(0)
   })
 
+  it('an empty reply is a failure, not a phantom turn (sanitize-on-read would drop it)', async () => {
+    const { convId, invoke } = await setup()
+    const pending = invoke('assistant:send', convId, 'q')
+    streamControl.end() // zero tokens, "successful" stream
+    const result = (await pending) as Record<string, unknown>
+    expect(result.ok).toBe(false)
+    expect(result.error).toBe('ai-failed')
+    expect((await getConversation(convDir(), convId))?.messages).toHaveLength(0)
+  })
+
   it('a provider failure persists nothing and reports the friendly message', async () => {
     const { convId, invoke } = await setup()
     const pending = invoke('assistant:send', convId, 'q')
@@ -206,6 +240,69 @@ describe('assistant:send', () => {
     expect(result.error).toBe('ai-failed')
     expect(broadcasts.some((b) => b.channel === 'assistant:error')).toBe(true)
     expect((await getConversation(convDir(), convId))?.messages).toHaveLength(0)
+  })
+})
+
+describe('task proposals — writes are confirmed, never executed by the turn', () => {
+  it('a proposed task persists on the message as pending; the turn creates NO task', async () => {
+    const { convId, invoke } = await setup()
+    toolsMock.execute.mockResolvedValueOnce({
+      sections: [],
+      taskProposals: [{ id: 'prop-1', title: 'Send the quote', type: 'email', priority: 'high' }]
+    })
+    const pending = invoke('assistant:send', convId, 'remind me to send the quote')
+    streamControl.push('Will do — confirm below.')
+    streamControl.end()
+    await pending
+    expect(taskMock.create).not.toHaveBeenCalled()
+    const conv = await getConversation(convDir(), convId)
+    expect(conv?.messages[1].taskProposals).toEqual([
+      { id: 'prop-1', title: 'Send the quote', type: 'email', priority: 'high', status: 'pending' }
+    ])
+  })
+
+  it('confirmTask creates the task exactly once; a second confirm is refused', async () => {
+    const { convId, invoke } = await setup()
+    toolsMock.execute.mockResolvedValueOnce({
+      sections: [],
+      taskProposals: [{ id: 'prop-1', title: 'Send the quote', type: 'email', priority: 'high' }]
+    })
+    const pending = invoke('assistant:send', convId, 'q')
+    streamControl.push('Confirm below.')
+    streamControl.end()
+    await pending
+    const msgId = (await getConversation(convDir(), convId))!.messages[1].id
+
+    const first = (await invoke('assistant:confirmTask', convId, msgId, 'prop-1')) as { ok: boolean }
+    expect(first.ok).toBe(true)
+    expect(taskMock.create).toHaveBeenCalledOnce()
+    expect((await getConversation(convDir(), convId))?.messages[1].taskProposals?.[0].status).toBe(
+      'accepted'
+    )
+
+    const second = (await invoke('assistant:confirmTask', convId, msgId, 'prop-1')) as { ok: boolean }
+    expect(second.ok).toBe(false)
+    expect(taskMock.create).toHaveBeenCalledOnce() // still once — no double-create
+  })
+
+  it('a failed create rolls the proposal back to pending so the user can retry', async () => {
+    const { convId, invoke } = await setup()
+    toolsMock.execute.mockResolvedValueOnce({
+      sections: [],
+      taskProposals: [{ id: 'prop-1', title: 'T', type: 'general', priority: 'medium' }]
+    })
+    const pending = invoke('assistant:send', convId, 'q')
+    streamControl.push('Confirm below.')
+    streamControl.end()
+    await pending
+    const msgId = (await getConversation(convDir(), convId))!.messages[1].id
+
+    taskMock.create.mockRejectedValueOnce(new Error('disk full'))
+    const result = (await invoke('assistant:confirmTask', convId, msgId, 'prop-1')) as { ok: boolean }
+    expect(result.ok).toBe(false)
+    expect((await getConversation(convDir(), convId))?.messages[1].taskProposals?.[0].status).toBe(
+      'pending'
+    )
   })
 })
 

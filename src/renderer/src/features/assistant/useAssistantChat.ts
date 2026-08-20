@@ -35,6 +35,7 @@ export interface UseAssistantChat {
     messageId: string,
     suggestion: CoachChatContextSuggestion
   ) => Promise<boolean>
+  confirmTask: (messageId: string, proposalId: string) => Promise<boolean>
   clearError: () => void
 }
 
@@ -205,6 +206,29 @@ export function useAssistantChat(conversationId: string | null): UseAssistantCha
     [conversationId]
   )
 
+  const confirmTask = useCallback(
+    async (messageId: string, proposalId: string): Promise<boolean> => {
+      if (!conversationId) return false
+      const res = await window.api.assistant.confirmTask(conversationId, messageId, proposalId)
+      if (res.ok && mountedRef.current) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === messageId
+              ? {
+                  ...m,
+                  taskProposals: m.taskProposals?.map((p) =>
+                    p.id === proposalId ? { ...p, status: 'accepted' as const } : p
+                  )
+                }
+              : m
+          )
+        )
+      }
+      return res.ok
+    },
+    [conversationId]
+  )
+
   return {
     messages,
     loading,
@@ -213,6 +237,7 @@ export function useAssistantChat(conversationId: string | null): UseAssistantCha
     send,
     stop,
     applySuggestion,
+    confirmTask,
     clearError: useCallback(() => setError(null), [])
   }
 }
