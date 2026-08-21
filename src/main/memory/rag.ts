@@ -15,7 +15,20 @@ import { searchMemoriesByVector } from './memories-store'
 import { clientScope, type MemoryScope } from './types'
 
 const MAX_RESULTS = 5
-const MAX_DISTANCE = 0.6 // looser than consolidation.ts's dedupe threshold — retrieval wants "plausibly relevant", not "probably the same fact"
+
+/** BUG-080 — vec_memories is a plain `vec0` table, so distances are
+ *  EUCLIDEAN (L2), not cosine: on MiniLM's unit vectors a natural-language
+ *  paraphrase of a stored fact lands around L2 1.0–1.25 (cos-sim ~0.2–0.5).
+ *  The original 0.6 here was written in cosine terms and, in L2 reality,
+ *  demanded ~82% cosine similarity — so retrieval returned NOTHING for
+ *  essentially every real question, silently, since M25. 1.3 is the
+ *  operating point chosen by M28's retrieval-quality harness from a 7-value
+ *  sweep (recall 0/14 → 13/14, MRR 0.79, zero empty answers, zero
+ *  cross-client scope violations; 1.4 added nothing — see the M28 branch's
+ *  docs/M28-retrieval-baseline.md). Consolidation's 0.35 dedupe threshold is
+ *  the same L2 scale but deliberately unchanged — "probably the same fact"
+ *  SHOULD demand near-identity. */
+const MAX_DISTANCE = 1.3
 
 /** Returns a labeled context section (same shape as profile-injection.ts's
  *  *Section() helpers) built from whichever ACTIVE memories are most
