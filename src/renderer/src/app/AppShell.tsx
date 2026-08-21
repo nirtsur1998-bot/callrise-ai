@@ -12,6 +12,11 @@ interface AppShellProps {
   title: string
   /** Optional per-screen actions rendered in the top bar's drag strip. */
   headerActions?: ReactNode
+  /** M28 — the active view OWNS the full center column: no shell padding,
+   *  no shell scrolling (the view manages its own scroll areas), and the
+   *  column is a height-constrained flex parent so `flex-1` children truly
+   *  fill the viewport. Ordinary document-style screens leave this off. */
+  fullBleed?: boolean
   /** The active view, rendered in the center column. */
   children: ReactNode
 }
@@ -27,6 +32,7 @@ export default function AppShell({
   copilotCollapsed = false,
   title,
   headerActions,
+  fullBleed = false,
   children
 }: AppShellProps): React.JSX.Element {
   return (
@@ -46,7 +52,15 @@ export default function AppShell({
         >
           {headerActions && <div className="no-drag flex items-center gap-2">{headerActions}</div>}
         </header>
-        <div className="flex-1 overflow-y-auto px-8 py-7">{children}</div>
+        <div
+          className={cn(
+            fullBleed
+              ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+              : 'flex-1 overflow-y-auto px-8 py-7'
+          )}
+        >
+          {children}
+        </div>
       </main>
 
       {/* Right: AI copilot — width responds to collapsed state so the whole

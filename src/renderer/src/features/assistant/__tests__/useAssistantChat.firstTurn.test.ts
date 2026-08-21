@@ -41,7 +41,8 @@ beforeEach(() => {
         return () => {}
       },
       onError: () => () => {},
-      onTurnComplete: () => () => {}
+      onTurnComplete: () => () => {},
+      onPhase: () => () => {}
     }
   }
 })

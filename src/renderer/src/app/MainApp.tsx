@@ -330,9 +330,18 @@ export function MainApp({
         />
       }
       copilotCollapsed={copilotCollapsed}
+      fullBleed={active === 'assistant'}
     >
-      {/* Keyed on the active screen so each view fades/slides in on switch. */}
-      <div key={active} className="animate-view">
+      {/* Keyed on the active screen so each view fades/slides in on switch.
+          The assistant screen additionally needs the wrapper to be a real
+          flex link in the height chain — audit G traced the dead-void layout
+          bug to exactly this div swallowing h-full. */}
+      <div
+        key={active}
+        className={
+          active === 'assistant' ? 'animate-view flex min-h-0 flex-1 flex-col' : 'animate-view'
+        }
+      >
         <Suspense
           fallback={
             <div className="mx-auto max-w-3xl px-2 py-4">

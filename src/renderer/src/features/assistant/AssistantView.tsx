@@ -1,12 +1,17 @@
-// M28 — the Rise section: conversation list + chat. The screen is a thin
-// shell over main-owned state (conversations on disk, in-flight turns in
-// assistant-ipc); navigation can destroy this component at any moment and
-// nothing of value is lost — useAssistantChat re-attaches on the way back.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+// M28 — the Rise section, rebuilt to the approved P1 direction: ONE surface,
+// one reading column. No boxes-in-boxes — the rail is a flat panel behind a
+// hairline divider, the chat IS the page, the composer is a single unified
+// object pinned to the bottom of the viewport. User messages are compact
+// accent bubbles; Rise's replies are flat document-style text with real
+// (block-progressive) markdown. The screen is disposable by design — main
+// owns conversations and in-flight turns; useAssistantChat re-attaches.
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Loader2,
   MessageSquarePlus,
   Pencil,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
   Send,
   Sparkles,
@@ -23,20 +28,20 @@ import {
 } from 'lucide-react'
 import { Button } from '@renderer/components/Button'
 import { IconButton } from '@renderer/components/IconButton'
-import { EmptyState } from '@renderer/components/EmptyState'
 import { Modal } from '@renderer/components/Modal'
+import { Skeleton, SkeletonRows } from '@renderer/components/Skeleton'
 import { cn } from '@renderer/lib/cn'
 import { fieldClass } from '@renderer/components/field'
 import { ASSISTANT_SECTION_NAME } from './config'
 import {
   useAssistantChat,
   type AssistantCitation,
-  type AssistantMessage,
   type AssistantSuggestion,
   type DisplayMessage
 } from './useAssistantChat'
 import { useVoiceNote } from './useVoiceNote'
 import { segmentCitedText } from './citation-markers'
+import { splitBlocks, tokenizeInline, type MdBlock } from './markdown-blocks'
 
 type ConversationMeta = Awaited<ReturnType<typeof window.api.assistant.listConversations>>[number]
 type MemoryEvidence = NonNullable<
@@ -56,21 +61,35 @@ const STATUS_LABEL: Record<MemoryEvidence['status'], string> = {
   archived: 'Forgotten'
 }
 
+const PHASE_LABEL: Record<'reading' | 'searching' | 'thinking', string> = {
+  reading: 'Reading your Sales Brain…',
+  searching: 'Searching your calls, contacts, and calendar…',
+  thinking: 'Thinking…'
+}
+
 function relativeDay(iso: string): string {
   const d = new Date(iso)
   const today = new Date()
-  const days = Math.floor((today.setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 86_400_000)
+  const days = Math.floor(
+    (today.setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 86_400_000
+  )
   if (days <= 0) return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
   if (days === 1) return 'Yesterday'
   if (days < 7) return d.toLocaleDateString('en-US', { weekday: 'short' })
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-/** Render an assistant reply's [n] markers as tappable citation chips.
- *  Audit fix V4: binding is BY MARKER NUMBER carried on each citation
- *  (segmentCitedText), never by array position — an invented marker renders
- *  as plain text and can never shift real chips onto wrong evidence. */
-function CitedText({
+function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000)
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+// --- Markdown-with-citations rendering --------------------------------------
+
+/** One inline text run: code spans, bold, and italic composed with citation
+ *  chips. Chips keep a REAL hit target (20px, 11px type) through the density
+ *  pass — they're the trust mechanism and get clicked constantly. */
+function InlineRun({
   text,
   citations,
   onCite
@@ -79,37 +98,165 @@ function CitedText({
   citations: AssistantCitation[] | undefined
   onCite: (c: AssistantCitation) => void
 }): React.JSX.Element {
-  const nodes = useMemo(
-    () =>
-      segmentCitedText(text, citations).map((seg, i) =>
-        seg.type === 'chip' ? (
-          <button
-            key={i}
-            type="button"
-            onClick={() => onCite(seg.citation)}
-            title={seg.citation.label}
-            aria-label={`Source ${seg.marker}: ${seg.citation.label}`}
-            className="mx-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded bg-accent-soft px-1 align-super text-[10px] font-semibold text-accent hover:brightness-110"
-          >
-            {seg.marker}
-          </button>
-        ) : (
-          <span key={i}>{seg.text}</span>
+  const nodes: React.ReactNode[] = []
+  tokenizeInline(text).forEach((token, ti) => {
+    if (token.type === 'code') {
+      nodes.push(
+        <code key={ti} className="rounded bg-elevated px-1 py-0.5 font-mono text-[12px] text-ink">
+          {token.text}
+        </code>
+      )
+      return
+    }
+    const segments = segmentCitedText(token.text, citations)
+    const rendered = segments.map((seg, si) =>
+      seg.type === 'chip' ? (
+        <button
+          key={si}
+          type="button"
+          onClick={() => onCite(seg.citation)}
+          title={seg.citation.label}
+          aria-label={`Source ${seg.marker}: ${seg.citation.label}`}
+          className="mx-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-accent-soft px-1.5 align-[-0.15em] text-[11px] font-semibold text-accent hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          {seg.marker}
+        </button>
+      ) : (
+        <span key={si}>{seg.text}</span>
+      )
+    )
+    if (token.type === 'bold') nodes.push(<strong key={ti}>{rendered}</strong>)
+    else if (token.type === 'italic') nodes.push(<em key={ti}>{rendered}</em>)
+    else nodes.push(<span key={ti}>{rendered}</span>)
+  })
+  return <>{nodes}</>
+}
+
+const BlockView = memo(
+  function BlockView({
+    block,
+    citations,
+    onCite
+  }: {
+    block: MdBlock
+    citations: AssistantCitation[] | undefined
+    onCite: (c: AssistantCitation) => void
+  }): React.JSX.Element {
+    switch (block.kind) {
+      case 'heading': {
+        const level = block.meta === '1' ? 'text-[16px]' : block.meta === '2' ? 'text-[15px]' : 'text-[14px]'
+        return (
+          <p className={cn('mt-3 font-semibold tracking-tight text-ink first:mt-0', level)}>
+            <InlineRun text={block.lines[0]} citations={citations} onCite={onCite} />
+          </p>
         )
-      ),
-    [text, citations, onCite]
+      }
+      case 'code':
+        return (
+          <pre className="my-2 overflow-x-auto rounded-xl border border-line-soft bg-elevated p-3 font-mono text-[12px] leading-relaxed text-ink">
+            {block.lines.join('\n')}
+          </pre>
+        )
+      case 'bullet-list':
+        return (
+          <ul className="my-1.5 space-y-1 pl-5">
+            {block.lines.map((l, i) => (
+              <li key={i} className="list-disc marker:text-faint">
+                <InlineRun text={l} citations={citations} onCite={onCite} />
+              </li>
+            ))}
+          </ul>
+        )
+      case 'ordered-list':
+        return (
+          <ol className="my-1.5 space-y-1 pl-5">
+            {block.lines.map((l, i) => (
+              <li key={i} className="list-decimal marker:text-faint">
+                <InlineRun text={l} citations={citations} onCite={onCite} />
+              </li>
+            ))}
+          </ol>
+        )
+      case 'quote':
+        return (
+          <blockquote className="my-2 border-l-2 border-line pl-3 text-muted">
+            {block.lines.map((l, i) => (
+              <p key={i}>
+                <InlineRun text={l} citations={citations} onCite={onCite} />
+              </p>
+            ))}
+          </blockquote>
+        )
+      default:
+        return (
+          <p className="my-1.5 first:mt-0 last:mb-0">
+            {block.lines.map((l, i) => (
+              <span key={i}>
+                {i > 0 && <br />}
+                <InlineRun text={l} citations={citations} onCite={onCite} />
+              </span>
+            ))}
+          </p>
+        )
+    }
+  },
+  (prev, next) =>
+    prev.block === next.block && prev.citations === next.citations && prev.onCite === next.onCite
+)
+
+/** Block-progressive markdown: complete blocks are memoized (block objects
+ *  are reference-stable via content keying below), the trailing in-progress
+ *  block renders as plain text — no reflow behind the reader. */
+function MarkdownMessage({
+  text,
+  streaming,
+  citations,
+  onCite
+}: {
+  text: string
+  streaming: boolean
+  citations: AssistantCitation[] | undefined
+  onCite: (c: AssistantCitation) => void
+}): React.JSX.Element {
+  const blockCacheRef = useRef(new Map<string, MdBlock>())
+  const { blocks, trailing } = useMemo(() => {
+    const split = splitBlocks(text, !streaming)
+    // Reference-stability: identical raw content -> the SAME block object,
+    // so BlockView's memo comparison short-circuits for settled blocks.
+    const cache = blockCacheRef.current
+    const stable = split.blocks.map((b) => {
+      const key = `${b.kind}:${b.meta ?? ''}:${b.lines.join('\n')}`
+      const hit = cache.get(key)
+      if (hit) return hit
+      cache.set(key, b)
+      return b
+    })
+    return { blocks: stable, trailing: split.trailing }
+  }, [text, streaming])
+
+  return (
+    <div className="text-[13.5px] leading-relaxed text-ink">
+      {blocks.map((b, i) => (
+        <BlockView key={i} block={b} citations={citations} onCite={onCite} />
+      ))}
+      {trailing && (
+        <p className="my-1.5 whitespace-pre-wrap first:mt-0 last:mb-0">
+          <InlineRun text={trailing} citations={citations} onCite={onCite} />
+        </p>
+      )}
+    </div>
   )
-  return <span className="whitespace-pre-wrap">{nodes}</span>
 }
 
-function formatDuration(ms: number): string {
-  const s = Math.round(ms / 1000)
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
+// --- Message rows ------------------------------------------------------------
 
-/** Playback chip for a sent voice note — bytes fetched over IPC on first
- *  play, held as a blob URL for the component's lifetime. */
-function VoiceNoteChip({ mediaId, durationMs }: { mediaId: string; durationMs: number }): React.JSX.Element {
+function VoiceNoteChip({
+  mediaId,
+  durationMs
+}: {
+  mediaId: string
+  durationMs: number
+}): React.JSX.Element {
   const [playing, setPlaying] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const urlRef = useRef<string | null>(null)
@@ -143,8 +290,8 @@ function VoiceNoteChip({ mediaId, durationMs }: { mediaId: string; durationMs: n
     <button
       type="button"
       onClick={() => void toggle()}
+      aria-label={playing ? 'Pause voice note' : 'Play voice note'}
       className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-line-soft bg-surface px-2.5 py-1 text-[11.5px] text-muted hover:text-ink"
-      title="Play the original voice note"
     >
       {playing ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
       Voice note · {formatDuration(durationMs)}
@@ -152,59 +299,98 @@ function VoiceNoteChip({ mediaId, durationMs }: { mediaId: string; durationMs: n
   )
 }
 
-function Bubble({
+function MessageRow({
   message,
+  phase,
   onCite,
   onApplySuggestion,
   onConfirmTask
 }: {
   message: DisplayMessage
+  phase: 'reading' | 'searching' | 'thinking' | null
   onCite: (c: AssistantCitation) => void
   onApplySuggestion: (messageId: string, s: AssistantSuggestion) => void
   onConfirmTask: (messageId: string, proposalId: string) => void
 }): React.JSX.Element {
-  const isUser = message.role === 'user'
-  const applied = new Set(message.appliedSuggestionIds ?? [])
+  if (message.role === 'user') {
+    const applied = new Set(message.appliedSuggestionIds ?? [])
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] rounded-2xl bg-accent-soft px-3.5 py-2 text-[13.5px] leading-relaxed text-ink">
+          <span className="whitespace-pre-wrap">{message.text}</span>
+          {message.voiceNote && (
+            <div>
+              <VoiceNoteChip
+                mediaId={message.voiceNote.mediaId}
+                durationMs={message.voiceNote.durationMs}
+              />
+            </div>
+          )}
+          {message.suggestions && message.suggestions.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {message.suggestions.map((s) => {
+                const isApplied = applied.has(s.id)
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    disabled={isApplied}
+                    onClick={() => onApplySuggestion(message.id, s)}
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11.5px]',
+                      isApplied
+                        ? 'border-line-soft text-faint'
+                        : 'border-accent/40 text-accent hover:bg-surface'
+                    )}
+                  >
+                    {isApplied ? <Check className="h-3 w-3" /> : <BookOpenCheck className="h-3 w-3" />}
+                    {isApplied ? 'Saved' : 'Save to Sales Brain'}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  // Rise's reply: flat document text with a small glyph gutter — no bubble.
+  const showActivity = message.streaming && message.text === '' && phase
   return (
-    <div className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
-      <div
-        className={cn(
-          'max-w-[78%] rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed',
-          isUser
-            ? 'bg-accent-soft text-ink'
-            : 'border border-line-soft bg-surface text-ink shadow-card'
-        )}
-      >
-        {isUser ? (
-          <>
-            <span className="whitespace-pre-wrap">{message.text}</span>
-            {message.voiceNote && (
-              <div>
-                <VoiceNoteChip
-                  mediaId={message.voiceNote.mediaId}
-                  durationMs={message.voiceNote.durationMs}
-                />
-              </div>
-            )}
-          </>
+    <div className="flex gap-3">
+      <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-accent-soft">
+        <Sparkles className="h-3.5 w-3.5 text-accent" />
+      </div>
+      <div className="min-w-0 flex-1">
+        {showActivity ? (
+          <p className="flex items-center gap-2 text-[12.5px] text-muted" role="status">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            {PHASE_LABEL[phase]}
+          </p>
         ) : (
           <>
-            <CitedText text={message.text} citations={message.citations} onCite={onCite} />
-            {message.streaming && (
+            <MarkdownMessage
+              text={message.text}
+              streaming={Boolean(message.streaming)}
+              citations={message.citations}
+              onCite={onCite}
+            />
+            {message.streaming && message.text !== '' && (
               <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-sm bg-accent align-middle" />
             )}
           </>
         )}
-        {!isUser && message.taskProposals && message.taskProposals.length > 0 && (
+        {message.taskProposals && message.taskProposals.length > 0 && (
           <div className="mt-2.5 space-y-2">
             {message.taskProposals.map((p) => (
               <div
                 key={p.id}
-                className="flex items-center justify-between gap-3 rounded-xl border border-line-soft bg-elevated px-3 py-2"
+                className="flex items-center justify-between gap-3 rounded-xl border border-line-soft bg-surface px-3 py-2"
               >
                 <div className="min-w-0">
                   <p className="truncate text-[12.5px] font-medium text-ink">{p.title}</p>
-                  <p className="text-[11px] text-faint">
+                  <p className="text-[11.5px] text-faint">
                     {p.type} · {p.priority} priority
                   </p>
                 </div>
@@ -221,34 +407,12 @@ function Bubble({
             ))}
           </div>
         )}
-        {isUser && message.suggestions && message.suggestions.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {message.suggestions.map((s) => {
-              const isApplied = applied.has(s.id)
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  disabled={isApplied}
-                  onClick={() => onApplySuggestion(message.id, s)}
-                  className={cn(
-                    'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11.5px]',
-                    isApplied
-                      ? 'border-line-soft text-faint'
-                      : 'border-accent/40 text-accent hover:bg-accent-soft'
-                  )}
-                >
-                  {isApplied ? <Check className="h-3 w-3" /> : <BookOpenCheck className="h-3 w-3" />}
-                  {isApplied ? 'Saved' : 'Save to Sales Brain'}
-                </button>
-              )
-            })}
-          </div>
-        )}
       </div>
     </div>
   )
 }
+
+// --- Evidence modal ----------------------------------------------------------
 
 function EvidenceModal({
   citation,
@@ -265,9 +429,14 @@ function EvidenceModal({
     void window.api.assistant.getMemoryEvidence(citation.id).then(setEvidence)
   }, [citation])
 
-  // Audit fix V5 — a CALL citation is not a memory: it gets its own panel
-  // with the real deep link, never the memory lookup (which would always
-  // "fail" and show a false "no longer available").
+  const closeButton = (
+    <div className="mt-4 flex justify-end">
+      <Button variant="secondary" onClick={onClose}>
+        Close
+      </Button>
+    </div>
+  )
+
   if (citation.kind === 'call') {
     return (
       <Modal onClose={onClose} title="Where this comes from" size="md">
@@ -287,6 +456,7 @@ function EvidenceModal({
             <p className="text-[12px] text-faint">Find it in Past Calls.</p>
           )}
         </div>
+        {closeButton}
       </Modal>
     )
   }
@@ -303,7 +473,7 @@ function EvidenceModal({
           citation label was: &ldquo;{citation.label}&rdquo;
         </p>
       ) : (
-        <div className="space-y-3">
+        <div className="max-h-[60vh] space-y-3 overflow-y-auto pr-1">
           <p className="text-[14px] font-medium text-ink">{evidence.statement}</p>
           <p className="text-[12px] text-muted">
             {STATUS_LABEL[evidence.status]} · {Math.round(evidence.confidence * 100)}% confidence ·{' '}
@@ -327,10 +497,12 @@ function EvidenceModal({
                     </button>
                   )}
                   {e.callId.startsWith('assistant:') && (
-                    <p className="mt-1 text-[11px] text-faint">Said in a chat with {ASSISTANT_SECTION_NAME}</p>
+                    <p className="mt-1 text-[11.5px] text-faint">
+                      Said in a chat with {ASSISTANT_SECTION_NAME}
+                    </p>
                   )}
                   {e.callId.startsWith('onboarding:') && (
-                    <p className="mt-1 text-[11px] text-faint">From your onboarding interview</p>
+                    <p className="mt-1 text-[11.5px] text-faint">From your onboarding interview</p>
                   )}
                 </div>
               ) : (
@@ -347,9 +519,42 @@ function EvidenceModal({
           </div>
         </div>
       )}
+      {closeButton}
     </Modal>
   )
 }
+
+// --- Confirm dialog (replaces window.confirm — on-system, focus-managed) -----
+
+interface ConfirmState {
+  title: string
+  body: string
+  confirmLabel: string
+  onConfirm: () => void
+}
+
+function ConfirmDialog({ state, onClose }: { state: ConfirmState; onClose: () => void }): React.JSX.Element {
+  return (
+    <Modal onClose={onClose} title={state.title} size="sm">
+      <p className="text-[13px] leading-relaxed text-muted">{state.body}</p>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button variant="secondary" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          onClick={() => {
+            onClose()
+            state.onConfirm()
+          }}
+        >
+          {state.confirmLabel}
+        </Button>
+      </div>
+    </Modal>
+  )
+}
+
+// --- Conversation rail -------------------------------------------------------
 
 function ConversationRow({
   meta,
@@ -366,82 +571,84 @@ function ConversationRow({
 }): React.JSX.Element {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(meta.title)
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1 px-2 py-1">
+        <input
+          className={cn(fieldClass, 'h-7 flex-1 text-[12.5px]')}
+          value={draft}
+          autoFocus
+          aria-label="Conversation name"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              onRename(draft)
+              setEditing(false)
+            }
+            if (e.key === 'Escape') setEditing(false)
+          }}
+        />
+        <IconButton icon={X} label="Cancel rename" onClick={() => setEditing(false)} />
+      </div>
+    )
+  }
   return (
-    <div
-      className={cn(
-        'group relative cursor-pointer rounded-xl px-3 py-2.5',
-        active ? 'bg-accent-soft' : 'hover:bg-elevated'
-      )}
-      onClick={editing ? undefined : onSelect}
-    >
-      {editing ? (
-        <div className="flex items-center gap-1">
-          <input
-            className={cn(fieldClass, 'h-7 flex-1 text-[12.5px]')}
-            value={draft}
-            autoFocus
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                onRename(draft)
-                setEditing(false)
-              }
-              if (e.key === 'Escape') setEditing(false)
-            }}
-            onClick={(e) => e.stopPropagation()}
-          />
-          <IconButton
-            icon={X}
-            label="Cancel"
-            onClick={() => setEditing(false)}
-          />
-        </div>
-      ) : (
-        <>
-          <div className="flex items-baseline justify-between gap-2">
-            <p className="truncate text-[13px] font-medium text-ink">{meta.title}</p>
-            <span className="shrink-0 text-[10.5px] text-faint">{relativeDay(meta.updatedAt)}</span>
-          </div>
-          {meta.preview && <p className="mt-0.5 truncate text-[11.5px] text-faint">{meta.preview}</p>}
-          <div
-            className="absolute right-1.5 top-1.5 hidden gap-0.5 rounded-lg bg-surface/90 p-0.5 group-hover:flex"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <IconButton
-              icon={Pencil}
-              label="Rename"
-              onClick={() => {
-                setDraft(meta.title)
-                setEditing(true)
-              }}
-            />
-            <IconButton icon={Trash2} label="Delete" onClick={onDelete} />
-          </div>
-        </>
-      )}
+    // A real button (keyboard-reachable), with actions that appear on hover
+    // OR keyboard focus-within — audit H: no mouse-only controls.
+    <div className={cn('group relative rounded-lg', active ? 'bg-accent-soft' : 'hover:bg-elevated focus-within:bg-elevated')}>
+      <button
+        type="button"
+        onClick={onSelect}
+        className="w-full px-3 py-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+      >
+        <span className="flex items-baseline justify-between gap-2">
+          <span className="truncate text-[12.5px] font-medium text-ink">{meta.title}</span>
+          <span className="shrink-0 text-[11px] text-faint">{relativeDay(meta.updatedAt)}</span>
+        </span>
+        {meta.preview && (
+          <span className="mt-0.5 block truncate text-[11.5px] text-faint">{meta.preview}</span>
+        )}
+      </button>
+      <div className="absolute right-1 top-1 hidden gap-0.5 rounded-md bg-surface/95 p-0.5 group-hover:flex group-focus-within:flex">
+        <IconButton
+          icon={Pencil}
+          label="Rename conversation"
+          onClick={() => {
+            setDraft(meta.title)
+            setEditing(true)
+          }}
+        />
+        <IconButton icon={Trash2} label="Delete conversation" onClick={onDelete} />
+      </div>
     </div>
   )
 }
+
+// --- The screen --------------------------------------------------------------
 
 export function AssistantView({
   onOpenCall
 }: {
   onOpenCall?: (callId: string) => void
 }): React.JSX.Element {
-  const [metas, setMetas] = useState<ConversationMeta[]>([])
+  const [metas, setMetas] = useState<ConversationMeta[] | null>(null) // null = loading
   const [activeId, setActiveId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [draft, setDraft] = useState('')
+  const [railCollapsed, setRailCollapsed] = useState(false)
   const [citation, setCitation] = useState<AssistantCitation | null>(null)
-  // Audit fix V2 — the first message of a brand-new conversation is handed
-  // to the hook (which streams it like any other send) instead of being
-  // fire-and-forgotten over raw IPC, which rendered a dead pane.
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [brainEmpty, setBrainEmpty] = useState<boolean | null>(null)
   const [pendingFirst, setPendingFirst] = useState<{
     convId: string
     text: string
     voiceNote?: { mediaId: string; durationMs: number }
   } | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const nearBottomRef = useRef(true)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
   const chat = useAssistantChat(
     activeId,
     pendingFirst && pendingFirst.convId === activeId
@@ -449,10 +656,7 @@ export function AssistantView({
       : undefined
   )
   const voice = useVoiceNote({
-    // Transcript lands in the composer FOR REVIEW — never auto-sent. This
-    // callback also serves the cap/unplug auto-finish paths (audit E fixes).
-    onTranscript: (text) =>
-      setDraft((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text))
+    onTranscript: (text) => setDraft((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text))
   })
 
   const refreshList = useCallback(async (): Promise<void> => {
@@ -461,10 +665,14 @@ export function AssistantView({
 
   useEffect(() => {
     void refreshList()
+    // Distinct empty states need one cheap fact: does the Sales Brain hold
+    // anything at all? Failure means "unknown" and we show the generic state.
+    void window.api.salesBrain.memories
+      .list({})
+      .then((rows: unknown[]) => setBrainEmpty(rows.length === 0))
+      .catch(() => setBrainEmpty(null))
   }, [refreshList])
 
-  // Keep the list's previews/ordering fresh as turns complete (this window
-  // or another). Cheap local-disk read.
   useEffect(
     () =>
       window.api.assistant.onTurnComplete(() => {
@@ -473,11 +681,25 @@ export function AssistantView({
     [refreshList]
   )
 
+  // Reader-respecting autoscroll (audit G): follow the stream only while the
+  // user is already at the bottom; never yank them back up mid-read.
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+    const el = scrollRef.current
+    if (el && nearBottomRef.current) el.scrollTo({ top: el.scrollHeight })
   }, [chat.messages])
 
+  // Escape cancels an active recording (audit H).
+  useEffect(() => {
+    if (voice.state !== 'recording') return undefined
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') voice.cancelRecording()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [voice])
+
   const filtered = useMemo(() => {
+    if (!metas) return []
     const q = query.trim().toLowerCase()
     if (!q) return metas
     return metas.filter(
@@ -491,12 +713,7 @@ export function AssistantView({
       voiceNote?: { mediaId: string; durationMs: number }
     ): Promise<void> => {
       const conv = await window.api.assistant.createConversation()
-      if (firstMessage) {
-        // The hook sends this once the new conversation mounts — same
-        // optimistic bubbles + streaming as every other message, and the
-        // voice note rides along instead of being discarded.
-        setPendingFirst({ convId: conv.id, text: firstMessage, voiceNote })
-      }
+      if (firstMessage) setPendingFirst({ convId: conv.id, text: firstMessage, voiceNote })
       setActiveId(conv.id)
       await refreshList()
     },
@@ -507,6 +724,7 @@ export function AssistantView({
     const text = draft.trim()
     if (!text || chat.sending) return
     setDraft('')
+    nearBottomRef.current = true
     const voiceNote = voice.pending ?? undefined
     voice.clearPending()
     if (!activeId) {
@@ -517,19 +735,20 @@ export function AssistantView({
     void refreshList()
   }, [draft, chat, activeId, startConversation, refreshList, voice])
 
-
   const handleDelete = useCallback(
-    async (id: string): Promise<void> => {
-      if (
-        !window.confirm(
-          `Delete this conversation? This cannot be undone. Anything ${ASSISTANT_SECTION_NAME} learned from it stays in the Sales Brain — you can manage that in Settings → Memory Center.`
-        )
-      ) {
-        return
-      }
-      await window.api.assistant.deleteConversation(id)
-      if (activeId === id) setActiveId(null)
-      void refreshList()
+    (id: string): void => {
+      setConfirm({
+        title: 'Delete conversation?',
+        body: `This cannot be undone. Anything ${ASSISTANT_SECTION_NAME} learned from it stays in the Sales Brain — you can manage that in Settings → Memory Center.`,
+        confirmLabel: 'Delete',
+        onConfirm: () => {
+          void (async () => {
+            await window.api.assistant.deleteConversation(id)
+            if (activeId === id) setActiveId(null)
+            void refreshList()
+          })()
+        }
+      })
     },
     [activeId, refreshList]
   )
@@ -542,244 +761,344 @@ export function AssistantView({
     [refreshList]
   )
 
+  const toggleLearning = useCallback((): void => {
+    if (chat.learningExcluded) {
+      void chat.setLearningExcluded(false)
+      return
+    }
+    setConfirm({
+      title: 'Stop learning from this conversation?',
+      body: 'Anything it already taught the Sales Brain will be forgotten. This cannot be undone.',
+      confirmLabel: 'Stop learning',
+      onConfirm: () => {
+        void chat.setLearningExcluded(true).then((ok) => {
+          if (!ok) {
+            setNotice(
+              'Could not stop learning — Sales Brain storage is unavailable, so nothing could be forgotten. Try again after restarting the app.'
+            )
+          }
+        })
+      }
+    })
+  }, [chat])
+
+  const activeMeta = metas?.find((m) => m.id === activeId) ?? null
+  const showEmptyHero = activeId === null
+
   return (
-    <div className="flex h-full min-h-0 gap-4">
-      {/* Conversation rail */}
-      <aside className="flex w-72 shrink-0 flex-col rounded-2xl border border-line-soft bg-surface shadow-card">
-        <div className="space-y-2 p-3">
-          <Button
-            fullWidth
-            icon={MessageSquarePlus}
-            onClick={() => {
-              setActiveId(null)
-              setDraft('')
-            }}
-          >
-            New chat
-          </Button>
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint" />
-            <input
-              className={cn(fieldClass, 'h-8 w-full pl-8 text-[12.5px]')}
-              placeholder="Search conversations"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
+    <div className="flex min-h-0 flex-1">
+      {/* Conversation rail — flat, quiet, collapsible. Navigation, not product. */}
+      <aside
+        className={cn(
+          'flex shrink-0 flex-col border-r border-line-soft transition-[width] duration-150',
+          railCollapsed ? 'w-12' : 'w-60'
+        )}
+      >
+        <div className={cn('flex items-center gap-1 p-2', railCollapsed && 'flex-col')}>
+          <IconButton
+            icon={railCollapsed ? PanelLeftOpen : PanelLeftClose}
+            label={railCollapsed ? 'Expand conversation list' : 'Collapse conversation list'}
+            onClick={() => setRailCollapsed((v) => !v)}
+          />
+          {railCollapsed ? (
+            <IconButton
+              icon={MessageSquarePlus}
+              label="New chat"
+              onClick={() => {
+                setActiveId(null)
+                setDraft('')
+                textareaRef.current?.focus()
+              }}
             />
-          </div>
-        </div>
-        <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-2">
-          {filtered.map((m) => (
-            <ConversationRow
-              key={m.id}
-              meta={m}
-              active={m.id === activeId}
-              onSelect={() => setActiveId(m.id)}
-              onRename={(title) => void handleRename(m.id, title)}
-              onDelete={() => void handleDelete(m.id)}
-            />
-          ))}
-          {filtered.length === 0 && (
-            <p className="px-3 py-6 text-center text-[12px] text-faint">
-              {metas.length === 0 ? 'No conversations yet.' : 'Nothing matches your search.'}
-            </p>
+          ) : (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={MessageSquarePlus}
+              className="flex-1"
+              onClick={() => {
+                setActiveId(null)
+                setDraft('')
+                textareaRef.current?.focus()
+              }}
+            >
+              New chat
+            </Button>
           )}
         </div>
-      </aside>
-
-      {/* Chat pane */}
-      <div className="flex min-w-0 flex-1 flex-col rounded-2xl border border-line-soft bg-surface shadow-card">
-        {activeId === null && chat.messages.length === 0 ? (
-          <div className="flex flex-1 flex-col items-center justify-center p-8">
-            <EmptyState
-              icon={Sparkles}
-              title={`Ask ${ASSISTANT_SECTION_NAME} anything`}
-              description="Grounded in your Sales Brain — your calls, clients, deals, and selling patterns. Every claim cites where it came from."
-            />
-            <div className="mt-5 flex flex-wrap justify-center gap-2">
-              {STARTER_PROMPTS.map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => void startConversation(p)}
-                  className="rounded-full border border-line px-3.5 py-1.5 text-[12.5px] text-muted hover:border-accent/50 hover:text-ink"
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
+        {!railCollapsed && (
           <>
-            {activeId && (
-              <div className="flex items-center justify-between border-b border-line-soft px-4 py-2">
-                <p className="truncate text-[12.5px] font-medium text-muted">
-                  {metas.find((m) => m.id === activeId)?.title ?? ''}
-                </p>
-                <button
-                  type="button"
-                  title={
-                    chat.learningExcluded
-                      ? `${ASSISTANT_SECTION_NAME} is not learning from this conversation. Click to turn learning back on (it will not re-learn past messages).`
-                      : `${ASSISTANT_SECTION_NAME} can save facts from this conversation to your Sales Brain (always with your confirmation, or via the reviewed auto-learning that calls also use). Click to exclude this conversation and forget what it already taught.`
-                  }
-                  onClick={() => {
-                    if (!chat.learningExcluded) {
-                      if (
-                        window.confirm(
-                          'Stop learning from this conversation? Anything it already taught the Sales Brain will be forgotten. This cannot be undone.'
-                        )
-                      ) {
-                        void chat.setLearningExcluded(true).then((ok) => {
-                          // Honesty: never flip the pill over memories that
-                          // quietly survived a failed forget.
-                          if (!ok) {
-                            window.alert(
-                              'Could not stop learning — Sales Brain storage is unavailable, so nothing could be forgotten. Try again after restarting the app.'
-                            )
-                          }
-                        })
-                      }
-                    } else {
-                      void chat.setLearningExcluded(false)
-                    }
-                  }}
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px]',
-                    chat.learningExcluded
-                      ? 'border-line text-faint'
-                      : 'border-accent/40 text-accent'
-                  )}
-                >
-                  {chat.learningExcluded ? (
-                    <BrainCog className="h-3.5 w-3.5" />
-                  ) : (
-                    <Brain className="h-3.5 w-3.5" />
-                  )}
-                  {chat.learningExcluded ? 'Not learning' : 'Learning'}
-                </button>
-              </div>
-            )}
-            <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
-            {chat.loading && (
-              <div className="flex items-center gap-2 text-[12.5px] text-faint">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
-              </div>
-            )}
-            {chat.messages.map((m) => (
-              <Bubble
-                key={m.id}
-                message={m}
-                onCite={setCitation}
-                onApplySuggestion={(messageId, s) => void chat.applySuggestion(messageId, s)}
-                onConfirmTask={(messageId, proposalId) =>
-                  void chat.confirmTask(messageId, proposalId)
-                }
+            <div className="relative px-2 pb-2">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-3.5 w-3.5 -translate-y-[calc(50%+4px)] text-faint" />
+              <input
+                className={cn(fieldClass, 'h-8 w-full pl-8 text-[12.5px]')}
+                placeholder="Search"
+                aria-label="Search conversations"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
               />
-            ))}
+            </div>
+            <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-2">
+              {metas === null ? (
+                <div className="space-y-2 p-2">
+                  <Skeleton className="h-8" />
+                  <Skeleton className="h-8" />
+                  <Skeleton className="h-8" />
+                </div>
+              ) : (
+                <>
+                  {filtered.map((m) => (
+                    <ConversationRow
+                      key={m.id}
+                      meta={m}
+                      active={m.id === activeId}
+                      onSelect={() => setActiveId(m.id)}
+                      onRename={(title) => void handleRename(m.id, title)}
+                      onDelete={() => handleDelete(m.id)}
+                    />
+                  ))}
+                  {filtered.length === 0 && (
+                    <p className="px-3 py-6 text-center text-[12px] text-faint">
+                      {metas.length === 0 ? 'No conversations yet.' : 'Nothing matches.'}
+                    </p>
+                  )}
+                </>
+              )}
             </div>
           </>
         )}
+      </aside>
 
-        {chat.error && (
-          <div className="mx-5 mb-2 flex items-center justify-between rounded-xl border border-danger/30 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">
-            <span>{chat.error}</span>
-            <IconButton icon={X} label="Dismiss" onClick={chat.clearError} />
+      {/* The chat IS the page: one surface, one reading column. */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {activeId && (
+          <div className="flex shrink-0 items-center justify-between border-b border-line-soft px-5 py-2">
+            <p className="truncate text-[12.5px] font-medium text-muted">
+              {activeMeta?.title ?? ''}
+            </p>
+            <button
+              type="button"
+              onClick={toggleLearning}
+              title={
+                chat.learningExcluded
+                  ? `${ASSISTANT_SECTION_NAME} is not learning from this conversation. Click to turn learning back on (it will not re-learn past messages).`
+                  : `${ASSISTANT_SECTION_NAME} can save facts from this conversation to your Sales Brain — always visibly, never silently. Click to exclude this conversation and forget what it already taught.`
+              }
+              className={cn(
+                'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px]',
+                chat.learningExcluded ? 'border-line text-faint' : 'border-accent/40 text-accent'
+              )}
+            >
+              {chat.learningExcluded ? (
+                <BrainCog className="h-3.5 w-3.5" />
+              ) : (
+                <Brain className="h-3.5 w-3.5" />
+              )}
+              {chat.learningExcluded ? 'Not learning' : 'Learning'}
+            </button>
           </div>
         )}
 
-        <div className="border-t border-line-soft p-3">
-          {voice.error && (
-            <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-warning/30 bg-warning-soft px-3 py-1.5 text-[12px] text-warning">
-              <span>{voice.error}</span>
-              <span className="flex shrink-0 items-center gap-1">
-                {voice.canRetry && (
-                  <Button size="sm" variant="secondary" onClick={() => void voice.retryTranscribe()}>
-                    Retry
-                  </Button>
-                )}
-                <IconButton icon={X} label="Dismiss" onClick={voice.clearError} />
-              </span>
-            </div>
-          )}
-          {voice.pending && (
-            <div className="mb-2 flex items-center justify-between rounded-xl border border-line-soft bg-elevated px-3 py-1.5 text-[12px] text-muted">
-              <span className="flex items-center gap-1.5">
-                <Mic className="h-3.5 w-3.5" /> Voice note attached ·{' '}
-                {formatDuration(voice.pending.durationMs)} — review the text below, then send.
-              </span>
-              <IconButton icon={Trash2} label="Discard voice note" onClick={voice.discardPending} />
-            </div>
-          )}
-          {voice.state === 'recording' ? (
-            <div className="flex items-center gap-3 rounded-xl border border-danger/30 bg-danger-soft px-3 py-2.5">
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-60" />
-                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-danger" />
-              </span>
-              <span className="text-[13px] tabular-nums text-ink">
-                {formatDuration(voice.elapsedMs)}
-              </span>
-              {/* Simple live level bar — visual confirmation the mic hears you. */}
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface">
-                <div
-                  className="h-full rounded-full bg-danger transition-[width] duration-100"
-                  style={{ width: `${Math.round(voice.level * 100)}%` }}
-                />
+        {showEmptyHero ? (
+          /* Empty state: composed hero in the upper third, chips attached to
+             the copy, composer waiting pinned below — no floating void. */
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto flex w-full max-w-[900px] flex-col items-center px-6 pt-[16vh] text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft">
+                <Sparkles className="h-6 w-6 text-accent" />
               </div>
-              <Button variant="secondary" size="sm" icon={X} onClick={voice.cancelRecording}>
-                Cancel
-              </Button>
-              <Button size="sm" icon={Check} onClick={() => void voice.finishRecording()}>
-                Done
-              </Button>
+              <h2 className="mt-4 text-xl font-semibold tracking-tight text-ink">
+                Ask {ASSISTANT_SECTION_NAME} anything
+              </h2>
+              {brainEmpty ? (
+                <>
+                  <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed text-muted">
+                    {ASSISTANT_SECTION_NAME} gets its edge from your Sales Brain — and it&rsquo;s
+                    empty right now. Import your call history or finish the Sales Brain interview
+                    in Settings, then every answer here starts citing what it knows.
+                  </p>
+                  <p className="mt-3 text-[12.5px] text-faint">
+                    You can still chat — answers just won&rsquo;t be grounded in your data yet.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed text-muted">
+                    Grounded in your Sales Brain — your calls, clients, deals, and selling
+                    patterns. Every claim cites where it came from.
+                  </p>
+                  <div className="mt-4 flex flex-wrap justify-center gap-2">
+                    {STARTER_PROMPTS.map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => void startConversation(p)}
+                        className="rounded-full border border-line px-3.5 py-1.5 text-[12.5px] text-muted hover:border-accent/50 hover:text-ink"
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
-          ) : (
-            <div className="flex items-end gap-2">
-              <textarea
-                rows={2}
-                className={cn(fieldClass, 'flex-1 resize-none text-[13px]')}
-                placeholder={`Message ${ASSISTANT_SECTION_NAME}…`}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault()
-                    void handleSend()
+          </div>
+        ) : (
+          <div
+            ref={scrollRef}
+            role="log"
+            aria-label="Conversation"
+            onScroll={() => {
+              const el = scrollRef.current
+              if (!el) return
+              nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+            }}
+            className="min-h-0 flex-1 overflow-y-auto"
+          >
+            <div className="mx-auto w-full max-w-[900px] space-y-4 px-6 py-5">
+              {chat.loading && (
+                <div className="space-y-3">
+                  <SkeletonRows />
+                </div>
+              )}
+              {chat.messages.map((m) => (
+                <MessageRow
+                  key={m.id}
+                  message={m}
+                  phase={chat.phase}
+                  onCite={setCitation}
+                  onApplySuggestion={(messageId, s) => void chat.applySuggestion(messageId, s)}
+                  onConfirmTask={(messageId, proposalId) =>
+                    void chat.confirmTask(messageId, proposalId)
                   }
-                }}
-              />
-              {voice.state === 'transcribing' ? (
-                <Button variant="secondary" disabled icon={Loader2}>
-                  Transcribing…
-                </Button>
-              ) : (
-                <IconButton
-                  icon={Mic}
-                  label="Record a voice note"
-                  onClick={() => void voice.start()}
-                  disabled={chat.sending}
                 />
-              )}
-              {chat.sending ? (
-                <Button variant="secondary" icon={Square} onClick={() => void chat.stop()}>
-                  Stop
-                </Button>
-              ) : (
-                <Button icon={Send} onClick={() => void handleSend()} disabled={!draft.trim()}>
-                  Send
-                </Button>
-              )}
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Live-region for errors so screen readers hear them (audit H). */}
+        <div aria-live="polite" className="shrink-0">
+          {chat.error && (
+            <div className="mx-auto mb-2 flex w-full max-w-[900px] items-center justify-between rounded-xl border border-danger/30 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">
+              <span>{chat.error}</span>
+              <IconButton icon={X} label="Dismiss error" onClick={chat.clearError} />
             </div>
           )}
+          {notice && (
+            <div className="mx-auto mb-2 flex w-full max-w-[900px] items-center justify-between rounded-xl border border-warning/30 bg-warning-soft px-3 py-2 text-[12.5px] text-warning">
+              <span>{notice}</span>
+              <IconButton icon={X} label="Dismiss notice" onClick={() => setNotice(null)} />
+            </div>
+          )}
+        </div>
+
+        {/* THE composer: one deliberate object — field and controls inside a
+            single bordered surface; recording/transcribing/pending are states
+            of the same object, not boxes around it. */}
+        <div className="shrink-0 px-6 pb-5 pt-1">
+          <div className="mx-auto w-full max-w-[900px]">
+            {voice.error && (
+              <div
+                aria-live="polite"
+                className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-warning/30 bg-warning-soft px-3 py-1.5 text-[12px] text-warning"
+              >
+                <span>{voice.error}</span>
+                <span className="flex shrink-0 items-center gap-1">
+                  {voice.canRetry && (
+                    <Button size="sm" variant="secondary" onClick={() => void voice.retryTranscribe()}>
+                      Retry
+                    </Button>
+                  )}
+                  <IconButton icon={X} label="Dismiss" onClick={voice.clearError} />
+                </span>
+              </div>
+            )}
+            <div className="rounded-2xl border border-line bg-surface shadow-card focus-within:border-accent/50">
+              {voice.pending && (
+                <div className="flex items-center justify-between border-b border-line-soft px-3 py-1.5 text-[12px] text-muted">
+                  <span className="flex items-center gap-1.5">
+                    <Mic className="h-3.5 w-3.5" /> Voice note attached ·{' '}
+                    {formatDuration(voice.pending.durationMs)} — review the text, then send.
+                  </span>
+                  <IconButton icon={Trash2} label="Discard voice note" onClick={voice.discardPending} />
+                </div>
+              )}
+              {voice.state === 'recording' ? (
+                <div className="flex items-center gap-3 px-3 py-2.5">
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-60" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-danger" />
+                  </span>
+                  <span className="text-[13px] tabular-nums text-ink" role="timer">
+                    {formatDuration(voice.elapsedMs)}
+                  </span>
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-elevated">
+                    <div
+                      className="h-full rounded-full bg-danger transition-[width] duration-100"
+                      style={{ width: `${Math.round(voice.level * 100)}%` }}
+                    />
+                  </div>
+                  <Button variant="secondary" size="sm" icon={X} onClick={voice.cancelRecording}>
+                    Cancel
+                  </Button>
+                  <Button size="sm" icon={Check} onClick={() => void voice.finishRecording()}>
+                    Done
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <textarea
+                    ref={textareaRef}
+                    rows={Math.min(6, Math.max(1, draft.split('\n').length))}
+                    className="block w-full resize-none bg-transparent px-3.5 pt-3 text-[13.5px] leading-relaxed text-ink outline-none placeholder:text-faint"
+                    placeholder={`Message ${ASSISTANT_SECTION_NAME}…`}
+                    aria-label={`Message ${ASSISTANT_SECTION_NAME}`}
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        void handleSend()
+                      }
+                    }}
+                  />
+                  <div className="flex items-center justify-between px-2 py-1.5">
+                    <div className="flex items-center gap-0.5">
+                      {voice.state === 'transcribing' ? (
+                        <span className="flex items-center gap-1.5 px-2 text-[12px] text-muted">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Transcribing…
+                        </span>
+                      ) : (
+                        <IconButton
+                          icon={Mic}
+                          label="Record a voice note"
+                          onClick={() => void voice.start()}
+                          disabled={chat.sending}
+                        />
+                      )}
+                    </div>
+                    {chat.sending ? (
+                      <Button variant="secondary" size="sm" icon={Square} onClick={() => void chat.stop()}>
+                        Stop
+                      </Button>
+                    ) : (
+                      <Button size="sm" icon={Send} onClick={() => void handleSend()} disabled={!draft.trim()}>
+                        Send
+                      </Button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
       {citation && (
         <EvidenceModal citation={citation} onClose={() => setCitation(null)} onOpenCall={onOpenCall} />
       )}
+      {confirm && <ConfirmDialog state={confirm} onClose={() => setConfirm(null)} />}
     </div>
   )
 }
-
-// Re-exported so MainApp's lazy() import shape matches every other screen.
-export type { AssistantMessage }

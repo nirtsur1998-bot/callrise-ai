@@ -679,6 +679,12 @@ export interface AssistantApi {
    *  after persistence — the recovery signal for a renderer that mounted
    *  mid-stream and does not own the original invoke() promise. */
   onTurnComplete: (cb: (payload: { conversationId: string }) => void) => () => void
+  /** Coarse pre-first-token progress, driven by what the turn is actually
+   *  doing: reading (profiles+retrieval) → searching (tool lookups, only
+   *  when any were planned) → thinking (the answer request is out). */
+  onPhase: (
+    cb: (payload: { conversationId: string; phase: 'reading' | 'searching' | 'thinking' }) => void
+  ) => () => void
 }
 
 export interface SkillHistoryPoint {

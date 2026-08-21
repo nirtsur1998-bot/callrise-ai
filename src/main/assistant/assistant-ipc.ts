@@ -158,6 +158,10 @@ async function handleSend(
     stopRequested: false
   }
   inFlight.set(conversationId, turn)
+  // Activity phases (P1 streaming-state work): honest, coarse progress for
+  // the pre-first-token window — driven by what the turn is ACTUALLY doing,
+  // never a fake ticker. The renderer clears it on the first delta.
+  broadcast('assistant:phase', { conversationId, phase: 'reading' })
 
   try {
     // Foreground retrieval: ensureMemoryDb retry + bounded embedding, so a
@@ -176,6 +180,9 @@ async function handleSend(
       planLookups(message, turn.controller.signal)
     ])
     if (turn.stopRequested) return { ok: false, error: 'cancelled', message: 'Stopped.' }
+    if (planned.length > 0) {
+      broadcast('assistant:phase', { conversationId, phase: 'searching' })
+    }
     const lookups = await executeLookups(
       planned,
       defaultToolDirs(app.getPath('userData')),
@@ -193,6 +200,7 @@ async function handleSend(
       .slice(-MAX_HISTORY_MESSAGES)
       .map((m) => ({ role: m.role, content: m.text }))
 
+    broadcast('assistant:phase', { conversationId, phase: 'thinking' })
     const stream = streamWithFallback({
       purpose: 'assistant-chat',
       system: context.system,

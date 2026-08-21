@@ -44,6 +44,9 @@ export interface UseAssistantChat {
   /** "Don't learn from this conversation" state (fresh from the record). */
   learningExcluded: boolean
   setLearningExcluded: (excluded: boolean) => Promise<boolean>
+  /** Pre-first-token activity ('reading' | 'searching' | 'thinking'), null
+   *  once tokens flow or the turn settles. */
+  phase: 'reading' | 'searching' | 'thinking' | null
   send: (text: string, voiceNote?: { mediaId: string; durationMs: number }) => Promise<void>
   stop: () => Promise<void>
   applySuggestion: (
@@ -69,6 +72,7 @@ export function useAssistantChat(
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [learningExcluded, setLearningExcludedState] = useState(false)
+  const [phase, setPhase] = useState<'reading' | 'searching' | 'thinking' | null>(null)
   const streamingIdRef = useRef<string | null>(null)
   // Read through refs inside the load effect so a new options object per
   // render never re-runs it; the consumed set makes the initial send
@@ -148,9 +152,14 @@ export function useAssistantChat(
 
     const offDelta = window.api.assistant.onDelta((p) => {
       if (p.conversationId !== conversationId || !streamingIdRef.current) return
+      setPhase(null) // tokens are flowing — the activity line yields to text
       setMessages((prev) =>
         prev.map((m) => (m.id === streamingIdRef.current ? { ...m, text: m.text + p.delta } : m))
       )
+    })
+    const offPhase = window.api.assistant.onPhase((p) => {
+      if (p.conversationId !== conversationId) return
+      setPhase(p.phase)
     })
     const offError = window.api.assistant.onError((p) => {
       if (p.conversationId !== conversationId) return
@@ -166,6 +175,7 @@ export function useAssistantChat(
       offDelta()
       offError()
       offComplete()
+      offPhase()
     }
   }, [conversationId, refetch])
 
@@ -203,6 +213,7 @@ export function useAssistantChat(
       if (!mountedRef.current) return
       streamingIdRef.current = null
       setSending(false)
+      setPhase(null)
       if (result.ok) {
         // Authoritative re-read keeps ids/persisted chips in perfect sync
         // (send already saved the turn — this is a local-disk read, cheap).
@@ -290,6 +301,7 @@ export function useAssistantChat(
     error,
     learningExcluded,
     setLearningExcluded,
+    phase,
     send,
     stop,
     applySuggestion,
