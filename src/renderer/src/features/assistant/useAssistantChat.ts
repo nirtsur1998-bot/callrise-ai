@@ -32,7 +32,7 @@ export interface UseAssistantChat {
   /** "Don't learn from this conversation" state (fresh from the record). */
   learningExcluded: boolean
   setLearningExcluded: (excluded: boolean) => Promise<boolean>
-  send: (text: string) => Promise<void>
+  send: (text: string, voiceNote?: { mediaId: string; durationMs: number }) => Promise<void>
   stop: () => Promise<void>
   applySuggestion: (
     messageId: string,
@@ -141,7 +141,10 @@ export function useAssistantChat(conversationId: string | null): UseAssistantCha
   }, [conversationId, refetch])
 
   const send = useCallback(
-    async (text: string): Promise<void> => {
+    async (
+      text: string,
+      voiceNote?: { mediaId: string; durationMs: number }
+    ): Promise<void> => {
       const trimmed = text.trim()
       if (!conversationId || !trimmed || sending) return
       setError(null)
@@ -163,7 +166,7 @@ export function useAssistantChat(conversationId: string | null): UseAssistantCha
       ])
       let result: AssistantSendResult
       try {
-        result = await window.api.assistant.send(conversationId, trimmed)
+        result = await window.api.assistant.send(conversationId, trimmed, voiceNote)
       } catch {
         result = { ok: false, error: 'ai-failed', message: 'Something went wrong. Please try again.' }
       }

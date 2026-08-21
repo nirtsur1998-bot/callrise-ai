@@ -62,6 +62,11 @@ export interface AssistantMessage {
    *  dispatch. Persisted WITH the message (the BUG-048 lesson: AI output
    *  living only in component state gets destroyed by navigation). */
   taskProposals?: PersistedTaskProposal[]
+  /** Only on user messages — the voice note this message was dictated from
+   *  (M28 Phase 3). The audio file lives in the conversations media dir;
+   *  the TEXT of the message is the reviewed/edited transcript, which is
+   *  what the AI ever sees — the audio is playback-only. */
+  voiceNote?: { mediaId: string; durationMs: number }
 }
 
 export interface AssistantConversation {
@@ -161,6 +166,19 @@ function sanitizeSuggestions(value: unknown): CoachChatContextSuggestion[] | und
   return out.length > 0 ? out : undefined
 }
 
+const MEDIA_FILE_RE = /^[A-Za-z0-9-]{1,64}\.(webm|ogg)$/
+const MAX_VOICE_NOTE_DURATION_MS = 5 * 60 * 1000
+
+function sanitizeVoiceNote(value: unknown): AssistantMessage['voiceNote'] {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  if (typeof v.mediaId !== 'string' || !MEDIA_FILE_RE.test(v.mediaId)) return undefined
+  const durationMs =
+    typeof v.durationMs === 'number' && Number.isFinite(v.durationMs)
+      ? Math.max(0, Math.min(v.durationMs, MAX_VOICE_NOTE_DURATION_MS))
+      : 0
+  return { mediaId: v.mediaId, durationMs }
+}
+
 const TASK_TYPES = new Set(['follow-up', 'email', 'meeting', 'research', 'general'])
 const TASK_PRIORITIES = new Set(['low', 'medium', 'high'])
 const MAX_TASK_PROPOSALS = 5
@@ -201,7 +219,8 @@ function sanitizeMessage(value: unknown): AssistantMessage | null {
     citations: v.role === 'assistant' ? sanitizeCitations(v.citations) : undefined,
     suggestions: v.role === 'user' ? sanitizeSuggestions(v.suggestions) : undefined,
     appliedSuggestionIds: applied.length > 0 ? applied : undefined,
-    taskProposals: v.role === 'assistant' ? sanitizeTaskProposals(v.taskProposals) : undefined
+    taskProposals: v.role === 'assistant' ? sanitizeTaskProposals(v.taskProposals) : undefined,
+    voiceNote: v.role === 'user' ? sanitizeVoiceNote(v.voiceNote) : undefined
   }
 }
 
@@ -340,7 +359,8 @@ export async function appendTurn(
       role: 'user',
       createdAt: now,
       text: clampText(userMessage.text, MAX_MESSAGE_TEXT),
-      suggestions: sanitizeSuggestions(userMessage.suggestions)
+      suggestions: sanitizeSuggestions(userMessage.suggestions),
+      voiceNote: sanitizeVoiceNote(userMessage.voiceNote)
     }
     const assistant: AssistantMessage = {
       id: randomUUID(),

@@ -27,6 +27,13 @@ import { extractContextSuggestions } from '../coaching-chat'
 import type { CoachChatContextSuggestion } from '../calls-fs'
 import type { MemoryCategory, MemoryScope } from '../memory/types'
 import { buildAssistantContext, citationsUsedIn } from './context'
+import {
+  deleteVoiceNote,
+  readVoiceNote,
+  saveVoiceNote,
+  transcribeVoiceNote,
+  MAX_VOICE_NOTE_BYTES
+} from './voice-note'
 import { defaultToolDirs, executeLookups, planLookups, type TaskProposal } from './tools'
 import { createTask } from '../tasks-fs'
 import { scheduleBackup } from '../backup'
@@ -127,7 +134,11 @@ export function inFlightCountForTests(): number {
   return inFlight.size
 }
 
-async function handleSend(conversationId: string, rawMessage: string): Promise<AssistantSendResult> {
+async function handleSend(
+  conversationId: string,
+  rawMessage: string,
+  voiceNote?: { mediaId: string; durationMs: number }
+): Promise<AssistantSendResult> {
   const message = typeof rawMessage === 'string' ? rawMessage.trim().slice(0, MAX_INBOUND_CHARS) : ''
   if (!isSafeConversationId(conversationId)) return { ok: false, error: 'not-found', message: 'Conversation not found.' }
   if (!message) return { ok: false, error: 'empty', message: 'Type a message first.' }
@@ -233,7 +244,11 @@ async function handleSend(conversationId: string, rawMessage: string): Promise<A
     const saved = await appendTurn(
       dir(),
       conversationId,
-      { text: message, suggestions: suggestions.length > 0 ? suggestions : undefined },
+      {
+        text: message,
+        suggestions: suggestions.length > 0 ? suggestions : undefined,
+        voiceNote
+      },
       {
         text: reply,
         citations: citations.length > 0 ? citations : undefined,
@@ -295,12 +310,89 @@ export function registerAssistant(): void {
       turn.stopRequested = true
       turn.controller.abort()
     }
-    return deleteConversation(dir(), id)
+    // Best-effort cleanup of the voice notes this conversation references —
+    // read before delete, remove after, so a failed delete leaks nothing.
+    const conv = await getConversation(dir(), id)
+    const deleted = await deleteConversation(dir(), id)
+    if (deleted && conv) {
+      for (const m of conv.messages) {
+        if (m.voiceNote) await deleteVoiceNote(dir(), m.voiceNote.mediaId)
+      }
+    }
+    return deleted
   })
 
-  ipcMain.handle('assistant:send', (_e, conversationId: unknown, message: unknown) =>
-    handleSend(String(conversationId), String(message))
+  ipcMain.handle(
+    'assistant:send',
+    (_e, conversationId: unknown, message: unknown, voiceNote: unknown) => {
+      const vn = (voiceNote && typeof voiceNote === 'object' ? voiceNote : null) as {
+        mediaId?: unknown
+        durationMs?: unknown
+      } | null
+      return handleSend(
+        String(conversationId),
+        String(message),
+        vn && typeof vn.mediaId === 'string' && typeof vn.durationMs === 'number'
+          ? { mediaId: vn.mediaId, durationMs: vn.durationMs }
+          : undefined
+      )
+    }
   )
+
+  // --- M28 Phase 3: voice notes (record → transcribe → REVIEW → send) ------
+  // Transcribe-and-store in one step; the renderer keeps its local blob, so
+  // a failed transcription loses nothing (the user retries or types).
+  // Nothing is attached to any message until the user actually sends.
+  ipcMain.handle(
+    'assistant:transcribeVoiceNote',
+    async (
+      _e,
+      audio: unknown,
+      mimeType: unknown,
+      durationMs: unknown
+    ): Promise<
+      | { ok: true; text: string; mediaId: string; durationMs: number }
+      | { ok: false; error: string; message: string }
+    > => {
+      if (!(audio instanceof ArrayBuffer) || audio.byteLength === 0) {
+        return { ok: false, error: 'empty', message: 'Nothing was recorded.' }
+      }
+      if (audio.byteLength > MAX_VOICE_NOTE_BYTES) {
+        return { ok: false, error: 'too-large', message: 'That recording is too long.' }
+      }
+      const mime = mimeType === 'audio/ogg' ? 'audio/ogg' : 'audio/webm'
+      const buffer = Buffer.from(audio)
+      const result = await transcribeVoiceNote(buffer, mime)
+      if (!result.ok || !result.text) {
+        return {
+          ok: false,
+          error: result.error ?? 'api',
+          message: result.message ?? 'Transcription failed.'
+        }
+      }
+      const mediaId = await saveVoiceNote(dir(), buffer, mime === 'audio/ogg' ? 'ogg' : 'webm')
+      const duration =
+        typeof durationMs === 'number' && Number.isFinite(durationMs)
+          ? Math.max(0, durationMs)
+          : 0
+      return { ok: true, text: result.text, mediaId, durationMs: duration }
+    }
+  )
+
+  // Composer cancel after a successful transcription — the stored audio is
+  // orphaned and should not linger.
+  ipcMain.handle('assistant:discardVoiceNote', async (_e, mediaId: unknown) => {
+    if (typeof mediaId === 'string') await deleteVoiceNote(dir(), mediaId)
+    return true
+  })
+
+  // Playback: the renderer builds a blob URL from these bytes.
+  ipcMain.handle('assistant:getVoiceNote', async (_e, mediaId: unknown) => {
+    if (typeof mediaId !== 'string') return null
+    const buffer = await readVoiceNote(dir(), mediaId)
+    if (!buffer) return null
+    return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+  })
 
   ipcMain.handle('assistant:cancel', (_e, conversationId: unknown) => {
     const turn = typeof conversationId === 'string' ? inFlight.get(conversationId) : undefined

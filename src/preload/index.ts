@@ -205,8 +205,16 @@ const api = {
     renameConversation: (id: string, title: string) =>
       ipcRenderer.invoke('assistant:renameConversation', id, title),
     deleteConversation: (id: string) => ipcRenderer.invoke('assistant:deleteConversation', id),
-    send: (conversationId: string, message: string) =>
-      ipcRenderer.invoke('assistant:send', conversationId, message),
+    send: (
+      conversationId: string,
+      message: string,
+      voiceNote?: { mediaId: string; durationMs: number }
+    ) => ipcRenderer.invoke('assistant:send', conversationId, message, voiceNote),
+    transcribeVoiceNote: (audio: ArrayBuffer, mimeType: string, durationMs: number) =>
+      ipcRenderer.invoke('assistant:transcribeVoiceNote', audio, mimeType, durationMs),
+    discardVoiceNote: (mediaId: string) =>
+      ipcRenderer.invoke('assistant:discardVoiceNote', mediaId),
+    getVoiceNote: (mediaId: string) => ipcRenderer.invoke('assistant:getVoiceNote', mediaId),
     cancel: (conversationId: string) => ipcRenderer.invoke('assistant:cancel', conversationId),
     attach: (conversationId: string) => ipcRenderer.invoke('assistant:attach', conversationId),
     applySuggestion: (conversationId: string, messageId: string, suggestion: unknown) =>

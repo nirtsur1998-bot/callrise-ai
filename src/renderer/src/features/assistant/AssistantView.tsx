@@ -16,7 +16,10 @@ import {
   Check,
   BookOpenCheck,
   Brain,
-  BrainCog
+  BrainCog,
+  Mic,
+  Pause,
+  Play
 } from 'lucide-react'
 import { Button } from '@renderer/components/Button'
 import { IconButton } from '@renderer/components/IconButton'
@@ -32,6 +35,7 @@ import {
   type AssistantSuggestion,
   type DisplayMessage
 } from './useAssistantChat'
+import { useVoiceNote } from './useVoiceNote'
 
 type ConversationMeta = Awaited<ReturnType<typeof window.api.assistant.listConversations>>[number]
 type MemoryEvidence = NonNullable<
@@ -104,6 +108,56 @@ function CitedText({
   return <span className="whitespace-pre-wrap">{nodes}</span>
 }
 
+function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000)
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+/** Playback chip for a sent voice note — bytes fetched over IPC on first
+ *  play, held as a blob URL for the component's lifetime. */
+function VoiceNoteChip({ mediaId, durationMs }: { mediaId: string; durationMs: number }): React.JSX.Element {
+  const [playing, setPlaying] = useState(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const urlRef = useRef<string | null>(null)
+
+  useEffect(
+    () => () => {
+      audioRef.current?.pause()
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current)
+    },
+    []
+  )
+
+  const toggle = useCallback(async (): Promise<void> => {
+    if (playing) {
+      audioRef.current?.pause()
+      setPlaying(false)
+      return
+    }
+    if (!audioRef.current) {
+      const bytes = await window.api.assistant.getVoiceNote(mediaId)
+      if (!bytes) return
+      urlRef.current = URL.createObjectURL(new Blob([bytes], { type: 'audio/webm' }))
+      audioRef.current = new Audio(urlRef.current)
+      audioRef.current.onended = () => setPlaying(false)
+    }
+    void audioRef.current.play()
+    setPlaying(true)
+  }, [playing, mediaId])
+
+  return (
+    <button
+      type="button"
+      onClick={() => void toggle()}
+      className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-line-soft bg-surface px-2.5 py-1 text-[11.5px] text-muted hover:text-ink"
+      title="Play the original voice note"
+    >
+      {playing ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+      Voice note · {formatDuration(durationMs)}
+    </button>
+  )
+}
+
 function Bubble({
   message,
   onCite,
@@ -128,7 +182,17 @@ function Bubble({
         )}
       >
         {isUser ? (
-          <span className="whitespace-pre-wrap">{message.text}</span>
+          <>
+            <span className="whitespace-pre-wrap">{message.text}</span>
+            {message.voiceNote && (
+              <div>
+                <VoiceNoteChip
+                  mediaId={message.voiceNote.mediaId}
+                  durationMs={message.voiceNote.durationMs}
+                />
+              </div>
+            )}
+          </>
         ) : (
           <>
             <CitedText text={message.text} citations={message.citations} onCite={onCite} />
@@ -354,6 +418,7 @@ export function AssistantView({
   const [citation, setCitation] = useState<AssistantCitation | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const chat = useAssistantChat(activeId)
+  const voice = useVoiceNote()
 
   const refreshList = useCallback(async (): Promise<void> => {
     setMetas(await window.api.assistant.listConversations())
@@ -402,13 +467,24 @@ export function AssistantView({
     const text = draft.trim()
     if (!text || chat.sending) return
     setDraft('')
+    const voiceNote = voice.pending ?? undefined
+    voice.clearPending()
     if (!activeId) {
+      // Starter path can't carry the voice note attachment (fire-and-forget
+      // send on a fresh conversation) — discard the audio rather than leak it.
+      if (voiceNote) void window.api.assistant.discardVoiceNote(voiceNote.mediaId)
       await startConversation(text)
       return
     }
-    await chat.send(text)
+    await chat.send(text, voiceNote)
     void refreshList()
-  }, [draft, chat, activeId, startConversation, refreshList])
+  }, [draft, chat, activeId, startConversation, refreshList, voice])
+
+  const handleMicStop = useCallback(async (): Promise<void> => {
+    const text = await voice.stopAndTranscribe()
+    // Transcript lands in the composer FOR REVIEW — never auto-sent.
+    if (text) setDraft((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text))
+  }, [voice])
 
   const handleDelete = useCallback(
     async (id: string): Promise<void> => {
@@ -566,30 +642,82 @@ export function AssistantView({
         )}
 
         <div className="border-t border-line-soft p-3">
-          <div className="flex items-end gap-2">
-            <textarea
-              rows={2}
-              className={cn(fieldClass, 'flex-1 resize-none text-[13px]')}
-              placeholder={`Message ${ASSISTANT_SECTION_NAME}…`}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  void handleSend()
-                }
-              }}
-            />
-            {chat.sending ? (
-              <Button variant="secondary" icon={Square} onClick={() => void chat.stop()}>
-                Stop
+          {voice.error && (
+            <div className="mb-2 flex items-center justify-between rounded-xl border border-warning/30 bg-warning-soft px-3 py-1.5 text-[12px] text-warning">
+              <span>{voice.error}</span>
+              <IconButton icon={X} label="Dismiss" onClick={voice.clearError} />
+            </div>
+          )}
+          {voice.pending && (
+            <div className="mb-2 flex items-center justify-between rounded-xl border border-line-soft bg-elevated px-3 py-1.5 text-[12px] text-muted">
+              <span className="flex items-center gap-1.5">
+                <Mic className="h-3.5 w-3.5" /> Voice note attached ·{' '}
+                {formatDuration(voice.pending.durationMs)} — review the text below, then send.
+              </span>
+              <IconButton icon={Trash2} label="Discard voice note" onClick={voice.discardPending} />
+            </div>
+          )}
+          {voice.state === 'recording' ? (
+            <div className="flex items-center gap-3 rounded-xl border border-danger/30 bg-danger-soft px-3 py-2.5">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-60" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-danger" />
+              </span>
+              <span className="text-[13px] tabular-nums text-ink">
+                {formatDuration(voice.elapsedMs)}
+              </span>
+              {/* Simple live level bar — visual confirmation the mic hears you. */}
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface">
+                <div
+                  className="h-full rounded-full bg-danger transition-[width] duration-100"
+                  style={{ width: `${Math.round(voice.level * 100)}%` }}
+                />
+              </div>
+              <Button variant="secondary" size="sm" icon={X} onClick={voice.cancelRecording}>
+                Cancel
               </Button>
-            ) : (
-              <Button icon={Send} onClick={() => void handleSend()} disabled={!draft.trim()}>
-                Send
+              <Button size="sm" icon={Check} onClick={() => void handleMicStop()}>
+                Done
               </Button>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className="flex items-end gap-2">
+              <textarea
+                rows={2}
+                className={cn(fieldClass, 'flex-1 resize-none text-[13px]')}
+                placeholder={`Message ${ASSISTANT_SECTION_NAME}…`}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    void handleSend()
+                  }
+                }}
+              />
+              {voice.state === 'transcribing' ? (
+                <Button variant="secondary" disabled icon={Loader2}>
+                  Transcribing…
+                </Button>
+              ) : (
+                <IconButton
+                  icon={Mic}
+                  label="Record a voice note"
+                  onClick={() => void voice.start()}
+                  disabled={chat.sending}
+                />
+              )}
+              {chat.sending ? (
+                <Button variant="secondary" icon={Square} onClick={() => void chat.stop()}>
+                  Stop
+                </Button>
+              ) : (
+                <Button icon={Send} onClick={() => void handleSend()} disabled={!draft.trim()}>
+                  Send
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

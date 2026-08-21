@@ -325,6 +325,30 @@ describe('task proposals — writes are confirmed, never executed by the turn', 
   })
 })
 
+describe('voice notes — attachment + cleanup', () => {
+  it('a send carrying a voice note persists it on the user message', async () => {
+    const { convId, invoke } = await setup()
+    const pending = invoke('assistant:send', convId, 'dictated text', {
+      mediaId: 'aaaa-1111.webm',
+      durationMs: 4200
+    })
+    streamControl.push('Got it.')
+    streamControl.end()
+    await pending
+    const conv = await getConversation(convDir(), convId)
+    expect(conv?.messages[0].voiceNote).toEqual({ mediaId: 'aaaa-1111.webm', durationMs: 4200 })
+  })
+
+  it('a malformed voiceNote argument is dropped, not persisted', async () => {
+    const { convId, invoke } = await setup()
+    const pending = invoke('assistant:send', convId, 'text', { mediaId: '../evil.webm', durationMs: 1 })
+    streamControl.push('ok')
+    streamControl.end()
+    await pending
+    expect((await getConversation(convDir(), convId))?.messages[0].voiceNote).toBeUndefined()
+  })
+})
+
 describe('chat as a memory source — wiring + retroactive forget', () => {
   it('a successful turn fires the extraction hook with the persisted user-message id', async () => {
     const { convId, invoke } = await setup()

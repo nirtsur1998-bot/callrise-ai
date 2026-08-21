@@ -562,6 +562,9 @@ export interface AssistantMessage {
   suggestions?: CoachChatContextSuggestion[]
   appliedSuggestionIds?: string[]
   taskProposals?: AssistantTaskProposal[]
+  /** The voice note this user message was dictated from — playback only;
+   *  the message TEXT is the reviewed transcript and is all the AI sees. */
+  voiceNote?: { mediaId: string; durationMs: number }
 }
 
 export interface AssistantConversation {
@@ -633,7 +636,24 @@ export interface AssistantApi {
   createConversation: () => Promise<AssistantConversation>
   renameConversation: (id: string, title: string) => Promise<AssistantConversation | null>
   deleteConversation: (id: string) => Promise<boolean>
-  send: (conversationId: string, message: string) => Promise<AssistantSendResult>
+  send: (
+    conversationId: string,
+    message: string,
+    voiceNote?: { mediaId: string; durationMs: number }
+  ) => Promise<AssistantSendResult>
+  /** M28 Phase 3 — one-shot voice-note transcription (Deepgram prerecorded
+   *  REST; NOT the live-call pipeline). On ok the audio is stored and the
+   *  text goes to the composer FOR REVIEW — nothing is sent automatically. */
+  transcribeVoiceNote: (
+    audio: ArrayBuffer,
+    mimeType: string,
+    durationMs: number
+  ) => Promise<
+    | { ok: true; text: string; mediaId: string; durationMs: number }
+    | { ok: false; error: string; message: string }
+  >
+  discardVoiceNote: (mediaId: string) => Promise<boolean>
+  getVoiceNote: (mediaId: string) => Promise<ArrayBuffer | null>
   cancel: (conversationId: string) => Promise<boolean>
   attach: (conversationId: string) => Promise<AssistantAttachSnapshot>
   applySuggestion: (
