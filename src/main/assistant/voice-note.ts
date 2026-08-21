@@ -118,13 +118,21 @@ export async function saveVoiceNote(
   return mediaId
 }
 
+/** One media-filename validator for EVERY path-touching operation — a name
+ *  that isn't exactly `<safe-id>.<ext>` never reaches join() (audit: delete
+ *  previously checked only the extension, leaving a traversal-shaped hole). */
+export function isSafeMediaFile(mediaId: unknown): mediaId is string {
+  return (
+    typeof mediaId === 'string' &&
+    /^[A-Za-z0-9-]{1,64}\.(webm|ogg)$/.test(mediaId)
+  )
+}
+
 export async function readVoiceNote(
   conversationsDir: string,
   mediaId: string
 ): Promise<Buffer | null> {
-  if (!isSafeMediaId(mediaId.replace(/\.(webm|ogg)$/, '')) || !/\.(webm|ogg)$/.test(mediaId)) {
-    return null
-  }
+  if (!isSafeMediaFile(mediaId)) return null
   try {
     return await fs.readFile(join(voiceMediaDir(conversationsDir), mediaId))
   } catch {
@@ -133,6 +141,6 @@ export async function readVoiceNote(
 }
 
 export async function deleteVoiceNote(conversationsDir: string, mediaId: string): Promise<void> {
-  if (!/\.(webm|ogg)$/.test(mediaId)) return
+  if (!isSafeMediaFile(mediaId)) return
   await fs.unlink(join(voiceMediaDir(conversationsDir), mediaId)).catch(() => {})
 }

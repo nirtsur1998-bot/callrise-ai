@@ -24,6 +24,18 @@ export interface DisplayMessage extends AssistantMessage {
   streaming?: boolean
 }
 
+export interface AssistantChatOptions {
+  /** Audit fix V2 (blank first turn): a message to send automatically,
+   *  exactly once, when this conversation loads EMPTY. The new-conversation
+   *  path hands the first message here instead of fire-and-forgetting a raw
+   *  IPC send, so the first turn goes through the SAME optimistic-bubble +
+   *  delta-streaming machinery as every other send. */
+  initialMessage?: {
+    text: string
+    voiceNote?: { mediaId: string; durationMs: number }
+  }
+}
+
 export interface UseAssistantChat {
   messages: DisplayMessage[]
   loading: boolean
@@ -48,13 +60,23 @@ function nextLocalId(): string {
   return `local-${localId}`
 }
 
-export function useAssistantChat(conversationId: string | null): UseAssistantChat {
+export function useAssistantChat(
+  conversationId: string | null,
+  options?: AssistantChatOptions
+): UseAssistantChat {
   const [messages, setMessages] = useState<DisplayMessage[]>([])
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [learningExcluded, setLearningExcludedState] = useState(false)
   const streamingIdRef = useRef<string | null>(null)
+  // Read through refs inside the load effect so a new options object per
+  // render never re-runs it; the consumed set makes the initial send
+  // exactly-once per conversation even across remounts.
+  const optionsRef = useRef(options)
+  optionsRef.current = options
+  const initialSendConsumedRef = useRef(new Set<string>())
+  const sendRef = useRef<UseAssistantChat['send']>(async () => {})
   // True while THIS instance's send() invoke is pending — its resolution
   // handles the final state, so turnComplete is ignored. False for a
   // recovered stream, where turnComplete triggers the authoritative re-read.
@@ -113,6 +135,13 @@ export function useAssistantChat(conversationId: string | null): UseAssistantCha
         ])
       } else {
         setMessages(base)
+        // The new-conversation first message: fires only for a genuinely
+        // empty, idle conversation, exactly once (audit fix V2).
+        const initial = optionsRef.current?.initialMessage
+        if (initial && base.length === 0 && !initialSendConsumedRef.current.has(conversationId)) {
+          initialSendConsumedRef.current.add(conversationId)
+          void sendRef.current(initial.text, initial.voiceNote)
+        }
       }
       setLoading(false)
     })()
@@ -178,16 +207,22 @@ export function useAssistantChat(conversationId: string | null): UseAssistantCha
         // Authoritative re-read keeps ids/persisted chips in perfect sync
         // (send already saved the turn — this is a local-disk read, cheap).
         await refetch()
-      } else if (result.error === 'cancelled') {
-        // Stopped before any token: drop the optimistic bubbles.
-        setMessages((prev) => prev.filter((m) => m.id !== userMsgId && m.id !== streamingMsgId))
       } else {
-        setMessages((prev) => prev.filter((m) => m.id !== streamingMsgId))
-        setError(result.message ?? 'Something went wrong.')
+        // No turn was persisted, so an attached voice note's media file is
+        // now unreferenced — clean it up instead of leaking it (audit).
+        if (voiceNote) void window.api.assistant.discardVoiceNote(voiceNote.mediaId)
+        if (result.error === 'cancelled') {
+          // Stopped before any token: drop the optimistic bubbles.
+          setMessages((prev) => prev.filter((m) => m.id !== userMsgId && m.id !== streamingMsgId))
+        } else {
+          setMessages((prev) => prev.filter((m) => m.id !== streamingMsgId))
+          setError(result.message ?? 'Something went wrong.')
+        }
       }
     },
     [conversationId, sending, refetch]
   )
+  sendRef.current = send
 
   const stop = useCallback(async (): Promise<void> => {
     if (!conversationId) return

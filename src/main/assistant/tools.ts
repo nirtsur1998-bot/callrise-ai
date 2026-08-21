@@ -101,13 +101,17 @@ const PLAN_PROMPT =
 /** One forced tool call to plan lookups. ANY failure — no tool-capable model
  *  configured, quota, malformed output — degrades to []: the turn proceeds
  *  on profile+memory context alone. */
-export async function planLookups(message: string): Promise<PlannedLookup[]> {
+export async function planLookups(
+  message: string,
+  signal?: AbortSignal
+): Promise<PlannedLookup[]> {
   try {
     const result = await completeWithFallback({
       purpose: 'assistant-chat',
       maxTokens: 400,
       messages: [{ role: 'user', content: PLAN_PROMPT + message }],
-      tool: DISPATCH_TOOL
+      tool: DISPATCH_TOOL,
+      signal
     })
     const raw = (result.toolInput as { lookups?: unknown })?.lookups
     if (!Array.isArray(raw)) return []
@@ -152,13 +156,17 @@ const PROPOSE_TASK_TOOL: AITool = {
 const TASK_TYPES = new Set(['follow-up', 'email', 'meeting', 'research', 'general'])
 const TASK_PRIORITIES = new Set(['low', 'medium', 'high'])
 
-async function proposeTask(description: string): Promise<TaskProposal | null> {
+async function proposeTask(
+  description: string,
+  signal?: AbortSignal
+): Promise<TaskProposal | null> {
   try {
     const result = await completeWithFallback({
       purpose: 'assistant-chat',
       maxTokens: 200,
       messages: [{ role: 'user', content: `Task request: ${description}` }],
-      tool: PROPOSE_TASK_TOOL
+      tool: PROPOSE_TASK_TOOL,
+      signal
     })
     const t = (result.toolInput ?? {}) as Record<string, unknown>
     const title = typeof t.title === 'string' ? t.title.trim().slice(0, 200) : ''
@@ -351,7 +359,8 @@ export function defaultToolDirs(userDataDir: string): ToolDirs {
  *  PROPOSAL only — nothing is written until the user confirms the chip. */
 export async function executeLookups(
   lookups: PlannedLookup[],
-  dirs: ToolDirs
+  dirs: ToolDirs,
+  signal?: AbortSignal
 ): Promise<LookupOutcome> {
   const sections: LookupSection[] = []
   const taskProposals: TaskProposal[] = []
@@ -366,7 +375,7 @@ export async function executeLookups(
       } else if (lookup.kind === 'today_schedule') {
         sections.push(await todaySchedule(dirs.eventsDir))
       } else if (lookup.kind === 'propose_task' && lookup.query) {
-        const proposal = await proposeTask(lookup.query)
+        const proposal = await proposeTask(lookup.query, signal)
         if (proposal) taskProposals.push(proposal)
       }
     } catch {

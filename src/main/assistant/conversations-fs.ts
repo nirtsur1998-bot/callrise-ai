@@ -32,6 +32,11 @@ export interface AssistantCitation {
   kind: 'memory' | 'call'
   id: string
   label: string
+  /** The [n] marker number this citation was assigned in the turn's CONTEXT
+   *  (audit V4): the renderer binds chips to citations BY THIS NUMBER, never
+   *  by array position, so a model-invented marker can only ever render as
+   *  plain text — it can never shift real chips onto the wrong evidence. */
+  marker?: number
 }
 
 export interface PersistedTaskProposal {
@@ -135,7 +140,11 @@ function sanitizeCitations(value: unknown): AssistantCitation[] | undefined {
   for (const v of value.slice(0, MAX_CITATIONS)) {
     const c = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
     if ((c.kind === 'memory' || c.kind === 'call') && isSafeConversationId(c.id)) {
-      out.push({ kind: c.kind, id: c.id, label: clampText(c.label, 300) })
+      const marker =
+        typeof c.marker === 'number' && Number.isInteger(c.marker) && c.marker >= 1 && c.marker <= 99
+          ? c.marker
+          : undefined
+      out.push({ kind: c.kind, id: c.id, label: clampText(c.label, 300), marker })
     }
   }
   return out.length > 0 ? out : undefined

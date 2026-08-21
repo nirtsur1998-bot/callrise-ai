@@ -15,7 +15,13 @@ const state = {
   salesBrainEnabled: true,
   conversation: null as unknown,
   extractCalls: [] as Array<{ callId: string; chatMessageId: string; contactId: string | null }>,
-  consolidated: [] as unknown[]
+  consolidated: [] as unknown[],
+  candidateCount: 1,
+  /** Test hooks simulating the user acting DURING the async AI steps. */
+  onExtractResolved: null as (() => void) | null,
+  onConsolidate: null as (() => void) | null,
+  storedByCall: [] as { id: string }[],
+  deleted: [] as string[]
 }
 
 vi.mock('electron', () => ({
@@ -46,18 +52,17 @@ vi.mock('../extraction', () => ({
     contactId: string | null
   ) => {
     state.extractCalls.push({ callId, chatMessageId, contactId })
+    state.onExtractResolved?.()
     return {
-      candidates: [
-        {
-          scope: 'rep',
-          category: 'preference',
-          statement: 'x',
-          evidence: [],
-          confidence: 0.4,
-          importance: 5,
-          source: 'auto'
-        }
-      ],
+      candidates: Array.from({ length: state.candidateCount }, (_, i) => ({
+        scope: 'rep',
+        category: 'preference',
+        statement: `x${i}`,
+        evidence: [],
+        confidence: 0.4,
+        importance: 5,
+        source: 'auto'
+      })),
       aiFailed: false
     }
   }
@@ -65,9 +70,17 @@ vi.mock('../extraction', () => ({
 vi.mock('../consolidation', () => ({
   consolidateNewCandidate: async (_db: unknown, candidate: unknown) => {
     state.consolidated.push(candidate)
+    state.onConsolidate?.()
     return 'created'
   },
   runLightConsolidation: async () => {}
+}))
+vi.mock('../memories-store', () => ({
+  listMemoriesByCallId: () => state.storedByCall,
+  deleteMemory: (_db: unknown, id: string) => {
+    state.deleted.push(id)
+    return true
+  }
 }))
 
 import { runMemoryExtractionForAssistantMessage } from '../memory-hooks'
@@ -77,6 +90,11 @@ beforeEach(() => {
   state.conversation = { id: 'conv-1', salesBrainExcluded: undefined }
   state.extractCalls = []
   state.consolidated = []
+  state.candidateCount = 1
+  state.onExtractResolved = null
+  state.onConsolidate = null
+  state.storedByCall = []
+  state.deleted = []
 })
 
 describe('runMemoryExtractionForAssistantMessage — consent invariants', () => {
@@ -105,5 +123,31 @@ describe('runMemoryExtractionForAssistantMessage — consent invariants', () => 
     state.conversation = null
     await runMemoryExtractionForAssistantMessage('conv-gone', 'msg-9', 'anything')
     expect(state.extractCalls).toHaveLength(0)
+  })
+})
+
+describe('audit V1 — consent checked AT WRITE TIME, not just at hook start', () => {
+  it('exclusion set DURING the extraction AI call blocks every insert', async () => {
+    // The user clicks "Not learning" while the AI round trip is in flight:
+    // the flag flips between the start-gate and the first insert.
+    state.onExtractResolved = () => {
+      state.conversation = { id: 'conv-1', salesBrainExcluded: true }
+    }
+    await runMemoryExtractionForAssistantMessage('conv-1', 'msg-9', 'secret detail')
+    expect(state.extractCalls).toHaveLength(1) // extraction had already started — fine
+    expect(state.consolidated).toHaveLength(0) // but NOTHING may be written
+  })
+
+  it('exclusion set DURING a consolidation step stops the rest and sweeps what landed', async () => {
+    state.candidateCount = 3
+    state.onConsolidate = () => {
+      // Flips while the first candidate's own AI judge is "in flight" —
+      // after its insert, before the next per-candidate permission check.
+      state.conversation = { id: 'conv-1', salesBrainExcluded: true }
+      state.storedByCall = [{ id: 'leaked-1' }]
+    }
+    await runMemoryExtractionForAssistantMessage('conv-1', 'msg-9', 'multi-fact message')
+    expect(state.consolidated).toHaveLength(1) // candidates 2 and 3 blocked
+    expect(state.deleted).toEqual(['leaked-1']) // and the landed one swept
   })
 })

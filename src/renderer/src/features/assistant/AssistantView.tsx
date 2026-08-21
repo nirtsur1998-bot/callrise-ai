@@ -36,6 +36,7 @@ import {
   type DisplayMessage
 } from './useAssistantChat'
 import { useVoiceNote } from './useVoiceNote'
+import { segmentCitedText } from './citation-markers'
 
 type ConversationMeta = Awaited<ReturnType<typeof window.api.assistant.listConversations>>[number]
 type MemoryEvidence = NonNullable<
@@ -66,8 +67,9 @@ function relativeDay(iso: string): string {
 }
 
 /** Render an assistant reply's [n] markers as tappable citation chips.
- *  Distinct markers in first-occurrence order map onto `citations` in order —
- *  the same rule main used to build the persisted list (context.ts). */
+ *  Audit fix V4: binding is BY MARKER NUMBER carried on each citation
+ *  (segmentCitedText), never by array position — an invented marker renders
+ *  as plain text and can never shift real chips onto wrong evidence. */
 function CitedText({
   text,
   citations,
@@ -77,34 +79,26 @@ function CitedText({
   citations: AssistantCitation[] | undefined
   onCite: (c: AssistantCitation) => void
 }): React.JSX.Element {
-  const nodes = useMemo(() => {
-    const parts = text.split(/(\[\d{1,2}\])/g)
-    const markerToIndex = new Map<string, number>()
-    for (const part of parts) {
-      if (/^\[\d{1,2}\]$/.test(part) && !markerToIndex.has(part)) {
-        markerToIndex.set(part, markerToIndex.size)
-      }
-    }
-    return parts.map((part, i) => {
-      const idx = markerToIndex.get(part)
-      const citation = idx !== undefined && citations ? citations[idx] : undefined
-      if (citation) {
-        return (
+  const nodes = useMemo(
+    () =>
+      segmentCitedText(text, citations).map((seg, i) =>
+        seg.type === 'chip' ? (
           <button
             key={i}
             type="button"
-            onClick={() => onCite(citation)}
-            title={citation.label}
+            onClick={() => onCite(seg.citation)}
+            title={seg.citation.label}
+            aria-label={`Source ${seg.marker}: ${seg.citation.label}`}
             className="mx-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded bg-accent-soft px-1 align-super text-[10px] font-semibold text-accent hover:brightness-110"
           >
-            {idx! + 1}
+            {seg.marker}
           </button>
+        ) : (
+          <span key={i}>{seg.text}</span>
         )
-      }
-      // Unmatched markers (mid-stream, or model inventions) render as-is.
-      return <span key={i}>{part}</span>
-    })
-  }, [text, citations, onCite])
+      ),
+    [text, citations, onCite]
+  )
   return <span className="whitespace-pre-wrap">{nodes}</span>
 }
 
@@ -267,12 +261,35 @@ function EvidenceModal({
 }): React.JSX.Element {
   const [evidence, setEvidence] = useState<MemoryEvidence | null | 'loading'>('loading')
   useEffect(() => {
-    if (citation.kind !== 'memory') {
-      setEvidence(null)
-      return
-    }
+    if (citation.kind !== 'memory') return
     void window.api.assistant.getMemoryEvidence(citation.id).then(setEvidence)
   }, [citation])
+
+  // Audit fix V5 — a CALL citation is not a memory: it gets its own panel
+  // with the real deep link, never the memory lookup (which would always
+  // "fail" and show a false "no longer available").
+  if (citation.kind === 'call') {
+    return (
+      <Modal onClose={onClose} title="Where this comes from" size="md">
+        <div className="space-y-3">
+          <p className="text-[14px] font-medium text-ink">&ldquo;{citation.label}&rdquo;</p>
+          <p className="text-[12px] text-muted">A call from your history.</p>
+          {onOpenCall ? (
+            <Button
+              onClick={() => {
+                onClose()
+                onOpenCall(citation.id)
+              }}
+            >
+              Open the call
+            </Button>
+          ) : (
+            <p className="text-[12px] text-faint">Find it in Past Calls.</p>
+          )}
+        </div>
+      </Modal>
+    )
+  }
 
   return (
     <Modal onClose={onClose} title="Where this comes from" size="md">
@@ -416,9 +433,27 @@ export function AssistantView({
   const [query, setQuery] = useState('')
   const [draft, setDraft] = useState('')
   const [citation, setCitation] = useState<AssistantCitation | null>(null)
+  // Audit fix V2 — the first message of a brand-new conversation is handed
+  // to the hook (which streams it like any other send) instead of being
+  // fire-and-forgotten over raw IPC, which rendered a dead pane.
+  const [pendingFirst, setPendingFirst] = useState<{
+    convId: string
+    text: string
+    voiceNote?: { mediaId: string; durationMs: number }
+  } | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const chat = useAssistantChat(activeId)
-  const voice = useVoiceNote()
+  const chat = useAssistantChat(
+    activeId,
+    pendingFirst && pendingFirst.convId === activeId
+      ? { initialMessage: { text: pendingFirst.text, voiceNote: pendingFirst.voiceNote } }
+      : undefined
+  )
+  const voice = useVoiceNote({
+    // Transcript lands in the composer FOR REVIEW — never auto-sent. This
+    // callback also serves the cap/unplug auto-finish paths (audit E fixes).
+    onTranscript: (text) =>
+      setDraft((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text))
+  })
 
   const refreshList = useCallback(async (): Promise<void> => {
     setMetas(await window.api.assistant.listConversations())
@@ -451,14 +486,19 @@ export function AssistantView({
   }, [metas, query])
 
   const startConversation = useCallback(
-    async (firstMessage?: string): Promise<void> => {
+    async (
+      firstMessage?: string,
+      voiceNote?: { mediaId: string; durationMs: number }
+    ): Promise<void> => {
       const conv = await window.api.assistant.createConversation()
+      if (firstMessage) {
+        // The hook sends this once the new conversation mounts — same
+        // optimistic bubbles + streaming as every other message, and the
+        // voice note rides along instead of being discarded.
+        setPendingFirst({ convId: conv.id, text: firstMessage, voiceNote })
+      }
       setActiveId(conv.id)
       await refreshList()
-      if (firstMessage) {
-        // Fire-and-forget: the hook attached to the new id renders the stream.
-        void window.api.assistant.send(conv.id, firstMessage)
-      }
     },
     [refreshList]
   )
@@ -470,25 +510,23 @@ export function AssistantView({
     const voiceNote = voice.pending ?? undefined
     voice.clearPending()
     if (!activeId) {
-      // Starter path can't carry the voice note attachment (fire-and-forget
-      // send on a fresh conversation) — discard the audio rather than leak it.
-      if (voiceNote) void window.api.assistant.discardVoiceNote(voiceNote.mediaId)
-      await startConversation(text)
+      await startConversation(text, voiceNote)
       return
     }
     await chat.send(text, voiceNote)
     void refreshList()
   }, [draft, chat, activeId, startConversation, refreshList, voice])
 
-  const handleMicStop = useCallback(async (): Promise<void> => {
-    const text = await voice.stopAndTranscribe()
-    // Transcript lands in the composer FOR REVIEW — never auto-sent.
-    if (text) setDraft((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text))
-  }, [voice])
 
   const handleDelete = useCallback(
     async (id: string): Promise<void> => {
-      if (!window.confirm('Delete this conversation? This cannot be undone.')) return
+      if (
+        !window.confirm(
+          `Delete this conversation? This cannot be undone. Anything ${ASSISTANT_SECTION_NAME} learned from it stays in the Sales Brain — you can manage that in Settings → Memory Center.`
+        )
+      ) {
+        return
+      }
       await window.api.assistant.deleteConversation(id)
       if (activeId === id) setActiveId(null)
       void refreshList()
@@ -591,7 +629,15 @@ export function AssistantView({
                           'Stop learning from this conversation? Anything it already taught the Sales Brain will be forgotten. This cannot be undone.'
                         )
                       ) {
-                        void chat.setLearningExcluded(true)
+                        void chat.setLearningExcluded(true).then((ok) => {
+                          // Honesty: never flip the pill over memories that
+                          // quietly survived a failed forget.
+                          if (!ok) {
+                            window.alert(
+                              'Could not stop learning — Sales Brain storage is unavailable, so nothing could be forgotten. Try again after restarting the app.'
+                            )
+                          }
+                        })
                       }
                     } else {
                       void chat.setLearningExcluded(false)
@@ -643,9 +689,16 @@ export function AssistantView({
 
         <div className="border-t border-line-soft p-3">
           {voice.error && (
-            <div className="mb-2 flex items-center justify-between rounded-xl border border-warning/30 bg-warning-soft px-3 py-1.5 text-[12px] text-warning">
+            <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-warning/30 bg-warning-soft px-3 py-1.5 text-[12px] text-warning">
               <span>{voice.error}</span>
-              <IconButton icon={X} label="Dismiss" onClick={voice.clearError} />
+              <span className="flex shrink-0 items-center gap-1">
+                {voice.canRetry && (
+                  <Button size="sm" variant="secondary" onClick={() => void voice.retryTranscribe()}>
+                    Retry
+                  </Button>
+                )}
+                <IconButton icon={X} label="Dismiss" onClick={voice.clearError} />
+              </span>
             </div>
           )}
           {voice.pending && (
@@ -676,7 +729,7 @@ export function AssistantView({
               <Button variant="secondary" size="sm" icon={X} onClick={voice.cancelRecording}>
                 Cancel
               </Button>
-              <Button size="sm" icon={Check} onClick={() => void handleMicStop()}>
+              <Button size="sm" icon={Check} onClick={() => void voice.finishRecording()}>
                 Done
               </Button>
             </div>

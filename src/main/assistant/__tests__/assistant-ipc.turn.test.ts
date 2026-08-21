@@ -113,9 +113,13 @@ vi.mock('../../memory/rag', () => ({
   ])
 }))
 vi.mock('../../memory/consolidation', () => ({ consolidateNewCandidate: vi.fn(async () => 'created') }))
+const brainMock = vi.hoisted(() => ({ enabled: true, dbAvailable: true }))
 vi.mock('../../memory/memory-runtime', () => ({
-  getMemoryDb: () => ({ fake: 'db' }),
-  ensureMemoryDb: async () => ({ db: { fake: 'db' }, detail: 'ok' })
+  getMemoryDb: () => (brainMock.dbAvailable ? { fake: 'db' } : null),
+  ensureMemoryDb: async () => ({
+    db: brainMock.dbAvailable ? { fake: 'db' } : null,
+    detail: 'x'
+  })
 }))
 const memStore = vi.hoisted(() => ({
   byCall: [] as { id: string }[],
@@ -134,7 +138,7 @@ vi.mock('../../memory/memories-store', () => ({
 vi.mock('../../memory/memory-hooks', () => ({
   runMemoryExtractionForAssistantMessage: memStore.extraction
 }))
-vi.mock('../../app-settings', () => ({ isSalesBrainEnabled: () => true }))
+vi.mock('../../app-settings', () => ({ isSalesBrainEnabled: () => brainMock.enabled }))
 const toolsMock = vi.hoisted(() => ({
   plan: vi.fn(async (): Promise<unknown[]> => []),
   execute: vi.fn(
@@ -154,12 +158,13 @@ const taskMock = vi.hoisted(() => ({
 }))
 vi.mock('../../tasks-fs', () => ({ createTask: taskMock.create }))
 vi.mock('../../backup', () => ({ scheduleBackup: vi.fn() }))
-vi.mock('../../coaching-chat', () => ({
-  extractContextSuggestions: vi.fn(async () => [
+const suggestMock = vi.hoisted(() => ({
+  extract: vi.fn(async () => [
     { id: 'sug-mem', type: 'memory', text: 'fact', confidence: 'high', memoryScope: 'rep', memoryCategory: 'preference' },
     { id: 'sug-kyc', type: 'kyc', field: 'timeline', text: 'x', confidence: 'high' }
   ])
 }))
+vi.mock('../../coaching-chat', () => ({ extractContextSuggestions: suggestMock.extract }))
 
 import { getConversation } from '../conversations-fs'
 import { inFlightCountForTests } from '../assistant-ipc'
@@ -193,6 +198,9 @@ beforeEach(async () => {
   memStore.byCall = []
   memStore.deleted = []
   memStore.extraction.mockClear()
+  brainMock.enabled = true
+  brainMock.dbAvailable = true
+  suggestMock.extract.mockClear()
   vi.resetModules()
 })
 
@@ -217,7 +225,7 @@ describe('assistant:send', () => {
     expect((deltas[0].payload as { conversationId: string }).conversationId).toBe(convId)
     // Citation [1] resolved against the retrieved memory.
     expect(result.citations).toEqual([
-      { kind: 'memory', id: 'mem-9', label: 'Rep excels at discovery' }
+      { kind: 'memory', id: 'mem-9', label: 'Rep excels at discovery', marker: 1 }
     ])
     // kyc chip filtered out on the global surface; memory chip kept.
     expect((result.suggestions as { id: string }[]).map((s) => s.id)).toEqual(['sug-mem'])
@@ -259,6 +267,40 @@ describe('assistant:send', () => {
     expect(result.error).toBe('ai-failed')
     expect(broadcasts.some((b) => b.channel === 'assistant:error')).toBe(true)
     expect((await getConversation(convDir(), convId))?.messages).toHaveLength(0)
+  })
+})
+
+describe('audit V6 — chips are never OFFERED when they cannot save', () => {
+  async function sendOne(convId: string, invoke: (c: string, ...a: unknown[]) => Promise<unknown>): Promise<Record<string, unknown>> {
+    const pending = invoke('assistant:send', convId, 'we use HubSpot')
+    streamControl.push('Noted.')
+    streamControl.end()
+    return (await pending) as Record<string, unknown>
+  }
+
+  it('Sales Brain OFF: no chips, and the suggestion AI call is never made', async () => {
+    const { convId, invoke } = await setup()
+    brainMock.enabled = false
+    const result = await sendOne(convId, invoke)
+    expect(result.suggestions).toEqual([])
+    expect(suggestMock.extract).not.toHaveBeenCalled()
+  })
+
+  it('memory db unavailable: same — no dead chips', async () => {
+    const { convId, invoke } = await setup()
+    brainMock.dbAvailable = false
+    const result = await sendOne(convId, invoke)
+    expect(result.suggestions).toEqual([])
+    expect(suggestMock.extract).not.toHaveBeenCalled()
+  })
+
+  it('"Not learning" conversation: chips suppressed too', async () => {
+    const { convId, invoke } = await setup()
+    const { setConversationSalesBrainExcluded } = await import('../conversations-fs')
+    await setConversationSalesBrainExcluded(convDir(), convId, true)
+    const result = await sendOne(convId, invoke)
+    expect(result.suggestions).toEqual([])
+    expect(suggestMock.extract).not.toHaveBeenCalled()
   })
 })
 
@@ -376,6 +418,18 @@ describe('chat as a memory source — wiring + retroactive forget', () => {
     expect(memStore.extraction).not.toHaveBeenCalled()
   })
 
+  it('honesty: excluding with the memory db unavailable FAILS CLOSED — flag not set', async () => {
+    const { convId, invoke } = await setup()
+    brainMock.dbAvailable = false
+    const res = (await invoke('assistant:setSalesBrainExcluded', convId, true)) as {
+      ok: boolean
+      message?: string
+    }
+    expect(res.ok).toBe(false)
+    expect(res.message).toContain('cannot be forgotten')
+    expect((await getConversation(convDir(), convId))?.salesBrainExcluded).toBeUndefined()
+  })
+
   it('excluding a conversation persists the flag and deletes everything it taught', async () => {
     const { convId, invoke } = await setup()
     memStore.byCall = [{ id: 'mem-1' }, { id: 'mem-2' }]
@@ -431,6 +485,29 @@ describe('stop and attach — the two M28 design claims', () => {
     await pending
     const after = (await invoke('assistant:attach', convId)) as Record<string, unknown>
     expect(after.streaming).toBe(false)
+  })
+
+  it('audit V3: Stop lands during the PRE-STREAM phase (planning still in flight)', async () => {
+    const { convId, invoke } = await setup()
+    // Planning hangs until we release it — simulating the multi-second
+    // plan_research call on a slow provider.
+    let releasePlan: (v: unknown[]) => void = () => {}
+    toolsMock.plan.mockImplementationOnce(
+      () => new Promise<unknown[]>((r) => (releasePlan = r))
+    )
+    const pending = invoke('assistant:send', convId, 'wrong question, stop it')
+    await new Promise((r) => setTimeout(r, 10))
+    // The turn must already be registered: attach sees it, cancel finds it.
+    const during = (await invoke('assistant:attach', convId)) as Record<string, unknown>
+    expect(during.streaming).toBe(true)
+    expect(await invoke('assistant:cancel', convId)).toBe(true)
+    releasePlan([])
+    const result = (await pending) as Record<string, unknown>
+    expect(result.ok).toBe(false)
+    expect(result.error).toBe('cancelled')
+    // The model was never asked for the answer, and nothing was persisted.
+    expect(streamControl.lastRequest).toBeNull()
+    expect((await getConversation(convDir(), convId))?.messages).toHaveLength(0)
   })
 
   it('cancel truly aborts the walk: the AbortSignal the engine passed fires', async () => {

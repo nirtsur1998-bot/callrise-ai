@@ -62,7 +62,8 @@ export function buildAssistantContext(input: AssistantContextInput): AssistantCo
       citationsByMarker.set(n, {
         kind: 'memory',
         id: r.memory.id,
-        label: r.memory.statement.slice(0, 300)
+        label: r.memory.statement.slice(0, 300),
+        marker: n
       })
     })
     const hasHypotheses = input.retrieved.some((r) => r.memory.status === 'hypothesis')
@@ -77,7 +78,7 @@ export function buildAssistantContext(input: AssistantContextInput): AssistantCo
       if (!line.cite) return `- ${line.text}`
       const n = nextMarker
       nextMarker += 1
-      citationsByMarker.set(n, line.cite)
+      citationsByMarker.set(n, { ...line.cite, marker: n })
       return `[${n}] ${line.text}`
     })
     sections.push(`--- CONTEXT: ${section.title} ---\n${lines.join('\n')}`)

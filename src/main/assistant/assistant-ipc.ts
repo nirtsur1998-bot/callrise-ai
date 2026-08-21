@@ -148,32 +148,9 @@ async function handleSend(
     return { ok: false, error: 'busy', message: 'A reply is already in progress — stop it first.' }
   }
 
-  // Foreground retrieval: ensureMemoryDb retry + bounded embedding, so a cold
-  // start degrades to a memory-blind turn instead of a hung one. Hypotheses
-  // included ON PURPOSE: a young install's Sales Brain is all hypotheses, and
-  // "I don't know anything" next to a visibly full Memory Center is the
-  // credibility trap Phase 0 flagged — context.ts hedges their phrasing.
-  // Retrieval and lookup PLANNING run concurrently (both need only the
-  // message); planning degrades to [] when no tool-capable model exists.
-  const [retrieved, planned] = await Promise.all([
-    retrieveRelevantMemoriesStructured(message, {
-      foreground: true,
-      includeHypotheses: true
-    }),
-    planLookups(message)
-  ])
-  const lookups = await executeLookups(planned, defaultToolDirs(app.getPath('userData')))
-  const context = buildAssistantContext({
-    repProfile: repProfileSection('full'),
-    businessProfile: businessProfileSection('full'),
-    retrieved,
-    lookupSections: lookups.sections
-  })
-
-  const history: AIMessage[] = conv.messages
-    .slice(-MAX_HISTORY_MESSAGES)
-    .map((m) => ({ role: m.role, content: m.text }))
-
+  // Audit fix V3 — the turn is registered (and therefore cancellable) BEFORE
+  // the pre-stream phase: retrieval + planning + lookups can take many
+  // seconds, and Stop must reach them, not only the token stream.
   const turn: InFlightTurn = {
     controller: new AbortController(),
     accumulated: '',
@@ -183,6 +160,39 @@ async function handleSend(
   inFlight.set(conversationId, turn)
 
   try {
+    // Foreground retrieval: ensureMemoryDb retry + bounded embedding, so a
+    // cold start degrades to a memory-blind turn instead of a hung one.
+    // Hypotheses included ON PURPOSE: a young install's Sales Brain is all
+    // hypotheses, and "I don't know anything" next to a visibly full Memory
+    // Center is the credibility trap Phase 0 flagged — context.ts hedges
+    // their phrasing. Retrieval and lookup PLANNING run concurrently (both
+    // need only the message); planning degrades to [] when no tool-capable
+    // model exists.
+    const [retrieved, planned] = await Promise.all([
+      retrieveRelevantMemoriesStructured(message, {
+        foreground: true,
+        includeHypotheses: true
+      }),
+      planLookups(message, turn.controller.signal)
+    ])
+    if (turn.stopRequested) return { ok: false, error: 'cancelled', message: 'Stopped.' }
+    const lookups = await executeLookups(
+      planned,
+      defaultToolDirs(app.getPath('userData')),
+      turn.controller.signal
+    )
+    if (turn.stopRequested) return { ok: false, error: 'cancelled', message: 'Stopped.' }
+    const context = buildAssistantContext({
+      repProfile: repProfileSection('full'),
+      businessProfile: businessProfileSection('full'),
+      retrieved,
+      lookupSections: lookups.sections
+    })
+
+    const history: AIMessage[] = conv.messages
+      .slice(-MAX_HISTORY_MESSAGES)
+      .map((m) => ({ role: m.role, content: m.text }))
+
     const stream = streamWithFallback({
       purpose: 'assistant-chat',
       system: context.system,
@@ -229,13 +239,22 @@ async function handleSend(
     // Global surface has no bound contact yet, so kyc/client-scope/call
     // suggestion types self-disable or are filtered — memory (rep/business)
     // is the one chip family that makes sense here in Phase 1.
-    const suggestions = (
-      await withTimeout(
-        extractContextSuggestions(message, null).catch(() => []),
-        SUGGESTION_TIMEOUT_MS,
-        []
-      )
-    ).filter((s) => s.type === 'memory')
+    // Audit fix V6: a chip that cannot possibly save (Sales Brain off, db
+    // unavailable, or this conversation set to "Not learning") must never be
+    // OFFERED — a clickable control that silently does nothing forever is
+    // the failure mode. Skipping also saves the AI call.
+    const suggestions = await (async () => {
+      if (!isSalesBrainEnabled() || !getMemoryDb()) return []
+      const freshConv = await getConversation(dir(), conversationId)
+      if (!freshConv || freshConv.salesBrainExcluded) return []
+      return (
+        await withTimeout(
+          extractContextSuggestions(message, null).catch(() => []),
+          SUGGESTION_TIMEOUT_MS,
+          []
+        )
+      ).filter((s) => s.type === 'memory')
+    })()
 
     const taskProposals: PersistedTaskProposal[] = lookups.taskProposals.map((p: TaskProposal) => ({
       ...p,
@@ -496,19 +515,37 @@ export function registerAssistant(): void {
   // exclusion leaves zero trace. Turning it back off does not re-extract.
   ipcMain.handle(
     'assistant:setSalesBrainExcluded',
-    async (_e, conversationId: unknown, excluded: unknown): Promise<{ ok: boolean }> => {
+    async (
+      _e,
+      conversationId: unknown,
+      excluded: unknown
+    ): Promise<{ ok: boolean; message?: string }> => {
       if (typeof conversationId !== 'string' || typeof excluded !== 'boolean') return { ok: false }
-      const conv = await setConversationSalesBrainExcluded(dir(), conversationId, excluded)
-      if (!conv) return { ok: false }
       if (excluded) {
-        const db = getMemoryDb()
+        // Audit fix (honesty): the pill's confirm promises "will be
+        // forgotten" — if the memory store can't run the forget, FAIL CLOSED
+        // (flag not set, error surfaced) rather than flipping the pill over
+        // memories that quietly survive. Sales Brain OFF is fine: nothing
+        // was ever stored, and extraction is master-gated anyway.
+        const db = getMemoryDb() ?? (await ensureMemoryDb()).db
+        if (isSalesBrainEnabled() && !db) {
+          return {
+            ok: false,
+            message:
+              'Sales Brain storage is unavailable, so what this conversation taught cannot be forgotten right now. Try again after restarting the app.'
+          }
+        }
+        const conv = await setConversationSalesBrainExcluded(dir(), conversationId, true)
+        if (!conv) return { ok: false }
         if (db) {
           for (const memory of listMemoriesByCallId(db, `assistant:${conversationId}`)) {
             deleteMemory(db, memory.id)
           }
         }
+        return { ok: true }
       }
-      return { ok: true }
+      const conv = await setConversationSalesBrainExcluded(dir(), conversationId, false)
+      return { ok: conv !== null }
     }
   )
 

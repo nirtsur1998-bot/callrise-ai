@@ -35,7 +35,8 @@ describe('buildAssistantContext', () => {
     expect(ctx.citationsByMarker.get(1)).toEqual({
       kind: 'memory',
       id: 'm-a',
-      label: 'Discovery calls run long'
+      label: 'Discovery calls run long',
+      marker: 1
     })
     expect(ctx.citationsByMarker.get(2)?.id).toBe('m-b')
     // Profiles included, empty ones omitted.

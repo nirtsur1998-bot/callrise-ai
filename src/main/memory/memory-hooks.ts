@@ -14,6 +14,7 @@ import { liveCallInfo } from '../live/live-transcript'
 import { getMemoryDb } from './memory-runtime'
 import { extractMemoriesFromCall, extractMemoriesFromChatMessage } from './extraction'
 import { consolidateNewCandidate, runLightConsolidation } from './consolidation'
+import { deleteMemory, listMemoriesByCallId } from './memories-store'
 import type { MemoryScope } from './types'
 
 function callsDir(): string {
@@ -136,9 +137,29 @@ export async function runMemoryExtractionForCall(
   const touchedScopes = new Set<MemoryScope>()
   let newCount = 0
   for (const candidate of candidates) {
+    // Audit fix V1 (same shape as the assistant hook below): the doc comment
+    // above promises fresh-read permissions, but a check only at hook START
+    // can't stop an exclusion set during the multi-second extraction — so
+    // both permissions are re-read before EVERY insert.
+    if (!isSalesBrainEnabled()) break
+    const freshCall = await getCall(callsDir(), callId)
+    if (!freshCall || freshCall.salesBrainExcluded) break
     const outcome = await consolidateNewCandidate(db, candidate)
     if (outcome === 'created') newCount++
     touchedScopes.add(candidate.scope)
+  }
+  // Convergence sweep BEFORE any profile recompile — mirrors Memory
+  // Center's own retroactive forget: if the call was excluded while a
+  // consolidation step was in flight, remove what that step inserted after
+  // the click-time forget already ran.
+  if (touchedScopes.size > 0) {
+    const finalCall = await getCall(callsDir(), callId)
+    if (!finalCall || finalCall.salesBrainExcluded) {
+      for (const memory of listMemoriesByCallId(db, callId)) {
+        deleteMemory(db, memory.id)
+      }
+      return
+    }
   }
   for (const scope of touchedScopes) {
     await runLightConsolidation(db, scope)
@@ -170,10 +191,8 @@ export async function runMemoryExtractionForAssistantMessage(
   const db = getMemoryDb()
   if (!db) return
 
-  const conversation = await getConversation(
-    conversationsDir(app.getPath('userData')),
-    conversationId
-  )
+  const convDir = conversationsDir(app.getPath('userData'))
+  const conversation = await getConversation(convDir, conversationId)
   if (!conversation || conversation.salesBrainExcluded) return
 
   const { candidates } = await extractMemoriesFromChatMessage(
@@ -184,8 +203,29 @@ export async function runMemoryExtractionForAssistantMessage(
   )
   const touchedScopes = new Set<MemoryScope>()
   for (const candidate of candidates) {
+    // Audit fix V1 — consent is checked AT WRITE TIME, not only at hook
+    // start: the extraction (and each consolidation's own AI judge) takes
+    // seconds, which is exactly when the "Not learning" pill is in front of
+    // the user. Both permissions re-read fresh before every insert.
+    if (!isSalesBrainEnabled()) break
+    const fresh = await getConversation(convDir, conversationId)
+    if (!fresh || fresh.salesBrainExcluded) break
     await consolidateNewCandidate(db, candidate)
     touchedScopes.add(candidate.scope)
+  }
+  // Convergence sweep BEFORE any profile recompile: if exclusion landed
+  // while a consolidation step was in flight (its AI judge can take
+  // seconds), the click-time forget ran before that insert existed — so
+  // re-check once more and forget here. Whichever of the two runs LAST now
+  // removes everything, and nothing swept ever reaches a compiled profile.
+  if (touchedScopes.size > 0) {
+    const finalCheck = await getConversation(convDir, conversationId)
+    if (!finalCheck || finalCheck.salesBrainExcluded) {
+      for (const memory of listMemoriesByCallId(db, `assistant:${conversationId}`)) {
+        deleteMemory(db, memory.id)
+      }
+      return
+    }
   }
   for (const scope of touchedScopes) {
     await runLightConsolidation(db, scope)
