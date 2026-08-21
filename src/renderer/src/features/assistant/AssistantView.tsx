@@ -903,7 +903,7 @@ export function AssistantView({
           /* Empty state: composed hero in the upper third, chips attached to
              the copy, composer waiting pinned below — no floating void. */
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto flex w-full max-w-[900px] flex-col items-center px-6 pt-[16vh] text-center">
+            <div className="mx-auto flex w-full max-w-[1140px] flex-col items-center px-6 pt-[16vh] text-center">
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft">
                 <Sparkles className="h-6 w-6 text-accent" />
               </div>
@@ -955,7 +955,7 @@ export function AssistantView({
             }}
             className="min-h-0 flex-1 overflow-y-auto"
           >
-            <div className="mx-auto w-full max-w-[900px] space-y-4 px-6 py-5">
+            <div className="mx-auto w-full max-w-[1140px] space-y-4 px-6 py-5">
               {chat.loading && (
                 <div className="space-y-3">
                   <SkeletonRows />
@@ -980,13 +980,13 @@ export function AssistantView({
         {/* Live-region for errors so screen readers hear them (audit H). */}
         <div aria-live="polite" className="shrink-0">
           {chat.error && (
-            <div className="mx-auto mb-2 flex w-full max-w-[900px] items-center justify-between rounded-xl border border-danger/30 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">
+            <div className="mx-auto mb-2 flex w-full max-w-[1140px] items-center justify-between rounded-xl border border-danger/30 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">
               <span>{chat.error}</span>
               <IconButton icon={X} label="Dismiss error" onClick={chat.clearError} />
             </div>
           )}
           {notice && (
-            <div className="mx-auto mb-2 flex w-full max-w-[900px] items-center justify-between rounded-xl border border-warning/30 bg-warning-soft px-3 py-2 text-[12.5px] text-warning">
+            <div className="mx-auto mb-2 flex w-full max-w-[1140px] items-center justify-between rounded-xl border border-warning/30 bg-warning-soft px-3 py-2 text-[12.5px] text-warning">
               <span>{notice}</span>
               <IconButton icon={X} label="Dismiss notice" onClick={() => setNotice(null)} />
             </div>
@@ -997,7 +997,7 @@ export function AssistantView({
             single bordered surface; recording/transcribing/pending are states
             of the same object, not boxes around it. */}
         <div className="shrink-0 px-6 pb-5 pt-1">
-          <div className="mx-auto w-full max-w-[900px]">
+          <div className="mx-auto w-full max-w-[1140px]">
             {voice.error && (
               <div
                 aria-live="polite"
