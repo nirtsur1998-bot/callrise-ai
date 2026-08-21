@@ -16,6 +16,10 @@ import { useAutoTranscribeCalls } from '@renderer/features/settings/useAutoTrans
 import { CallDetectedBanner } from '@renderer/features/live/components/CallDetectedBanner'
 import { MemoryReviewModal } from '@renderer/features/settings/MemoryReviewModal'
 import { setGoToLiveCallsListener } from '@renderer/features/live/liveCallNav'
+import {
+  setOpenAssistantListener,
+  type AssistantScopeRequest
+} from '@renderer/features/assistant/assistantNav'
 
 // Exactly one of these renders at a time (see the `active === ...` switch
 // below, itself remounted via `key={active}` on every switch) — so eagerly
@@ -269,6 +273,18 @@ export function MainApp({
     setActive('past-calls')
   }
 
+  // M28 Part 4 — "open Rise about this client" from a contact/deal/call page.
+  // Same one-shot preselect pattern as openCallId; the signal arrives through
+  // assistantNav.ts's single listener slot (the liveCallNav shape).
+  const [assistantScope, setAssistantScope] = useState<AssistantScopeRequest | null>(null)
+  useEffect(() => {
+    setOpenAssistantListener((scope) => {
+      setAssistantScope(scope)
+      setActive('assistant')
+    })
+    return () => setOpenAssistantListener(null)
+  }, [])
+
   const signOut = (): void => {
     void window.api.auth.signOut() // the gate swaps back to the login screen via the broadcast
   }
@@ -366,7 +382,11 @@ export function MainApp({
               remotePauseToken={remotePauseToken}
             />
           ) : active === 'assistant' ? (
-            <AssistantView onOpenCall={openCallFromPalette} />
+            <AssistantView
+              onOpenCall={openCallFromPalette}
+              initialScope={assistantScope}
+              onInitialScopeConsumed={() => setAssistantScope(null)}
+            />
           ) : active === 'past-calls' ? (
             <PastCallsView
               initialSelectedId={openCallId}

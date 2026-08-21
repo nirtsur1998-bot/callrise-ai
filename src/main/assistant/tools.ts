@@ -196,9 +196,18 @@ function scoreText(text: string, queryTerms: string[]): number {
   return queryTerms.reduce((n, t) => (lower.includes(t) ? n + 1 : n), 0)
 }
 
-async function searchCalls(callsDir: string, query: string): Promise<LookupSection> {
+async function searchCalls(
+  callsDir: string,
+  query: string,
+  scopeContactId?: string
+): Promise<LookupSection> {
   const queryTerms = terms(query)
-  const summaries = await listCalls(callsDir)
+  // M28 Part 4 — in a client-scoped conversation, only THAT client's calls
+  // are searchable: the cross-client invariant is enforced by filtering the
+  // corpus, not by hoping the model stays on topic.
+  const summaries = (await listCalls(callsDir)).filter(
+    (s) => !scopeContactId || s.contactId === scopeContactId
+  )
   const scored = summaries
     .map((s) => ({ s, score: scoreText(`${s.title} ${s.preview ?? ''}`, queryTerms) }))
     .filter((x) => x.score > 0)
@@ -241,15 +250,23 @@ function contactLine(c: Contact): string {
 async function findContact(
   contactsDir: string,
   dealsDir: string,
-  query: string
+  query: string,
+  scopeContactId?: string
 ): Promise<LookupSection> {
   const queryTerms = terms(query)
   const contacts = await listContacts(contactsDir)
-  const matches = contacts
-    .map((c) => ({ c, score: scoreText(`${c.name} ${c.company ?? ''} ${c.email ?? ''}`, queryTerms) }))
-    .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_RECORD_RESULTS)
+  // Scoped: the only contact record that may enter the context is the
+  // scoped client's own, whatever name the model asked about.
+  const matches = scopeContactId
+    ? contacts.filter((c) => c.id === scopeContactId).map((c) => ({ c, score: 1 }))
+    : contacts
+        .map((c) => ({
+          c,
+          score: scoreText(`${c.name} ${c.company ?? ''} ${c.email ?? ''}`, queryTerms)
+        }))
+        .filter((x) => x.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, MAX_RECORD_RESULTS)
   const deals = matches.length > 0 ? await listDeals(dealsDir) : []
   const lines: LookupSection['lines'] = matches.map(({ c }) => {
     const theirs = deals.filter((d) => d.contactId === c.id)
@@ -265,9 +282,16 @@ async function findContact(
   }
 }
 
-async function findDeal(dealsDir: string, contactsDir: string, query: string): Promise<LookupSection> {
+async function findDeal(
+  dealsDir: string,
+  contactsDir: string,
+  query: string,
+  scopeContactId?: string
+): Promise<LookupSection> {
   const queryTerms = terms(query)
-  const deals = await listDeals(dealsDir)
+  const deals = (await listDeals(dealsDir)).filter(
+    (d) => !scopeContactId || d.contactId === scopeContactId
+  )
   const matches = deals
     .map((d) => ({ d, score: scoreText(d.title, queryTerms) }))
     .filter((x) => x.score > 0)
@@ -355,23 +379,80 @@ export function defaultToolDirs(userDataDir: string): ToolDirs {
   }
 }
 
+/** M28 Part 4 — the standing brief for a client-scoped conversation: their
+ *  record, their deals, their recent calls (citable). Always present in a
+ *  scoped turn regardless of what the planner chose, so "how should I open
+ *  the next call with her?" never depends on a lookup being planned. */
+export async function clientBriefSections(
+  contactId: string,
+  dirs: ToolDirs
+): Promise<LookupSection[]> {
+  const sections: LookupSection[] = []
+  const contact = (await listContacts(dirs.contactsDir)).find((c) => c.id === contactId)
+  if (!contact) return sections
+  sections.push({ title: 'THIS CLIENT — CONTACT RECORD', lines: [{ text: contactLine(contact) }] })
+
+  const deals = (await listDeals(dirs.dealsDir)).filter((d) => d.contactId === contactId)
+  sections.push({
+    title: 'THIS CLIENT — DEALS',
+    lines:
+      deals.length > 0
+        ? deals.map((d) => {
+            const bits = [
+              d.value !== undefined && `value: ${d.value}`,
+              d.expectedCloseDate && `expected close: ${d.expectedCloseDate}`,
+              d.riskAssessment && 'has a risk assessment on file',
+              d.notes && `notes: ${d.notes.slice(0, 200)}`
+            ].filter(Boolean)
+            return { text: `${d.title}${bits.length > 0 ? ` — ${bits.join('; ')}` : ''}` }
+          })
+        : [{ text: 'No deals on file.' }]
+  })
+
+  const calls = (await listCalls(dirs.callsDir))
+    .filter((s) => s.contactId === contactId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 5)
+  const lines: LookupSection['lines'] = []
+  for (const s of calls) {
+    const call = await getCall(dirs.callsDir, s.id)
+    const executive =
+      call?.summary && 'executive' in call.summary ? String(call.summary.executive ?? '') : ''
+    const snippet = (executive || s.preview || '').slice(0, 400)
+    const when = new Date(s.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    lines.push({
+      text: `"${s.title}" (${when})${snippet ? `: ${snippet}` : ''}`,
+      cite: { kind: 'call', id: s.id, label: s.title.slice(0, 300) }
+    })
+  }
+  sections.push({
+    title: 'THIS CLIENT — RECENT CALLS (newest first)',
+    lines: lines.length > 0 ? lines : [{ text: 'No calls linked to this client yet.' }]
+  })
+  return sections
+}
+
 /** Execute planned lookups. Reads run directly; propose_task generates a
- *  PROPOSAL only — nothing is written until the user confirms the chip. */
+ *  PROPOSAL only — nothing is written until the user confirms the chip.
+ *  `scopeContactId` (M28 Part 4) narrows every record lookup to one client. */
 export async function executeLookups(
   lookups: PlannedLookup[],
   dirs: ToolDirs,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  scopeContactId?: string
 ): Promise<LookupOutcome> {
   const sections: LookupSection[] = []
   const taskProposals: TaskProposal[] = []
   for (const lookup of lookups) {
     try {
       if (lookup.kind === 'search_calls' && lookup.query) {
-        sections.push(await searchCalls(dirs.callsDir, lookup.query))
+        sections.push(await searchCalls(dirs.callsDir, lookup.query, scopeContactId))
       } else if (lookup.kind === 'find_contact' && lookup.query) {
-        sections.push(await findContact(dirs.contactsDir, dirs.dealsDir, lookup.query))
+        sections.push(
+          await findContact(dirs.contactsDir, dirs.dealsDir, lookup.query, scopeContactId)
+        )
       } else if (lookup.kind === 'find_deal' && lookup.query) {
-        sections.push(await findDeal(dirs.dealsDir, dirs.contactsDir, lookup.query))
+        sections.push(await findDeal(dirs.dealsDir, dirs.contactsDir, lookup.query, scopeContactId))
       } else if (lookup.kind === 'today_schedule') {
         sections.push(await todaySchedule(dirs.eventsDir))
       } else if (lookup.kind === 'propose_task' && lookup.query) {

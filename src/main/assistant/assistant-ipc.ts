@@ -14,9 +14,17 @@
 import { app, ipcMain, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { AIProviderError } from '../ai'
-import { streamWithFallback, AllModelsExhaustedError } from '../ai/complete-with-fallback'
+import {
+  streamWithFallback,
+  AllModelsExhaustedError,
+  resolveChain
+} from '../ai/complete-with-fallback'
 import type { AIMessage } from '../ai/types'
-import { businessProfileSection, repProfileSection } from '../memory/profile-injection'
+import {
+  businessProfileSection,
+  clientProfileSection,
+  repProfileSection
+} from '../memory/profile-injection'
 import { retrieveRelevantMemoriesStructured } from '../memory/rag'
 import { consolidateNewCandidate } from '../memory/consolidation'
 import { getMemoryDb, ensureMemoryDb } from '../memory/memory-runtime'
@@ -34,7 +42,20 @@ import {
   transcribeVoiceNote,
   MAX_VOICE_NOTE_BYTES
 } from './voice-note'
-import { defaultToolDirs, executeLookups, planLookups, type TaskProposal } from './tools'
+import {
+  clientBriefSections,
+  defaultToolDirs,
+  executeLookups,
+  planLookups,
+  type TaskProposal
+} from './tools'
+import {
+  addAttachment,
+  deleteAttachment,
+  readAttachmentBytes,
+  readAttachmentRecord,
+  ATTACHMENT_LIMITS
+} from './attachments'
 import { createTask } from '../tasks-fs'
 import { scheduleBackup } from '../backup'
 import {
@@ -49,7 +70,9 @@ import {
   markSuggestionApplied,
   renameConversation,
   revertTaskProposal,
+  sanitizeScope,
   setConversationSalesBrainExcluded,
+  type AssistantAttachment,
   type AssistantCitation,
   type PersistedTaskProposal
 } from './conversations-fs'
@@ -134,10 +157,38 @@ export function inFlightCountForTests(): number {
   return inFlight.size
 }
 
+/** M28 Part 3 — resolve attachment ids (renderer-supplied) against the
+ *  TRUSTED stored records, and load what each will contribute to the turn. */
+async function loadAttachments(ids: string[]): Promise<{
+  metadata: AssistantAttachment[]
+  images: { mimeType: string; base64: string }[]
+  document?: { base64: string; filename?: string }
+  texts: { name: string; text: string }[]
+}> {
+  const metadata: AssistantAttachment[] = []
+  const images: { mimeType: string; base64: string }[] = []
+  const texts: { name: string; text: string }[] = []
+  let document: { base64: string; filename?: string } | undefined
+  for (const id of ids.slice(0, 6)) {
+    const record = await readAttachmentRecord(dir(), id)
+    if (!record) continue
+    const bytes = await readAttachmentBytes(dir(), record)
+    if (!bytes) continue
+    const { storedExt: _ext, ...meta } = record
+    void _ext
+    metadata.push(meta)
+    if (record.kind === 'image') images.push({ mimeType: record.mimeType, base64: bytes.toString('base64') })
+    else if (record.kind === 'pdf' && !document) document = { base64: bytes.toString('base64'), filename: record.name }
+    else if (record.kind === 'text') texts.push({ name: record.name, text: bytes.toString('utf8') })
+  }
+  return { metadata, images, document, texts }
+}
+
 async function handleSend(
   conversationId: string,
   rawMessage: string,
-  voiceNote?: { mediaId: string; durationMs: number }
+  voiceNote?: { mediaId: string; durationMs: number },
+  attachmentIds: string[] = []
 ): Promise<AssistantSendResult> {
   const message = typeof rawMessage === 'string' ? rawMessage.trim().slice(0, MAX_INBOUND_CHARS) : ''
   if (!isSafeConversationId(conversationId)) return { ok: false, error: 'not-found', message: 'Conversation not found.' }
@@ -147,6 +198,25 @@ async function handleSend(
   if (inFlight.has(conversationId)) {
     return { ok: false, error: 'busy', message: 'A reply is already in progress — stop it first.' }
   }
+
+  // M28 Part 3 — attachments, with the vision gate BEFORE the turn starts:
+  // an image with no vision-capable model is refused with the exact reason,
+  // never silently dropped or sent to a model that can't read it.
+  const files = await loadAttachments(attachmentIds)
+  if (files.images.length > 0) {
+    const { configured, capable } = resolveChain('assistant-chat', { needsVision: true })
+    if (configured.length > 0 && capable.length === 0) {
+      return {
+        ok: false,
+        error: 'ai-failed',
+        message:
+          'None of your configured AI models can read images. Add a Claude, ChatGPT, or Gemini key (or assign Llama 4 Scout on Groq) in Settings, or send the file as text or PDF instead.'
+      }
+    }
+  }
+  // M28 Part 4 — the conversation's client scope, read from the record:
+  // retrieval and every lookup are narrowed to this one contact.
+  const scope = conv.scope
 
   // Audit fix V3 — the turn is registered (and therefore cancellable) BEFORE
   // the pre-stream phase: retrieval + planning + lookups can take many
@@ -172,12 +242,18 @@ async function handleSend(
     // their phrasing. Retrieval and lookup PLANNING run concurrently (both
     // need only the message); planning degrades to [] when no tool-capable
     // model exists.
-    const [retrieved, planned] = await Promise.all([
+    const toolDirs = defaultToolDirs(app.getPath('userData'))
+    const [retrieved, planned, clientBrief] = await Promise.all([
       retrieveRelevantMemoriesStructured(message, {
         foreground: true,
-        includeHypotheses: true
+        includeHypotheses: true,
+        // Scoped: rag searches rep + business + THIS client's scope and no
+        // other client's — the cross-client invariant lives in rag.ts's scope
+        // list, which is built from exactly this id.
+        contactId: scope?.contactId ?? null
       }),
-      planLookups(message, turn.controller.signal)
+      planLookups(message, turn.controller.signal),
+      scope ? clientBriefSections(scope.contactId, toolDirs) : Promise.resolve([])
     ])
     if (turn.stopRequested) return { ok: false, error: 'cancelled', message: 'Stopped.' }
     if (planned.length > 0) {
@@ -185,15 +261,22 @@ async function handleSend(
     }
     const lookups = await executeLookups(
       planned,
-      defaultToolDirs(app.getPath('userData')),
-      turn.controller.signal
+      toolDirs,
+      turn.controller.signal,
+      scope?.contactId
     )
     if (turn.stopRequested) return { ok: false, error: 'cancelled', message: 'Stopped.' }
     const context = buildAssistantContext({
       repProfile: repProfileSection('full'),
       businessProfile: businessProfileSection('full'),
       retrieved,
-      lookupSections: lookups.sections
+      // The client brief LEADS the lookup sections in a scoped turn.
+      lookupSections: [...clientBrief, ...lookups.sections],
+      scope: scope
+        ? { contactName: scope.contactName, company: scope.company, dealTitle: scope.dealTitle }
+        : undefined,
+      clientProfile: scope ? clientProfileSection(scope.contactId, 'full') : undefined,
+      attachmentTexts: files.texts.length > 0 ? files.texts : undefined
     })
 
     const history: AIMessage[] = conv.messages
@@ -206,7 +289,22 @@ async function handleSend(
       system: context.system,
       messages: [...history, { role: 'user', content: message }],
       maxTokens: MAX_TOKENS,
-      signal: turn.controller.signal
+      signal: turn.controller.signal,
+      // M28 Part 3 — native multimodal parts ride on the first user message
+      // of the request; providers attach them in their own formats. NOTE:
+      // history puts older turns first, so for a conversation with history
+      // the attachments bind to message[0]... which is the OLDEST user turn.
+      // Providers attach to the first USER message — so when attachments are
+      // present we send ONLY the current message (no history) to keep the
+      // binding unambiguous. Documented trade-off: an attachment turn is
+      // answered on its own merits plus the CONTEXT, without chat history.
+      ...(files.images.length > 0 || files.document
+        ? {
+            messages: [{ role: 'user' as const, content: message }],
+            images: files.images.length > 0 ? files.images : undefined,
+            document: files.document
+          }
+        : {})
     })
 
     let streamError: unknown = null
@@ -274,7 +372,8 @@ async function handleSend(
       {
         text: message,
         suggestions: suggestions.length > 0 ? suggestions : undefined,
-        voiceNote
+        voiceNote,
+        attachments: files.metadata.length > 0 ? files.metadata : undefined
       },
       {
         text: reply,
@@ -320,7 +419,11 @@ export function registerAssistant(): void {
     typeof id === 'string' ? getConversation(dir(), id) : null
   )
 
-  ipcMain.handle('assistant:createConversation', () => createConversation(dir()))
+  // M28 Part 4 — an optional client scope, validated here (sanitizeScope)
+  // before it becomes the conversation's identity.
+  ipcMain.handle('assistant:createConversation', (_e, scope: unknown) =>
+    createConversation(dir(), undefined, sanitizeScope(scope))
+  )
 
   ipcMain.handle('assistant:renameConversation', (_e, id: unknown, title: unknown) =>
     typeof id === 'string' && typeof title === 'string'
@@ -344,6 +447,7 @@ export function registerAssistant(): void {
     if (deleted && conv) {
       for (const m of conv.messages) {
         if (m.voiceNote) await deleteVoiceNote(dir(), m.voiceNote.mediaId)
+        for (const a of m.attachments ?? []) await deleteAttachment(dir(), a.id)
       }
     }
     return deleted
@@ -351,7 +455,13 @@ export function registerAssistant(): void {
 
   ipcMain.handle(
     'assistant:send',
-    (_e, conversationId: unknown, message: unknown, voiceNote: unknown) => {
+    (
+      _e,
+      conversationId: unknown,
+      message: unknown,
+      voiceNote: unknown,
+      attachmentIds: unknown
+    ) => {
       const vn = (voiceNote && typeof voiceNote === 'object' ? voiceNote : null) as {
         mediaId?: unknown
         durationMs?: unknown
@@ -361,10 +471,35 @@ export function registerAssistant(): void {
         String(message),
         vn && typeof vn.mediaId === 'string' && typeof vn.durationMs === 'number'
           ? { mediaId: vn.mediaId, durationMs: vn.durationMs }
-          : undefined
+          : undefined,
+        Array.isArray(attachmentIds)
+          ? attachmentIds.filter((x): x is string => typeof x === 'string')
+          : []
       )
     }
   )
+
+  // --- M28 Part 3: attachments (local-only until send) ---------------------
+  // Validate + cap + extract + store; returns trusted metadata and an honest
+  // "what will be sent" preview. Nothing reaches a provider until send().
+  ipcMain.handle(
+    'assistant:addAttachment',
+    async (_e, name: unknown, bytes: unknown) => {
+      if (typeof name !== 'string' || !(bytes instanceof ArrayBuffer)) {
+        return { ok: false, message: 'That file could not be read.' }
+      }
+      const cap = Math.max(...Object.values(ATTACHMENT_LIMITS))
+      if (bytes.byteLength > cap) {
+        return { ok: false, message: `That file is larger than the ${Math.round(cap / (1024 * 1024))} MB limit.` }
+      }
+      return addAttachment(dir(), name, Buffer.from(bytes))
+    }
+  )
+
+  ipcMain.handle('assistant:discardAttachment', async (_e, id: unknown) => {
+    if (typeof id === 'string') await deleteAttachment(dir(), id)
+    return true
+  })
 
   // --- M28 Phase 3: voice notes (record → transcribe → REVIEW → send) ------
   // Transcribe-and-store in one step; the renderer keeps its local blob, so

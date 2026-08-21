@@ -37,6 +37,8 @@ import { CrmNoteGeneratorCard } from './CrmNoteGeneratorCard'
 import { formatRelative } from './contactStats'
 import type { Contact, ContactComment } from './types'
 import { formatDateOnly } from '@renderer/lib/dateOnly'
+import { openAssistantFor } from '@renderer/features/assistant/assistantNav'
+import { ASSISTANT_SECTION_NAME } from '@renderer/features/assistant/config'
 
 interface ContactDetailProps {
   contact: Contact
@@ -144,9 +146,26 @@ export function ContactDetail({
     <div className="flex h-full flex-col">
       <div className="mb-4 flex items-center justify-between">
         <BackButton onClick={onBack} label="Contacts" />
-        <Button variant="secondary" size="sm" icon={Pencil} onClick={onEdit}>
-          Edit
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* M28 Part 4 — open the assistant scoped to this client. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={Sparkles}
+            onClick={() =>
+              openAssistantFor({
+                contactId: contact.id,
+                contactName: contact.name,
+                company: contact.company
+              })
+            }
+          >
+            Ask {ASSISTANT_SECTION_NAME}
+          </Button>
+          <Button variant="secondary" size="sm" icon={Pencil} onClick={onEdit}>
+            Edit
+          </Button>
+        </div>
       </div>
 
       {/* Contact header */}

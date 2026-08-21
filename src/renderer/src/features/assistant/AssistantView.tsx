@@ -24,7 +24,11 @@ import {
   BrainCog,
   Mic,
   Pause,
-  Play
+  Play,
+  Paperclip,
+  UserRound,
+  FileText,
+  Image as ImageIcon
 } from 'lucide-react'
 import { Button } from '@renderer/components/Button'
 import { IconButton } from '@renderer/components/IconButton'
@@ -35,11 +39,14 @@ import { fieldClass } from '@renderer/components/field'
 import { ASSISTANT_SECTION_NAME } from './config'
 import {
   useAssistantChat,
+  type AssistantAttachment,
   type AssistantCitation,
+  type AssistantScope,
   type AssistantSuggestion,
   type DisplayMessage
 } from './useAssistantChat'
 import { useVoiceNote } from './useVoiceNote'
+import type { AssistantScopeRequest } from './assistantNav'
 import { segmentCitedText } from './citation-markers'
 import { splitBlocks, tokenizeInline, type MdBlock } from './markdown-blocks'
 
@@ -53,6 +60,125 @@ const STARTER_PROMPTS = [
   'What am I strongest at on calls — and weakest?',
   'What should I focus on this week?'
 ]
+
+/** M28 Part 4 — prompts change when the conversation is about one client. */
+function scopedPrompts(scope: AssistantScope): string[] {
+  const first = scope.contactName.split(' ')[0]
+  return [
+    scope.dealTitle ? `What's blocking the ${scope.dealTitle} deal?` : `Where do we stand with ${first}?`,
+    `How should I open the next call with ${first}?`,
+    `What objections has ${first} raised, and what worked?`,
+    `Summarize everything we know about ${first}`
+  ]
+}
+
+function formatBytes(n: number): string {
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`
+  return `${n} B`
+}
+
+interface PendingAttachment {
+  attachment: AssistantAttachment
+  preview: string
+}
+
+/** One attached-file chip — on a sent message (compact) or in the composer
+ *  (with the honest "what will be sent" preview and a remove control). */
+function AttachmentChip({
+  attachment,
+  preview,
+  onRemove
+}: {
+  attachment: AssistantAttachment
+  preview?: string
+  onRemove?: () => void
+}): React.JSX.Element {
+  const Icon = attachment.kind === 'image' ? ImageIcon : FileText
+  return (
+    <div
+      className="flex max-w-full items-start gap-2 rounded-xl border border-line-soft bg-surface px-2.5 py-1.5 text-[12px]"
+      title={preview}
+    >
+      <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+      <div className="min-w-0">
+        <p className="truncate font-medium text-ink">{attachment.name}</p>
+        <p className="text-[11px] text-faint">
+          {formatBytes(attachment.sizeBytes)}
+          {attachment.kind === 'text' && attachment.extractedChars !== undefined
+            ? ` · ${attachment.extractedChars.toLocaleString()} characters of text will be sent`
+            : attachment.kind === 'image'
+              ? ' · sent as an image (needs a vision-capable model)'
+              : ' · sent as a PDF'}
+        </p>
+        {preview && attachment.kind === 'text' && (
+          <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-[11px] text-muted">{preview}</p>
+        )}
+      </div>
+      {onRemove && <IconButton icon={X} label={`Remove ${attachment.name}`} onClick={onRemove} />}
+    </div>
+  )
+}
+
+/** M28 Part 4 — pick a client to talk about. Contacts come from the local
+ *  CRM list (same call the command palette makes). */
+function ScopePickerModal({
+  onClose,
+  onPick
+}: {
+  onClose: () => void
+  onPick: (scope: AssistantScope) => void
+}): React.JSX.Element {
+  const [contacts, setContacts] = useState<{ id: string; name: string; company?: string }[] | null>(
+    null
+  )
+  const [q, setQ] = useState('')
+  useEffect(() => {
+    void window.api.contacts
+      .list()
+      .then((rows) => setContacts(rows.map((c) => ({ id: c.id, name: c.name, company: c.company }))))
+      .catch(() => setContacts([]))
+  }, [])
+  const filtered = useMemo(() => {
+    if (!contacts) return []
+    const needle = q.trim().toLowerCase()
+    return contacts
+      .filter((c) => !needle || `${c.name} ${c.company ?? ''}`.toLowerCase().includes(needle))
+      .slice(0, 50)
+  }, [contacts, q])
+  return (
+    <Modal onClose={onClose} title="Talk about a client" size="sm">
+      <input
+        className={cn(fieldClass, 'h-9 w-full text-[13px]')}
+        placeholder="Search contacts"
+        aria-label="Search contacts"
+        autoFocus
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+      />
+      <div className="mt-2 max-h-[50vh] space-y-0.5 overflow-y-auto">
+        {contacts === null ? (
+          <Skeleton className="h-8" />
+        ) : filtered.length === 0 ? (
+          <p className="py-4 text-center text-[12px] text-faint">No contacts match.</p>
+        ) : (
+          filtered.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => onPick({ contactId: c.id, contactName: c.name, company: c.company })}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-elevated focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              <UserRound className="h-3.5 w-3.5 text-muted" />
+              <span className="truncate text-[13px] text-ink">{c.name}</span>
+              {c.company && <span className="truncate text-[11.5px] text-faint">· {c.company}</span>}
+            </button>
+          ))
+        )}
+      </div>
+    </Modal>
+  )
+}
 
 const STATUS_LABEL: Record<MemoryEvidence['status'], string> = {
   active: 'Trusted fact',
@@ -324,6 +450,13 @@ function MessageRow({
                 mediaId={message.voiceNote.mediaId}
                 durationMs={message.voiceNote.durationMs}
               />
+            </div>
+          )}
+          {message.attachments && message.attachments.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {message.attachments.map((a) => (
+                <AttachmentChip key={a.id} attachment={a} />
+              ))}
             </div>
           )}
           {message.suggestions && message.suggestions.length > 0 && (
@@ -627,9 +760,15 @@ function ConversationRow({
 // --- The screen --------------------------------------------------------------
 
 export function AssistantView({
-  onOpenCall
+  onOpenCall,
+  initialScope = null,
+  onInitialScopeConsumed
 }: {
   onOpenCall?: (callId: string) => void
+  /** M28 Part 4 — one-shot: open a NEW conversation about this client
+   *  (from a contact/deal/call page). Consumed once acted on. */
+  initialScope?: AssistantScopeRequest | null
+  onInitialScopeConsumed?: () => void
 }): React.JSX.Element {
   const [metas, setMetas] = useState<ConversationMeta[] | null>(null) // null = loading
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -644,15 +783,25 @@ export function AssistantView({
     convId: string
     text: string
     voiceNote?: { mediaId: string; durationMs: number }
+    attachments?: AssistantAttachment[]
   } | null>(null)
+  const [pendingFiles, setPendingFiles] = useState<PendingAttachment[]>([])
+  const [scopePickerOpen, setScopePickerOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const nearBottomRef = useRef(true)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const chat = useAssistantChat(
     activeId,
     pendingFirst && pendingFirst.convId === activeId
-      ? { initialMessage: { text: pendingFirst.text, voiceNote: pendingFirst.voiceNote } }
+      ? {
+          initialMessage: {
+            text: pendingFirst.text,
+            voiceNote: pendingFirst.voiceNote,
+            attachments: pendingFirst.attachments
+          }
+        }
       : undefined
   )
   const voice = useVoiceNote({
@@ -710,15 +859,65 @@ export function AssistantView({
   const startConversation = useCallback(
     async (
       firstMessage?: string,
-      voiceNote?: { mediaId: string; durationMs: number }
+      voiceNote?: { mediaId: string; durationMs: number },
+      attachments?: AssistantAttachment[],
+      scope?: AssistantScope
     ): Promise<void> => {
-      const conv = await window.api.assistant.createConversation()
-      if (firstMessage) setPendingFirst({ convId: conv.id, text: firstMessage, voiceNote })
+      const conv = await window.api.assistant.createConversation(scope)
+      if (firstMessage) {
+        setPendingFirst({ convId: conv.id, text: firstMessage, voiceNote, attachments })
+      }
       setActiveId(conv.id)
       await refreshList()
     },
     [refreshList]
   )
+
+  // M28 Part 4 — arriving from a contact/deal/call page: open a new scoped
+  // conversation. A caller that only knows the id (a call page) gets the
+  // name resolved from the contact record here.
+  useEffect(() => {
+    if (!initialScope) return
+    const req = initialScope
+    onInitialScopeConsumed?.()
+    void (async () => {
+      let name = req.contactName
+      let company = req.company
+      if (!name) {
+        const contact = (await window.api.contacts.list().catch(() => []))
+          .find((c) => c.id === req.contactId)
+        if (!contact) return
+        name = contact.name
+        company = contact.company
+      }
+      await startConversation(undefined, undefined, undefined, {
+        contactId: req.contactId,
+        contactName: name,
+        company,
+        dealId: req.dealId,
+        dealTitle: req.dealTitle
+      })
+    })()
+  }, [initialScope, onInitialScopeConsumed, startConversation])
+
+  const addFiles = useCallback(async (files: FileList | null): Promise<void> => {
+    if (!files) return
+    for (const file of Array.from(files).slice(0, 6)) {
+      const result = await window.api.assistant.addAttachment(file.name, await file.arrayBuffer())
+      if (result.ok) {
+        setPendingFiles((prev) =>
+          prev.length >= 6 ? prev : [...prev, { attachment: result.attachment, preview: result.preview }]
+        )
+      } else {
+        setNotice(result.message)
+      }
+    }
+  }, [])
+
+  const removePendingFile = useCallback((id: string): void => {
+    void window.api.assistant.discardAttachment(id)
+    setPendingFiles((prev) => prev.filter((p) => p.attachment.id !== id))
+  }, [])
 
   const handleSend = useCallback(async (): Promise<void> => {
     const text = draft.trim()
@@ -727,13 +926,15 @@ export function AssistantView({
     nearBottomRef.current = true
     const voiceNote = voice.pending ?? undefined
     voice.clearPending()
+    const attachments = pendingFiles.map((p) => p.attachment)
+    setPendingFiles([])
     if (!activeId) {
-      await startConversation(text, voiceNote)
+      await startConversation(text, voiceNote, attachments.length > 0 ? attachments : undefined)
       return
     }
-    await chat.send(text, voiceNote)
+    await chat.send(text, voiceNote, attachments.length > 0 ? attachments : undefined)
     void refreshList()
-  }, [draft, chat, activeId, startConversation, refreshList, voice])
+  }, [draft, chat, activeId, startConversation, refreshList, voice, pendingFiles])
 
   const handleDelete = useCallback(
     (id: string): void => {
@@ -872,10 +1073,23 @@ export function AssistantView({
       {/* The chat IS the page: one surface, one reading column. */}
       <div className="flex min-w-0 flex-1 flex-col">
         {activeId && (
-          <div className="flex shrink-0 items-center justify-between border-b border-line-soft px-5 py-2">
-            <p className="truncate text-[12.5px] font-medium text-muted">
-              {activeMeta?.title ?? ''}
-            </p>
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line-soft px-5 py-2">
+            <div className="flex min-w-0 items-center gap-2">
+              {chat.scope && (
+                /* M28 Part 4 — the scope indicator: who Rise is talking about. */
+                <span
+                  className="flex shrink-0 items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 text-[11.5px] font-medium text-accent"
+                  title={`This conversation is only about ${chat.scope.contactName}. Other clients' memories are never used here.`}
+                >
+                  <UserRound className="h-3.5 w-3.5" />
+                  About {chat.scope.contactName}
+                  {chat.scope.company ? ` · ${chat.scope.company}` : ''}
+                </span>
+              )}
+              <p className="truncate text-[12.5px] font-medium text-muted">
+                {activeMeta?.title ?? ''}
+              </p>
+            </div>
             <button
               type="button"
               onClick={toggleLearning}
@@ -941,6 +1155,13 @@ export function AssistantView({
                   </div>
                 </>
               )}
+              <button
+                type="button"
+                onClick={() => setScopePickerOpen(true)}
+                className="mt-5 flex items-center gap-1.5 rounded-full border border-accent/40 px-3.5 py-1.5 text-[12.5px] text-accent hover:bg-accent-soft"
+              >
+                <UserRound className="h-3.5 w-3.5" /> Talk about a specific client
+              </button>
             </div>
           </div>
         ) : (
@@ -959,6 +1180,32 @@ export function AssistantView({
               {chat.loading && (
                 <div className="space-y-3">
                   <SkeletonRows />
+                </div>
+              )}
+              {!chat.loading && chat.messages.length === 0 && chat.scope && (
+                /* A fresh scoped conversation: say who it's about, offer the
+                   scoped prompts — one click sends. */
+                <div className="rounded-2xl border border-line-soft bg-surface p-5">
+                  <p className="text-[14px] font-semibold text-ink">
+                    Talking about {chat.scope.contactName}
+                    {chat.scope.company ? ` at ${chat.scope.company}` : ''}
+                  </p>
+                  <p className="mt-1 text-[12.5px] text-muted">
+                    {ASSISTANT_SECTION_NAME} leads with their memories, calls, and deals here — and
+                    never mixes in another client.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {scopedPrompts(chat.scope).map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => void chat.send(p)}
+                        className="rounded-full border border-line px-3.5 py-1.5 text-[12.5px] text-muted hover:border-accent/50 hover:text-ink"
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
               {chat.messages.map((m) => (
@@ -1015,6 +1262,20 @@ export function AssistantView({
               </div>
             )}
             <div className="rounded-2xl border border-line bg-surface shadow-card focus-within:border-accent/50">
+              {pendingFiles.length > 0 && (
+                /* M28 Part 3 — the send preview: exactly what each file will
+                   contribute, before anything leaves the machine. */
+                <div className="flex flex-wrap gap-2 border-b border-line-soft px-3 py-2">
+                  {pendingFiles.map((p) => (
+                    <AttachmentChip
+                      key={p.attachment.id}
+                      attachment={p.attachment}
+                      preview={p.preview}
+                      onRemove={() => removePendingFile(p.attachment.id)}
+                    />
+                  ))}
+                </div>
+              )}
               {voice.pending && (
                 <div className="flex items-center justify-between border-b border-line-soft px-3 py-1.5 text-[12px] text-muted">
                   <span className="flex items-center gap-1.5">
@@ -1065,6 +1326,23 @@ export function AssistantView({
                   />
                   <div className="flex items-center justify-between px-2 py-1.5">
                     <div className="flex items-center gap-0.5">
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        multiple
+                        accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.docx,.txt,.md,.csv"
+                        className="hidden"
+                        onChange={(e) => {
+                          void addFiles(e.target.files)
+                          e.target.value = ''
+                        }}
+                      />
+                      <IconButton
+                        icon={Paperclip}
+                        label="Attach a file (images, PDF, DOCX, TXT, MD, CSV)"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={chat.sending}
+                      />
                       {voice.state === 'transcribing' ? (
                         <span className="flex items-center gap-1.5 px-2 text-[12px] text-muted">
                           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Transcribing…
@@ -1099,6 +1377,15 @@ export function AssistantView({
         <EvidenceModal citation={citation} onClose={() => setCitation(null)} onOpenCall={onOpenCall} />
       )}
       {confirm && <ConfirmDialog state={confirm} onClose={() => setConfirm(null)} />}
+      {scopePickerOpen && (
+        <ScopePickerModal
+          onClose={() => setScopePickerOpen(false)}
+          onPick={(scope) => {
+            setScopePickerOpen(false)
+            void startConversation(undefined, undefined, undefined, scope)
+          }}
+        />
+      )}
     </div>
   )
 }

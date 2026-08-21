@@ -33,6 +33,8 @@ import { Card } from '@renderer/components/Card'
 import { Skeleton } from '@renderer/components/Skeleton'
 import { fieldClass } from '@renderer/components/field'
 import { overallTier, TONE_TO_BADGE, speakerLabel } from '@renderer/features/coaching/meta'
+import { openAssistantFor } from '@renderer/features/assistant/assistantNav'
+import { ASSISTANT_SECTION_NAME } from '@renderer/features/assistant/config'
 import { Badge } from '@renderer/components/Badge'
 import { GenerateTasksDialog } from '@renderer/features/tasks/GenerateTasksDialog'
 import { CoachReportView, CoachLoading } from '@renderer/features/coaching/CoachReportView'
@@ -807,7 +809,20 @@ export function CallDetail({
 
       {/* Title + meta */}
       <div className="mb-4">
-        <h2 className="text-xl font-semibold tracking-tight">{call.title}</h2>
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="text-xl font-semibold tracking-tight">{call.title}</h2>
+          {/* M28 Part 4 — the assistant, scoped to this call's linked client. */}
+          {call.contactId && (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={Sparkles}
+              onClick={() => openAssistantFor({ contactId: call.contactId as string })}
+            >
+              Ask {ASSISTANT_SECTION_NAME}
+            </Button>
+          )}
+        </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-4 text-[13px] text-muted">
           <span>{formatDate(call.createdAt)}</span>
           <span className="flex items-center gap-1">

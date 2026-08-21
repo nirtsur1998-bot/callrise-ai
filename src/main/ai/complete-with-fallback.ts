@@ -241,9 +241,20 @@ const LEGACY_TAIL_MAX: Record<AIPurpose, number> = {
   'deal-tier1': 0,
   other: 1,
   'coaching-chat': 1,
-  // M28 - same reasoning as coaching-chat: an interactive streamed surface
-  // where a long tail means a human watching hops they didn't ask for.
-  'assistant-chat': 1,
+  // M28 - REVERSED from the original 1 (which copied coaching-chat's "human
+  // watching a spinner" reasoning uncritically). Real field evidence
+  // (ai-fallback-events.jsonl, 2026-08-21) showed why that was wrong for
+  // Rise specifically: a single "send" walks this SAME purpose 2-3 times
+  // (plan_research, the answer stream, the suggestion pass), all sharing
+  // one thin tail — and unlike coaching-chat, Rise already shows a real
+  // activity-phase indicator during this window, so the "spinner" cost the
+  // original comment worried about doesn't apply the same way. With tail=1
+  // and the founder's actual config (legacy:groq's default model dead on
+  // Groq's live API + Gemini genuinely daily-quota-exhausted), the whole
+  // chain collapsed to zero live links on the very first two entries. 3
+  // matches the other quality-lane durable purposes and gives Rise the same
+  // resilience summary/scorecard/coaching-chat already have.
+  'assistant-chat': 3,
   summary: 3,
   scorecard: 3,
   tasks: 3,
@@ -418,12 +429,44 @@ export function purposeTier(purpose: AIPurpose): CooldownTier {
   return purpose in CHAIN_BUDGET ? 'live' : 'durable'
 }
 
-export function resolveChain(purpose: AIPurpose, opts?: { needsTool?: boolean }): ResolvedChain {
+/** M28 Part 3 — which LEGACY steps (providers with no catalog entries, so no
+ *  per-entry flag) can read images. Hand-verified 2026-08-21: every current
+ *  Claude and GPT chat model accepts image input; Gemini is catalog-flagged. */
+const VISION_CAPABLE_LEGACY_PROVIDERS: ReadonlySet<CatalogEntry['providerId']> = new Set([
+  'anthropic',
+  'openai',
+  'google'
+])
+
+export function stepSupportsVision(step: ResolvedStep): boolean {
+  const entry = catalogEntry(step.catalogId)
+  if (entry) return entry.supportsVision === true
+  return step.catalogId.startsWith('legacy:') && VISION_CAPABLE_LEGACY_PROVIDERS.has(step.providerId)
+}
+
+export interface ChainCapabilityNeeds {
+  needsTool?: boolean
+  /** M28 Part 3 — the request carries images; only vision-capable steps may run it. */
+  needsVision?: boolean
+}
+
+export function resolveChain(purpose: AIPurpose, opts?: ChainCapabilityNeeds): ResolvedChain {
   const configured = resolveConfiguredChain(purpose)
-  const capable = opts?.needsTool
-    ? configured.filter((s) => catalogEntry(s.catalogId)?.supportsToolCalling !== false)
-    : configured
+  let capable = configured
+  if (opts?.needsTool) {
+    capable = capable.filter((s) => catalogEntry(s.catalogId)?.supportsToolCalling !== false)
+  }
+  if (opts?.needsVision) capable = capable.filter(stepSupportsVision)
   return { configured, capable }
+}
+
+/** Human copy for "keys exist, none can run THIS request" — names the
+ *  actual missing capability instead of blaming tool-calling for everything. */
+function noCapableModelMessage(needs: ChainCapabilityNeeds): string {
+  if (needs.needsVision) {
+    return 'None of your configured AI models can read images. Add a Claude, ChatGPT, or Gemini key (or assign Llama 4 Scout on Groq) in Settings, or send the file as text or PDF instead.'
+  }
+  return "Every model configured for this can't run this request (tool-calling not supported by any of them) — reassign a model in Settings."
 }
 
 // BUG-057 Phase 6 follow-up — the one deferred piece of that phase, closed.
@@ -601,7 +644,11 @@ async function completeWithSameModelRetry(
  *  callers pass their existing AICompletionRequest unchanged. */
 export async function completeWithFallback(req: AICompletionRequest): Promise<AICompletionResult> {
   const purpose = req.purpose
-  const { configured, capable } = resolveChain(purpose, { needsTool: Boolean(req.tool) })
+  const needs: ChainCapabilityNeeds = {
+    needsTool: Boolean(req.tool),
+    needsVision: Boolean(req.images?.length)
+  }
+  const { configured, capable } = resolveChain(purpose, needs)
   logToolCapabilityExclusions(purpose, configured, capable)
   const tier: CooldownTier = purposeTier(purpose)
 
@@ -611,18 +658,21 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   }
   if (capable.length === 0) {
     // BUG-057 Phase 6 — configured.length > 0 here by construction: real
-    // keys ARE configured, none of them are verified to support forced tool
-    // calls. Distinct from the no-key case above (and from the cooldown
+    // keys ARE configured, none of them are verified to support the
+    // capability this request needs (forced tool calls, or image input —
+    // M28). Distinct from the no-key case above (and from the cooldown
     // case below) — a different problem with a different fix (reassign a
     // model in Settings, not add/wait for a key).
     void recordAiFailure(purpose, {
       reason: 'failed',
       providerId: null,
-      detail: 'no configured model verified to support tool calling'
+      detail: needs.needsVision
+        ? 'no configured model verified to support image input'
+        : 'no configured model verified to support tool calling'
     })
     throw new AIProviderError(
       'failed',
-      "Every model configured for this can't run this request (tool-calling not supported by any of them) — reassign a model in Settings.",
+      noCapableModelMessage(needs),
       undefined,
       'structural'
     )
@@ -898,7 +948,11 @@ export interface StreamWithFallbackResult extends AsyncIterable<{ delta: string 
  */
 export function streamWithFallback(req: AICompletionRequest): StreamWithFallbackResult {
   const purpose = req.purpose
-  const { configured, capable } = resolveChain(purpose, { needsTool: Boolean(req.tool) })
+  const needs: ChainCapabilityNeeds = {
+    needsTool: Boolean(req.tool),
+    needsVision: Boolean(req.images?.length)
+  }
+  const { configured, capable } = resolveChain(purpose, needs)
   logToolCapabilityExclusions(purpose, configured, capable)
   // coaching-chat (the only consumer today) isn't in CHAIN_BUDGET, so this is
   // always 'durable' currently; asked rather than hardcoded, so a future live
@@ -929,17 +983,20 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     }
     if (capable.length === 0) {
       // BUG-057 Phase 6 — configured.length > 0 here by construction: real
-      // keys ARE configured, none of them are verified to support forced
-      // tool calls. Distinct from the no-key case above and the cooldown
-      // case below — same three-way split as completeWithFallback.
+      // keys ARE configured, none of them are verified to support the needed
+      // capability (tool calls, or image input — M28). Distinct from the
+      // no-key case above and the cooldown case below — same three-way
+      // split as completeWithFallback.
       void recordAiFailure(purpose, {
         reason: 'failed',
         providerId: null,
-        detail: 'no configured model verified to support tool calling'
+        detail: needs.needsVision
+          ? 'no configured model verified to support image input'
+          : 'no configured model verified to support tool calling'
       })
       const err = new AIProviderError(
         'failed',
-        "Every model configured for this can't run this request (tool-calling not supported by any of them) — reassign a model in Settings.",
+        noCapableModelMessage(needs),
         undefined,
         'structural'
       )

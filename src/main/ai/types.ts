@@ -107,6 +107,11 @@ export interface AICompletionRequest {
    *  multimodal format (Anthropic's `document` content block, OpenAI's
    *  `file` content part), callers just pass the base64. */
   document?: { base64: string; filename?: string }
+  /** M28 Part 3 — images to analyze alongside the first user message. Each
+   *  provider attaches them in its native vision format (Anthropic `image`
+   *  block, OpenAI-style `image_url` data URL, Gemini `inlineData`). Callers
+   *  gate on vision capability first — see resolveChain({ needsVision }). */
+  images?: { mimeType: string; base64: string }[]
   signal?: AbortSignal
 }
 

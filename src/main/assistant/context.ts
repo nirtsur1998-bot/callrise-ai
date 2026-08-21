@@ -37,7 +37,18 @@ export interface AssistantContextInput {
    *  [n] numbering after the memories, so a call result is citable exactly
    *  like a memory. */
   lookupSections?: LookupSection[]
+  /** M28 Part 4 — when the conversation is scoped to one client: the scope
+   *  itself (for the framing rule) and that client's precompiled profile,
+   *  which LEADS the context ahead of rep/business. */
+  scope?: { contactName: string; company?: string; dealTitle?: string }
+  clientProfile?: string
+  /** M28 Part 3 — locally-extracted text of attached documents, injected as
+   *  their own CONTEXT sections (images/PDFs travel as native parts instead). */
+  attachmentTexts?: { name: string; text: string }[]
 }
+
+const SCOPE_RULE = (s: NonNullable<AssistantContextInput['scope']>): string =>
+  `THIS CONVERSATION IS ABOUT ONE CLIENT: ${s.contactName}${s.company ? ` at ${s.company}` : ''}${s.dealTitle ? ` (deal: ${s.dealTitle})` : ''}. Treat every question as being about them unless the user clearly says otherwise. The CONTEXT below contains ONLY this client's records plus the user's own profile — never speculate about other clients.`
 
 export interface AssistantContext {
   system: string
@@ -47,6 +58,9 @@ export interface AssistantContext {
 
 export function buildAssistantContext(input: AssistantContextInput): AssistantContext {
   const sections: string[] = [IDENTITY, GROUNDING, CITE_RULE]
+  if (input.scope) sections.push(SCOPE_RULE(input.scope))
+  // Scoped conversations LEAD with the client; the user's own profiles follow.
+  if (input.clientProfile) sections.push(input.clientProfile.trim())
   if (input.repProfile) sections.push(input.repProfile.trim())
   if (input.businessProfile) sections.push(input.businessProfile.trim())
 
@@ -82,6 +96,12 @@ export function buildAssistantContext(input: AssistantContextInput): AssistantCo
       return `[${n}] ${line.text}`
     })
     sections.push(`--- CONTEXT: ${section.title} ---\n${lines.join('\n')}`)
+  }
+
+  for (const att of input.attachmentTexts ?? []) {
+    sections.push(
+      `--- CONTEXT: ATTACHED FILE "${att.name}" (text extracted locally on the user's machine) ---\n${att.text}`
+    )
   }
 
   return { system: sections.join('\n\n'), citationsByMarker }

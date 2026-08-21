@@ -137,6 +137,54 @@ describe('appendTurn', () => {
   })
 })
 
+describe('M28 Part 4 — scope is an identity fixed at creation', () => {
+  it('a scoped conversation persists its scope, default-titles "About X", and surfaces scope in the list', async () => {
+    const conv = await createConversation(dir, undefined, {
+      contactId: 'acme-1',
+      contactName: 'Dana Levy',
+      company: 'Acme'
+    })
+    expect(conv.title).toBe('About Dana Levy')
+    const back = await getConversation(dir, conv.id)
+    expect(back?.scope).toEqual({ contactId: 'acme-1', contactName: 'Dana Levy', company: 'Acme' })
+    expect((await listConversations(dir))[0].scope?.contactId).toBe('acme-1')
+    // First message still auto-titles over the scoped default.
+    await appendTurn(dir, conv.id, { text: 'Where do we stand?' }, { text: 'Close.' })
+    expect((await getConversation(dir, conv.id))?.title).toBe('Where do we stand?')
+  })
+
+  it('a malformed scope is dropped, never half-stored', async () => {
+    const conv = await createConversation(dir, undefined, {
+      contactId: 'has spaces!',
+      contactName: 'x'
+    })
+    expect(conv.scope).toBeUndefined()
+    expect(conv.title).toBe('New conversation')
+  })
+})
+
+describe('M28 Part 3 — attachment metadata on user messages', () => {
+  it('persists and sanitizes attachments (unknown kinds dropped)', async () => {
+    const conv = await createConversation(dir)
+    await appendTurn(
+      dir,
+      conv.id,
+      {
+        text: 'see attached',
+        attachments: [
+          { id: 'att-1', name: 'brief.txt', kind: 'text', mimeType: 'text/plain', sizeBytes: 120, extractedChars: 118 },
+          { id: 'att-2', name: 'x', kind: 'zip' as 'text', mimeType: 'application/zip', sizeBytes: 1 }
+        ]
+      },
+      { text: 'ok' }
+    )
+    const back = await getConversation(dir, conv.id)
+    expect(back?.messages[0].attachments).toEqual([
+      { id: 'att-1', name: 'brief.txt', kind: 'text', mimeType: 'text/plain', sizeBytes: 120, extractedChars: 118 }
+    ])
+  })
+})
+
 describe('markSuggestionApplied', () => {
   it('applied ids survive a fresh read from disk and never duplicate', async () => {
     const conv = await createConversation(dir)

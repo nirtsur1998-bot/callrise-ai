@@ -6,8 +6,11 @@ import {
   Pencil,
   GraduationCap,
   AlertTriangle,
-  ListPlus
+  ListPlus,
+  Sparkles
 } from 'lucide-react'
+import { openAssistantFor } from '@renderer/features/assistant/assistantNav'
+import { ASSISTANT_SECTION_NAME } from '@renderer/features/assistant/config'
 import { TONE_TEXT, overallTier } from '@renderer/features/coaching/meta'
 import { Badge } from '@renderer/components/Badge'
 import { Button } from '@renderer/components/Button'
@@ -92,9 +95,28 @@ export function DealDetail({
     <div className="flex h-full flex-col">
       <div className="mb-4 flex items-center justify-between">
         <BackButton onClick={onBack} label="Deals" />
-        <Button variant="secondary" size="sm" icon={Pencil} onClick={onEdit}>
-          Edit
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* M28 Part 4 — open the assistant scoped to this deal's client. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={Sparkles}
+            onClick={() =>
+              openAssistantFor({
+                contactId: deal.contactId,
+                contactName: contact?.name,
+                company: contact?.company,
+                dealId: deal.id,
+                dealTitle: deal.title
+              })
+            }
+          >
+            Ask {ASSISTANT_SECTION_NAME}
+          </Button>
+          <Button variant="secondary" size="sm" icon={Pencil} onClick={onEdit}>
+            Edit
+          </Button>
+        </div>
       </div>
 
       {/* Deal header */}

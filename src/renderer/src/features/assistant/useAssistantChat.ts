@@ -17,6 +17,8 @@ export type AssistantConversation = NonNullable<
 export type AssistantMessage = AssistantConversation['messages'][number]
 export type AssistantCitation = NonNullable<AssistantMessage['citations']>[number]
 export type AssistantSuggestion = NonNullable<AssistantMessage['suggestions']>[number]
+export type AssistantAttachment = NonNullable<AssistantMessage['attachments']>[number]
+export type AssistantScope = NonNullable<AssistantConversation['scope']>
 type AssistantSendResult = Awaited<ReturnType<typeof window.api.assistant.send>>
 type CoachChatContextSuggestion = AssistantSuggestion
 
@@ -33,6 +35,7 @@ export interface AssistantChatOptions {
   initialMessage?: {
     text: string
     voiceNote?: { mediaId: string; durationMs: number }
+    attachments?: AssistantAttachment[]
   }
 }
 
@@ -47,7 +50,13 @@ export interface UseAssistantChat {
   /** Pre-first-token activity ('reading' | 'searching' | 'thinking'), null
    *  once tokens flow or the turn settles. */
   phase: 'reading' | 'searching' | 'thinking' | null
-  send: (text: string, voiceNote?: { mediaId: string; durationMs: number }) => Promise<void>
+  send: (
+    text: string,
+    voiceNote?: { mediaId: string; durationMs: number },
+    attachments?: AssistantAttachment[]
+  ) => Promise<void>
+  /** The conversation's client scope (M28 Part 4), fresh from the record. */
+  scope: AssistantScope | null
   stop: () => Promise<void>
   applySuggestion: (
     messageId: string,
@@ -73,6 +82,7 @@ export function useAssistantChat(
   const [error, setError] = useState<string | null>(null)
   const [learningExcluded, setLearningExcludedState] = useState(false)
   const [phase, setPhase] = useState<'reading' | 'searching' | 'thinking' | null>(null)
+  const [scope, setScope] = useState<AssistantScope | null>(null)
   const streamingIdRef = useRef<string | null>(null)
   // Read through refs inside the load effect so a new options object per
   // render never re-runs it; the consumed set makes the initial send
@@ -95,6 +105,7 @@ export function useAssistantChat(
     setSending(false)
     setMessages(conv?.messages ?? [])
     setLearningExcludedState(conv?.salesBrainExcluded === true)
+    setScope(conv?.scope ?? null)
   }, [conversationId])
 
   useEffect(() => {
@@ -114,6 +125,7 @@ export function useAssistantChat(
       ])
       if (!mountedRef.current) return
       setLearningExcludedState(conv?.salesBrainExcluded === true)
+      setScope(conv?.scope ?? null)
       const base: DisplayMessage[] = conv?.messages ?? []
       if (snapshot.streaming) {
         // Recover the in-flight turn: rebuild the two live bubbles from
@@ -144,7 +156,7 @@ export function useAssistantChat(
         const initial = optionsRef.current?.initialMessage
         if (initial && base.length === 0 && !initialSendConsumedRef.current.has(conversationId)) {
           initialSendConsumedRef.current.add(conversationId)
-          void sendRef.current(initial.text, initial.voiceNote)
+          void sendRef.current(initial.text, initial.voiceNote, initial.attachments)
         }
       }
       setLoading(false)
@@ -182,7 +194,8 @@ export function useAssistantChat(
   const send = useCallback(
     async (
       text: string,
-      voiceNote?: { mediaId: string; durationMs: number }
+      voiceNote?: { mediaId: string; durationMs: number },
+      attachments?: AssistantAttachment[]
     ): Promise<void> => {
       const trimmed = text.trim()
       if (!conversationId || !trimmed || sending) return
@@ -194,7 +207,13 @@ export function useAssistantChat(
       streamingIdRef.current = streamingMsgId
       setMessages((prev) => [
         ...prev,
-        { id: userMsgId, role: 'user', text: trimmed, createdAt: new Date().toISOString() },
+        {
+          id: userMsgId,
+          role: 'user',
+          text: trimmed,
+          createdAt: new Date().toISOString(),
+          attachments: attachments && attachments.length > 0 ? attachments : undefined
+        },
         {
           id: streamingMsgId,
           role: 'assistant',
@@ -205,7 +224,12 @@ export function useAssistantChat(
       ])
       let result: AssistantSendResult
       try {
-        result = await window.api.assistant.send(conversationId, trimmed, voiceNote)
+        result = await window.api.assistant.send(
+          conversationId,
+          trimmed,
+          voiceNote,
+          attachments?.map((a) => a.id)
+        )
       } catch {
         result = { ok: false, error: 'ai-failed', message: 'Something went wrong. Please try again.' }
       }
@@ -222,6 +246,7 @@ export function useAssistantChat(
         // No turn was persisted, so an attached voice note's media file is
         // now unreferenced — clean it up instead of leaking it (audit).
         if (voiceNote) void window.api.assistant.discardVoiceNote(voiceNote.mediaId)
+        for (const a of attachments ?? []) void window.api.assistant.discardAttachment(a.id)
         if (result.error === 'cancelled') {
           // Stopped before any token: drop the optimistic bubbles.
           setMessages((prev) => prev.filter((m) => m.id !== userMsgId && m.id !== streamingMsgId))
@@ -302,6 +327,7 @@ export function useAssistantChat(
     learningExcluded,
     setLearningExcluded,
     phase,
+    scope,
     send,
     stop,
     applySuggestion,

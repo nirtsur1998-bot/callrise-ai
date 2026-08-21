@@ -72,6 +72,35 @@ export interface AssistantMessage {
    *  the TEXT of the message is the reviewed/edited transcript, which is
    *  what the AI ever sees — the audio is playback-only. */
   voiceNote?: { mediaId: string; durationMs: number }
+  /** Only on user messages — files sent with this message (metadata; the
+   *  bytes live in the conversations media dir). M28 Part 3. */
+  attachments?: AssistantAttachment[]
+}
+
+/** M28 Part 3 — a file attached to a user message. `kind` decides how it
+ *  reaches the provider: image → vision input, pdf → document input, text →
+ *  locally-extracted text injected as context. */
+export interface AssistantAttachment {
+  id: string
+  name: string
+  kind: 'image' | 'pdf' | 'text'
+  mimeType: string
+  sizeBytes: number
+  /** For 'text': how many characters were extracted and actually sent. */
+  extractedChars?: number
+}
+
+/** M28 Part 4 — a conversation born IN THE CONTEXT of one client. Fixed at
+ *  creation (a scope is an identity, not a setting): context assembly leads
+ *  with this client's memories/calls/deals, retrieval never touches another
+ *  client's scope, and the UI always shows who Rise is talking about. */
+export interface AssistantScope {
+  contactId: string
+  /** Denormalized for display + prompts so the header never needs a fetch. */
+  contactName: string
+  company?: string
+  dealId?: string
+  dealTitle?: string
 }
 
 export interface AssistantConversation {
@@ -85,6 +114,7 @@ export interface AssistantConversation {
    *  time (a permission, never snapshotted), and setting it retroactively
    *  forgets what the conversation already taught (assistant-ipc.ts). */
   salesBrainExcluded?: boolean
+  scope?: AssistantScope
 }
 
 /** List-row projection — everything the conversation list needs without
@@ -97,6 +127,7 @@ export interface AssistantConversationMeta {
   messageCount: number
   /** First line of the latest message, for the list row's preview. */
   preview: string
+  scope?: AssistantScope
 }
 
 export const MAX_MESSAGES = 500
@@ -212,6 +243,42 @@ function sanitizeTaskProposals(value: unknown): PersistedTaskProposal[] | undefi
   return out.length > 0 ? out : undefined
 }
 
+const ATTACHMENT_KINDS = new Set(['image', 'pdf', 'text'])
+const MAX_ATTACHMENTS = 6
+
+function sanitizeAttachments(value: unknown): AssistantAttachment[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: AssistantAttachment[] = []
+  for (const v of value.slice(0, MAX_ATTACHMENTS)) {
+    const a = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
+    if (!isSafeConversationId(a.id) || !ATTACHMENT_KINDS.has(a.kind as string)) continue
+    out.push({
+      id: a.id,
+      name: clampText(a.name, 200) || 'file',
+      kind: a.kind as AssistantAttachment['kind'],
+      mimeType: clampText(a.mimeType, 100),
+      sizeBytes: typeof a.sizeBytes === 'number' && a.sizeBytes >= 0 ? a.sizeBytes : 0,
+      extractedChars:
+        typeof a.extractedChars === 'number' && a.extractedChars >= 0 ? a.extractedChars : undefined
+    })
+  }
+  return out.length > 0 ? out : undefined
+}
+
+export function sanitizeScope(value: unknown): AssistantScope | undefined {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  if (!isSafeConversationId(v.contactId)) return undefined
+  const contactName = clampText(v.contactName, 200).trim()
+  if (!contactName) return undefined
+  return {
+    contactId: v.contactId,
+    contactName,
+    company: clampText(v.company, 200) || undefined,
+    dealId: isSafeConversationId(v.dealId) ? v.dealId : undefined,
+    dealTitle: clampText(v.dealTitle, 200) || undefined
+  }
+}
+
 function sanitizeMessage(value: unknown): AssistantMessage | null {
   const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
   if (v.role !== 'user' && v.role !== 'assistant') return null
@@ -229,7 +296,8 @@ function sanitizeMessage(value: unknown): AssistantMessage | null {
     suggestions: v.role === 'user' ? sanitizeSuggestions(v.suggestions) : undefined,
     appliedSuggestionIds: applied.length > 0 ? applied : undefined,
     taskProposals: v.role === 'assistant' ? sanitizeTaskProposals(v.taskProposals) : undefined,
-    voiceNote: v.role === 'user' ? sanitizeVoiceNote(v.voiceNote) : undefined
+    voiceNote: v.role === 'user' ? sanitizeVoiceNote(v.voiceNote) : undefined,
+    attachments: v.role === 'user' ? sanitizeAttachments(v.attachments) : undefined
   }
 }
 
@@ -249,7 +317,8 @@ export function sanitizeConversation(value: unknown): AssistantConversation | nu
     createdAt: typeof v.createdAt === 'string' ? v.createdAt : now,
     updatedAt: typeof v.updatedAt === 'string' ? v.updatedAt : now,
     messages,
-    salesBrainExcluded: v.salesBrainExcluded === true ? true : undefined
+    salesBrainExcluded: v.salesBrainExcluded === true ? true : undefined,
+    scope: sanitizeScope(v.scope)
   }
 }
 
@@ -296,24 +365,32 @@ export async function listConversations(dir: string): Promise<AssistantConversat
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
       messageCount: conv.messages.length,
-      preview: last ? last.text.split('\n')[0].slice(0, PREVIEW_CHARS) : ''
+      preview: last ? last.text.split('\n')[0].slice(0, PREVIEW_CHARS) : '',
+      scope: conv.scope
     })
   }
   metas.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   return metas
 }
 
+export function defaultTitleFor(scope: AssistantScope | undefined): string {
+  return scope ? `About ${scope.contactName}` : 'New conversation'
+}
+
 export async function createConversation(
   dir: string,
-  title?: string
+  title?: string,
+  scope?: AssistantScope
 ): Promise<AssistantConversation> {
   const now = new Date().toISOString()
+  const cleanScope = sanitizeScope(scope)
   const conversation: AssistantConversation = {
     id: randomUUID(),
-    title: clampText(title, MAX_TITLE_CHARS) || 'New conversation',
+    title: clampText(title, MAX_TITLE_CHARS) || defaultTitleFor(cleanScope),
     createdAt: now,
     updatedAt: now,
-    messages: []
+    messages: [],
+    scope: cleanScope
   }
   await writeConversation(dir, conversation)
   return conversation
@@ -369,7 +446,8 @@ export async function appendTurn(
       createdAt: now,
       text: clampText(userMessage.text, MAX_MESSAGE_TEXT),
       suggestions: sanitizeSuggestions(userMessage.suggestions),
-      voiceNote: sanitizeVoiceNote(userMessage.voiceNote)
+      voiceNote: sanitizeVoiceNote(userMessage.voiceNote),
+      attachments: sanitizeAttachments(userMessage.attachments)
     }
     const assistant: AssistantMessage = {
       id: randomUUID(),
@@ -380,7 +458,7 @@ export async function appendTurn(
       taskProposals: sanitizeTaskProposals(assistantMessage.taskProposals)
     }
     conv.messages = [...conv.messages, user, assistant].slice(-MAX_MESSAGES)
-    if (conv.title === 'New conversation' && user.text) {
+    if (conv.title === defaultTitleFor(conv.scope) && user.text) {
       conv.title = user.text.split('\n')[0].slice(0, MAX_TITLE_CHARS)
     }
     conv.updatedAt = now

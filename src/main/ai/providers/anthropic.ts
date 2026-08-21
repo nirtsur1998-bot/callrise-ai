@@ -155,6 +155,28 @@ export class AnthropicProvider implements AIProvider {
         ]
       }
     }
+    // M28 Part 3 — images ride on the first user message as native image
+    // blocks, ahead of any document block and the text.
+    if (req.images?.length && messages.length > 0 && messages[0].role === 'user') {
+      const existing = messages[0].content
+      const tail = Array.isArray(existing)
+        ? existing
+        : [{ type: 'text' as const, text: req.messages[0].content }]
+      messages[0] = {
+        role: 'user',
+        content: [
+          ...req.images.map((img) => ({
+            type: 'image' as const,
+            source: {
+              type: 'base64' as const,
+              media_type: img.mimeType as 'image/png',
+              data: img.base64
+            }
+          })),
+          ...tail
+        ]
+      } as Anthropic.MessageParam
+    }
     return messages
   }
 

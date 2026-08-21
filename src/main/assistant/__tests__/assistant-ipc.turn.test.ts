@@ -63,8 +63,21 @@ const streamControl = vi.hoisted(() => ({
   }
 }))
 
+const chainMock = vi.hoisted(() => ({
+  configured: 1,
+  capable: 1,
+  lastNeeds: null as Record<string, unknown> | null
+}))
 vi.mock('../../ai/complete-with-fallback', () => ({
   AllModelsExhaustedError: class AllModelsExhaustedError extends Error {},
+  resolveChain: (_purpose: string, needs: Record<string, unknown>) => {
+    chainMock.lastNeeds = needs
+    const step = { catalogId: 'x', providerId: 'google', modelId: 'm' }
+    return {
+      configured: Array.from({ length: chainMock.configured }, () => step),
+      capable: Array.from({ length: chainMock.capable }, () => step)
+    }
+  },
   streamWithFallback: (req: Record<string, unknown>) => {
     streamControl.lastRequest = req
     streamControl.signal = (req.signal as AbortSignal) ?? null
@@ -89,7 +102,8 @@ vi.mock('../../ai/complete-with-fallback', () => ({
 vi.mock('../../ai', () => ({ AIProviderError: class AIProviderError extends Error {} }))
 vi.mock('../../memory/profile-injection', () => ({
   repProfileSection: () => '--- REP (Sales Brain) ---\n- closes fast',
-  businessProfileSection: () => ''
+  businessProfileSection: () => '',
+  clientProfileSection: (contactId: string) => `--- CLIENT ${contactId} (Sales Brain) ---\n- prefers email`
 }))
 vi.mock('../../memory/rag', () => ({
   retrieveRelevantMemoriesStructured: vi.fn(async () => [
@@ -146,11 +160,13 @@ const toolsMock = vi.hoisted(() => ({
       sections: [],
       taskProposals: []
     })
-  )
+  ),
+  clientBrief: vi.fn(async (): Promise<unknown[]> => [])
 }))
 vi.mock('../tools', () => ({
   planLookups: toolsMock.plan,
   executeLookups: toolsMock.execute,
+  clientBriefSections: toolsMock.clientBrief,
   defaultToolDirs: () => ({ callsDir: '', contactsDir: '', dealsDir: '', eventsDir: '' })
 }))
 const taskMock = vi.hoisted(() => ({
@@ -168,6 +184,7 @@ vi.mock('../../coaching-chat', () => ({ extractContextSuggestions: suggestMock.e
 
 import { getConversation } from '../conversations-fs'
 import { inFlightCountForTests } from '../assistant-ipc'
+import * as ragMod from '../../memory/rag'
 
 async function setup(): Promise<{
   convId: string
@@ -193,6 +210,8 @@ beforeEach(async () => {
   toolsMock.plan.mockClear()
   toolsMock.execute.mockClear()
   toolsMock.execute.mockResolvedValue({ sections: [], taskProposals: [] })
+  toolsMock.clientBrief.mockClear()
+  toolsMock.clientBrief.mockResolvedValue([])
   taskMock.create.mockClear()
   taskMock.create.mockResolvedValue({ id: 'task-1' })
   memStore.byCall = []
@@ -201,7 +220,113 @@ beforeEach(async () => {
   brainMock.enabled = true
   brainMock.dbAvailable = true
   suggestMock.extract.mockClear()
+  chainMock.configured = 1
+  chainMock.capable = 1
+  chainMock.lastNeeds = null
+  vi.mocked(ragMod.retrieveRelevantMemoriesStructured).mockClear()
   vi.resetModules()
+})
+
+describe('M28 Part 4 — client scope: the cross-client invariant (red-check target)', () => {
+  it('a scoped conversation retrieves with THAT contactId and narrows every lookup to it', async () => {
+    const { invoke } = await setup()
+    const conv = (await invoke('assistant:createConversation', {
+      contactId: 'acme-1',
+      contactName: 'Dana Levy',
+      company: 'Acme'
+    })) as { id: string; scope?: { contactId: string }; title: string }
+    expect(conv.scope?.contactId).toBe('acme-1')
+    expect(conv.title).toBe('About Dana Levy')
+
+    const pending = invoke('assistant:send', conv.id, 'what objections has she raised?')
+    streamControl.push('Mostly price.')
+    streamControl.end()
+    await pending
+
+    // Retrieval was asked for THIS client's scope — rag's scope list is built
+    // from exactly this id, so no other client scope is ever searched.
+    const ragCall = vi.mocked(ragMod.retrieveRelevantMemoriesStructured).mock.calls[0]
+    expect((ragCall[1] as { contactId: string | null }).contactId).toBe('acme-1')
+    // Every record lookup carried the same narrowing id.
+    const executeArgs = toolsMock.execute.mock.calls[0] as unknown[]
+    expect(executeArgs[3]).toBe('acme-1')
+    // The model was told who the conversation is about.
+    expect(String(streamControl.lastRequest?.system)).toContain('ONE CLIENT: Dana Levy at Acme')
+  })
+
+  it('an unscoped conversation retrieves with contactId null and no lookup narrowing', async () => {
+    const { convId, invoke } = await setup()
+    const pending = invoke('assistant:send', convId, 'hello')
+    streamControl.push('hi')
+    streamControl.end()
+    await pending
+    const ragCall = vi.mocked(ragMod.retrieveRelevantMemoriesStructured).mock.calls[0]
+    expect((ragCall[1] as { contactId: string | null }).contactId).toBeNull()
+    expect((toolsMock.execute.mock.calls[0] as unknown[])[3]).toBeUndefined()
+  })
+
+  it('a malformed scope is rejected at creation — the conversation is simply unscoped', async () => {
+    const { invoke } = await setup()
+    const conv = (await invoke('assistant:createConversation', {
+      contactId: '../evil',
+      contactName: 'x'
+    })) as { scope?: unknown }
+    expect(conv.scope).toBeUndefined()
+  })
+})
+
+describe('M28 Part 3 — attachments + the vision gate', () => {
+  it('an image with no vision-capable model is refused BEFORE the turn, naming the fix', async () => {
+    const { convId, invoke } = await setup()
+    const added = (await invoke('assistant:addAttachment', 'shot.png', new Uint8Array([1, 2, 3]).buffer)) as {
+      ok: boolean
+      attachment: { id: string }
+    }
+    expect(added.ok).toBe(true)
+    chainMock.capable = 0 // keys configured, none can see
+    const result = (await invoke('assistant:send', convId, 'what is in this?', undefined, [
+      added.attachment.id
+    ])) as Record<string, unknown>
+    expect(result.ok).toBe(false)
+    expect(String(result.message)).toContain('read images')
+    expect(streamControl.lastRequest).toBeNull() // never reached a provider
+    expect(inFlightCountForTests()).toBe(0)
+  })
+
+  it('with a vision-capable model the image rides the request and the metadata persists', async () => {
+    const { convId, invoke } = await setup()
+    const added = (await invoke('assistant:addAttachment', 'shot.png', new Uint8Array([9, 9]).buffer)) as {
+      ok: boolean
+      attachment: { id: string }
+    }
+    const pending = invoke('assistant:send', convId, 'describe it', undefined, [added.attachment.id])
+    streamControl.push('A chart.')
+    streamControl.end()
+    await pending
+    const req = streamControl.lastRequest as { images?: unknown[]; messages: unknown[] }
+    expect(req.images).toHaveLength(1)
+    expect(req.messages).toHaveLength(1) // attachment turns bind to the current message only
+    const conv = await getConversation(convDir(), convId)
+    expect(conv?.messages[0].attachments?.[0]).toMatchObject({ name: 'shot.png', kind: 'image' })
+  })
+
+  it('a text document is injected as locally-extracted context, not sent as bytes', async () => {
+    const { convId, invoke } = await setup()
+    const added = (await invoke(
+      'assistant:addAttachment',
+      'brief.txt',
+      new TextEncoder().encode('Acme wants a pilot before any annual commitment.').buffer
+    )) as { ok: boolean; attachment: { id: string; extractedChars: number } }
+    expect(added.ok).toBe(true)
+    const pending = invoke('assistant:send', convId, 'summarize the brief', undefined, [added.attachment.id])
+    streamControl.push('Pilot first.')
+    streamControl.end()
+    await pending
+    const req = streamControl.lastRequest as { system: string; images?: unknown[] }
+    expect(req.system).toContain('ATTACHED FILE "brief.txt"')
+    expect(req.system).toContain('Acme wants a pilot')
+    expect(req.images).toBeUndefined()
+  })
 })
 
 afterEach(async () => {

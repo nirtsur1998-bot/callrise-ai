@@ -543,6 +543,27 @@ export interface AssistantCitation {
   kind: 'memory' | 'call'
   id: string
   label: string
+  /** The [n] marker this citation owns — chips bind by this, never by position. */
+  marker?: number
+}
+
+/** M28 Part 3 — a file sent with a user message (metadata only). */
+export interface AssistantAttachment {
+  id: string
+  name: string
+  kind: 'image' | 'pdf' | 'text'
+  mimeType: string
+  sizeBytes: number
+  extractedChars?: number
+}
+
+/** M28 Part 4 — the client a conversation is about, fixed at creation. */
+export interface AssistantScope {
+  contactId: string
+  contactName: string
+  company?: string
+  dealId?: string
+  dealTitle?: string
 }
 
 export interface AssistantTaskProposal {
@@ -565,6 +586,7 @@ export interface AssistantMessage {
   /** The voice note this user message was dictated from — playback only;
    *  the message TEXT is the reviewed transcript and is all the AI sees. */
   voiceNote?: { mediaId: string; durationMs: number }
+  attachments?: AssistantAttachment[]
 }
 
 export interface AssistantConversation {
@@ -575,6 +597,7 @@ export interface AssistantConversation {
   messages: AssistantMessage[]
   /** "Don't learn from this conversation" — see AssistantApi.setSalesBrainExcluded. */
   salesBrainExcluded?: boolean
+  scope?: AssistantScope
 }
 
 export interface AssistantConversationMeta {
@@ -584,6 +607,7 @@ export interface AssistantConversationMeta {
   updatedAt: string
   messageCount: number
   preview: string
+  scope?: AssistantScope
 }
 
 export interface AssistantSendResult {
@@ -633,14 +657,27 @@ export interface AssistantMemoryEvidence {
 export interface AssistantApi {
   listConversations: () => Promise<AssistantConversationMeta[]>
   getConversation: (id: string) => Promise<AssistantConversation | null>
-  createConversation: () => Promise<AssistantConversation>
+  /** M28 Part 4 — pass a scope to open the conversation about ONE client. */
+  createConversation: (scope?: AssistantScope) => Promise<AssistantConversation>
   renameConversation: (id: string, title: string) => Promise<AssistantConversation | null>
   deleteConversation: (id: string) => Promise<boolean>
   send: (
     conversationId: string,
     message: string,
-    voiceNote?: { mediaId: string; durationMs: number }
+    voiceNote?: { mediaId: string; durationMs: number },
+    attachmentIds?: string[]
   ) => Promise<AssistantSendResult>
+  /** M28 Part 3 — validate/cap/extract/store a file locally. Nothing reaches
+   *  a provider until it rides a send(). `preview` is exactly what will be
+   *  sent (extracted text head, or how the binary travels). */
+  addAttachment: (
+    name: string,
+    bytes: ArrayBuffer
+  ) => Promise<
+    | { ok: true; attachment: AssistantAttachment; preview: string }
+    | { ok: false; message: string }
+  >
+  discardAttachment: (id: string) => Promise<boolean>
   /** M28 Phase 3 — one-shot voice-note transcription (Deepgram prerecorded
    *  REST; NOT the live-call pipeline). On ok the audio is stored and the
    *  text goes to the composer FOR REVIEW — nothing is sent automatically. */

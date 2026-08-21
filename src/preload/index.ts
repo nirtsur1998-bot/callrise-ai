@@ -201,15 +201,20 @@ const api = {
   assistant: {
     listConversations: () => ipcRenderer.invoke('assistant:listConversations'),
     getConversation: (id: string) => ipcRenderer.invoke('assistant:getConversation', id),
-    createConversation: () => ipcRenderer.invoke('assistant:createConversation'),
+    createConversation: (scope?: unknown) =>
+      ipcRenderer.invoke('assistant:createConversation', scope),
     renameConversation: (id: string, title: string) =>
       ipcRenderer.invoke('assistant:renameConversation', id, title),
     deleteConversation: (id: string) => ipcRenderer.invoke('assistant:deleteConversation', id),
     send: (
       conversationId: string,
       message: string,
-      voiceNote?: { mediaId: string; durationMs: number }
-    ) => ipcRenderer.invoke('assistant:send', conversationId, message, voiceNote),
+      voiceNote?: { mediaId: string; durationMs: number },
+      attachmentIds?: string[]
+    ) => ipcRenderer.invoke('assistant:send', conversationId, message, voiceNote, attachmentIds),
+    addAttachment: (name: string, bytes: ArrayBuffer) =>
+      ipcRenderer.invoke('assistant:addAttachment', name, bytes),
+    discardAttachment: (id: string) => ipcRenderer.invoke('assistant:discardAttachment', id),
     transcribeVoiceNote: (audio: ArrayBuffer, mimeType: string, durationMs: number) =>
       ipcRenderer.invoke('assistant:transcribeVoiceNote', audio, mimeType, durationMs),
     discardVoiceNote: (mediaId: string) =>

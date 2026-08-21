@@ -79,6 +79,12 @@ export interface CatalogEntry {
    *  attention as a `knownStale` one — the log makes a stale flag findable,
    *  it doesn't self-heal it. */
   supportsToolCalling?: false
+  /** M28 Part 3 — hand-verified image-input support, dated in the entry's
+   *  comment where set. POSITIVE flag (unlike supportsToolCalling): undefined
+   *  = "not known to see", so a new entry is never silently sent an image it
+   *  can't read. Providers without catalog entries (Claude, ChatGPT) are
+   *  handled by complete-with-fallback.ts's legacy-step vision set. */
+  supportsVision?: true
 }
 
 export const MODEL_CATALOG: CatalogEntry[] = [
@@ -154,6 +160,9 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     retentionPosture: 'unknown',
     retentionUrl: 'https://groq.com/privacy-policy/',
     keyUrl: 'https://console.groq.com/keys',
+    // M28 Part 3 — Llama 4 Scout is natively multimodal (image input) per
+    // Meta's model card and Groq's vision docs, 2026-08-21.
+    supportsVision: true,
     knownStale:
       'Not found on Groq\'s live model list (console.groq.com/docs/models) as of 2026-07-30 - ' +
       'flagged unavailable rather than silently substituted. resolveCatalog() re-checks on next key config.'
@@ -190,7 +199,9 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     contextWindow: 1_000_000,
     retentionPosture: 'trains',
     retentionUrl: 'https://ai.google.dev/gemini-api/terms',
-    keyUrl: 'https://aistudio.google.com/apikey'
+    keyUrl: 'https://aistudio.google.com/apikey',
+    // M28 Part 3 — every Gemini Flash generation accepts image input.
+    supportsVision: true
     // Retention CONFIRMED 2026-07-30 via Google's live Gemini API terms:
     // free/unpaid tier - "Google uses the content you submit to the
     // Services and any generated responses to provide, improve, and develop
