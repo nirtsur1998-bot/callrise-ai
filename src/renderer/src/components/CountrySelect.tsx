@@ -32,8 +32,13 @@ export function CountrySelect({
     const onDown = (e: MouseEvent): void => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
     }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
+    // BUG-047: capture phase, not bubble — same belt-and-suspenders reasoning
+    // as ContactPicker.tsx (see its own comment). The real fix is in
+    // Modal.tsx, which used to stopPropagation() every mousedown inside the
+    // dialog panel; this picker is used inside the Add/Edit contact dialog,
+    // which sits inside that same Modal.
+    document.addEventListener('mousedown', onDown, true)
+    return () => document.removeEventListener('mousedown', onDown, true)
   }, [open])
 
   useEffect(() => {
