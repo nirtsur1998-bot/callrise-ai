@@ -330,19 +330,52 @@ function timeOf(iso: string, allDay: boolean): string {
   return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 }
 
-async function todaySchedule(eventsDir: string): Promise<LookupSection> {
+/**
+ * AUDIT FIX (2026-08-24) — CROSS-CLIENT LEAK. Takes the conversation's client
+ * scope, which it previously ignored.
+ *
+ * executeLookups threaded scopeContactId into search_calls, find_contact and
+ * find_deal and dropped it here alone, so a client-scoped turn injected the
+ * WHOLE day's calendar — every other client's meeting titles — into a system
+ * prompt that states verbatim: "The CONTEXT below contains ONLY this client's
+ * records plus the user's own profile — never speculate about other clients"
+ * (context.ts SCOPE_RULE). The UI promises the same at
+ * AssistantView.tsx:1194-1196, "never mixes in another client".
+ *
+ * Concretely: a chat scoped to Dana Levy at Acme, asked "when am I next
+ * talking to her?", put "2:00 PM — Globex pilot review with Sam Park" in the
+ * prompt. The model either recites Sam Park's meeting inside the Acme chat
+ * or, obeying SCOPE_RULE, attributes it to Dana.
+ *
+ * PROVIDER EVENTS ARE DROPPED ENTIRELY when scoped, not filtered. Only local
+ * events carry contactId (events-fs.ts:51); GoogleEvent and its Outlook
+ * counterpart have no such field, so a Google meeting cannot be attributed to
+ * a client at all. There is no filter that keeps them safely — including them
+ * IS the leak.
+ *
+ * That makes silence dangerous in a new way, so the section says what it is
+ * hiding. Filtering to zero and emitting the old "Nothing on the calendar
+ * today." would be a confident falsehood that could cost the user a meeting;
+ * the scoped copy says only this client's linked meetings are listed and that
+ * connected-calendar entries are not shown here.
+ */
+async function todaySchedule(eventsDir: string, scopeContactId?: string): Promise<LookupSection> {
   // Same three sources the Calendar screen merges (useCalendar.ts) — local
   // events plus both provider caches; missing/erroring providers contribute
   // nothing rather than failing the lookup.
+  const scoped = typeof scopeContactId === 'string' && scopeContactId.length > 0
   const [local, google, outlook] = await Promise.all([
     listEvents(eventsDir).catch(() => []),
-    getCachedGoogleEvents().catch(() => []),
-    getCachedOutlookEvents().catch(() => [])
+    // Not even fetched when scoped: these carry no contactId, so nothing here
+    // can be shown without leaking another client's meeting.
+    scoped ? Promise.resolve([]) : getCachedGoogleEvents().catch(() => []),
+    scoped ? Promise.resolve([]) : getCachedOutlookEvents().catch(() => [])
   ])
   const seen = new Set<string>()
   const items: { title: string; start: string; allDay: boolean }[] = []
   for (const e of local) {
     if (!isToday(e.start)) continue
+    if (scoped && e.contactId !== scopeContactId) continue
     // Locally-adopted provider events carry externalId — dedupe against the
     // caches by that key so an adopted meeting isn't listed twice.
     if (e.externalId) seen.add(e.externalId)
@@ -354,6 +387,22 @@ async function todaySchedule(eventsDir: string): Promise<LookupSection> {
     items.push({ title: e.title, start: e.start, allDay: e.allDay })
   }
   items.sort((a, b) => a.start.localeCompare(b.start))
+  if (scoped) {
+    return {
+      title: 'TODAY’S SCHEDULE (this client only)',
+      lines: [
+        ...(items.length > 0
+          ? items.map((i) => ({ text: `${timeOf(i.start, i.allDay)} — ${i.title}` }))
+          : [{ text: 'Nothing today is linked to this client.' }]),
+        {
+          text:
+            'Only meetings linked to this client are listed. Other calendar entries, ' +
+            'including everything from connected Google and Outlook calendars, are not ' +
+            'shown in a client-scoped chat — so do not tell the user their day is empty.'
+        }
+      ]
+    }
+  }
   return {
     title: 'TODAY’S SCHEDULE',
     lines:
@@ -454,7 +503,8 @@ export async function executeLookups(
       } else if (lookup.kind === 'find_deal' && lookup.query) {
         sections.push(await findDeal(dirs.dealsDir, dirs.contactsDir, lookup.query, scopeContactId))
       } else if (lookup.kind === 'today_schedule') {
-        sections.push(await todaySchedule(dirs.eventsDir))
+        // AUDIT FIX (2026-08-24) — the one branch that dropped the scope.
+        sections.push(await todaySchedule(dirs.eventsDir, scopeContactId))
       } else if (lookup.kind === 'propose_task' && lookup.query) {
         const proposal = await proposeTask(lookup.query, signal)
         if (proposal) taskProposals.push(proposal)
