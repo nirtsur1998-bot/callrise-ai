@@ -804,6 +804,49 @@ describe('chat as a memory source — wiring + retroactive forget', () => {
     expect(gotMsgId).toBe(conv?.messages[0].id) // the REAL persisted id, not a local one
   })
 
+  // AUDIT FIX (2026-08-24) — the extraction id must belong to the USER's
+  // message, asserted by ROLE rather than by position, across MORE THAN ONE
+  // turn. The test above uses a first turn, where the old
+  // `messages[length - 2]` arithmetic happens to equal index 0, so it could
+  // not distinguish "the right message" from "the right offset".
+  //
+  // HONEST NOTE: this does not go red against the old code today. Behaviour
+  // is identical while the tail of the array is always a complete
+  // user+assistant pair, which appendTurn guarantees by appending both
+  // atomically. What changed is that the caller no longer DEPENDS on that —
+  // appendTurn now returns the id it minted. The failure this removes is
+  // silent (a memory extracted from the user's words filed under the
+  // assistant's id), so it is worth removing the dependency rather than
+  // waiting for something to break it. See BUG-109.
+  it('the extraction id is the latest USER message, across multiple turns', async () => {
+    const { convId, invoke } = await setup()
+
+    const first = invoke('assistant:send', convId, 'first question')
+    streamControl.push('first answer')
+    streamControl.end()
+    await first
+
+    memStore.extraction.mockClear()
+    streamControl.reset()
+
+    const second = invoke('assistant:send', convId, 'we use HubSpot for CRM')
+    streamControl.push('Noted.')
+    streamControl.end()
+    await second
+
+    expect(memStore.extraction).toHaveBeenCalledOnce()
+    const [, gotMsgId] = memStore.extraction.mock.calls[0] as unknown as [string, string, string]
+
+    const conv = await getConversation(convDir(), convId)
+    const target = conv?.messages.find((m) => m.id === gotMsgId)
+    expect(target, 'the extraction id matches no persisted message').toBeTruthy()
+    expect(
+      target?.role,
+      "a memory extracted from the USER-side turn was filed under a non-user message"
+    ).toBe('user')
+    expect(target?.text).toBe('we use HubSpot for CRM')
+  })
+
   it('a failed turn fires no extraction', async () => {
     const { convId, invoke } = await setup()
     const pending = invoke('assistant:send', convId, 'q')

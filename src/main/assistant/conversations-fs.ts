@@ -430,12 +430,43 @@ export async function deleteConversation(dir: string, id: string): Promise<boole
 /** Append one COMPLETE turn (user + final assistant reply) under the lock.
  *  Also auto-titles a still-default conversation from the first user message
  *  so the list is scannable without the user ever renaming anything. */
+/**
+ * AUDIT FIX (2026-08-24) — returns the ids it MINTED, so callers never have
+ * to infer which stored message was theirs.
+ *
+ * The caller used to recover the user's message with
+ * `saved.messages[saved.messages.length - 2]`, which is only correct while
+ * the tail of the array is a complete user+assistant pair. Nothing enforces
+ * that. It holds today because this function is the sole appender and appends
+ * exactly two atomically — but if it ever stopped holding, `length - 2`
+ * points at the ASSISTANT message and a memory extracted from the USER's
+ * words is filed under the coach's message id.
+ *
+ * That failure is worse in kind than the other consumers of the same pairing
+ * assumption (BUG-109), which hand a malformed sequence to a provider and get
+ * a loud rejection. This one is silent: no error, no rejection, just a fact
+ * attributed to the wrong speaker in Sales Brain data — the one place where
+ * this product's consent and privacy posture assumes provenance is exact.
+ *
+ * Returning the ids removes the inference rather than making it more robust.
+ * Found by applying the M29 session's (a)/(b) split from BUG-109 to Rise's
+ * equivalent site: coaching chat's `coaching-chat-ipc.ts:280` has the same
+ * shape, and checking my own equivalent is what surfaced this one.
+ */
+export interface AppendedTurn {
+  conversation: AssistantConversation
+  /** Id minted for the user message of this turn. */
+  userMessageId: string
+  /** Id minted for the assistant message of this turn. */
+  assistantMessageId: string
+}
+
 export async function appendTurn(
   dir: string,
   id: string,
   userMessage: Omit<AssistantMessage, 'id' | 'createdAt' | 'role'>,
   assistantMessage: Omit<AssistantMessage, 'id' | 'createdAt' | 'role'>
-): Promise<AssistantConversation | null> {
+): Promise<AppendedTurn | null> {
   return withConversationLock(id, async () => {
     const conv = await getConversation(dir, id)
     if (!conv) return null
@@ -463,7 +494,7 @@ export async function appendTurn(
     }
     conv.updatedAt = now
     await writeConversation(dir, conv)
-    return conv
+    return { conversation: conv, userMessageId: user.id, assistantMessageId: assistant.id }
   })
 }
 

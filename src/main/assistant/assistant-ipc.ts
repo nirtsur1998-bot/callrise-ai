@@ -484,14 +484,19 @@ async function handleSend(
         taskProposals: taskProposals.length > 0 ? taskProposals : undefined
       }
     )
-    const savedUser = saved?.messages[saved.messages.length - 2]
+    // AUDIT FIX (2026-08-24) — the id comes from appendTurn, which minted it.
+    // This was `saved.messages[saved.messages.length - 2]`, correct only
+    // while the tail is a complete pair; if that ever broke it would silently
+    // file a memory extracted from the USER's words under the ASSISTANT's
+    // message id. See appendTurn's header and BUG-109.
+    const savedUserId = saved?.userMessageId
 
     // M28 Phase 2 — the conversation feeds the Sales Brain like calls do.
     // Fire-and-forget (the coaching chat's exact precedent); the hook
     // re-reads BOTH permissions fresh (master flag + this conversation's
     // exclusion) at execution time, never from here.
-    if (savedUser) {
-      void runMemoryExtractionForAssistantMessage(conversationId, savedUser.id, message).catch(
+    if (savedUserId) {
+      void runMemoryExtractionForAssistantMessage(conversationId, savedUserId, message).catch(
         () => {}
       )
     }
@@ -502,7 +507,7 @@ async function handleSend(
       citations,
       suggestions,
       stopped: stopped || undefined,
-      userMessageId: savedUser?.id
+      userMessageId: savedUserId
     }
   } finally {
     inFlight.delete(conversationId)
