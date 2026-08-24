@@ -48,7 +48,7 @@ import {
 import { useVoiceNote } from './useVoiceNote'
 import type { AssistantScopeRequest } from './assistantNav'
 import { segmentCitedText } from './citation-markers'
-import { splitBlocks, tokenizeInline, type MdBlock } from './markdown-blocks'
+import { splitBlocks, tokenizeInline, TABLE_CELL_SEP, type MdBlock } from './markdown-blocks'
 
 type ConversationMeta = Awaited<ReturnType<typeof window.api.assistant.listConversations>>[number]
 type MemoryEvidence = NonNullable<
@@ -282,6 +282,38 @@ const BlockView = memo(
           <p className={cn('mt-3 font-semibold tracking-tight text-ink first:mt-0', level)}>
             <InlineRun text={block.lines[0]} citations={citations} onCite={onCite} />
           </p>
+        )
+      }
+      case 'table': {
+        // AUDIT FIX (2026-08-25) — tables had no block kind at all and came
+        // out as a wall of pipe characters. Scrolls inside its own container
+        // so a wide table never forces the chat column to scroll sideways.
+        const header = (block.meta ?? '').split(TABLE_CELL_SEP)
+        return (
+          <div className="my-2 overflow-x-auto rounded-xl border border-line-soft">
+            <table className="w-full border-collapse text-[12.5px]">
+              <thead>
+                <tr className="border-b border-line-soft bg-elevated">
+                  {header.map((h, i) => (
+                    <th key={i} className="px-2.5 py-1.5 text-left font-semibold text-ink">
+                      <InlineRun text={h} citations={citations} onCite={onCite} />
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {block.lines.map((row, r) => (
+                  <tr key={r} className="border-b border-line-soft last:border-0">
+                    {row.split(TABLE_CELL_SEP).map((cell, c) => (
+                      <td key={c} className="px-2.5 py-1.5 align-top text-muted">
+                        <InlineRun text={cell} citations={citations} onCite={onCite} />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )
       }
       case 'code':
@@ -928,13 +960,28 @@ export function AssistantView({
       void refreshList()
     }
     const owner = convId
+    // Seeded from what is already staged, then incremented from the
+    // AUTHORITATIVE kind the main process assigns — the extension test above
+    // is only a cheap pre-upload guess, and counting on it would let a
+    // mislabelled file through.
+    let pdfCount = pendingFiles.filter((p) => p.attachment.kind === 'pdf').length
     for (const file of Array.from(files).slice(0, 6)) {
+      // AUDIT FIX (2026-08-25) — only ONE pdf can actually be sent
+      // (req.document is singular across every provider adapter), and the
+      // send path used to keep the first and discard the rest while every
+      // chip still claimed success. Refuse the second here, where the user
+      // can still do something about it, instead of letting a chip lie.
+      if (new RegExp('\\.pdf$', 'i').test(file.name) && pdfCount >= 1) {
+        setNotice(`Only one PDF per message — "${file.name}" was not attached.`)
+        continue
+      }
       const result = await window.api.assistant.addAttachment(
         file.name,
         await file.arrayBuffer(),
         owner
       )
       if (result.ok) {
+        if (result.attachment.kind === 'pdf') pdfCount++
         setPendingFiles((prev) =>
           prev.length >= 6
             ? prev
@@ -944,7 +991,11 @@ export function AssistantView({
         setNotice(result.message)
       }
     }
-  }, [])
+    // AUDIT FIX (2026-08-25) — these deps were `[]` while the body reads
+    // activeId, which I introduced with the attachment-owner change. A stale
+    // closure captured activeId as null at mount, so EVERY attach created and
+    // switched to a brand-new conversation instead of using the open one.
+  }, [activeId, pendingFiles, refreshList])
 
   const removePendingFile = useCallback((id: string): void => {
     void window.api.assistant.discardAttachment(id)
@@ -1353,9 +1404,25 @@ export function AssistantView({
                 <div className="flex items-center justify-between border-b border-line-soft px-3 py-1.5 text-[12px] text-muted">
                   <span className="flex items-center gap-1.5">
                     <Mic className="h-3.5 w-3.5" /> Voice note attached ·{' '}
-                    {formatDuration(voice.pending.durationMs)} — review the text, then send.
+                    {formatDuration(voice.pending.durationMs)} — transcribed by Deepgram; review
+                    the text, then send.
                   </span>
                   <IconButton icon={Trash2} label="Discard voice note" onClick={voice.discardPending} />
+                </div>
+              )}
+              {/* AUDIT FIX (2026-08-25) — voice-note audio is POSTed to
+                  Deepgram's prerecorded REST API, and NOTHING in Rise said so.
+                  A consent and transparency gap, not a polish item: the user
+                  is recording their own voice, and where it goes is a fact
+                  they are entitled to before they finish, not after.
+                  Disclosed at BOTH decision points — while recording (they
+                  can still Cancel) and on the review chip (they can still
+                  Discard) — because a disclosure only shown after the upload
+                  would be a notice, not a choice. */}
+              {voice.state === 'recording' && (
+                <div className="border-b border-line-soft px-3 py-1.5 text-[11px] text-faint">
+                  Audio is sent to Deepgram to be transcribed. Nothing is sent until you press
+                  Done, and Cancel discards the recording without uploading it.
                 </div>
               )}
               {voice.state === 'recording' ? (
@@ -1418,7 +1485,8 @@ export function AssistantView({
                       />
                       {voice.state === 'transcribing' ? (
                         <span className="flex items-center gap-1.5 px-2 text-[12px] text-muted">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Transcribing…
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Transcribing with
+                          Deepgram…
                         </span>
                       ) : (
                         <IconButton

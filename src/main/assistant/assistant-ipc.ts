@@ -136,6 +136,7 @@ export interface AssistantSendResult {
     | 'ai-failed'
     | 'cancelled'
     | 'attachment-mismatch'
+    | 'too-many-documents'
   message?: string
   reply?: string
   citations?: AssistantCitation[]
@@ -192,12 +193,16 @@ async function loadAttachments(
   texts: { name: string; text: string }[]
   /** Names of files refused because they belong to another conversation. */
   rejected: string[]
+  /** Names of PDFs beyond the first; the request shape carries only one. */
+  extraDocuments: string[]
 }> {
   const metadata: AssistantAttachment[] = []
   const images: { mimeType: string; base64: string }[] = []
   const texts: { name: string; text: string }[] = []
   let document: { base64: string; filename?: string } | undefined
   const rejected: string[] = []
+  /** Names of PDFs beyond the first — the request carries only one. */
+  const extraDocuments: string[] = []
   for (const id of ids.slice(0, 6)) {
     const record = await readAttachmentRecord(dir(), id)
     if (!record) continue
@@ -211,10 +216,19 @@ async function loadAttachments(
     void _ext
     metadata.push(meta)
     if (record.kind === 'image') images.push({ mimeType: record.mimeType, base64: bytes.toString('base64') })
-    else if (record.kind === 'pdf' && !document) document = { base64: bytes.toString('base64'), filename: record.name }
+    else if (record.kind === 'pdf') {
+      // AUDIT FIX (2026-08-25) — this used to be `&& !document`, silently
+      // keeping the FIRST pdf and discarding the rest while every chip in the
+      // composer still said the file had been sent. The request shape carries
+      // ONE document (req.document is singular across all four provider
+      // adapters), so a second pdf cannot be delivered — and a silent drop is
+      // the one outcome worse than refusing.
+      if (document) extraDocuments.push(record.name)
+      else document = { base64: bytes.toString('base64'), filename: record.name }
+    }
     else if (record.kind === 'text') texts.push({ name: record.name, text: bytes.toString('utf8') })
   }
-  return { metadata, images, document, texts, rejected }
+  return { metadata, images, document, texts, rejected, extraDocuments }
 }
 
 async function handleSend(
@@ -265,6 +279,17 @@ async function handleSend(
     // an image with no vision-capable model is refused with the exact reason,
     // never silently dropped or sent to a model that can't read it.
     const files = await loadAttachments(attachmentIds, conversationId)
+    if (files.extraDocuments.length > 0) {
+      // Refuse rather than silently send one of them. The composer prevents
+      // this from being reachable in normal use; this is the guard that makes
+      // a silent drop impossible from any path.
+      return {
+        ok: false,
+        error: 'too-many-documents',
+        message:
+          `Only one PDF can be sent per message. Remove ${files.extraDocuments.join(', ')} and send again, or send them in separate messages.`
+      }
+    }
     if (files.rejected.length > 0) {
       // AUDIT FIX (2026-08-24) — a staged file belonging to a DIFFERENT
       // conversation must never ride along. In a client-scoped chat that is
@@ -309,7 +334,23 @@ async function handleSend(
     // Activity phases (P1 streaming-state work): honest, coarse progress for
     // the pre-first-token window — driven by what the turn is ACTUALLY doing,
     // never a fake ticker. The renderer clears it on the first delta.
-    broadcast('assistant:phase', { conversationId, phase: 'reading' })
+    //
+    // AUDIT FIX (2026-08-25) — 'reading' was broadcast UNCONDITIONALLY, so
+    // "Reading your Sales Brain…" appeared on turns that never touched it:
+    // Sales Brain off (the shipping default), or its DB unavailable. The
+    // comment directly above asserted the exact property the code violated,
+    // which is the worst version of this — a status that lies while claiming
+    // it cannot.
+    //
+    // Same condition as salesBrain:status (BUG-100), deliberately: two places
+    // answering "will the brain be consulted" must not drift. When it will
+    // not be, the turn skips straight to the phase it IS in — planning runs
+    // regardless — rather than inventing a step.
+    if (isSalesBrainEnabled() && getMemoryDb() !== null) {
+      broadcast('assistant:phase', { conversationId, phase: 'reading' })
+    } else {
+      broadcast('assistant:phase', { conversationId, phase: 'searching' })
+    }
     // Foreground retrieval: ensureMemoryDb retry + bounded embedding, so a
     // cold start degrades to a memory-blind turn instead of a hung one.
     // Hypotheses included ON PURPOSE: a young install's Sales Brain is all

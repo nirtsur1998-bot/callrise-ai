@@ -621,6 +621,7 @@ export interface AssistantSendResult {
     | 'ai-failed'
     | 'cancelled'
     | 'attachment-mismatch'
+    | 'too-many-documents'
   message?: string
   reply?: string
   citations?: AssistantCitation[]
