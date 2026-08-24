@@ -5,15 +5,40 @@
 // retrieveRelevantMemoriesStructured() — so a ranking change moves THESE
 // numbers and nothing else has to be believed.
 //
-// Like the extraction harness (memory-quality-eval.test.ts): the printed
-// report is the deliverable, read by a human; the only hard assertion is
-// that the pipeline didn't error. Runs BOTH retrieval configurations —
-// active-only (coaching chat today) and active+hypotheses (Rise) — because
-// the delta between them is itself a finding.
+// Runs BOTH retrieval configurations — active-only (coaching chat today) and
+// active+hypotheses (Rise) — because the delta between them is itself a
+// finding.
+//
+// ─────────────────────────────────────────────────────────────────────────
+// 2026-08-24 — THIS HARNESS WAS HOLLOW AND IS NOW A REAL GATE.
+//
+// As originally written its only assertions were `expect(results).toHaveLength
+// (QUESTIONS.length)`, which runConfig() satisfies by construction — it pushes
+// one result per question unconditionally. Proven, not theorised: reverting
+// rag.ts's MAX_DISTANCE from 1.3 to 0.6 reintroduced the ENTIRE BUG-080
+// regression (recall 0/14, 0%, every question answered with nothing) and this
+// file still reported "Tests 1 passed", exit 0. The instrument built to
+// measure BUG-080 could not detect BUG-080 returning.
+//
+// Two further failures of the same kind, also fixed here:
+//   - The "explicit skip" for a missing embedding model asserted
+//     `expect(modelUnavailable).toBeTruthy()` — i.e. it PASSED, in ~500ms,
+//     having measured nothing. On any machine without the model cached (a
+//     fresh clone, CI, an offline laptop) the suite went green while the
+//     whole memory-quality question was silently unanswered.
+//   - That same skipped run still wrote REPORT_PATH, overwriting the real
+//     before/after artifact with a one-line SKIPPED. A skip that destroys
+//     the evidence is worse than no harness at all.
+//
+// The rules now enforced below:
+//   1. Scores are ASSERTED against floors, not merely printed.
+//   2. A missing embedding model FAILS LOUDLY — it never reports success for
+//      a run that measured nothing.
+//   3. The report file is written ONLY by a run that actually measured.
+// ─────────────────────────────────────────────────────────────────────────
 //
 // Needs the embedding model (~23MB, one-time download into a repo-local
-// cache). On a machine that can't load it (offline, no cache), the test
-// SKIPS explicitly with the reason in its name — never a silent green.
+// cache).
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -45,6 +70,25 @@ let modelUnavailable: string | null = null
  *  is what a before/after comparison actually diffs. */
 const reportLines: string[] = []
 const REPORT_PATH = join(__dirname, '..', '..', '..', '..', 'retrieval-eval-report.log')
+/** True only once real scores have been produced — gates the report write. */
+let measured = false
+
+/**
+ * Regression floors, set just below the values measured on this machine
+ * (docs/M28-retrieval-baseline.md: active-only 12/14, Rise 13/14, zero
+ * violations, zero empty answers). Retrieval here is DETERMINISTIC — fixed
+ * corpus, fixed questions, local MiniLM — so these are real gates, not
+ * flaky thresholds. A floor rather than an equality so a genuine improvement
+ * doesn't fail the build; the point is to catch a COLLAPSE.
+ *
+ * Calibration proof: reintroducing BUG-080 (MAX_DISTANCE 0.6) drives recall
+ * to 0/14, which is far below both floors — the exact regression this file
+ * exists to catch.
+ */
+const MIN_HITS_ACTIVE_ONLY = 11
+const MIN_HITS_RISE = 12
+const MAX_SCOPE_VIOLATIONS = 0
+const MAX_EMPTY_ANSWERS = 0
 /** fixture key → inserted row id */
 const idByKey = new Map<string, string>()
 const keyById = new Map<string, string>()
@@ -70,7 +114,13 @@ beforeAll(async () => {
 }, 300_000)
 
 afterAll(async () => {
-  await writeFile(REPORT_PATH, reportLines.join('\n') + '\n', 'utf8').catch(() => {})
+  // Write the report ONLY when a real measurement happened. A run that
+  // measured nothing (no embedding model) must never clobber the last good
+  // before/after artifact — that destruction is exactly what made the old
+  // skip path worse than having no harness.
+  if (measured) {
+    await writeFile(REPORT_PATH, reportLines.join('\n') + '\n', 'utf8').catch(() => {})
+  }
   db?.close()
   await rm(dir, { recursive: true, force: true }).catch(() => {})
 })
@@ -112,7 +162,16 @@ async function runConfig(
   return results
 }
 
-function report(label: string, results: QuestionResult[]): void {
+interface Metrics {
+  totalHits: number
+  totalExpected: number
+  mrr: number
+  violations: number
+  emptyAnswers: number
+  scoredCount: number
+}
+
+function report(label: string, results: QuestionResult[]): Metrics {
   const scored = results.filter((r) => r.q.shouldSurface.length > 0)
   const totalExpected = scored.reduce((n, r) => n + r.q.shouldSurface.length, 0)
   const totalHits = scored.reduce((n, r) => n + r.hits.length, 0)
@@ -144,15 +203,24 @@ function report(label: string, results: QuestionResult[]): void {
   )
   reportLines.push(...lines)
   console.log(lines.join('\n'))
+  measured = true
+  return { totalHits, totalExpected, mrr, violations, emptyAnswers, scoredCount: scored.length }
 }
 
 describe('retrieval quality eval (offline, real embeddings + real sqlite-vec)', () => {
   it('baseline: active-only (coaching chat) and active+hypotheses (Rise)', async () => {
     if (modelUnavailable) {
-      reportLines.push(`SKIPPED — embedding model unavailable: ${modelUnavailable}`)
-      console.log(reportLines[reportLines.length - 1])
-      expect(modelUnavailable).toBeTruthy() // explicit, documented skip
-      return
+      // FAIL LOUDLY. This used to `expect(modelUnavailable).toBeTruthy()` and
+      // pass — a green run that measured nothing, on exactly the machines
+      // (fresh clone, CI, offline) where a silent memory-quality regression
+      // is most likely to slip through. Nothing is written to REPORT_PATH on
+      // this path, so the last real before/after artifact survives.
+      throw new Error(
+        'Retrieval-quality harness could not run: the local embedding model is unavailable ' +
+          `(${modelUnavailable}). This is a HARD FAILURE, not a skip — a green result here ` +
+          'would claim memory quality was verified when nothing was measured. Run once with ' +
+          'network access to populate node_modules/.cache/callrise-eval, then re-run offline.'
+      )
     }
     // Threshold sweep (L2, unit vectors) — the operating-point picker for
     // rag.ts's MAX_DISTANCE. 0.6 is the pre-M28 shipped value.
@@ -163,13 +231,40 @@ describe('retrieval quality eval (offline, real embeddings + real sqlite-vec)', 
       )
     }
     const activeOnly = await runConfig(false)
-    report('DEFAULT active-only (coaching chat)', activeOnly)
+    const activeMetrics = report('DEFAULT active-only (coaching chat)', activeOnly)
     const withHypotheses = await runConfig(true)
-    report('DEFAULT active+hypotheses (Rise)', withHypotheses)
+    const riseMetrics = report('DEFAULT active+hypotheses (Rise)', withHypotheses)
 
-    // The one hard functional assertion: the pipeline ran for every question
-    // in both configs without erroring. Scores are the human-read deliverable.
+    // Structural sanity (kept, but it was never the real gate).
     expect(activeOnly).toHaveLength(QUESTIONS.length)
     expect(withHypotheses).toHaveLength(QUESTIONS.length)
+
+    // THE REAL GATES. Each of these fails on a BUG-080-shaped collapse.
+    expect(
+      activeMetrics.totalHits,
+      `active-only recall collapsed to ${activeMetrics.totalHits}/${activeMetrics.totalExpected} ` +
+        `(floor ${MIN_HITS_ACTIVE_ONLY}) — see retrieval-eval-report.log`
+    ).toBeGreaterThanOrEqual(MIN_HITS_ACTIVE_ONLY)
+    expect(
+      riseMetrics.totalHits,
+      `Rise recall collapsed to ${riseMetrics.totalHits}/${riseMetrics.totalExpected} ` +
+        `(floor ${MIN_HITS_RISE}) — see retrieval-eval-report.log`
+    ).toBeGreaterThanOrEqual(MIN_HITS_RISE)
+
+    // Cross-client leakage is a HARD invariant, not a score: a scoped
+    // question must never surface another client's memory.
+    expect(activeMetrics.violations).toBeLessThanOrEqual(MAX_SCOPE_VIOLATIONS)
+    expect(riseMetrics.violations).toBeLessThanOrEqual(MAX_SCOPE_VIOLATIONS)
+
+    // "Answered with nothing" is the user-visible symptom BUG-080 produced —
+    // Rise saying "I don't know" while Memory Center visibly holds the answer.
+    expect(
+      riseMetrics.emptyAnswers,
+      `${riseMetrics.emptyAnswers}/${riseMetrics.scoredCount} questions retrieved nothing`
+    ).toBeLessThanOrEqual(MAX_EMPTY_ANSWERS)
+
+    // The designed win of Rise's configuration: including hypotheses can only
+    // ever surface MORE, never less, than active-only.
+    expect(riseMetrics.totalHits).toBeGreaterThanOrEqual(activeMetrics.totalHits)
   }, 300_000)
 })
