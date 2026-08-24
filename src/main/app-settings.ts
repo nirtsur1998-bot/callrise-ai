@@ -175,9 +175,7 @@ function mergeDealIntelligence(
   return {
     enabled: 'enabled' in p ? p.enabled === true : current.enabled,
     sensitivity:
-      'sensitivity' in p
-        ? sanitizeDealIntelligenceSensitivity(p.sensitivity)
-        : current.sensitivity,
+      'sensitivity' in p ? sanitizeDealIntelligenceSensitivity(p.sensitivity) : current.sensitivity,
     enabledTypes: mergeEnabledTypes(current.enabledTypes, p.enabledTypes),
     frequency: 'frequency' in p ? sanitizeAnalysisFrequency(p.frequency) : current.frequency
   }
@@ -259,9 +257,15 @@ function mergeJobConcurrency(
   if (!patch || typeof patch !== 'object') return current
   const p = patch as Record<string, unknown>
   return {
-    interactive: 'interactive' in p ? clampConcurrency(p.interactive, current.interactive) : current.interactive,
+    interactive:
+      'interactive' in p
+        ? clampConcurrency(p.interactive, current.interactive)
+        : current.interactive,
     batch: 'batch' in p ? clampConcurrency(p.batch, current.batch) : current.batch,
-    maintenance: 'maintenance' in p ? clampConcurrency(p.maintenance, current.maintenance) : current.maintenance
+    maintenance:
+      'maintenance' in p
+        ? clampConcurrency(p.maintenance, current.maintenance)
+        : current.maintenance
   }
 }
 
@@ -452,7 +456,9 @@ function mergeSpeakerId(current: SpeakerIdSettings, patch: unknown): SpeakerIdSe
   return {
     enabled: 'enabled' in p ? p.enabled === true : current.enabled,
     allowSelfIntroExtraction:
-      'allowSelfIntroExtraction' in p ? p.allowSelfIntroExtraction === true : current.allowSelfIntroExtraction,
+      'allowSelfIntroExtraction' in p
+        ? p.allowSelfIntroExtraction === true
+        : current.allowSelfIntroExtraction,
     voiceProfileMatching:
       'voiceProfileMatching' in p ? p.voiceProfileMatching === true : current.voiceProfileMatching
   }
@@ -673,11 +679,25 @@ export interface AppSettings {
   /** M23 — when true, the updater downloads a newly available version
    *  automatically (no click needed) and installs it on the app's next
    *  natural quit, instead of requiring Download + Restart to be clicked
-   *  manually. Off by default: matches every other opt-in in this file —
-   *  the updater's own module doc explains why nothing installs without
-   *  the user asking at least once, and this IS that one ask. Manual
-   *  Check/Download/Install buttons keep working regardless of this. */
+   *  manually. ON by default since 1.3.4 (M29, founder decision 2026-08-24):
+   *  the 1.2.5/1.2.6 consent-leak hotfixes never reached installs whose
+   *  users never clicked "Check for updates" — an updater that is off by
+   *  default makes the app's own privacy fixes optional. Downloads happen in
+   *  the background; the install only ever happens on a natural quit, never
+   *  mid-session. Manual Check/Download/Install buttons keep working
+   *  regardless of this, and turning it off is one toggle. */
   autoUpdateEnabled: boolean
+  /** M29 one-time migration marker. Existing installs all have
+   *  `autoUpdateEnabled: false` PERSISTED (the whole settings object is
+   *  written), so flipping the default alone would reach nobody. While this
+   *  marker is absent the load path overrides the stored value to ON —
+   *  once, visibly (see autoUpdateNoticePending) — and records the marker,
+   *  after which the user's own choice is never overridden again. */
+  autoUpdateMigratedToDefaultOn: boolean
+  /** Show the one-time "CallRise now keeps itself up to date" Home notice.
+   *  Set by the migration (and for brand-new installs, whose users weren't
+   *  asked either); cleared when the user dismisses the card. */
+  autoUpdateNoticePending: boolean
   /** M23 Workstream A — Coach 2.0 master switch + methodology picker. Off by
    *  default; see Coach2Settings for the exact behavior change. */
   coach2: Coach2Settings
@@ -739,7 +759,10 @@ const DEFAULT_SETTINGS: AppSettings = {
   speakerId: EMPTY_SPEAKER_ID,
   aiProvider: 'anthropic',
   aiModelAssignments: DEFAULT_MODEL_ASSIGNMENTS,
-  autoUpdateEnabled: false,
+  autoUpdateEnabled: true,
+  autoUpdateMigratedToDefaultOn: true,
+  // A fresh install wasn't asked either — it gets the same one-time notice.
+  autoUpdateNoticePending: true,
   coach2: EMPTY_COACH2,
   contactIntelligence: EMPTY_CONTACT_INTELLIGENCE,
   salesBrain: EMPTY_SALES_BRAIN,
@@ -816,7 +839,17 @@ export function loadAppSettings(): AppSettings {
       speakerId: sanitizeSpeakerId(parsed.speakerId),
       aiProvider: sanitizeAIProvider(parsed.aiProvider),
       aiModelAssignments: sanitizeModelAssignments(parsed.aiModelAssignments),
-      autoUpdateEnabled: parsed.autoUpdateEnabled === true,
+      // M29 migration (see the interface docs): until the marker is present,
+      // the stored value is pre-decision data and is overridden to ON, with
+      // the notice queued so the change is visible, not silent. After the
+      // marker, the stored value is the user's own choice and always wins.
+      autoUpdateEnabled:
+        parsed.autoUpdateMigratedToDefaultOn === true ? parsed.autoUpdateEnabled === true : true,
+      autoUpdateMigratedToDefaultOn: true,
+      autoUpdateNoticePending:
+        parsed.autoUpdateMigratedToDefaultOn === true
+          ? parsed.autoUpdateNoticePending === true
+          : true,
       coach2: sanitizeCoach2(parsed.coach2),
       contactIntelligence: sanitizeContactIntelligence(parsed.contactIntelligence),
       salesBrain: sanitizeSalesBrain(parsed.salesBrain),
@@ -877,8 +910,19 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
     aiModelAssignments: mergeModelAssignments(current.aiModelAssignments, p.aiModelAssignments),
     autoUpdateEnabled:
       'autoUpdateEnabled' in p ? p.autoUpdateEnabled === true : current.autoUpdateEnabled,
+    // The marker only ever moves forward; a pre-migration payload (e.g. a
+    // cloud-settings pull from an old install) cannot un-migrate a device.
+    autoUpdateMigratedToDefaultOn:
+      current.autoUpdateMigratedToDefaultOn || p.autoUpdateMigratedToDefaultOn === true,
+    autoUpdateNoticePending:
+      'autoUpdateNoticePending' in p
+        ? p.autoUpdateNoticePending === true
+        : current.autoUpdateNoticePending,
     coach2: mergeCoach2(current.coach2, p.coach2),
-    contactIntelligence: mergeContactIntelligence(current.contactIntelligence, p.contactIntelligence),
+    contactIntelligence: mergeContactIntelligence(
+      current.contactIntelligence,
+      p.contactIntelligence
+    ),
     salesBrain: mergeSalesBrain(current.salesBrain, p.salesBrain),
     dealIntelligence: mergeDealIntelligence(current.dealIntelligence, p.dealIntelligence),
     liveCues: mergeLiveCues(current.liveCues, p.liveCues),

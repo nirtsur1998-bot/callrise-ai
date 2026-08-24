@@ -1844,6 +1844,8 @@ export interface AppSettings {
    *  its own (no clicks) instead of requiring manual Download/Restart
    *  clicks. Off by default. */
   autoUpdateEnabled: boolean
+  autoUpdateMigratedToDefaultOn: boolean
+  autoUpdateNoticePending: boolean
   /** M23 Workstream A — Coach 2.0 master switch + methodology picker. */
   coach2: Coach2Settings
   /** M23 Workstream D — Contact Intelligence mode. Off by default. */
@@ -1957,6 +1959,7 @@ export interface AppSettingsPatch {
    *  as one unit in the Model Assignment UI). */
   aiModelAssignments?: Partial<Record<AiPurpose, ModelAssignment>>
   autoUpdateEnabled?: boolean
+  autoUpdateNoticePending?: boolean
   /** Partial — only the keys present are changed; others are left as-is. */
   coach2?: Partial<Coach2Settings>
   /** Partial — only the keys present are changed; others are left as-is. */
