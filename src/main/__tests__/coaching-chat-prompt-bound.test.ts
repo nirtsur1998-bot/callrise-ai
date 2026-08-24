@@ -71,7 +71,13 @@ const testCall = {
 vi.mock('../calls-fs', () => ({
   getCall: vi.fn(async () => testCall),
   listCalls: vi.fn(async () => []),
-  appendCoachChatTurn: vi.fn(async () => testCall),
+  // Mirrors the real return shape (BUG-110): the ids it MINTED, so the
+  // caller never infers which stored message was which by position.
+  appendCoachChatTurn: vi.fn(async () => ({
+    call: testCall,
+    userMessageId: 'minted-user-id',
+    assistantMessageId: 'minted-assistant-id'
+  })),
   appendCallNotes: vi.fn(async () => testCall),
   appendCommitment: vi.fn(async () => testCall),
   // Real behaviour: drop kind:'gap' silence markers, keep real speech.
@@ -86,7 +92,8 @@ vi.mock('../kyc-apply', () => ({ applyKycField: vi.fn() }))
 vi.mock('../prep-brief-fs', () => ({ formatContactContext: () => '' }))
 vi.mock('../backup', () => ({ scheduleBackup: vi.fn() }))
 vi.mock('../app-settings', () => ({ isSalesBrainEnabled: () => false }))
-vi.mock('../memory/memory-hooks', () => ({ runMemoryExtractionForChatMessage: vi.fn(async () => undefined) }))
+const runMemoryExtractionForChatMessage = vi.fn(async () => undefined)
+vi.mock('../memory/memory-hooks', () => ({ runMemoryExtractionForChatMessage }))
 // Mutable so one test can grow the FIXED floor — the part of the system
 // prompt the budget may not cut. Sales Brain 'full' profiles are injected
 // with no cap of their own, so this is the realistic lever that forces the
@@ -243,6 +250,21 @@ describe('coachChat:send — the total prompt bound is actually applied (BUG-108
     } finally {
       warn.mockRestore()
     }
+  })
+
+  it('files a memory extraction against the MINTED user id, never a positional guess (BUG-110)', async () => {
+    // The old code read coachChat[length - 2], which is the rep's message
+    // only while the tail is a complete user+assistant pair — an invariant
+    // nothing enforces. Landing one off would file a memory extracted from
+    // the REP's words under the COACH's id: no error, no rejection, just
+    // wrong provenance in Sales Brain data. Asserting the minted id proves
+    // the inference is gone rather than merely currently-correct.
+    runMemoryExtractionForChatMessage.mockClear()
+    await send('their CFO signs off on anything over 50k')
+    expect(runMemoryExtractionForChatMessage).toHaveBeenCalledTimes(1)
+    const [, passedId] = runMemoryExtractionForChatMessage.mock.calls[0] as unknown as [string, string, string]
+    expect(passedId).toBe('minted-user-id')
+    expect(passedId).not.toBe('minted-assistant-id')
   })
 
   it('never truncates the message the rep just typed', async () => {

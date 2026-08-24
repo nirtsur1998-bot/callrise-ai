@@ -370,10 +370,13 @@ async function handleSend(
   // the kind of thing this feature must never do) and never the end-
   // practice control phrase itself.
   if (mode === 'advisor' && !endingPractice) {
-    const userMessageId = saved.coachChat?.[saved.coachChat.length - 2]?.id
-    if (userMessageId) {
-      void runMemoryExtractionForChatMessage(callId, userMessageId, message).catch(() => {})
-    }
+    // BUG-110 (hardening) — this was `saved.coachChat[length - 2]?.id`,
+    // inferring the rep's message by position. Correct only while the tail is
+    // a complete user+assistant pair, which nothing enforces; landing one off
+    // would file a memory extracted from the REP's words under the coach's
+    // id, silently and with no error. appendCoachChatTurn now returns the id
+    // it minted, so there is no inference left to get wrong.
+    void runMemoryExtractionForChatMessage(callId, saved.userMessageId, message).catch(() => {})
   }
 
   return { ok: true, reply: full, suggestions }

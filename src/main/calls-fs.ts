@@ -2034,6 +2034,27 @@ const MAX_CHAT_MESSAGES = 300
 // a boundary that doesn't match what the model was actually asked to produce.
 const MAX_CHAT_TEXT = 16_000
 
+/** What appendCoachChatTurn hands back: the saved call, plus the ids it just
+ *  MINTED for the two messages.
+ *
+ *  BUG-110 (hardening) — the ids exist so no caller has to work out which
+ *  stored message was which by POSITION. coaching-chat-ipc.ts used to reach
+ *  back `coachChat[length - 2]` to find the rep's message of the turn it had
+ *  just saved, which is correct only while the tail is a complete
+ *  user+assistant pair. Nothing enforces that (see prompt-budget.ts's guard
+ *  for the four other consumers relying on the same unenforced invariant),
+ *  and unlike those, this one does not fail loudly: `length - 2` landing on
+ *  the ASSISTANT message files a memory extracted from the rep's words under
+ *  the coach's id — no error, no rejection, just wrong provenance in Sales
+ *  Brain data, which is the one area where the consent posture assumes
+ *  provenance is exact. Returning the minted ids removes the inference
+ *  rather than making it more careful. */
+export interface CoachChatTurnResult {
+  call: Call
+  userMessageId: string
+  assistantMessageId: string
+}
+
 /** Appends ONE complete turn (user message + the assistant's full final
  *  reply) to this call's chat thread — never a partial/mid-stream message,
  *  see CoachChatMessage's doc comment. Oldest messages drop past
@@ -2043,31 +2064,33 @@ export async function appendCoachChatTurn(
   callId: string,
   userMessage: { text: string; mode?: CoachChatMode },
   assistantMessage: { text: string; mode?: CoachChatMode }
-): Promise<Call | null> {
+): Promise<CoachChatTurnResult | null> {
   return withCallLock(callId, async () => {
     const call = await getCall(dir, callId)
     if (!call) return null
     const now = new Date().toISOString()
-    const turn: CoachChatMessage[] = [
-      {
-        id: randomUUID(),
-        role: 'user',
-        text: userMessage.text.trim().slice(0, MAX_CHAT_TEXT),
-        createdAt: now,
-        mode: userMessage.mode
-      },
-      {
-        id: randomUUID(),
-        role: 'assistant',
-        text: assistantMessage.text.trim().slice(0, MAX_CHAT_TEXT),
-        createdAt: now,
-        mode: assistantMessage.mode
-      }
-    ]
+    const userEntry: CoachChatMessage = {
+      id: randomUUID(),
+      role: 'user',
+      text: userMessage.text.trim().slice(0, MAX_CHAT_TEXT),
+      createdAt: now,
+      mode: userMessage.mode
+    }
+    const assistantEntry: CoachChatMessage = {
+      id: randomUUID(),
+      role: 'assistant',
+      text: assistantMessage.text.trim().slice(0, MAX_CHAT_TEXT),
+      createdAt: now,
+      mode: assistantMessage.mode
+    }
+    const turn: CoachChatMessage[] = [userEntry, assistantEntry]
+    // The new turn is appended at the END, and slice(-N) keeps the LAST N, so
+    // the two messages just minted are always among the survivors — the ids
+    // returned below can never refer to something this write dropped.
     call.coachChat = [...(call.coachChat ?? []), ...turn].slice(-MAX_CHAT_MESSAGES)
     call.updatedAt = now
     await writeCall(dir, call)
-    return call
+    return { call, userMessageId: userEntry.id, assistantMessageId: assistantEntry.id }
   })
 }
 
