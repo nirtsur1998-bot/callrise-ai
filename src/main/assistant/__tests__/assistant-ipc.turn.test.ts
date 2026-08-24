@@ -183,20 +183,30 @@ const suggestMock = vi.hoisted(() => ({
 vi.mock('../../coaching-chat', () => ({ extractContextSuggestions: suggestMock.extract }))
 
 import { getConversation } from '../conversations-fs'
-import { inFlightCountForTests } from '../assistant-ipc'
 import * as ragMod from '../../memory/rag'
 
+// NOTE (2026-08-24, audit fix): `inFlightCountForTests` used to be imported
+// STATICALLY at the top of this file. That binding was useless: beforeEach
+// ends with vi.resetModules(), and setup() then obtains the handlers via a
+// fresh `await import('../assistant-ipc')` — so the handlers mutate a
+// DIFFERENT module instance's `inFlight` map than the static import read.
+// The three "no leaked turn" assertions therefore observed a map nobody ever
+// wrote to, and were permanently, vacuously 0: removing the
+// `inFlight.delete(conversationId)` cleanup left them all green. setup() now
+// returns the LIVE instance's counter so those assertions observe the same
+// state the product mutates.
 async function setup(): Promise<{
   convId: string
   invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
+  inFlightCount: () => number
 }> {
-  const { registerAssistant } = await import('../assistant-ipc')
+  const mod = await import('../assistant-ipc')
   ipcHandlers.clear()
-  registerAssistant()
+  mod.registerAssistant()
   const invoke = (channel: string, ...args: unknown[]): Promise<unknown> =>
     Promise.resolve(ipcHandlers.get(channel)!({}, ...args))
   const conv = (await invoke('assistant:createConversation')) as { id: string }
-  return { convId: conv.id, invoke }
+  return { convId: conv.id, invoke, inFlightCount: mod.inFlightCountForTests }
 }
 
 function convDir(): string {
@@ -277,7 +287,7 @@ describe('M28 Part 4 — client scope: the cross-client invariant (red-check tar
 
 describe('M28 Part 3 — attachments + the vision gate', () => {
   it('an image with no vision-capable model is refused BEFORE the turn, naming the fix', async () => {
-    const { convId, invoke } = await setup()
+    const { convId, invoke, inFlightCount } = await setup()
     const added = (await invoke('assistant:addAttachment', 'shot.png', new Uint8Array([1, 2, 3]).buffer)) as {
       ok: boolean
       attachment: { id: string }
@@ -287,10 +297,17 @@ describe('M28 Part 3 — attachments + the vision gate', () => {
     const result = (await invoke('assistant:send', convId, 'what is in this?', undefined, [
       added.attachment.id
     ])) as Record<string, unknown>
+    // AUDIT FIX (2026-08-24): assert what the gate ACTUALLY ASKED FOR, not
+    // merely that it branched on a `capable` array someone handed it. The
+    // mock recorded `needs` but nothing ever read it, so deleting
+    // `{ needsVision: true }` from the production call — which in reality
+    // resolves the ordinary chain and lets a BLIND model receive the image —
+    // left every test in this area green.
+    expect(chainMock.lastNeeds).toMatchObject({ needsVision: true })
     expect(result.ok).toBe(false)
     expect(String(result.message)).toContain('read images')
     expect(streamControl.lastRequest).toBeNull() // never reached a provider
-    expect(inFlightCountForTests()).toBe(0)
+    expect(inFlightCount()).toBe(0)
   })
 
   it('with a vision-capable model the image rides the request and the metadata persists', async () => {
@@ -335,7 +352,7 @@ afterEach(async () => {
 
 describe('assistant:send', () => {
   it('streams deltas, persists the complete turn with parsed citations, filters chips to memory', async () => {
-    const { convId, invoke } = await setup()
+    const { convId, invoke, inFlightCount } = await setup()
     const pending = invoke('assistant:send', convId, 'What am I good at?')
     streamControl.push('You excel at discovery ')
     streamControl.push('[1].')
@@ -359,18 +376,55 @@ describe('assistant:send', () => {
     expect(conv?.messages).toHaveLength(2)
     expect(conv?.messages[1].citations?.[0].id).toBe('mem-9')
     expect(conv?.messages[0].suggestions?.[0].id).toBe('sug-mem')
-    expect(inFlightCountForTests()).toBe(0)
+    expect(inFlightCount()).toBe(0)
+  })
+
+  // AUDIT FIX (2026-08-24) — the check-then-act race, made deterministic.
+  //
+  // The existing busy test below awaits the second invoke, which lets the
+  // first turn's async prologue finish first — so it never exercised the
+  // window. This one fires BOTH sends in the same tick, exactly like two
+  // windows on one conversation or a double Enter inside one React batch.
+  // With the old ordering (busy check after `await getConversation`,
+  // registration after `await loadAttachments`) both calls observed an empty
+  // map and both proceeded; the second registration overwrote the first, and
+  // the first turn to settle deleted the survivor's slot — leaving cancel and
+  // attach lying about a turn that was still streaming.
+  it('two sends fired in the SAME TICK: exactly one wins, the other is told busy', async () => {
+    const { convId, invoke, inFlightCount } = await setup()
+
+    // No await between them — the claim must be atomic to survive this.
+    const first = invoke('assistant:send', convId, 'one')
+    const second = invoke('assistant:send', convId, 'two')
+    const secondResult = (await second) as Record<string, unknown>
+
+    expect(secondResult.ok, 'both sends were accepted — the slot claim is not atomic').toBe(false)
+    expect(secondResult.error).toBe('busy')
+    // Exactly one turn is registered, and it is the FIRST one — a later
+    // registration overwriting the earlier entry is the corruption itself.
+    expect(inFlightCount()).toBe(1)
+
+    streamControl.push('winner')
+    streamControl.end()
+    const firstResult = (await first) as Record<string, unknown>
+    expect(firstResult.ok).toBe(true)
+    expect(firstResult.reply).toBe('winner')
+    // Only the winning turn was persisted.
+    const conv = await getConversation(convDir(), convId)
+    expect(conv?.messages).toHaveLength(2)
+    expect(conv?.messages[0].text).toBe('one')
+    expect(inFlightCount()).toBe(0)
   })
 
   it('rejects a second send while one is in flight (busy), then frees the slot', async () => {
-    const { convId, invoke } = await setup()
+    const { convId, invoke, inFlightCount } = await setup()
     const first = invoke('assistant:send', convId, 'one')
     const second = (await invoke('assistant:send', convId, 'two')) as Record<string, unknown>
     expect(second.ok).toBe(false)
     expect(second.error).toBe('busy')
     streamControl.end()
     await first
-    expect(inFlightCountForTests()).toBe(0)
+    expect(inFlightCount()).toBe(0)
   })
 
   it('an empty reply is a failure, not a phantom turn (sanitize-on-read would drop it)', async () => {

@@ -193,34 +193,29 @@ async function handleSend(
   const message = typeof rawMessage === 'string' ? rawMessage.trim().slice(0, MAX_INBOUND_CHARS) : ''
   if (!isSafeConversationId(conversationId)) return { ok: false, error: 'not-found', message: 'Conversation not found.' }
   if (!message) return { ok: false, error: 'empty', message: 'Type a message first.' }
-  const conv = await getConversation(dir(), conversationId)
-  if (!conv) return { ok: false, error: 'not-found', message: 'Conversation not found.' }
+
+  // AUDIT FIX (2026-08-24) — CLAIM THE SLOT SYNCHRONOUSLY.
+  //
+  // This was a real check-then-act race, not a theoretical one. The busy
+  // check used to sit AFTER `await getConversation(...)` and the registration
+  // AFTER `await loadAttachments(...)`, so two sends on the same conversation
+  // could both observe an empty `inFlight` and both proceed. The damage was
+  // not just a duplicate turn: the second `inFlight.set` overwrote the first
+  // turn's entry, and whichever turn settled first ran the `finally` that
+  // deletes the SURVIVOR's registration — after which `assistant:cancel`
+  // returned false and `assistant:attach` reported streaming:false while
+  // tokens were still arriving, with both turns broadcasting deltas into the
+  // same bubble. Trigger paths are ordinary: two windows on one conversation,
+  // or a double Enter inside a single React batch (each renderer hook has its
+  // own `sending` flag, so main's check is the only shared guard).
+  //
+  // The fix is to make check-and-claim ATOMIC — no await may separate them.
+  // JS is single-threaded, so a synchronous has()+set() pair cannot interleave.
+  // Everything that can fail now lives inside the try, whose finally releases
+  // the slot on every exit path.
   if (inFlight.has(conversationId)) {
     return { ok: false, error: 'busy', message: 'A reply is already in progress — stop it first.' }
   }
-
-  // M28 Part 3 — attachments, with the vision gate BEFORE the turn starts:
-  // an image with no vision-capable model is refused with the exact reason,
-  // never silently dropped or sent to a model that can't read it.
-  const files = await loadAttachments(attachmentIds)
-  if (files.images.length > 0) {
-    const { configured, capable } = resolveChain('assistant-chat', { needsVision: true })
-    if (configured.length > 0 && capable.length === 0) {
-      return {
-        ok: false,
-        error: 'ai-failed',
-        message:
-          'None of your configured AI models can read images. Add a Claude, ChatGPT, or Gemini key (or assign Llama 4 Scout on Groq) in Settings, or send the file as text or PDF instead.'
-      }
-    }
-  }
-  // M28 Part 4 — the conversation's client scope, read from the record:
-  // retrieval and every lookup are narrowed to this one contact.
-  const scope = conv.scope
-
-  // Audit fix V3 — the turn is registered (and therefore cancellable) BEFORE
-  // the pre-stream phase: retrieval + planning + lookups can take many
-  // seconds, and Stop must reach them, not only the token stream.
   const turn: InFlightTurn = {
     controller: new AbortController(),
     accumulated: '',
@@ -228,12 +223,34 @@ async function handleSend(
     stopRequested: false
   }
   inFlight.set(conversationId, turn)
-  // Activity phases (P1 streaming-state work): honest, coarse progress for
-  // the pre-first-token window — driven by what the turn is ACTUALLY doing,
-  // never a fake ticker. The renderer clears it on the first delta.
-  broadcast('assistant:phase', { conversationId, phase: 'reading' })
 
   try {
+    const conv = await getConversation(dir(), conversationId)
+    if (!conv) return { ok: false, error: 'not-found', message: 'Conversation not found.' }
+
+    // M28 Part 3 — attachments, with the vision gate BEFORE the turn starts:
+    // an image with no vision-capable model is refused with the exact reason,
+    // never silently dropped or sent to a model that can't read it.
+    const files = await loadAttachments(attachmentIds)
+    if (files.images.length > 0) {
+      const { configured, capable } = resolveChain('assistant-chat', { needsVision: true })
+      if (configured.length > 0 && capable.length === 0) {
+        return {
+          ok: false,
+          error: 'ai-failed',
+          message:
+            'None of your configured AI models can read images. Add a Claude, ChatGPT, or Gemini key (or assign Llama 4 Scout on Groq) in Settings, or send the file as text or PDF instead.'
+        }
+      }
+    }
+    // M28 Part 4 — the conversation's client scope, read from the record:
+    // retrieval and every lookup are narrowed to this one contact.
+    const scope = conv.scope
+
+    // Activity phases (P1 streaming-state work): honest, coarse progress for
+    // the pre-first-token window — driven by what the turn is ACTUALLY doing,
+    // never a fake ticker. The renderer clears it on the first delta.
+    broadcast('assistant:phase', { conversationId, phase: 'reading' })
     // Foreground retrieval: ensureMemoryDb retry + bounded embedding, so a
     // cold start degrades to a memory-blind turn instead of a hung one.
     // Hypotheses included ON PURPOSE: a young install's Sales Brain is all
