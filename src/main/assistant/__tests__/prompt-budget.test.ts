@@ -38,6 +38,46 @@ describe('fitPromptToBudget', () => {
     expect(out.trim.historyMessagesDropped).toBe(10 - out.history.length)
   })
 
+  // AUDIT FIX (2026-08-24) — turns persist in PAIRS, so dropping history one
+  // at a time lands on an odd boundary half the time and leaves the history
+  // starting on an ASSISTANT turn. That still alternates, which is what makes
+  // it easy to miss — but a leading assistant message is invalid for
+  // Anthropic's API, and coaching-chat-ipc.ts:177 records providers rejecting
+  // malformed sequences outright. Found by the BUG-108 hotfix session hitting
+  // the identical bug in coaching chat.
+  it('never leaves the history starting on an assistant turn (paired-drop boundary)', () => {
+    // 10 paired turns, sized so the budget forces an ODD number of drops.
+    const history = Array.from({ length: 10 }, (_, i) =>
+      msg(i % 2 === 0 ? 'user' : 'assistant', `turn-${i}-${'x'.repeat(100)}`)
+    )
+
+    // Sweep every budget that forces a different number of drops, so the fix
+    // is proven across boundaries rather than at one lucky size.
+    for (let budget = 200; budget <= 1_200; budget += 50) {
+      const out = fitPromptToBudget({ system: 'sys', history, message: 'now' }, budget)
+      if (out.history.length === 0) continue
+      expect(
+        out.history[0].role,
+        `budget ${budget} left the history starting on an assistant turn — ` +
+          'Anthropic rejects a leading assistant message outright'
+      ).toBe('user')
+    }
+  })
+
+  it('the paired-drop guard still respects the budget it just satisfied', () => {
+    // Dropping one MORE can only shrink the prompt, but assert it rather than
+    // asserting the reasoning: the guard runs AFTER the fitting loop, so a
+    // careless version could re-add or reorder.
+    const history = Array.from({ length: 10 }, (_, i) =>
+      msg(i % 2 === 0 ? 'user' : 'assistant', `turn-${i}-${'x'.repeat(100)}`)
+    )
+    const budget = 500
+    const out = fitPromptToBudget({ system: 'sys', history, message: 'now' }, budget)
+    const total =
+      out.system.length + 'now'.length + out.history.reduce((n, h) => n + h.content.length, 0)
+    expect(total).toBeLessThanOrEqual(budget)
+  })
+
   it('never trims the current message — the one degradation the user would notice', () => {
     const message = 'z'.repeat(5_000)
     const out = fitPromptToBudget({ system: 'x'.repeat(5_000), history: [], message }, 1_000)

@@ -112,6 +112,30 @@ export function fitPromptToBudget(
     historyMessagesDropped++
   }
 
+  // AUDIT FIX (2026-08-24) — never leave the history starting on an assistant
+  // turn. Found by the BUG-108 hotfix session hitting the same latent bug in
+  // coaching chat and telling me to check here; it was real.
+  //
+  // Turns persist in PAIRS (conversations-fs appendTurn writes user then
+  // assistant), so dropping one at a time lands on an odd boundary half the
+  // time and yields [assistant, user, assistant, …]. That still alternates,
+  // which is why it is easy to miss — but the FIRST message being an
+  // assistant turn is itself invalid for Anthropic's API, and
+  // coaching-chat-ipc.ts:177 records providers rejecting malformed sequences
+  // "outright as an invalid, non-alternating message sequence".
+  //
+  // Reachable, not theoretical: the budget genuinely bites on a maxed-out
+  // conversation (320,000 history + 8,000 message + a ~26,458-char system
+  // prompt leaves only ~1% margin), so odd-numbered drops happen in normal
+  // use, not just at the type-level ceiling.
+  //
+  // Dropping one MORE can only shrink the prompt, so it cannot break the
+  // budget invariant established above.
+  if (history.length > 0 && history[0].role === 'assistant') {
+    history.shift()
+    historyMessagesDropped++
+  }
+
   let system = input.system
   const overflow = system.length + input.message.length - budgetChars
   if (overflow > 0) {
