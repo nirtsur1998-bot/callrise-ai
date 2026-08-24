@@ -85,6 +85,24 @@ export interface CatalogEntry {
    *  can't read. Providers without catalog entries (Claude, ChatGPT) are
    *  handled by complete-with-fallback.ts's legacy-step vision set. */
   supportsVision?: true
+  /** AUDIT FIX (2026-08-24) — hand-verified PDF/document input support. Same
+   *  POSITIVE-flag discipline as supportsVision: undefined = "not known to
+   *  read documents", so a new entry is never silently sent a PDF it cannot
+   *  parse.
+   *
+   *  This flag did not exist, and its absence was the second half of a
+   *  field-critical bug. `needsVision` was derived from req.images ONLY, so a
+   *  PDF passed through resolveChain unfiltered and openai-compatible.ts:99
+   *  emitted an OpenAI-only `{type:'file'}` part to Groq / NVIDIA / Mistral /
+   *  OpenRouter / Cerebras — none of which accept it. Every resulting 400 was
+   *  classified 'structural' and blacklisted that model.
+   *
+   *  Verified per adapter, 2026-08-24: anthropic.ts:146 builds a native
+   *  `type:'document'` block, gemini.ts:108 builds `inlineData` with
+   *  application/pdf, and openai.ts:112 uses OpenAI's own file part — all
+   *  three genuinely carry a PDF. openai-compatible.ts is the odd one out: it
+   *  reuses OpenAI's wire format against providers that never adopted it. */
+  supportsDocuments?: true
 }
 
 export const MODEL_CATALOG: CatalogEntry[] = [
@@ -201,7 +219,12 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     retentionUrl: 'https://ai.google.dev/gemini-api/terms',
     keyUrl: 'https://aistudio.google.com/apikey',
     // M28 Part 3 — every Gemini Flash generation accepts image input.
-    supportsVision: true
+    supportsVision: true,
+    // AUDIT FIX (2026-08-24) — gemini.ts:108 sends PDFs as inlineData with
+    // mimeType application/pdf, which the Gemini API accepts natively. The
+    // only catalog entry that can read a document: every other entry routes
+    // through openai-compatible.ts, whose file part these providers reject.
+    supportsDocuments: true
     // Retention CONFIRMED 2026-07-30 via Google's live Gemini API terms:
     // free/unpaid tier - "Google uses the content you submit to the
     // Services and any generated responses to provide, improve, and develop

@@ -19,6 +19,7 @@ import {
   AllModelsExhaustedError,
   resolveChain
 } from '../ai/complete-with-fallback'
+import { noCapableModelMessage } from '../ai/capability-copy'
 import type { AIMessage } from '../ai/types'
 import {
   businessProfileSection,
@@ -232,15 +233,28 @@ async function handleSend(
     // an image with no vision-capable model is refused with the exact reason,
     // never silently dropped or sent to a model that can't read it.
     const files = await loadAttachments(attachmentIds)
-    if (files.images.length > 0) {
-      const { configured, capable } = resolveChain('assistant-chat', { needsVision: true })
+    // AUDIT FIX (2026-08-24) — documents are gated exactly like images now.
+    //
+    // Before, only images were checked. A PDF rode into the chain ungated,
+    // openai-compatible.ts emitted an OpenAI-only file part to providers that
+    // reject it, and each 400 blacklisted a model for four hours. The refusal
+    // copy right here made it worse by recommending PDF as the workaround for
+    // an unreadable image.
+    //
+    // The message text now comes from noCapableModelMessage, the same
+    // function the chain layer uses when it refuses for the same reason. It
+    // was previously copy-pasted here, so the two could disagree — and while
+    // they still agreed, they agreed on the wrong advice.
+    const capabilityNeeds =
+      files.images.length > 0
+        ? { needsVision: true }
+        : files.document
+          ? { needsDocument: true }
+          : null
+    if (capabilityNeeds) {
+      const { configured, capable } = resolveChain('assistant-chat', capabilityNeeds)
       if (configured.length > 0 && capable.length === 0) {
-        return {
-          ok: false,
-          error: 'ai-failed',
-          message:
-            'None of your configured AI models can read images. Add a Claude, ChatGPT, or Gemini key (or assign Llama 4 Scout on Groq) in Settings, or send the file as text or PDF instead.'
-        }
+        return { ok: false, error: 'ai-failed', message: noCapableModelMessage(capabilityNeeds) }
       }
     }
     // M28 Part 4 — the conversation's client scope, read from the record:

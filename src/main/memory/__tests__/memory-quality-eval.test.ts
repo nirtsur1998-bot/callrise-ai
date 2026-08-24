@@ -105,18 +105,37 @@ describe('Memory Quality Eval Harness (M27 audit — Sales Brain extraction base
   const hasKey = anyProviderKeyConfigured()
 
   it(
-    hasKey ? 'runs extraction against scripted transcripts and reports precision/recall' : 'SKIPPED — no AI provider key in process.env',
+    hasKey
+      ? 'runs extraction against scripted transcripts and reports precision/recall'
+      : 'FAILS LOUDLY — no AI provider key, so extraction quality is UNMEASURED',
     async () => {
       if (!hasKey) {
-        console.log(
-          '\n[memory-quality-eval] No AI provider key found in process.env ' +
-            `(checked: ${Object.values(PROVIDER_REGISTRY)
-              .map((e) => e.keyEnvName)
-              .join(', ')}). ` +
-            "Set one and re-run to get a real baseline: see this file's header comment for the exact command.\n"
+        // FAIL LOUDLY (2026-08-24, founder's instruction, applied BEFORE the
+        // key lands rather than after).
+        //
+        // This used to `expect(hasKey).toBe(false)` and PASS: a green result
+        // in ~4ms that measured nothing. That is the same hollow-skip the
+        // sibling retrieval harness was fixed for on this branch — there, the
+        // green-skip was actively false (that harness could run offline all
+        // along). Here it is "only" a trap: extraction genuinely IS blocked on
+        // a key, so the honest status is UNMEASURED. But a suite that reports
+        // success for a run that measured nothing is a trap regardless of
+        // whether anyone is relying on it today, and the next person to run
+        // this without a key should be told so in one line rather than reading
+        // a green tick and moving on.
+        //
+        // The status stays "never measured" — this change does not create a
+        // baseline, it stops the absence of one from looking like a pass.
+        const checked = Object.values(PROVIDER_REGISTRY)
+          .map((e) => e.keyEnvName)
+          .join(', ')
+        throw new Error(
+          'Memory-extraction quality harness could not run: no AI provider key in process.env ' +
+            `(checked: ${checked}). This is a HARD FAILURE, not a skip — a green result here ` +
+            'would claim extraction quality was verified when nothing was measured. Extraction ' +
+            'quality has NEVER been baselined (owed since M27). Set a throwaway free-tier key and ' +
+            "re-run to get the first real numbers: see this file's header comment for the command."
         )
-        expect(hasKey).toBe(false) // documents the skip explicitly rather than a bare no-op test
-        return
       }
 
       const reports: ScenarioReport[] = []

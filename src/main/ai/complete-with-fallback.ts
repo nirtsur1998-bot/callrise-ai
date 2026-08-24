@@ -444,11 +444,30 @@ export function stepSupportsVision(step: ResolvedStep): boolean {
   return step.catalogId.startsWith('legacy:') && VISION_CAPABLE_LEGACY_PROVIDERS.has(step.providerId)
 }
 
-export interface ChainCapabilityNeeds {
-  needsTool?: boolean
-  /** M28 Part 3 — the request carries images; only vision-capable steps may run it. */
-  needsVision?: boolean
+/** AUDIT FIX (2026-08-24) — the document equivalent of the vision set.
+ *  Anthropic, OpenAI and Google each have an adapter that builds a real
+ *  document part for their own API (anthropic.ts:146, openai.ts:112,
+ *  gemini.ts:108). Every other provider is served by openai-compatible.ts,
+ *  which sends OpenAI's file format to APIs that do not implement it. */
+const DOCUMENT_CAPABLE_LEGACY_PROVIDERS: ReadonlySet<CatalogEntry['providerId']> = new Set([
+  'anthropic',
+  'openai',
+  'google'
+])
+
+export function stepSupportsDocuments(step: ResolvedStep): boolean {
+  const entry = catalogEntry(step.catalogId)
+  if (entry) return entry.supportsDocuments === true
+  return (
+    step.catalogId.startsWith('legacy:') &&
+    DOCUMENT_CAPABLE_LEGACY_PROVIDERS.has(step.providerId)
+  )
 }
+
+import type { ChainCapabilityNeeds } from './capability-needs'
+import { noCapableModelMessage } from './capability-copy'
+export type { ChainCapabilityNeeds }
+export { noCapableModelMessage }
 
 export function resolveChain(purpose: AIPurpose, opts?: ChainCapabilityNeeds): ResolvedChain {
   const configured = resolveConfiguredChain(purpose)
@@ -457,17 +476,11 @@ export function resolveChain(purpose: AIPurpose, opts?: ChainCapabilityNeeds): R
     capable = capable.filter((s) => catalogEntry(s.catalogId)?.supportsToolCalling !== false)
   }
   if (opts?.needsVision) capable = capable.filter(stepSupportsVision)
+  if (opts?.needsDocument) capable = capable.filter(stepSupportsDocuments)
   return { configured, capable }
 }
 
-/** Human copy for "keys exist, none can run THIS request" — names the
- *  actual missing capability instead of blaming tool-calling for everything. */
-function noCapableModelMessage(needs: ChainCapabilityNeeds): string {
-  if (needs.needsVision) {
-    return 'None of your configured AI models can read images. Add a Claude, ChatGPT, or Gemini key (or assign Llama 4 Scout on Groq) in Settings, or send the file as text or PDF instead.'
-  }
-  return "Every model configured for this can't run this request (tool-calling not supported by any of them) — reassign a model in Settings."
-}
+
 
 // BUG-057 Phase 6 follow-up — the one deferred piece of that phase, closed.
 // `supportsToolCalling: false` (model-catalog.ts) is a static, hand-verified
@@ -646,7 +659,8 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   const purpose = req.purpose
   const needs: ChainCapabilityNeeds = {
     needsTool: Boolean(req.tool),
-    needsVision: Boolean(req.images?.length)
+    needsVision: Boolean(req.images?.length),
+    needsDocument: Boolean(req.document)
   }
   const { configured, capable } = resolveChain(purpose, needs)
   logToolCapabilityExclusions(purpose, configured, capable)
@@ -951,7 +965,8 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
   const purpose = req.purpose
   const needs: ChainCapabilityNeeds = {
     needsTool: Boolean(req.tool),
-    needsVision: Boolean(req.images?.length)
+    needsVision: Boolean(req.images?.length),
+    needsDocument: Boolean(req.document)
   }
   const { configured, capable } = resolveChain(purpose, needs)
   logToolCapabilityExclusions(purpose, configured, capable)

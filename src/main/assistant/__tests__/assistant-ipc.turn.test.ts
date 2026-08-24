@@ -310,6 +310,40 @@ describe('M28 Part 3 — attachments + the vision gate', () => {
     expect(inFlightCount()).toBe(0)
   })
 
+  // AUDIT FIX (2026-08-24) — there was NO PDF test anywhere in this file
+  // (image and text only), and no document capability gate in the product.
+  // A PDF rode ungated into the chain, openai-compatible.ts emitted an
+  // OpenAI-only file part to providers that reject it, and each 400
+  // blacklisted that model for four hours across every purpose — taking out
+  // live call coaching from a chat window.
+  it('a PDF with no document-capable model is refused BEFORE the turn, naming the fix', async () => {
+    const { convId, invoke, inFlightCount } = await setup()
+    const added = (await invoke(
+      'assistant:addAttachment',
+      'contract.pdf',
+      new Uint8Array([0x25, 0x50, 0x44, 0x46]).buffer
+    )) as { ok: boolean; attachment: { id: string } }
+    expect(added.ok).toBe(true)
+    chainMock.capable = 0 // keys configured, none can read a document
+    const result = (await invoke('assistant:send', convId, 'summarise this', undefined, [
+      added.attachment.id
+    ])) as Record<string, unknown>
+
+    // The gate must ask for the DOCUMENT capability specifically. Asking for
+    // vision would be a different question with a different answer: a model
+    // can see an image and still reject a PDF (Groq's Llama 4 Scout is
+    // exactly that), so reusing the vision flag here would let the PDF
+    // through to a provider that 400s on it.
+    expect(chainMock.lastNeeds).toMatchObject({ needsDocument: true })
+    expect(result.ok).toBe(false)
+    expect(String(result.message)).toContain('PDF')
+    expect(
+      streamControl.lastRequest,
+      'the PDF reached a provider — every rejection blacklists that model for 4h'
+    ).toBeNull()
+    expect(inFlightCount()).toBe(0)
+  })
+
   it('with a vision-capable model the image rides the request and the metadata persists', async () => {
     const { convId, invoke } = await setup()
     const added = (await invoke('assistant:addAttachment', 'shot.png', new Uint8Array([9, 9]).buffer)) as {
