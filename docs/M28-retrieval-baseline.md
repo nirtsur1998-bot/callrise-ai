@@ -54,9 +54,38 @@ demand near-identity, and loosening it would silently change C1 semantics.
 |---|---|---|---|---|
 | active-only (coaching chat) | 12/14 (86%) | 0.76 | 0/13 | 0 |
 | active+hypotheses (Rise) | 13/14 (93%) | 0.79 | 0/13 | 0 |
+| **Rise, UNSCOPED conversation** | **8/14 (57%)** | **0.53** | **0/13** | **0** |
 
-The +1 between configs is exactly the hypothesis-gated question — the Rise
-configuration's designed win, now demonstrated by measurement.
+The +1 between the first two configs is exactly the hypothesis-gated question
+— the Rise configuration's designed win, now demonstrated by measurement.
+
+### Read the 93% correctly (added 2026-08-24)
+
+The first two rows supply each question's own `contactId`. That models a
+conversation **already bound to exactly the client being asked about**. Rise
+passes `scope?.contactId ?? null` (`assistant-ipc.ts:270`), so a conversation
+with no client bound — the default "New chat" — sends `null`, and
+`rag.ts:105` builds its scope list as
+`['rep','business', ...(contactId ? [clientScope(contactId)] : [])]`. Every
+`client:*` memory is then unreachable **by construction**.
+
+That is the third row: **57%**, with all six lost questions being the client
+ones. Both numbers are real; they describe different situations, and only the
+third describes the default one.
+
+The recall drop is not the dangerous part. **Empty answers stay 0/13** — the
+client questions do not come back empty, they come back with generic
+business-scope memories. Asked *"who makes the buying decisions at Acme?"* in
+an unscoped chat, retrieval returns `b-icp`, `b-objection-impl`, `b-product`,
+and Rise answers confidently from the wrong context instead of saying it does
+not know. That is the credibility trap `M28-rise.md:54-58` describes, reached
+through a different door than the one that doc guards.
+
+The harness now measures and gates this configuration, floored at its current
+value (8) as a collapse detector rather than an aspiration, plus an invariant
+that scoped recall can never fall below unscoped. Raising 57% is Phase 2
+design work — see the ranking weaknesses below, and note that scope selection
+is now the larger of the two problems.
 
 ## Known remaining weaknesses (measured, deliberately not "fixed" tonight)
 

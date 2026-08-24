@@ -87,6 +87,25 @@ let measured = false
  */
 const MIN_HITS_ACTIVE_ONLY = 11
 const MIN_HITS_RISE = 12
+/**
+ * UNSCOPED Rise — a conversation with no client bound. This floor is
+ * deliberately set at the CURRENT measured value, not an aspirational one:
+ * 8/14 is a known-bad number, and the gate exists to stop it degrading
+ * further while the real fix is designed.
+ *
+ * Why it is this low: rag.ts builds its scope list as
+ * ['rep', 'business', ...(contactId ? [clientScope(contactId)] : [])], so with
+ * no contactId every client:* memory is unreachable by construction. All six
+ * misses are the client questions. They do not come back empty — they come
+ * back with generic business memories, so Rise answers confidently from the
+ * wrong context instead of saying it does not know.
+ *
+ * The headline 13/14 (93%) figure is measured with each question's correct
+ * contactId supplied, i.e. the best case where the conversation is already
+ * bound to exactly the client being asked about. Both numbers are real; they
+ * describe different situations, and only this one describes "New chat".
+ */
+const MIN_HITS_RISE_UNSCOPED = 8
 const MAX_SCOPE_VIOLATIONS = 0
 const MAX_EMPTY_ANSWERS = 0
 /** fixture key → inserted row id */
@@ -136,12 +155,19 @@ interface QuestionResult {
 
 async function runConfig(
   includeHypotheses: boolean,
-  maxDistance?: number
+  maxDistance?: number,
+  /**
+   * Drop every question's contactId, modelling a Rise conversation that is
+   * NOT bound to a client. Rise passes `scope?.contactId ?? null`
+   * (assistant-ipc.ts), so this is the shape of every general conversation —
+   * the default one a user gets by clicking "New chat".
+   */
+  unscoped = false
 ): Promise<QuestionResult[]> {
   const results: QuestionResult[] = []
   for (const q of QUESTIONS) {
     const retrieved = await retrieveRelevantMemoriesStructured(q.question, {
-      contactId: q.contactId,
+      contactId: unscoped ? null : q.contactId,
       includeHypotheses,
       maxDistance
     })
@@ -234,6 +260,10 @@ describe('retrieval quality eval (offline, real embeddings + real sqlite-vec)', 
     const activeMetrics = report('DEFAULT active-only (coaching chat)', activeOnly)
     const withHypotheses = await runConfig(true)
     const riseMetrics = report('DEFAULT active+hypotheses (Rise)', withHypotheses)
+    const unscopedMetrics = report(
+      'Rise in an UNSCOPED conversation (no client bound)',
+      await runConfig(true, undefined, true)
+    )
 
     // Structural sanity (kept, but it was never the real gate).
     expect(activeOnly).toHaveLength(QUESTIONS.length)
@@ -262,6 +292,19 @@ describe('retrieval quality eval (offline, real embeddings + real sqlite-vec)', 
       riseMetrics.emptyAnswers,
       `${riseMetrics.emptyAnswers}/${riseMetrics.scoredCount} questions retrieved nothing`
     ).toBeLessThanOrEqual(MAX_EMPTY_ANSWERS)
+
+    // The unscoped shape is the one most users are actually in. Gated at its
+    // current value so a regression is caught even though the value itself is
+    // not yet good enough.
+    expect(
+      unscopedMetrics.totalHits,
+      `unscoped Rise recall dropped to ${unscopedMetrics.totalHits}/${unscopedMetrics.totalExpected} ` +
+        `(floor ${MIN_HITS_RISE_UNSCOPED}) — see retrieval-eval-report.log`
+    ).toBeGreaterThanOrEqual(MIN_HITS_RISE_UNSCOPED)
+
+    // Binding a conversation to a client must never retrieve LESS than not
+    // binding it. If this ever inverts, scope selection is broken.
+    expect(riseMetrics.totalHits).toBeGreaterThanOrEqual(unscopedMetrics.totalHits)
 
     // The designed win of Rise's configuration: including hypotheses can only
     // ever surface MORE, never less, than active-only.
