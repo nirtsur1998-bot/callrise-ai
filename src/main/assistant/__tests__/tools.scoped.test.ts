@@ -197,3 +197,44 @@ describe('today_schedule in a scoped conversation — the cross-client invariant
     expect(text).toContain('do not tell the user their day is empty')
   })
 })
+
+// AUDIT FIX (2026-08-24) — the scoped find_contact LABEL.
+//
+// The record returned was correctly scoped all along; the section TITLE was
+// the leak. The scoped branch discards the query and returns this
+// conversation's client regardless, while the title interpolated the query —
+// so the system prompt asserted that client A's private record was the answer
+// to a question about person B, right next to SCOPE_RULE's instruction to
+// "treat every question as being about them".
+describe('find_contact in a scoped conversation — the label must not lie', () => {
+  const run = (query: string, scopeContactId?: string) =>
+    executeLookups([{ kind: 'find_contact', query }], DIRS, undefined, scopeContactId)
+
+  it("does NOT claim the scoped client's record matched another person's name", async () => {
+    const { sections } = await run('Sam Park at Globex', 'acme')
+    expect(
+      sections[0].title,
+      "the prompt labelled Dana Levy's record as matching Sam Park's name"
+    ).not.toContain('Sam Park')
+    expect(sections[0].title).toContain("THIS CONVERSATION'S CLIENT")
+  })
+
+  it('says plainly that the other name was not looked up', async () => {
+    const { sections } = await run('Sam Park at Globex', 'acme')
+    const text = sections[0].lines.map((l) => l.text).join('\n')
+    expect(text).toContain('Dana Levy')
+    expect(text).toContain('was NOT looked up')
+    expect(text).toContain('Do not present this record as a match for another name')
+    // The clarifier must not reintroduce the other person's name — the file's
+    // standing invariant is that no other name appears in a scoped section.
+    expect(text).not.toContain('Sam Park')
+  })
+
+  it('UNSCOPED: the query-matching title is unchanged', async () => {
+    const { sections } = await run('Sam Park', undefined)
+    expect(sections[0].title).toBe('CONTACT RECORDS MATCHING "Sam Park"')
+    const text = sections[0].lines.map((l) => l.text).join('\n')
+    expect(text).toContain('Sam Park')
+    expect(text).not.toContain('was NOT looked up')
+  })
+})

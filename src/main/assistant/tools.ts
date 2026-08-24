@@ -276,6 +276,43 @@ async function findContact(
         : ''
     return { text: contactLine(c) + dealsBit }
   })
+  if (scopeContactId) {
+    // AUDIT FIX (2026-08-24) — the scoped branch DISCARDS the query and
+    // returns this conversation's client regardless, but the title still
+    // interpolated the query — so the prompt asserted that client A's private
+    // record was the answer to a question about person B.
+    //
+    // Concretely: a chat scoped to Dana Levy, asked "is Sam Park at Globex the
+    // same buyer profile?", produced
+    //   --- CONTEXT: CONTACT RECORDS MATCHING "Sam Park at Globex" ---
+    //   - Dana Levy — company: Acme; stage: negotiation; deal value: 45000
+    // Combined with SCOPE_RULE's "Treat every question as being about them",
+    // the model was handed a labelled mapping from Sam Park's name onto Dana's
+    // private data. The record was correctly scoped; the LABEL was the leak.
+    //
+    // Unlike search_calls and find_deal, which filter by scope and still score
+    // by query — so their titles stay true — this branch ignores the query
+    // entirely, which is why only it needs the honest title.
+    return {
+      title: "CONTACT RECORD FOR THIS CONVERSATION'S CLIENT",
+      lines: [
+        ...(lines.length > 0 ? lines : [{ text: 'No record found for this client.' }]),
+        {
+          // The query is deliberately NOT echoed here. tools.scoped.test.ts
+          // holds a blunt invariant that no other person's name appears in a
+          // scoped section, and while echoing the user's own words is not a
+          // data leak, the guard is worth more than the convenience — the
+          // model already has the user's message. Saying WHAT happened is
+          // what prevents the misattribution; repeating the name is not.
+          text:
+            'This conversation is scoped to one client, so only their record is available. ' +
+            'If the question referred to anyone else, that person was NOT looked up and ' +
+            'nothing above describes them. Do not present this record as a match for ' +
+            'another name.'
+        }
+      ]
+    }
+  }
   return {
     title: `CONTACT RECORDS MATCHING "${query}"`,
     lines: lines.length > 0 ? lines : [{ text: 'No matching contacts found.' }]
