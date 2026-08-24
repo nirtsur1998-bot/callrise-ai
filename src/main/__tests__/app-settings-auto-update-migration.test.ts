@@ -114,3 +114,57 @@ describe('the one-time migration to on-by-default', () => {
     expect(s.autoUpdateNoticePending).toBe(false) // …and nothing re-migrates or re-notices
   })
 })
+
+describe('M29 sweep item 5 — a cloud pull must not re-enable auto-update on this device', () => {
+  // Whether THIS machine downloads and executes new software is a per-device
+  // decision, exactly like syncScope. The pushed payload is the WHOLE settings
+  // object, so it always carries a value for autoUpdateEnabled — before the
+  // fix, one unrelated edit on the desktop silently re-armed the laptop.
+
+  it("the laptop's explicit OFF survives a pull from a device where it is ON", async () => {
+    writeSettingsFile({ autoUpdateEnabled: false, autoUpdateMigratedToDefaultOn: true })
+    const mod = await freshModule()
+    expect(mod.loadAppSettings().autoUpdateEnabled).toBe(false) // the user's choice
+
+    // Desktop changes something unrelated and pushes the whole object.
+    const next = mod.applyPulledSettings(
+      { autoUpdateEnabled: true, autoUpdateMigratedToDefaultOn: true, theme: 'dark' },
+      new Date(Date.now() + 60_000).toISOString()
+    )
+    expect(next.autoUpdateEnabled).toBe(false) // NOT re-enabled
+
+    const reloaded = await freshModule()
+    expect(reloaded.loadAppSettings().autoUpdateEnabled).toBe(false) // and it stuck
+  })
+
+  it('a pull cannot clear the migration marker and re-arm the one-time override', async () => {
+    writeSettingsFile({ autoUpdateEnabled: false, autoUpdateMigratedToDefaultOn: true })
+    const mod = await freshModule()
+    // A payload from an install that predates the marker entirely.
+    mod.applyPulledSettings({ autoUpdateEnabled: false }, new Date(Date.now() + 60_000).toISOString())
+    const onDisk = JSON.parse(readFileSync(join(dir, 'app-settings.json'), 'utf8'))
+    expect(onDisk.autoUpdateMigratedToDefaultOn).toBe(true) // marker held
+    const again = await freshModule()
+    expect(again.loadAppSettings().autoUpdateEnabled).toBe(false) // no second override
+  })
+
+  it('the local toggle still works — the fix must not freeze the pref', async () => {
+    writeSettingsFile({ autoUpdateEnabled: false, autoUpdateMigratedToDefaultOn: true })
+    const mod = await freshModule()
+    mod.saveAppSettings({ autoUpdateEnabled: true })
+    expect(mod.loadAppSettings().autoUpdateEnabled).toBe(true)
+  })
+
+  it('syncScope stays protected too — the existing invariant is untouched', async () => {
+    writeSettingsFile({
+      autoUpdateMigratedToDefaultOn: true,
+      syncScope: { transcripts: false }
+    })
+    const mod = await freshModule()
+    const next = mod.applyPulledSettings(
+      { syncScope: { transcripts: true } },
+      new Date(Date.now() + 60_000).toISOString()
+    )
+    expect(next.syncScope.transcripts).toBe(false)
+  })
+})

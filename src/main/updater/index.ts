@@ -295,9 +295,19 @@ export function registerUpdater(): void {
 
   const applyAutoUpdatePreference = (): void => {
     const on = isAutoUpdateEnabled()
-    // Only affects an update not yet found — a download or install already
-    // in flight from before the toggle changed is left to finish/settle on
-    // its own rather than being torn out from under the user mid-action.
+    // THE PENDING INSTALL IS PART OF THE PREFERENCE (M29 sweep item 5).
+    // `autoInstallOnAppQuit` used to be set only inside the update-downloaded
+    // handler, so it latched `true` at download time and nothing ever cleared
+    // it. Turning auto-update OFF after an update had already downloaded left
+    // the flag true and the app installed anyway on the next quit — the app
+    // doing exactly what the user had just declined, in the one window where
+    // the toggle is most likely to be used. electron-updater re-reads this
+    // flag inside its own quit handler, so setting it here is honoured even
+    // late. Unconditional and both directions: an assignment, not a transition.
+    autoUpdater.autoInstallOnAppQuit = on
+    // Beyond that, only affects an update not yet found — a download already
+    // in flight is left to finish rather than being torn out from under the
+    // user mid-action. It simply will not be installed while this is false.
     if (on && !checkInterval) {
       firstCheckTimer = setTimeout(runBackgroundCheck, FIRST_CHECK_DELAY_MS)
       checkInterval = setInterval(runBackgroundCheck, AUTO_CHECK_INTERVAL_MS)

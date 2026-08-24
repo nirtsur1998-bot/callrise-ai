@@ -1041,11 +1041,24 @@ export function saveAppSettings(patch: unknown): AppSettings {
  *     (transcripts, contacts, attachments, …) is a per-device privacy
  *     decision — another device turning a toggle on must never make this one
  *     silently start uploading local-only data.
+ *   - THIS device's autoUpdateEnabled is preserved, for the same reason
+ *     (M29 sweep item 5). Whether this machine downloads and executes new
+ *     software is a per-device decision in exactly the sense syncScope is:
+ *     a laptop on metered tethering may say no while the desktop says yes.
+ *     Before this, the pref fell through the generic merge, and because the
+ *     pushed payload is the WHOLE settings object it always carried a value —
+ *     so one unrelated edit on device B silently re-enabled auto-update on
+ *     device A and started its background check on the spot. That is the
+ *     "overridden exactly once, ever" promise broken by a side door: the
+ *     forward-only migration marker guards the pre-migration case, and
+ *     nobody guarded the simpler post-migration one.
  */
 export function applyPulledSettings(payload: unknown, cloudUpdatedAt: string): AppSettings {
   const current = loadAppSettings()
   const next = mergeSettings(current, payload)
   next.syncScope = current.syncScope
+  next.autoUpdateEnabled = current.autoUpdateEnabled
+  next.autoUpdateMigratedToDefaultOn = current.autoUpdateMigratedToDefaultOn
   next.settingsUpdatedAt =
     typeof cloudUpdatedAt === 'string' && !Number.isNaN(Date.parse(cloudUpdatedAt))
       ? cloudUpdatedAt
