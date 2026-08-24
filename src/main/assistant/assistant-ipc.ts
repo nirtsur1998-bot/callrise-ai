@@ -20,6 +20,11 @@ import {
   resolveChain
 } from '../ai/complete-with-fallback'
 import { noCapableModelMessage } from '../ai/capability-copy'
+import {
+  fitPromptToBudget,
+  budgetCharsFor,
+  DEFAULT_CONTEXT_WINDOW_TOKENS
+} from './prompt-budget'
 import type { AIMessage } from '../ai/types'
 import {
   businessProfileSection,
@@ -310,14 +315,41 @@ async function handleSend(
       attachmentTexts: files.texts.length > 0 ? files.texts : undefined
     })
 
-    const history: AIMessage[] = conv.messages
+    const rawHistory: AIMessage[] = conv.messages
       .slice(-MAX_HISTORY_MESSAGES)
       .map((m) => ({ role: m.role, content: m.text }))
+
+    // AUDIT FIX (2026-08-24) — a TOTAL bound on the prompt.
+    //
+    // Each input was capped individually and nothing capped the sum, so
+    // ~595,000 chars (~149,000 tokens) was reachable through the UI against a
+    // declared 128,000-token window: a 267,016-char system prompt with six
+    // text attachments, plus 40 history turns at 8,000 chars each. Overflow
+    // returned a 400, which failure-class.ts calls 'structural', and the walk
+    // then sent the SAME oversize prompt to the next model and blacklisted
+    // each one in turn — the user seeing only AllModelsExhaustedError, which
+    // never mentions size.
+    //
+    // Note the earlier drop-history rule fired only for images and PDFs, so
+    // TEXT attachments — the bulkiest input there is — stacked with full
+    // history. This bound covers every source uniformly instead.
+    const budget = fitPromptToBudget(
+      { system: context.system, history: rawHistory, message },
+      budgetCharsFor(DEFAULT_CONTEXT_WINDOW_TOKENS)
+    )
+    const history = budget.history
+    if (budget.trim.trimmed) {
+      console.warn(
+        '[assistant] prompt trimmed to fit the context budget:',
+        `${budget.trim.historyMessagesDropped} history message(s) dropped, ` +
+          `${budget.trim.systemCharsDropped} system char(s) truncated`
+      )
+    }
 
     broadcast('assistant:phase', { conversationId, phase: 'thinking' })
     const stream = streamWithFallback({
       purpose: 'assistant-chat',
-      system: context.system,
+      system: budget.system,
       messages: [...history, { role: 'user', content: message }],
       maxTokens: MAX_TOKENS,
       signal: turn.controller.signal,

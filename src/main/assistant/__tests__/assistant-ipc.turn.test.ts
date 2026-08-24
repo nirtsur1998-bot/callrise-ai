@@ -285,6 +285,76 @@ describe('M28 Part 4 — client scope: the cross-client invariant (red-check tar
   })
 })
 
+// AUDIT FIX (2026-08-24) — proves the total prompt bound is actually WIRED
+// INTO the send path. prompt-budget.test.ts proves the policy in isolation; a
+// correct module that nothing calls is the same hollow shape as a correct
+// assertion nothing reads, which is what four of this milestone's tests
+// turned out to be.
+describe('the total prompt bound is applied to real sends', () => {
+  it('a conversation far over the window is trimmed before it reaches a provider', async () => {
+    const { convId, invoke } = await setup()
+    const { appendTurn } = await import('../conversations-fs')
+
+    // The measured worst case, reproduced: 20 turns x 2 messages x 8,000
+    // chars = 320,000 of history (the maximum MAX_HISTORY_MESSAGES and
+    // MAX_INBOUND_CHARS allow), PLUS six text attachments at
+    // MAX_EXTRACTED_CHARS = 40,000 each. History alone fits; attachments
+    // alone fit; the sum does not — which is exactly why capping each input
+    // individually was not a bound.
+    //
+    // Text attachments are the case that mattered: the pre-existing
+    // drop-history rule fired only for images and PDFs, so documents stacked
+    // on top of a full history.
+    const big = 'h'.repeat(8_000)
+    for (let i = 0; i < 20; i++) {
+      await appendTurn(convDir(), convId, { text: big }, { text: big })
+    }
+
+    const attachmentIds: string[] = []
+    for (let i = 0; i < 6; i++) {
+      const added = (await invoke(
+        'assistant:addAttachment',
+        `notes-${i}.txt`,
+        new TextEncoder().encode('t'.repeat(40_000)).buffer
+      )) as { ok: boolean; attachment?: { id: string } }
+      if (added.ok && added.attachment) attachmentIds.push(added.attachment.id)
+    }
+    expect(attachmentIds).toHaveLength(6)
+
+    const pending = invoke(
+      'assistant:send',
+      convId,
+      'and finally, what now?',
+      undefined,
+      attachmentIds
+    )
+    streamControl.push('ok')
+    streamControl.end()
+    await pending
+
+    const req = streamControl.lastRequest as {
+      system: string
+      messages: { content: string }[]
+    }
+    const total =
+      req.system.length + req.messages.reduce((n, m) => n + m.content.length, 0)
+    const { budgetCharsFor, DEFAULT_CONTEXT_WINDOW_TOKENS } = await import('../prompt-budget')
+    const budget = budgetCharsFor(DEFAULT_CONTEXT_WINDOW_TOKENS)
+
+    expect(
+      total,
+      'the send path shipped an oversize prompt — the provider 400s, ' +
+        'failure-class calls it structural, and the walk blacklists every ' +
+        'model in the chain while re-sending the identical prompt'
+    ).toBeLessThanOrEqual(budget)
+
+    // And the trimming must be real, not an artefact of a small fixture.
+    expect(req.messages.length).toBeLessThan(41)
+    // The user's own message always survives, and is the LAST one.
+    expect(req.messages[req.messages.length - 1].content).toBe('and finally, what now?')
+  })
+})
+
 describe('M28 Part 3 — attachments + the vision gate', () => {
   it('an image with no vision-capable model is refused BEFORE the turn, naming the fix', async () => {
     const { convId, invoke, inFlightCount } = await setup()
@@ -658,13 +728,47 @@ describe('chat as a memory source — wiring + retroactive forget', () => {
   })
 })
 
+/**
+ * AUDIT FIX (2026-08-24) — replaces `await new Promise(r => setTimeout(r, 10))`
+ * as the way these tests wait for a turn to reach a given state.
+ *
+ * A fixed 10ms sleep is a timeout standing in for a condition: it has to
+ * cover loading the conversation, loading attachments, retrieval, planning,
+ * building the context, starting the stream and consuming the first delta.
+ * That fits comfortably when the file runs alone and does NOT fit under
+ * full-suite CPU contention — which is precisely how it behaved: 30/30 twice
+ * in isolation, one failure in the full run, with attach reporting
+ * streaming:true and an empty accumulated string because the assertion
+ * arrived before the first delta did.
+ *
+ * I have already mislabelled one load-dependent failure in this file as a
+ * pre-existing flake; it was a real TOCTOU. So this one is fixed rather than
+ * retried: the wait is now on the CONDITION, with a generous ceiling and a
+ * failure message that names what never happened.
+ */
+async function waitUntil(
+  predicate: () => boolean | Promise<boolean>,
+  what: string,
+  timeoutMs = 4_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    if (await predicate()) return
+    if (Date.now() > deadline) {
+      throw new Error(`timed out after ${timeoutMs}ms waiting until ${what}`)
+    }
+    await new Promise((r) => setTimeout(r, 1))
+  }
+}
+
 describe('stop and attach — the two M28 design claims', () => {
   it('cancel mid-stream keeps the partial reply as a persisted turn (stopped: true)', async () => {
     const { convId, invoke } = await setup()
     const pending = invoke('assistant:send', convId, 'long question')
     streamControl.push('Partial answer the user already read')
-    // Let the delta actually get consumed before aborting.
-    await new Promise((r) => setTimeout(r, 10))
+    // The delta must actually be consumed before aborting, or there is no
+    // partial reply to keep and the test proves nothing.
+    await waitUntil(() => streamControl.queue.length === 0, 'the pushed delta was consumed')
     expect(await invoke('assistant:cancel', convId)).toBe(true)
     const result = (await pending) as Record<string, unknown>
     expect(result.ok).toBe(true)
@@ -677,7 +781,10 @@ describe('stop and attach — the two M28 design claims', () => {
   it('cancel before any token persists nothing (error: cancelled)', async () => {
     const { convId, invoke } = await setup()
     const pending = invoke('assistant:send', convId, 'q')
-    await new Promise((r) => setTimeout(r, 10))
+    await waitUntil(async () => {
+      const probe = (await invoke('assistant:attach', convId)) as Record<string, unknown>
+      return probe.streaming === true
+    }, 'the turn was registered in flight')
     await invoke('assistant:cancel', convId)
     const result = (await pending) as Record<string, unknown>
     expect(result.ok).toBe(false)
@@ -689,7 +796,14 @@ describe('stop and attach — the two M28 design claims', () => {
     const { convId, invoke } = await setup()
     const pending = invoke('assistant:send', convId, 'the question')
     streamControl.push('So far…')
-    await new Promise((r) => setTimeout(r, 10))
+    // Wait for the turn to have ACCUMULATED something rather than for a fixed
+    // number of milliseconds. If it never does, waitUntil fails loudly — the
+    // claim under test ("attach returns the text so far") is still what the
+    // assertions below check, exactly, including the text itself.
+    await waitUntil(async () => {
+      const probe = (await invoke('assistant:attach', convId)) as Record<string, unknown>
+      return probe.streaming === true && probe.accumulated !== ''
+    }, 'attach reported a streaming turn with accumulated text')
     const during = (await invoke('assistant:attach', convId)) as Record<string, unknown>
     expect(during.streaming).toBe(true)
     expect(during.accumulated).toBe('So far…')
@@ -709,7 +823,23 @@ describe('stop and attach — the two M28 design claims', () => {
       () => new Promise<unknown[]>((r) => (releasePlan = r))
     )
     const pending = invoke('assistant:send', convId, 'wrong question, stop it')
-    await new Promise((r) => setTimeout(r, 10))
+
+    // Wait for PLANNING to have started, not merely for the turn to be
+    // registered. Those were the same moment when this test was written and
+    // are not any more: the busy-guard TOCTOU fix moved registration to the
+    // first synchronous statement of handleSend, while planning still sits
+    // behind an awaited retrieval.
+    //
+    // Waiting on the wrong one deadlocks rather than fails: releasePlan is
+    // only assigned when the mock is CALLED, so cancelling before that point
+    // fires the no-op default, and the hanging promise created moments later
+    // has nobody left to resolve it. The old fixed 10ms sleep did not
+    // guarantee this either — it just usually won the race, and would have
+    // deadlocked the same way on a slow machine.
+    await waitUntil(
+      () => toolsMock.plan.mock.calls.length > 0,
+      'planning was actually in flight (releasePlan is only bound once the mock is called)'
+    )
     // The turn must already be registered: attach sees it, cancel finds it.
     const during = (await invoke('assistant:attach', convId)) as Record<string, unknown>
     expect(during.streaming).toBe(true)
@@ -726,7 +856,7 @@ describe('stop and attach — the two M28 design claims', () => {
   it('cancel truly aborts the walk: the AbortSignal the engine passed fires', async () => {
     const { convId, invoke } = await setup()
     const pending = invoke('assistant:send', convId, 'q')
-    await new Promise((r) => setTimeout(r, 10))
+    await waitUntil(() => streamControl.signal !== null, 'the engine passed an AbortSignal')
     expect(streamControl.signal?.aborted).toBe(false)
     await invoke('assistant:cancel', convId)
     expect(streamControl.signal?.aborted).toBe(true)
