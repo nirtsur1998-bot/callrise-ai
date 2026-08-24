@@ -54,9 +54,15 @@ demand near-identity, and loosening it would silently change C1 semantics.
 
 | Config | recall@5 | MRR | empty answers | scope violations |
 |---|---|---|---|---|
-| active-only (coaching chat) | 12/14 (86%) | 0.76 | 0/13 | 0 |
-| active+hypotheses (Rise) | 13/14 (93%) | 0.79 | 0/13 | 0 |
-| **Rise, UNSCOPED conversation** | **8/14 (57%)** | **0.53** | **0/13** | **0** |
+| coaching chat — active-only, CLIENT-BOUND | 12/14 (86%) | 0.76 | 0/13 | 0 |
+| Rise, CLIENT-BOUND conversation (**the exception**) | 13/14 (93%) | 0.79 | 0/13 | 0 |
+| **Rise, UNSCOPED — THE DEFAULT "New chat" shape** | **8/14 (57%)** | **0.53** | **0/13** | **0** |
+
+**Row labels corrected 2026-08-24.** The row that used to wear the plain name
+"Rise" is the client-BOUND case. All three rows describe real production
+shapes — what was wrong was that the exception carried the unqualified name and
+the default was labelled as the special case. **The headline 93% describes the
+exception; 57% describes the default.**
 
 The +1 between the first two configs is exactly the hypothesis-gated question
 — the Rise configuration's designed win, now demonstrated by measurement.

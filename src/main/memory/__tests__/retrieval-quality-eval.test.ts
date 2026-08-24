@@ -9,6 +9,31 @@
 // active+hypotheses (Rise) — because the delta between them is itself a
 // finding.
 //
+// ────────────────────────────────────────────────────────────────────────────
+// 2026-08-24 — LABELS, because a number without its config is a false claim.
+//
+// Three configurations are measured and ALL THREE describe real production
+// shapes. What was wrong was which one wore the plain name "Rise":
+//
+//   * The row previously called "DEFAULT active+hypotheses (Rise)" supplies
+//     each question's own contactId. That is a conversation ALREADY BOUND to
+//     exactly the client being asked about — real, but the EXCEPTION.
+//   * Rise passes `contactId: scope?.contactId ?? null` (assistant-ipc.ts:289),
+//     so the default "New chat" sends null and rag.ts builds its scope list
+//     WITHOUT any client scope. Every `client:*` memory is then unreachable by
+//     construction. That is the DEFAULT, and it is the third row.
+//
+// So the headline 93% describes the exception and the 57% describes the
+// default. Anyone quoting one number without saying which shape it measures is
+// making a claim the harness does not support.
+//
+// (Superseded finding, recorded so it is not re-fixed: M28-audit-findings.md's
+// C-post-bug080 says "Rise never passes contactId" and concludes real Rise
+// client recall is 0 by construction. That was true when written; it is STALE
+// — assistant-ipc.ts:289 passes it today. The bound row measures a shape that
+// does exist; it is simply not the default one.)
+// ────────────────────────────────────────────────────────────────────────────
+//
 // ─────────────────────────────────────────────────────────────────────────
 // 2026-08-24 — THIS HARNESS WAS HOLLOW AND IS NOW A REAL GATE.
 //
@@ -257,11 +282,11 @@ describe('retrieval quality eval (offline, real embeddings + real sqlite-vec)', 
       )
     }
     const activeOnly = await runConfig(false)
-    const activeMetrics = report('DEFAULT active-only (coaching chat)', activeOnly)
+    const activeMetrics = report('coaching chat — active-only, CLIENT-BOUND', activeOnly)
     const withHypotheses = await runConfig(true)
-    const riseMetrics = report('DEFAULT active+hypotheses (Rise)', withHypotheses)
+    const riseMetrics = report('Rise, CLIENT-BOUND conversation (NOT the default — see below)', withHypotheses)
     const unscopedMetrics = report(
-      'Rise in an UNSCOPED conversation (no client bound)',
+      'Rise, UNSCOPED — *** THE DEFAULT "New chat" SHAPE ***',
       await runConfig(true, undefined, true)
     )
 
