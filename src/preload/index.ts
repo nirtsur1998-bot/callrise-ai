@@ -212,8 +212,8 @@ const api = {
       voiceNote?: { mediaId: string; durationMs: number },
       attachmentIds?: string[]
     ) => ipcRenderer.invoke('assistant:send', conversationId, message, voiceNote, attachmentIds),
-    addAttachment: (name: string, bytes: ArrayBuffer) =>
-      ipcRenderer.invoke('assistant:addAttachment', name, bytes),
+    addAttachment: (name: string, bytes: ArrayBuffer, conversationId: string) =>
+      ipcRenderer.invoke('assistant:addAttachment', name, bytes, conversationId),
     discardAttachment: (id: string) => ipcRenderer.invoke('assistant:discardAttachment', id),
     transcribeVoiceNote: (audio: ArrayBuffer, mimeType: string, durationMs: number) =>
       ipcRenderer.invoke('assistant:transcribeVoiceNote', audio, mimeType, durationMs),

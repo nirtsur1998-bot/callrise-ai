@@ -81,6 +81,13 @@ function formatBytes(n: number): string {
 interface PendingAttachment {
   attachment: AssistantAttachment
   preview: string
+  /** AUDIT FIX (2026-08-24) — which conversation this file was staged for.
+   *  pendingFiles is component state that no setActiveId site cleared, so a
+   *  file staged in client A's scoped chat stayed in the composer when the
+   *  user clicked client B's conversation in the rail and was sent into B's
+   *  turn. Stamping the owner lets the composer prune precisely, rather than
+   *  relying on every future navigation path remembering to reset. */
+  conversationId: string
 }
 
 /** One attached-file chip — on a sent message (compact) or in the composer
@@ -909,11 +916,29 @@ export function AssistantView({
 
   const addFiles = useCallback(async (files: FileList | null): Promise<void> => {
     if (!files) return
+    // Every attachment needs a real owner at creation, so a file dropped into
+    // the empty "new chat" state creates its conversation first. Attaching is
+    // already the start of a conversation in every other sense; this just
+    // makes that explicit early enough for the record to be bound.
+    let convId = activeId
+    if (!convId) {
+      const conv = await window.api.assistant.createConversation()
+      convId = conv.id
+      setActiveId(conv.id)
+      void refreshList()
+    }
+    const owner = convId
     for (const file of Array.from(files).slice(0, 6)) {
-      const result = await window.api.assistant.addAttachment(file.name, await file.arrayBuffer())
+      const result = await window.api.assistant.addAttachment(
+        file.name,
+        await file.arrayBuffer(),
+        owner
+      )
       if (result.ok) {
         setPendingFiles((prev) =>
-          prev.length >= 6 ? prev : [...prev, { attachment: result.attachment, preview: result.preview }]
+          prev.length >= 6
+            ? prev
+            : [...prev, { attachment: result.attachment, preview: result.preview, conversationId: owner }]
         )
       } else {
         setNotice(result.message)
@@ -925,6 +950,24 @@ export function AssistantView({
     void window.api.assistant.discardAttachment(id)
     setPendingFiles((prev) => prev.filter((p) => p.attachment.id !== id))
   }, [])
+
+  // AUDIT FIX (2026-08-24) — staged files never survive a conversation
+  // switch. Pruned by OWNER rather than blanket-cleared on every activeId
+  // change, so the conversation that addFiles creates for a file dropped into
+  // the empty state does not immediately discard that same file. Anything
+  // pruned is discarded on disk too, rather than left as an orphan.
+  useEffect(() => {
+    setPendingFiles((prev) => {
+      const keep = prev.filter((p) => p.conversationId === activeId)
+      if (keep.length === prev.length) return prev
+      for (const stale of prev) {
+        if (stale.conversationId !== activeId) {
+          void window.api.assistant.discardAttachment(stale.attachment.id)
+        }
+      }
+      return keep
+    })
+  }, [activeId])
 
   const handleSend = useCallback(async (): Promise<void> => {
     const text = draft.trim()

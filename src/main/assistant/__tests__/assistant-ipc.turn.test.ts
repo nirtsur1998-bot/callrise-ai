@@ -5,7 +5,7 @@
 // citations, busy/cancel/attach semantics, and — the two M28 design claims —
 // a Stop keeps already-streamed words, and an in-flight turn is recoverable
 // by a remounting renderer (main owns the turn).
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -338,7 +338,8 @@ describe('the total prompt bound is applied to real sends', () => {
       const added = (await invoke(
         'assistant:addAttachment',
         `notes-${i}.txt`,
-        new TextEncoder().encode('t'.repeat(40_000)).buffer
+        new TextEncoder().encode('t'.repeat(40_000)).buffer,
+        convId
       )) as { ok: boolean; attachment?: { id: string } }
       if (added.ok && added.attachment) attachmentIds.push(added.attachment.id)
     }
@@ -378,10 +379,95 @@ describe('the total prompt bound is applied to real sends', () => {
   })
 })
 
+// AUDIT FIX (2026-08-24) — attachments are BOUND to a conversation.
+//
+// pendingFiles is component-level renderer state that no setActiveId site
+// cleared, and the stored record carried no conversation id — so a file
+// staged in client A's scoped conversation stayed in the composer when the
+// user clicked client B's conversation in the rail, and was shipped verbatim
+// into B's turn. In a client-scoped chat that is one client's document
+// reaching another client's turn, under a system prompt that asserts the
+// context holds only this client's records.
+//
+// Main could not catch it: readAttachmentRecord resolves any id against one
+// shared attachments/ directory and loadAttachments validated only that the
+// record EXISTED. There was no ownership to check. The renderer now prunes
+// staged files by owner, and this is the backstop that makes every other path
+// fail closed too.
+describe('attachments are bound to their conversation', () => {
+  it("a file staged in one conversation is REFUSED when sent from another", async () => {
+    const { convId, invoke, inFlightCount } = await setup()
+    const other = (await invoke('assistant:createConversation', undefined)) as { id: string }
+    expect(other.id).not.toBe(convId)
+
+    const added = (await invoke(
+      'assistant:addAttachment',
+      'AcmePricing.pdf',
+      new Uint8Array([0x25, 0x50, 0x44, 0x46]).buffer,
+      other.id
+    )) as { ok: boolean; attachment: { id: string } }
+    expect(added.ok).toBe(true)
+
+    const result = (await invoke('assistant:send', convId, 'what does this say?', undefined, [
+      added.attachment.id
+    ])) as Record<string, unknown>
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toBe('attachment-mismatch')
+    expect(String(result.message)).toContain('AcmePricing.pdf')
+    expect(
+      streamControl.lastRequest,
+      "another conversation's document reached the provider"
+    ).toBeNull()
+    expect(inFlightCount()).toBe(0)
+  })
+
+  it('an attachment with NO owner is refused too — fails closed, not open', async () => {
+    // Records written before this field existed have no owner. Trusting them
+    // would leave exactly the hole this closes, and staging happens seconds
+    // before sending, so there is nothing real to preserve by being lenient.
+    const { convId, invoke } = await setup()
+    const added = (await invoke(
+      'assistant:addAttachment',
+      'legacy.txt',
+      new TextEncoder().encode('older build').buffer,
+      convId
+    )) as { ok: boolean; attachment: { id: string } }
+
+    // Strip the owner the way an older build would have left it.
+    const recPath = join(convDir(), 'attachments', `${added.attachment.id}.json`)
+    const rec = JSON.parse(await readFile(recPath, 'utf8')) as Record<string, unknown>
+    delete rec.conversationId
+    await writeFile(recPath, JSON.stringify(rec), 'utf8')
+
+    const result = (await invoke('assistant:send', convId, 'read it', undefined, [
+      added.attachment.id
+    ])) as Record<string, unknown>
+    expect(result.error).toBe('attachment-mismatch')
+  })
+
+  it('the normal case still works — same conversation, file goes through', async () => {
+    const { convId, invoke } = await setup()
+    const added = (await invoke(
+      'assistant:addAttachment',
+      'brief.txt',
+      new TextEncoder().encode('Acme wants a pilot first.').buffer,
+      convId
+    )) as { ok: boolean; attachment: { id: string } }
+
+    const pending = invoke('assistant:send', convId, 'summarise', undefined, [added.attachment.id])
+    streamControl.push('Pilot first.')
+    streamControl.end()
+    const result = (await pending) as Record<string, unknown>
+    expect(result.ok).toBe(true)
+    expect(streamControl.lastRequest).not.toBeNull()
+  })
+})
+
 describe('M28 Part 3 — attachments + the vision gate', () => {
   it('an image with no vision-capable model is refused BEFORE the turn, naming the fix', async () => {
     const { convId, invoke, inFlightCount } = await setup()
-    const added = (await invoke('assistant:addAttachment', 'shot.png', new Uint8Array([1, 2, 3]).buffer)) as {
+    const added = (await invoke('assistant:addAttachment', 'shot.png', new Uint8Array([1, 2, 3]).buffer, convId)) as {
       ok: boolean
       attachment: { id: string }
     }
@@ -414,7 +500,8 @@ describe('M28 Part 3 — attachments + the vision gate', () => {
     const added = (await invoke(
       'assistant:addAttachment',
       'contract.pdf',
-      new Uint8Array([0x25, 0x50, 0x44, 0x46]).buffer
+      new Uint8Array([0x25, 0x50, 0x44, 0x46]).buffer,
+      convId
     )) as { ok: boolean; attachment: { id: string } }
     expect(added.ok).toBe(true)
     chainMock.capable = 0 // keys configured, none can read a document
@@ -439,7 +526,7 @@ describe('M28 Part 3 — attachments + the vision gate', () => {
 
   it('with a vision-capable model the image rides the request and the metadata persists', async () => {
     const { convId, invoke } = await setup()
-    const added = (await invoke('assistant:addAttachment', 'shot.png', new Uint8Array([9, 9]).buffer)) as {
+    const added = (await invoke('assistant:addAttachment', 'shot.png', new Uint8Array([9, 9]).buffer, convId)) as {
       ok: boolean
       attachment: { id: string }
     }
@@ -459,7 +546,8 @@ describe('M28 Part 3 — attachments + the vision gate', () => {
     const added = (await invoke(
       'assistant:addAttachment',
       'brief.txt',
-      new TextEncoder().encode('Acme wants a pilot before any annual commitment.').buffer
+      new TextEncoder().encode('Acme wants a pilot before any annual commitment.').buffer,
+      convId
     )) as { ok: boolean; attachment: { id: string; extractedChars: number } }
     expect(added.ok).toBe(true)
     const pending = invoke('assistant:send', convId, 'summarize the brief', undefined, [added.attachment.id])

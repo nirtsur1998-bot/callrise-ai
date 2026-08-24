@@ -102,6 +102,24 @@ export interface StoredAttachmentRecord extends AssistantAttachment {
   /** Extension the bytes were stored under (`<id>.<ext>`), or 'txt' for the
    *  extracted text of a document — i.e. exactly what will be sent. */
   storedExt: string
+  /**
+   * AUDIT FIX (2026-08-24) — CROSS-CLIENT LEAK. The conversation this file was
+   * staged for.
+   *
+   * Attachments had no owner. `pendingFiles` is component-level renderer state
+   * that no setActiveId site cleared, and the stored record carried no
+   * conversation id, so a file staged in client A's scoped conversation stayed
+   * in the composer when the user clicked client B's conversation in the rail
+   * — and was shipped verbatim into B's turn.
+   *
+   * The main process could not catch it, and that is the part worth fixing
+   * here rather than only in the UI: readAttachmentRecord resolves any id
+   * against one shared attachments/ directory and loadAttachments validated
+   * only that the record EXISTED. There was no ownership to check. Clearing
+   * the composer on conversation change fixes the one path anyone thought of;
+   * recording the owner makes every other path fail closed too.
+   */
+  conversationId?: string
 }
 
 export type AddAttachmentResult =
@@ -114,7 +132,10 @@ export type AddAttachmentResult =
 export async function addAttachment(
   conversationsDir: string,
   name: string,
-  bytes: Buffer
+  bytes: Buffer,
+  /** The conversation this file is being staged for — see
+   *  StoredAttachmentRecord.conversationId. */
+  conversationId?: string
 ): Promise<AddAttachmentResult> {
   const classified = classifyAttachment(name)
   if (!classified) {
@@ -153,7 +174,8 @@ export async function addAttachment(
       mimeType: classified.mimeType,
       sizeBytes: bytes.byteLength,
       extractedChars: sent.length,
-      storedExt: 'txt'
+      storedExt: 'txt',
+      conversationId
     }
     await fs.writeFile(join(dir, `${id}.txt`), sent, 'utf8')
     await fs.writeFile(join(dir, `${id}.json`), JSON.stringify(record), 'utf8')
@@ -168,7 +190,8 @@ export async function addAttachment(
     kind: classified.kind,
     mimeType: classified.mimeType,
     sizeBytes: bytes.byteLength,
-    storedExt: classified.ext
+    storedExt: classified.ext,
+    conversationId
   }
   await fs.writeFile(join(dir, `${id}.${classified.ext}`), bytes)
   await fs.writeFile(join(dir, `${id}.json`), JSON.stringify(record), 'utf8')

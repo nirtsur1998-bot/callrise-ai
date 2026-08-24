@@ -127,7 +127,15 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Pro
 export interface AssistantSendResult {
   ok: boolean
   /** Machine-readable failure class; `message` is always the human copy. */
-  error?: 'not-found' | 'busy' | 'empty' | 'ai-failed' | 'cancelled'
+  /** 'attachment-mismatch' (2026-08-24): a staged file belonged to a
+   *  different conversation and was refused rather than sent. */
+  error?:
+    | 'not-found'
+    | 'busy'
+    | 'empty'
+    | 'ai-failed'
+    | 'cancelled'
+    | 'attachment-mismatch'
   message?: string
   reply?: string
   citations?: AssistantCitation[]
@@ -165,19 +173,38 @@ export function inFlightCountForTests(): number {
 
 /** M28 Part 3 — resolve attachment ids (renderer-supplied) against the
  *  TRUSTED stored records, and load what each will contribute to the turn. */
-async function loadAttachments(ids: string[]): Promise<{
+/**
+ * AUDIT FIX (2026-08-24) — refuses any attachment staged for a DIFFERENT
+ * conversation. See StoredAttachmentRecord.conversationId for the leak.
+ *
+ * Fails CLOSED on a record with no owner: attachments are staged seconds
+ * before they are sent, so an unowned record can only come from a build older
+ * than this field, and trusting it would leave exactly the hole this closes.
+ * The user gets a clear refusal and can re-attach.
+ */
+async function loadAttachments(
+  ids: string[],
+  conversationId: string
+): Promise<{
   metadata: AssistantAttachment[]
   images: { mimeType: string; base64: string }[]
   document?: { base64: string; filename?: string }
   texts: { name: string; text: string }[]
+  /** Names of files refused because they belong to another conversation. */
+  rejected: string[]
 }> {
   const metadata: AssistantAttachment[] = []
   const images: { mimeType: string; base64: string }[] = []
   const texts: { name: string; text: string }[] = []
   let document: { base64: string; filename?: string } | undefined
+  const rejected: string[] = []
   for (const id of ids.slice(0, 6)) {
     const record = await readAttachmentRecord(dir(), id)
     if (!record) continue
+    if (record.conversationId !== conversationId) {
+      rejected.push(record.name)
+      continue
+    }
     const bytes = await readAttachmentBytes(dir(), record)
     if (!bytes) continue
     const { storedExt: _ext, ...meta } = record
@@ -187,7 +214,7 @@ async function loadAttachments(ids: string[]): Promise<{
     else if (record.kind === 'pdf' && !document) document = { base64: bytes.toString('base64'), filename: record.name }
     else if (record.kind === 'text') texts.push({ name: record.name, text: bytes.toString('utf8') })
   }
-  return { metadata, images, document, texts }
+  return { metadata, images, document, texts, rejected }
 }
 
 async function handleSend(
@@ -237,7 +264,20 @@ async function handleSend(
     // M28 Part 3 — attachments, with the vision gate BEFORE the turn starts:
     // an image with no vision-capable model is refused with the exact reason,
     // never silently dropped or sent to a model that can't read it.
-    const files = await loadAttachments(attachmentIds)
+    const files = await loadAttachments(attachmentIds, conversationId)
+    if (files.rejected.length > 0) {
+      // AUDIT FIX (2026-08-24) — a staged file belonging to a DIFFERENT
+      // conversation must never ride along. In a client-scoped chat that is
+      // one client's document reaching another client's turn.
+      return {
+        ok: false,
+        error: 'attachment-mismatch',
+        message:
+          files.rejected.length === 1
+            ? `"${files.rejected[0]}" was attached in a different conversation. Attach it again here if you meant to send it.`
+            : `${files.rejected.length} files were attached in a different conversation. Attach them again here if you meant to send them.`
+      }
+    }
     // AUDIT FIX (2026-08-24) — documents are gated exactly like images now.
     //
     // Before, only images were checked. A PDF rode into the chain ungated,
@@ -547,15 +587,19 @@ export function registerAssistant(): void {
   // "what will be sent" preview. Nothing reaches a provider until send().
   ipcMain.handle(
     'assistant:addAttachment',
-    async (_e, name: unknown, bytes: unknown) => {
+    async (_e, name: unknown, bytes: unknown, conversationId: unknown) => {
       if (typeof name !== 'string' || !(bytes instanceof ArrayBuffer)) {
         return { ok: false, message: 'That file could not be read.' }
+      }
+      // AUDIT FIX (2026-08-24) — every attachment gets an owner at creation.
+      if (typeof conversationId !== 'string' || !conversationId) {
+        return { ok: false, message: 'That file could not be attached to this conversation.' }
       }
       const cap = Math.max(...Object.values(ATTACHMENT_LIMITS))
       if (bytes.byteLength > cap) {
         return { ok: false, message: `That file is larger than the ${Math.round(cap / (1024 * 1024))} MB limit.` }
       }
-      return addAttachment(dir(), name, Buffer.from(bytes))
+      return addAttachment(dir(), name, Buffer.from(bytes), conversationId)
     }
   )
 

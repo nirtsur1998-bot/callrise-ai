@@ -612,7 +612,15 @@ export interface AssistantConversationMeta {
 
 export interface AssistantSendResult {
   ok: boolean
-  error?: 'not-found' | 'busy' | 'empty' | 'ai-failed' | 'cancelled'
+  /** 'attachment-mismatch' (2026-08-24): a staged file belonged to a
+   *  different conversation and was refused rather than sent. */
+  error?:
+    | 'not-found'
+    | 'busy'
+    | 'empty'
+    | 'ai-failed'
+    | 'cancelled'
+    | 'attachment-mismatch'
   message?: string
   reply?: string
   citations?: AssistantCitation[]
@@ -672,7 +680,11 @@ export interface AssistantApi {
    *  sent (extracted text head, or how the binary travels). */
   addAttachment: (
     name: string,
-    bytes: ArrayBuffer
+    bytes: ArrayBuffer,
+    /** AUDIT FIX (2026-08-24) — the conversation this file is staged for.
+     *  Required: an unowned attachment could be sent into any conversation,
+     *  including a different client's scoped one. */
+    conversationId: string
   ) => Promise<
     | { ok: true; attachment: AssistantAttachment; preview: string }
     | { ok: false; message: string }
