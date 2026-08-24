@@ -60,7 +60,25 @@ export interface SettingsGroup {
   items: SettingsPageItem[]
 }
 
-export const SETTINGS_GROUPS: SettingsGroup[] = [
+// BUG-083 (M29 audit, 2026-08-23): the Scheduled Alerts backend — five tables
+// and four edge functions in supabase/ — was never deployed to the live
+// project, so every control on the Alerts page has failed for every user
+// since M19 shipped. Until the backend is genuinely live (verified end to
+// end, not merely committed — see the vault's "shipped as code but never as
+// deployment" taxonomy entry), the page is hidden rather than left lying.
+// Flipping this to true is the WHOLE un-hide; planned as part of the future
+// paid-cloud alerts deployment, not as a quiet default.
+export const ALERTS_BACKEND_LIVE = false
+
+/** Exported so the regression test can prove the switch is wired BOTH ways
+ *  (a nav entry that ignores its flag is taxonomy species 17). */
+export function buildSettingsGroups(alertsBackendLive: boolean): SettingsGroup[] {
+  return ALL_GROUPS.filter(
+    (g) => alertsBackendLive || !g.items.some((item) => item.id === 'alerts')
+  )
+}
+
+const ALL_GROUPS: SettingsGroup[] = [
   {
     items: [{ id: 'account', label: 'Account', icon: User }]
   },
@@ -266,5 +284,7 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
       ]
     : [])
 ]
+
+export const SETTINGS_GROUPS: SettingsGroup[] = buildSettingsGroups(ALERTS_BACKEND_LIVE)
 
 export const ALL_SETTINGS_PAGES: SettingsPageItem[] = SETTINGS_GROUPS.flatMap((g) => g.items)
