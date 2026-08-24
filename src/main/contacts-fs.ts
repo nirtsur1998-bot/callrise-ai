@@ -217,6 +217,45 @@ function sanitizeOptionalText(value: unknown, max: number): string | undefined {
 /** Like sanitizeOptionalText but PRESERVES newlines — for the multi-line
  *  notes textarea. Collapsing newlines silently flattened users' notes into
  *  one run-on line on every save AND read. Normalizes CRLF, caps blank runs. */
+/** Hard cap on comments per contact, so one contact file cannot grow without bound. */
+const MAX_COMMENTS = 500
+
+/**
+ * BUG-095 (founder-reported 2026-08-24). `comments` was missing from
+ * sanitizeContactRecord's closed object literal, so every read stripped it:
+ * a posted comment was written to disk, shown once from the return value, and
+ * gone on the next read — and because updateContact is read-then-write, the
+ * next unrelated edit erased it from disk for good.
+ *
+ * Validated element by element rather than passed through: this array comes
+ * off disk, and a contact file is user-writable. A malformed entry is dropped,
+ * never allowed through as-is. MAX_COMMENTS bounds the array so a runaway
+ * writer cannot make a contact file unbounded.
+ */
+function sanitizeComments(value: unknown): ContactComment[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: ContactComment[] = []
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') continue
+    const c = raw as Record<string, unknown>
+    const text = sanitizeMultilineText(c.text, MAX_COMMENT)
+    if (!text) continue // a comment with no text is not a comment
+    if (!isSafeId(c.id)) continue
+    const createdAt =
+      typeof c.createdAt === 'string' && !Number.isNaN(Date.parse(c.createdAt))
+        ? c.createdAt
+        : new Date().toISOString()
+    out.push({
+      id: c.id as string,
+      text,
+      createdAt,
+      source: c.source === 'ai' ? 'ai' : 'user'
+    })
+    if (out.length >= MAX_COMMENTS) break
+  }
+  return out.length > 0 ? out : undefined
+}
+
 function sanitizeMultilineText(value: unknown, max: number): string | undefined {
   if (typeof value !== 'string') return undefined
   const clean = value
@@ -298,6 +337,9 @@ function sanitizeContactRecord(value: unknown): Contact | null {
     phone: sanitizeOptionalText(v.phone, MAX_PHONE),
     phoneE164: sanitizePhoneE164(v.phoneE164),
     notes: sanitizeMultilineText(v.notes, MAX_NOTES),
+    // BUG-095: without this line every read silently dropped the rep's
+    // comments and AI-drafted notes.
+    comments: sanitizeComments(v.comments),
     industry: sanitizeOptionalText(v.industry, MAX_SHORT_TEXT),
     companySize: sanitizeOptionalText(v.companySize, MAX_SHORT_TEXT),
     website: sanitizeOptionalText(v.website, MAX_LONG_TEXT),
