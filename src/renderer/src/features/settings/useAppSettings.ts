@@ -56,7 +56,9 @@ const DEFAULT_SETTINGS: AppSettings = {
     'coaching-chat': { chain: [] },
     'memory-extract': { chain: [] }
   },
-  autoUpdateEnabled: false,
+  autoUpdateEnabled: true,
+  autoUpdateMigratedToDefaultOn: true,
+  autoUpdateNoticePending: false,
   coach2: { enabled: false, methodology: 'blended' },
   contactIntelligence: { mode: 'off' },
   salesBrain: { enabled: false },
