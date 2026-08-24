@@ -236,10 +236,16 @@ export function markStructurallyBroken(catalogId: string, now: number, purpose: 
 /**
  * `purpose: null` means "no particular purpose is being asked about" and
  * always answers false — the honest answer for a purpose-scoped record. A
- * break proven by assistant-chat's request says nothing about whether a
+ * break proven by ONE purpose's request says nothing about whether a
  * background summarisation job can use the model. Only hasUsableAiCapacity
- * passes null, and deferring every background job because one chat request
- * 400'd is exactly the cross-purpose damage this scoping exists to end.
+ * passes null, and deferring every background job because one interactive
+ * chat request 400'd is exactly the cross-purpose damage this scoping exists
+ * to end.
+ *
+ * Deliberately names no specific purpose: the principle holds for any pair,
+ * and this block is a backport candidate to `main`, which does not have
+ * every purpose this branch does. A comment that cites an identifier the
+ * target branch lacks is a small lie that ships.
  */
 export function isStructurallyBroken(
   catalogId: string,
