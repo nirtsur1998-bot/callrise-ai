@@ -67,9 +67,21 @@ describe('hasUsableAiCapacity — the signal', () => {
     expect(hasUsableAiCapacity(NOW)).toBe(false)
   })
 
-  it('counts a structural break as unusable too, not just a quota cooldown', () => {
-    for (const id of idsForProvider('groq')) markStructurallyBroken(id, NOW)
-    expect(hasUsableAiCapacity(NOW)).toBe(false)
+  // AUDIT FIX (2026-08-24) — this assertion INVERTED deliberately when
+  // structural breaks became purpose-scoped, and the inversion is the point.
+  //
+  // hasUsableAiCapacity is the no-purpose fallback (src/main/index.ts:360);
+  // every caller that knows its purpose uses hasUsableCapacityForPurpose,
+  // which still counts breaks for that purpose (capacityForPurpose.test.ts).
+  // A break is now evidence about one purpose's request shape, so it cannot
+  // answer "does anything have capacity at all". Treating it as if it could
+  // is what let one rejected Rise attachment defer every background job in
+  // the app behind a "waiting for provider capacity" label that no success
+  // could ever clear — a blacklisted model is filtered out of every chain,
+  // so it can never earn the success that clears it early.
+  it("does NOT count another purpose's structural break — breaks are purpose-scoped", () => {
+    for (const id of idsForProvider('groq')) markStructurallyBroken(id, NOW, 'coaching-chat')
+    expect(hasUsableAiCapacity(NOW)).toBe(true)
   })
 
   it('recovers as soon as ONE model comes back', () => {
