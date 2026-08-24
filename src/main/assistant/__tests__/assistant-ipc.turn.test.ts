@@ -195,6 +195,26 @@ vi.mock('../tools', () => ({
 const taskMock = vi.hoisted(() => ({
   create: vi.fn(async (): Promise<{ id: string }> => ({ id: 'task-1' }))
 }))
+// BUG-096 fix C — the unbound-client notice. Mocked at the module boundary so
+// the TURN test proves the WIRING (does it run, only when unscoped, and does
+// its output reach the prompt); the module's own behaviour is covered for
+// real in unbound-client.test.ts.
+const unboundMock = vi.hoisted(() => ({
+  detect: vi.fn(
+    async (_message: string, _dir: string) => [{ contactId: 'acme', label: 'Acme', memoryCount: 2 }]
+  ),
+  calls: [] as string[]
+}))
+vi.mock('../unbound-client', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>
+  return {
+    ...actual,
+    detectUnboundClientMentions: async (message: string, dir: string) => {
+      unboundMock.calls.push(message)
+      return unboundMock.detect(message, dir)
+    }
+  }
+})
 vi.mock('../../tasks-fs', () => ({ createTask: taskMock.create }))
 vi.mock('../../backup', () => ({ scheduleBackup: vi.fn() }))
 const suggestMock = vi.hoisted(() => ({
@@ -1015,5 +1035,84 @@ describe('stop and attach — the two M28 design claims', () => {
     await invoke('assistant:cancel', convId)
     expect(streamControl.signal?.aborted).toBe(true)
     await pending
+  })
+})
+
+// BUG-096 fix C (2026-08-25) — the WIRING. Does the notice run, does it run
+// ONLY when the conversation is unbound, and does its text reach the prompt?
+// The module's own behaviour is covered in unbound-client.test.ts; a correct
+// module nothing calls is the hollow shape this milestone spent a day on.
+describe('BUG-096 fix C — naming clients an unbound chat cannot reach', () => {
+  it('an UNBOUND chat gets the notice, and it reaches the system prompt', async () => {
+    const { convId, invoke } = await setup()
+    unboundMock.calls = []
+
+    const pending = invoke('assistant:send', convId, 'who makes the buying decisions at Acme?')
+    streamControl.push('ok')
+    streamControl.end()
+    await pending
+
+    expect(unboundMock.calls).toEqual(['who makes the buying decisions at Acme?'])
+    const req = streamControl.lastRequest as { system: string }
+    expect(req.system).toContain('CLIENTS NAMED IN THE QUESTION THAT THIS CONVERSATION CANNOT REACH')
+    expect(req.system).toContain('Acme')
+    expect(
+      req.system,
+      'the model was not told to stop answering from general context — which is ' +
+        'the entire fix, since the damage was a confident answer from the wrong memories'
+    ).toContain('Do NOT present rep-wide or business-wide facts')
+  })
+
+  it('a SCOPED chat never runs it — the cross-client path is untouched', async () => {
+    // The invariant is preserved BY CONSTRUCTION: a scoped turn must not even
+    // reach the detector, so no future change to the detector can widen what
+    // a scoped conversation sees.
+    const { invoke } = await setup()
+    const scoped = (await invoke('assistant:createConversation', {
+      contactId: 'globex',
+      contactName: 'Sam Park',
+      company: 'Globex'
+    })) as { id: string }
+    unboundMock.calls = []
+
+    const pending = invoke('assistant:send', scoped.id, 'who decides at Acme?')
+    streamControl.push('ok')
+    streamControl.end()
+    await pending
+
+    expect(
+      unboundMock.calls,
+      'a scoped conversation reached the unbound-client detector'
+    ).toEqual([])
+    const req = streamControl.lastRequest as { system: string }
+    expect(req.system).not.toContain('CANNOT REACH')
+  })
+
+  it('no notice when nothing is named — ordinary turns are unchanged', async () => {
+    const { convId, invoke } = await setup()
+    unboundMock.detect.mockResolvedValueOnce([])
+
+    const pending = invoke('assistant:send', convId, 'how do I handle pricing pushback?')
+    streamControl.push('ok')
+    streamControl.end()
+    await pending
+
+    const req = streamControl.lastRequest as { system: string }
+    expect(req.system).not.toContain('CANNOT REACH')
+  })
+
+  it('a detector failure never breaks the turn', async () => {
+    // It is an advisory note, not a dependency. Nothing about answering the
+    // user should hinge on whether contact matching succeeded.
+    const { convId, invoke } = await setup()
+    unboundMock.detect.mockRejectedValueOnce(new Error('contacts unreadable'))
+
+    const pending = invoke('assistant:send', convId, 'who decides at Acme?')
+    streamControl.push('still answered')
+    streamControl.end()
+    const result = (await pending) as Record<string, unknown>
+
+    expect(result.ok).toBe(true)
+    expect(result.reply).toBe('still answered')
   })
 })

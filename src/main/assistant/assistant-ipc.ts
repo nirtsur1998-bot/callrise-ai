@@ -41,6 +41,7 @@ import { extractContextSuggestions } from '../coaching-chat'
 import type { CoachChatContextSuggestion } from '../calls-fs'
 import type { MemoryCategory, MemoryScope } from '../memory/types'
 import { buildAssistantContext, citationsUsedIn } from './context'
+import { detectUnboundClientMentions, unboundClientNotice } from './unbound-client'
 import {
   deleteVoiceNote,
   readVoiceNote,
@@ -360,7 +361,7 @@ async function handleSend(
     // need only the message); planning degrades to [] when no tool-capable
     // model exists.
     const toolDirs = defaultToolDirs(app.getPath('userData'))
-    const [retrieved, planned, clientBrief] = await Promise.all([
+    const [retrieved, planned, clientBrief, unboundMentions] = await Promise.all([
       retrieveRelevantMemoriesStructured(message, {
         foreground: true,
         includeHypotheses: true,
@@ -370,9 +371,21 @@ async function handleSend(
         contactId: scope?.contactId ?? null
       }),
       planLookups(message, turn.controller.signal),
-      scope ? clientBriefSections(scope.contactId, toolDirs) : Promise.resolve([])
+      scope ? clientBriefSections(scope.contactId, toolDirs) : Promise.resolve([]),
+      // BUG-096 fix C — in an UNBOUND chat, work out which named clients this
+      // conversation cannot reach. Runs only when there is no scope: a scoped
+      // chat can reach its own client, and asking about a different one is
+      // the cross-client case that other guards already refuse.
+      //
+      // Deliberately does NOT widen retrieval. The cross-client invariant
+      // stays untouched BY CONSTRUCTION rather than by care — this path adds
+      // a note about what is missing, never the missing data itself.
+      scope
+        ? Promise.resolve([])
+        : detectUnboundClientMentions(message, toolDirs.contactsDir).catch(() => [])
     ])
     if (turn.stopRequested) return { ok: false, error: 'cancelled', message: 'Stopped.' }
+    const unboundNotice = unboundClientNotice(unboundMentions)
     if (planned.length > 0) {
       broadcast('assistant:phase', { conversationId, phase: 'searching' })
     }
@@ -388,7 +401,14 @@ async function handleSend(
       businessProfile: businessProfileSection('full'),
       retrieved,
       // The client brief LEADS the lookup sections in a scoped turn.
-      lookupSections: [...clientBrief, ...lookups.sections],
+      // The unreachable-client notice LEADS, for the same reason the client
+      // brief leads in a scoped turn: it changes how everything after it
+      // should be read.
+      lookupSections: [
+        ...(unboundNotice ? [unboundNotice] : []),
+        ...clientBrief,
+        ...lookups.sections
+      ],
       scope: scope
         ? { contactName: scope.contactName, company: scope.company, dealTitle: scope.dealTitle }
         : undefined,
