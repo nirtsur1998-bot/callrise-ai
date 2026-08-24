@@ -64,6 +64,41 @@ describe('fitPromptToBudget', () => {
     }
   })
 
+  // AUDIT FIX (2026-08-25) — the repair must not hide what it repairs. A
+  // history that ALREADY began on an assistant turn is a violated pairing
+  // invariant (BUG-109) that nothing should be able to produce; the routine
+  // odd-drop boundary this function creates itself is benign. Both end with
+  // the same repaired output, so without a flag read BEFORE any dropping the
+  // two are indistinguishable — a detector that switches off what it detects.
+  it('flags a history that ALREADY began on an assistant turn', () => {
+    const malformed = [msg('assistant', 'orphaned reply'), msg('user', 'then a question')]
+    const out = fitPromptToBudget({ system: 'sys', history: malformed, message: 'now' }, 10_000)
+    expect(out.historyStartedOnAssistant).toBe(true)
+  })
+
+  it('does NOT flag the routine odd-drop boundary it creates itself', () => {
+    // Well-formed input, forced to drop an odd number — the guard repairs it,
+    // and that is not a violation of anything.
+    const history = Array.from({ length: 10 }, (_, i) =>
+      msg(i % 2 === 0 ? 'user' : 'assistant', `turn-${i}-${'x'.repeat(100)}`)
+    )
+    const out = fitPromptToBudget({ system: 'sys', history, message: 'now' }, 400)
+    expect(out.trim.historyMessagesDropped).toBeGreaterThan(0)
+    expect(
+      out.historyStartedOnAssistant,
+      'the benign odd-drop boundary was reported as a violated invariant — ' +
+        'this flag would then fire on ordinary long conversations and mean nothing'
+    ).toBe(false)
+  })
+
+  it('a well-formed history that needs no trimming is not flagged', () => {
+    const out = fitPromptToBudget(
+      { system: 'sys', history: [msg('user', 'hi'), msg('assistant', 'hello')], message: 'now' },
+      10_000
+    )
+    expect(out.historyStartedOnAssistant).toBe(false)
+  })
+
   it('the paired-drop guard still respects the budget it just satisfied', () => {
     // Dropping one MORE can only shrink the prompt, but assert it rather than
     // asserting the reasoning: the guard runs AFTER the fitting loop, so a

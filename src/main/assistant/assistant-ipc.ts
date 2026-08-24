@@ -419,6 +419,17 @@ async function handleSend(
       budgetCharsFor(DEFAULT_CONTEXT_WINDOW_TOKENS)
     )
     const history = budget.history
+    if (budget.historyStartedOnAssistant) {
+      // Not the routine odd-drop boundary — this history was ALREADY
+      // malformed on arrival, which nothing should be able to produce. The
+      // trimmer repairs it either way; this is what stops the repair from
+      // hiding it. See BUG-109.
+      console.warn(
+        '[assistant] conversation history began on an assistant turn before any trimming —',
+        'the user/assistant pairing invariant was violated upstream:',
+        conversationId
+      )
+    }
     if (budget.trim.trimmed) {
       console.warn(
         '[assistant] prompt trimmed to fit the context budget:',

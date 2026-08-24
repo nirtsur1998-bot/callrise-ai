@@ -49,6 +49,19 @@ export interface PromptBudgetResult {
     /** True when anything at all was trimmed. */
     trimmed: boolean
   }
+  /**
+   * AUDIT FIX (2026-08-25) — read BEFORE any dropping, so it reports a
+   * GENUINELY broken pairing invariant (BUG-109) rather than the routine odd
+   * drop this function creates itself and then repairs.
+   *
+   * Without the distinction the repair below is a detector that switches off
+   * the thing it detects: an input whose history already started on an
+   * assistant turn — which nothing on this branch should ever produce — would
+   * be silently corrected and look identical to the benign case. Mirrored
+   * from the coaching-chat module on `main`, whose author pointed out that my
+   * trimmer had the same blind spot.
+   */
+  historyStartedOnAssistant: boolean
 }
 
 /**
@@ -104,6 +117,9 @@ export function fitPromptToBudget(
   budgetChars: number
 ): PromptBudgetResult {
   const history = [...input.history]
+  // Captured BEFORE the loop: afterwards it cannot be told apart from the
+  // odd-drop boundary this function creates on its own.
+  const historyStartedOnAssistant = history.length > 0 && history[0].role === 'assistant'
   let historyMessagesDropped = 0
   let systemCharsDropped = 0
 
@@ -153,6 +169,7 @@ export function fitPromptToBudget(
       historyMessagesDropped,
       systemCharsDropped,
       trimmed: historyMessagesDropped > 0 || systemCharsDropped > 0
-    }
+    },
+    historyStartedOnAssistant
   }
 }
