@@ -68,6 +68,41 @@ describe('create / list / rename / delete', () => {
 })
 
 describe('appendTurn', () => {
+  // AUDIT FIX (2026-08-25) — appendTurn's RETURNED IDS are the contract that
+  // replaced positional inference (BUG-110). Tested here rather than at the
+  // IPC layer, and the distinction is the point: at the IPC layer, with a
+  // real store, "the id I was handed" and "messages[length - 2].id" are
+  // INDISTINGUISHABLE by behaviour, because the array is always well-formed.
+  // Reverting the caller to positional there passes 3/3 — I checked. The
+  // mechanism only becomes assertable where the ids are minted.
+  //
+  // Resolved by LOOKUP, never by index: indexing is the thing under test, so
+  // a test that indexes proves the array's shape rather than the contract.
+  it('returns the ids it minted, and they resolve to the right roles and texts', async () => {
+    const conv = await createConversation(dir)
+    const first = await appendTurn(dir, conv.id, { text: 'first ask' }, { text: 'first reply' })
+    const second = await appendTurn(dir, conv.id, { text: 'second ask' }, { text: 'second reply' })
+    expect(first).toBeTruthy()
+    expect(second).toBeTruthy()
+
+    const stored = await getConversation(dir, conv.id)
+    const byId = (id: string) => stored?.messages.find((m) => m.id === id)
+
+    const u = byId(second!.userMessageId)
+    const a = byId(second!.assistantMessageId)
+    expect(u, 'the returned userMessageId matches no persisted message').toBeTruthy()
+    expect(a, 'the returned assistantMessageId matches no persisted message').toBeTruthy()
+    expect(u?.role).toBe('user')
+    expect(u?.text).toBe('second ask')
+    expect(a?.role).toBe('assistant')
+    expect(a?.text).toBe('second reply')
+
+    // Each turn's ids are its own — a stale or reused id would still resolve
+    // to SOME message, so identity across turns has to be asserted too.
+    expect(second!.userMessageId).not.toBe(first!.userMessageId)
+    expect(byId(first!.userMessageId)?.text).toBe('first ask')
+  })
+
   it('persists one complete turn and auto-titles from the first user message', async () => {
     const conv = await createConversation(dir)
     await appendTurn(dir, conv.id, { text: 'Prep me for the 2pm with Dana' }, { text: 'Sure —' })
