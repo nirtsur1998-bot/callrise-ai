@@ -232,10 +232,12 @@ async function handleSend(
   // cap (8,000, :141) and the persistence cap (MAX_CHAT_TEXT 16,000) disagree
   // and the replay path enforces neither. Overflow returns a 400, which
   // failure-class.ts calls 'structural', and the walk then re-sends the SAME
-  // oversize prompt to the next model, blacklisting each in turn — leaving
-  // coaching chat dark for 4 hours behind an AllModelsExhaustedError that
-  // never mentions size. (Since cf053b9 that break is purpose-scoped, so it
-  // no longer takes every other AI feature down with it.)
+  // oversize prompt to the next model, blacklisting each in turn for 4 hours
+  // behind an AllModelsExhaustedError that never mentions size. On the
+  // RELEASED build (v1.3.3) that break is keyed by catalogId alone, so it
+  // takes down every AI feature, not just this one; cf053b9 purpose-scopes it
+  // but is merged-and-unreleased. See prompt-budget.ts's header for both
+  // numbers — do not quote just the main-branch one.
   //
   // Applied HERE, at assembly, for two reasons. It covers the
   // draftFollowUpEmail path (:419 persists an assistant turn from a different

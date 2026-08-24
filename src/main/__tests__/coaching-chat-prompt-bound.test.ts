@@ -257,8 +257,24 @@ describe('coachChat:send — the total prompt bound is actually applied (BUG-108
     // only while the tail is a complete user+assistant pair — an invariant
     // nothing enforces. Landing one off would file a memory extracted from
     // the REP's words under the COACH's id: no error, no rejection, just
-    // wrong provenance in Sales Brain data. Asserting the minted id proves
-    // the inference is gone rather than merely currently-correct.
+    // wrong provenance in Sales Brain data.
+    //
+    // BE PRECISE ABOUT WHAT THIS PROVES, because it is easy to overclaim.
+    // In production the two mechanisms COINCIDE: appendCoachChatTurn appends
+    // the pair and returns those same ids, so on well-formed data
+    // `coachChat[length - 2].id === userMessageId` and no behavioural test
+    // could separate them. This test discriminates only because the MOCK
+    // decouples the two sources — it returns 'minted-user-id' while the
+    // array it also returns holds m0..m39. That state is one the real
+    // appendCoachChatTurn cannot produce.
+    //
+    // So this asserts WHICH SOURCE THE CODE READS (a handed-back id, not a
+    // computed index) — a real regression guard if someone later "simplifies"
+    // back to arithmetic. It does NOT assert that arithmetic gives a wrong
+    // answer today; it doesn't. The M28 session's equivalent Rise test can't
+    // discriminate at all, because its fixture keeps the two sources in
+    // agreement — the asymmetry is a property of the FIXTURES, not the code,
+    // so neither result generalises to "hardening is/isn't testable".
     runMemoryExtractionForChatMessage.mockClear()
     await send('their CFO signs off on anything over 50k')
     expect(runMemoryExtractionForChatMessage).toHaveBeenCalledTimes(1)

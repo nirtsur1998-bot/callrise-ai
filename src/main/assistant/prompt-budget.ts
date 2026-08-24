@@ -32,13 +32,24 @@
 // blacklisting each in turn. The user sees only AllModelsExhaustedError,
 // which never mentions size.
 //
-// Blast radius, as of cf053b9 (`8192f85`, the purpose-scoping backport that
-// landed on main WHILE this fix was being written): `structuralBreaks` is now
-// keyed `purpose\0catalogId`, so an overflow here takes out coaching chat for
-// 4 hours rather than every AI feature in the app. Before that backport it
-// was keyed by catalogId alone and this was a whole-app outage, exactly as
-// BUG-097 was. Containment limits the damage; it does not prevent the
-// overflow, which is what this module is for.
+// Blast radius — TWO ANSWERS, and the one that matters for users is the
+// worse one. State both or neither.
+//
+//   In the field: EVERY purpose goes dark for 4 hours. The released build is
+//   v1.3.3 (tag a084ad8), and `8192f85` is NOT an ancestor of it — verified,
+//   not assumed. Every installed copy keys `structuralBreaks` by catalogId
+//   alone, so one oversize coaching prompt blacklists that model for live
+//   cues, summaries, tasks, everything — exactly as BUG-097 did.
+//
+//   On main: coaching chat only. `cf053b9` (containing `8192f85`) re-keyed
+//   the map `purpose\0catalogId`. Merged, and at the time of writing
+//   UNRELEASED — main is 6 commits ahead of the tag.
+//
+// So containment is real but not yet reaching anyone, and the two states
+// diverge until a release ships. An earlier draft of this comment stated
+// only the main-branch answer and was quietly wrong about every machine
+// running the app. Containment limits the damage anyway; it never prevents
+// the overflow, which is what this module is for.
 //
 // MERGE-BOUNDARY OBLIGATION. claude/m28-rise carries its own copy of this
 // module at the same path, written first, for the Rise assistant. THIS file
