@@ -14,7 +14,7 @@ import { liveCallInfo } from '../live/live-transcript'
 import { getMemoryDb } from './memory-runtime'
 import { extractMemoriesFromCall, extractMemoriesFromChatMessage } from './extraction'
 import { consolidateNewCandidate, runLightConsolidation } from './consolidation'
-import { deleteMemory, listMemoriesByCallId } from './memories-store'
+import { forgetCallContribution } from './memories-store'
 import type { MemoryScope } from './types'
 
 function callsDir(): string {
@@ -155,9 +155,11 @@ export async function runMemoryExtractionForCall(
   if (touchedScopes.size > 0) {
     const finalCall = await getCall(callsDir(), callId)
     if (!finalCall || finalCall.salesBrainExcluded) {
-      for (const memory of listMemoriesByCallId(db, callId)) {
-        deleteMemory(db, memory.id)
-      }
+        // AUDIT FIX (2026-08-24) — evidence-level, not row-level. Deleting
+        // every memory this source ever TOUCHED also destroyed what other
+        // calls taught, because reinforcement stamps this source's callId
+        // onto pre-existing rows. See forgetCallContribution.
+      forgetCallContribution(db, callId)
       return
     }
   }
@@ -221,9 +223,11 @@ export async function runMemoryExtractionForAssistantMessage(
   if (touchedScopes.size > 0) {
     const finalCheck = await getConversation(convDir, conversationId)
     if (!finalCheck || finalCheck.salesBrainExcluded) {
-      for (const memory of listMemoriesByCallId(db, `assistant:${conversationId}`)) {
-        deleteMemory(db, memory.id)
-      }
+        // AUDIT FIX (2026-08-24) — evidence-level, not row-level. Deleting
+        // every memory this source ever TOUCHED also destroyed what other
+        // calls taught, because reinforcement stamps this source's callId
+        // onto pre-existing rows. See forgetCallContribution.
+      forgetCallContribution(db, `assistant:${conversationId}`)
       return
     }
   }

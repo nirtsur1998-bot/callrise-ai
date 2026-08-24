@@ -11,6 +11,7 @@ import { embedText } from './embeddings'
 import {
   buildChangelog,
   deleteMemory,
+  forgetCallContribution,
   forgetEverything,
   listMemories,
   listMemoriesByCallId,
@@ -168,9 +169,11 @@ export function registerMemoryCenter(): void {
       if (excluded === true && isSalesBrainEnabled()) {
         const db = getMemoryDb()
         if (db) {
-          for (const memory of listMemoriesByCallId(db, callId)) {
-            deleteMemory(db, memory.id)
-          }
+        // AUDIT FIX (2026-08-24) — evidence-level, not row-level. Deleting
+        // every memory this source ever TOUCHED also destroyed what other
+        // calls taught, because reinforcement stamps this source's callId
+        // onto pre-existing rows. See forgetCallContribution.
+          forgetCallContribution(db, callId)
         }
       }
       return { ok: true }

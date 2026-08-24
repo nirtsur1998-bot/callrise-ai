@@ -34,7 +34,7 @@ import {
 import { retrieveRelevantMemoriesStructured } from '../memory/rag'
 import { consolidateNewCandidate } from '../memory/consolidation'
 import { getMemoryDb, ensureMemoryDb } from '../memory/memory-runtime'
-import { deleteMemory, getMemoryById, listMemoriesByCallId } from '../memory/memories-store'
+import { forgetCallContribution, getMemoryById } from '../memory/memories-store'
 import { runMemoryExtractionForAssistantMessage } from '../memory/memory-hooks'
 import { isSalesBrainEnabled } from '../app-settings'
 import { extractContextSuggestions } from '../coaching-chat'
@@ -744,9 +744,11 @@ export function registerAssistant(): void {
         const conv = await setConversationSalesBrainExcluded(dir(), conversationId, true)
         if (!conv) return { ok: false }
         if (db) {
-          for (const memory of listMemoriesByCallId(db, `assistant:${conversationId}`)) {
-            deleteMemory(db, memory.id)
-          }
+        // AUDIT FIX (2026-08-24) — evidence-level, not row-level. Deleting
+        // every memory this source ever TOUCHED also destroyed what other
+        // calls taught, because reinforcement stamps this source's callId
+        // onto pre-existing rows. See forgetCallContribution.
+          forgetCallContribution(db, `assistant:${conversationId}`)
         }
         return { ok: true }
       }

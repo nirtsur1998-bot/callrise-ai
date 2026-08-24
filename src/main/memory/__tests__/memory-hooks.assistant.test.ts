@@ -80,6 +80,28 @@ vi.mock('../memories-store', () => ({
   deleteMemory: (_db: unknown, id: string) => {
     state.deleted.push(id)
     return true
+  },
+  // AUDIT FIX (2026-08-24) — mirrors forgetCallContribution's real
+  // semantics (prune this source's evidence; delete only when it was the
+  // last) rather than stubbing it, so the assertions below still mean
+  // something. The store's own semantics are covered for real against a
+  // migrated database in exclusion-forgets.test.ts; this mock exists only so
+  // the HOOK's sweep can be observed.
+  forgetCallContribution: (_db: unknown, callId: string) => {
+    let deleted = 0
+    let pruned = 0
+    for (const m of state.storedByCall as { id: string; evidence?: { type?: string; callId?: string }[] }[]) {
+      const remaining = (m.evidence ?? []).filter(
+        (e) => !(e.type === 'transcript' && e.callId === callId)
+      )
+      if (remaining.length === 0) {
+        state.deleted.push(m.id)
+        deleted++
+      } else {
+        pruned++
+      }
+    }
+    return { deleted, pruned }
   }
 }))
 

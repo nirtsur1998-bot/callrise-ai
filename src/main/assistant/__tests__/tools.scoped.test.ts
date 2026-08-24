@@ -143,7 +143,7 @@ describe('clientBriefSections', () => {
 // leak was not merely untested: it was untestable here.
 describe('today_schedule in a scoped conversation — the cross-client invariant', () => {
   const runSchedule = (scopeContactId?: string) =>
-    executeLookups([{ kind: 'today_schedule' }], DIRS, undefined, scopeContactId)
+    executeLookups([{ kind: 'today_schedule', query: '' }], DIRS, undefined, scopeContactId)
 
   it('UNSCOPED: the full day is shown, every source merged (unchanged behaviour)', async () => {
     const { sections } = await runSchedule()
