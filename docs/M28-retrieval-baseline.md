@@ -48,6 +48,8 @@ demand near-identity, and loosening it would silently change C1 semantics.
 
 1.4 adds nothing over 1.3; 1.3 eliminates empty answers entirely. Chosen: 1.3.
 
+**Why this is an operating point rather than a tuned number (stated explicitly, founder 2026-08-24).** 1.3 sits at the **start of a plateau**: 1.25 gives 86%, 1.3 gives 93%, and 1.4 gives 93% again — the curve flattens, so the choice is where the gain stops rather than where a target is met. That distinction is what makes the number trustworthy or not, so it should not be left implicit: a threshold picked to hit a goal moves whenever the goal moves, while an operating point picked off a plateau is stable under re-measurement and is falsifiable — if a future embedding or ranking change moves the plateau, the sweep says so on the next run. **The sweep is re-run in full on every harness run, including the 0.6 row**, so the pre-M28 collapse is re-measured every time rather than remembered.
+
 ## After (1.3)
 
 | Config | recall@5 | MRR | empty answers | scope violations |
