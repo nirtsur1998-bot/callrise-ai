@@ -2630,6 +2630,7 @@ export interface SalesBrainCallsApi {
 }
 
 export interface SalesBrainApi {
+  status: () => Promise<SalesBrainStatus>
   onboarding: SalesBrainOnboardingApi
   backfill: SalesBrainBackfillApi
   memories: SalesBrainMemoriesApi
@@ -2667,6 +2668,21 @@ export interface LiveApi {
 }
 
 declare global {
+  /** AUDIT FIX (2026-08-24) — the four states an empty memories.list() can
+   *  mean. Each of the first three has a DIFFERENT correct user action, and
+   *  the boolean this replaces collapsed them into "your Sales Brain is
+   *  empty" — wrong for two of them, and wrong for the SHIPPING DEFAULT.
+   *
+   *  Ambient rather than exported: no renderer file imports preload types,
+   *  and `../../../../preload` resolves to the implementation module (which
+   *  would drag electron into the web project), so an import here would be
+   *  swimming against the repo's own convention. */
+  type SalesBrainStatus =
+    | { state: 'off' }
+    | { state: 'unavailable'; detail: string }
+    | { state: 'empty' }
+    | { state: 'ready'; count: number }
+
   interface Window {
     electron: ElectronAPI
     api: {

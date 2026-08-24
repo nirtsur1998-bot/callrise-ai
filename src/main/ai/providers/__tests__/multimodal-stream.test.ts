@@ -22,6 +22,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const seen = vi.hoisted(() => ({ params: null as Record<string, unknown> | null }))
 
+/** Reads the captured params without letting TypeScript narrow `seen.params`
+ *  to `null` after an explicit reset — the narrowing is correct in general
+ *  and wrong here, because the mock reassigns it from outside this flow. */
+function captured(): Record<string, unknown> | null {
+  return seen.params
+}
+
 vi.mock('@anthropic-ai/sdk', () => {
   class FakeAnthropic {
     messages = {
@@ -131,7 +138,7 @@ describe('AnthropicProvider.stream() — multimodal parts reach the wire', () =>
 
     seen.params = null
     await provider.complete(req)
-    const completed = JSON.stringify(seen.params?.messages)
+    const completed = JSON.stringify(captured()?.messages)
 
     expect(streamed).toBe(completed)
   })

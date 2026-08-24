@@ -6,7 +6,7 @@ import { app, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { isSalesBrainEnabled } from '../app-settings'
 import { getCall, setCallSalesBrainExcluded } from '../calls-fs'
-import { getMemoryDb } from './memory-runtime'
+import { getLastInitResult, getMemoryDb } from './memory-runtime'
 import { embedText } from './embeddings'
 import {
   buildChangelog,
@@ -23,6 +23,17 @@ function noDb<T>(fallback: T): T {
   return fallback
 }
 
+/**
+ * AUDIT FIX (2026-08-24) — the four states an empty result can mean, made
+ * distinguishable. 'off' and 'unavailable' each have a DIFFERENT correct user
+ * action from 'empty', and the old boolean collapsed all three.
+ */
+export type SalesBrainStatus =
+  | { state: 'off' }
+  | { state: 'unavailable'; detail: string }
+  | { state: 'empty' }
+  | { state: 'ready'; count: number }
+
 function callsDir(): string {
   return join(app.getPath('userData'), 'calls')
 }
@@ -32,6 +43,34 @@ let registered = false
 export function registerMemoryCenter(): void {
   if (registered) return
   registered = true
+
+  // AUDIT FIX (2026-08-24) — a status any caller can ACT on.
+  //
+  // 'salesBrain:memories:list' returns [] and never rejects, for three
+  // unrelated reasons: Sales Brain is off (the SHIPPING DEFAULT —
+  // EMPTY_SALES_BRAIN is { enabled: false }), the DB is unavailable because
+  // migration failed and left db null while the flag stayed on, or the brain
+  // is genuinely empty. Rise read `rows.length === 0` as proof of the third
+  // and told new users "your Sales Brain is empty — import your call
+  // history". Importing cannot help in either of the other two cases:
+  // initSalesBrain() returns before it even creates the DB file when the flag
+  // is off, and every extraction hook is master-gated. So the copy named a
+  // wrong cause and prescribed work that could not work, on the state most
+  // new installs are actually in.
+  //
+  // Deliberately a NEW channel rather than changing what memories:list
+  // returns — that shape is consumed in several places and widening it would
+  // be a silent behaviour change at each one.
+  ipcMain.handle('salesBrain:status', async (): Promise<SalesBrainStatus> => {
+    if (!isSalesBrainEnabled()) return { state: 'off' }
+    const db = getMemoryDb()
+    if (!db) {
+      return { state: 'unavailable', detail: getLastInitResult()?.detail ?? 'not initialised' }
+    }
+    // Cheap: the count, not the rows.
+    const count = listMemories(db, {}).length
+    return count === 0 ? { state: 'empty' } : { state: 'ready', count }
+  })
 
   ipcMain.handle(
     'salesBrain:memories:list',

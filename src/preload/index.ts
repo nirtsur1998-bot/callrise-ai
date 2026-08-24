@@ -303,6 +303,11 @@ const api = {
       subscribe<string>('prepBrief:openRequested', cb)
   },
   salesBrain: {
+    /** AUDIT FIX (2026-08-24) — distinguishes OFF / UNAVAILABLE / EMPTY /
+     *  READY. memories.list() returns [] for the first three, so callers
+     *  could not tell them apart and Rise told users to import call history
+     *  when the real fix was to switch Sales Brain on. */
+    status: () => ipcRenderer.invoke('salesBrain:status'),
     onboarding: {
       status: () => ipcRenderer.invoke('salesBrain:onboarding:status'),
       submitAnswer: (topicId: string, answer: string) =>

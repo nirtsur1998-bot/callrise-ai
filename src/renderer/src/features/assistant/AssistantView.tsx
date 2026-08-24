@@ -778,7 +778,10 @@ export function AssistantView({
   const [citation, setCitation] = useState<AssistantCitation | null>(null)
   const [confirm, setConfirm] = useState<ConfirmState | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [brainEmpty, setBrainEmpty] = useState<boolean | null>(null)
+  // AUDIT FIX (2026-08-24) — the real status, not a boolean that conflated
+  // "off" (the shipping default), "unavailable" (migration failed) and
+  // "empty" into one message that named the wrong cause for two of them.
+  const [brainStatus, setBrainStatus] = useState<SalesBrainStatus | null>(null)
   const [pendingFirst, setPendingFirst] = useState<{
     convId: string
     text: string
@@ -814,12 +817,16 @@ export function AssistantView({
 
   useEffect(() => {
     void refreshList()
-    // Distinct empty states need one cheap fact: does the Sales Brain hold
-    // anything at all? Failure means "unknown" and we show the generic state.
-    void window.api.salesBrain.memories
-      .list({})
-      .then((rows: unknown[]) => setBrainEmpty(rows.length === 0))
-      .catch(() => setBrainEmpty(null))
+    // Distinct empty states need the real status. This used to read
+    // memories.list({}).length === 0, which is [] when Sales Brain is OFF,
+    // [] when the DB failed to migrate, and [] when it is genuinely empty —
+    // so the "unknown" catch branch below was dead for BOTH failure classes,
+    // and every new user (Sales Brain ships off) was told to import their
+    // call history, which cannot help until they switch it on.
+    void window.api.salesBrain
+      .status()
+      .then(setBrainStatus)
+      .catch(() => setBrainStatus(null))
   }, [refreshList])
 
   useEffect(
@@ -1124,7 +1131,30 @@ export function AssistantView({
               <h2 className="mt-4 text-xl font-semibold tracking-tight text-ink">
                 Ask {ASSISTANT_SECTION_NAME} anything
               </h2>
-              {brainEmpty ? (
+              {brainStatus?.state === 'off' ? (
+                <>
+                  <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed text-muted">
+                    {ASSISTANT_SECTION_NAME} gets its edge from your Sales Brain — and it&rsquo;s
+                    switched off right now. Turn it on in Settings → Sales Brain, and answers
+                    here start citing your own calls, clients, and deals.
+                  </p>
+                  <p className="mt-3 text-[12.5px] text-faint">
+                    You can still chat — answers just won&rsquo;t be grounded in your data yet.
+                  </p>
+                </>
+              ) : brainStatus?.state === 'unavailable' ? (
+                <>
+                  <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed text-muted">
+                    {ASSISTANT_SECTION_NAME} can&rsquo;t reach your Sales Brain — it&rsquo;s on,
+                    but its database didn&rsquo;t open this session, so nothing can be read or
+                    learned until it does. Restarting the app usually fixes it.
+                  </p>
+                  <p className="mt-3 text-[12.5px] text-faint">
+                    You can still chat — answers just won&rsquo;t be grounded in your data.
+                    Importing more calls won&rsquo;t help while this persists.
+                  </p>
+                </>
+              ) : brainStatus?.state === 'empty' ? (
                 <>
                   <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed text-muted">
                     {ASSISTANT_SECTION_NAME} gets its edge from your Sales Brain — and it&rsquo;s
