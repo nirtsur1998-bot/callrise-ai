@@ -99,5 +99,7 @@ export function hasUsableCapacityForPurpose(purpose: AIPurpose, now: number): bo
   const { capable } = resolveChain(purpose, { needsTool: true })
   if (capable.length === 0) return true
   const tier = purposeTier(purpose)
-  return capable.some((step) => isUsableFor(step.catalogId, now, tier, { ignorePacing: true }))
+  return capable.some((step) =>
+    isUsableFor(step.catalogId, now, tier, { ignorePacing: true, purpose })
+  )
 }

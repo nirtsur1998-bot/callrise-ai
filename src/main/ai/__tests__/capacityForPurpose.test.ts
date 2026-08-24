@@ -83,8 +83,18 @@ describe('hasUsableCapacityForPurpose, against real cooldown state', () => {
 
   it('counts a structural break as unusable too, not only a quota cooldown', () => {
     const ids = chainIds()
-    for (const id of ids) markStructurallyBroken(id, NOW)
+    for (const id of ids) markStructurallyBroken(id, NOW, PURPOSE)
     expect(hasUsableCapacityForPurpose(PURPOSE, NOW)).toBe(false)
+  })
+
+  // AUDIT FIX (2026-08-24) — breaks are purpose-scoped, so one purpose's
+  // rejected request must not defer another purpose's work. Before the fix
+  // this returned false and background jobs waited behind a "waiting for
+  // provider capacity" label they could never clear.
+  it("another purpose's structural break does not consume this purpose's capacity", () => {
+    const ids = chainIds()
+    for (const id of ids) markStructurallyBroken(id, NOW, 'coaching-chat')
+    expect(hasUsableCapacityForPurpose(PURPOSE, NOW)).toBe(true)
   })
 
   it('recovers once the cooldown window passes', () => {
