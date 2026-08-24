@@ -89,8 +89,31 @@ describe('fitPromptToBudget', () => {
     const approxTokens = chars / CHARS_PER_TOKEN
     expect(approxTokens).toBeLessThan(DEFAULT_CONTEXT_WINDOW_TOKENS)
     expect(approxTokens).toBe(DEFAULT_CONTEXT_WINDOW_TOKENS * PROMPT_WINDOW_FRACTION)
-    // And it must still be generous enough that a normal long conversation
-    // is never trimmed: 40 turns at the 8,000-char inbound cap is 320,000.
+    // The budget must clear a maxed-out HISTORY on its own: 40 turns at the
+    // 8,000-char inbound cap is 320,000, leaving 38,400 for system + message.
     expect(chars).toBeGreaterThan(320_000)
+
+    // CORRECTED 2026-08-24 — this comment used to claim the budget was
+    // "generous enough that a normal long conversation is never trimmed".
+    // That was broader than anything measured, and the arithmetic is tighter
+    // than it sounds: 320,000 history + 8,000 message + the audit's measured
+    // 26,458-char no-attachment system prompt = 354,458, which fits by 3,942
+    // chars — a 1.1% margin. The system prompt only has to exceed 30,400
+    // chars for a maxed-out history to start trimming, and it varies with
+    // retrieved memories, lookup sections and the client brief.
+    //
+    // So the honest statement is the one asserted here: history alone always
+    // fits, and beyond that trimming is EXPECTED rather than exceptional.
+    // That is fine — dropping the oldest turns is the designed degradation,
+    // not a failure — but a comment claiming it never happens would send the
+    // next reader looking for a bug when they saw it happen.
+    const MAXED_HISTORY = 320_000
+    const MEASURED_SYSTEM_NO_ATTACHMENTS = 26_458
+    const MESSAGE_CAP = 8_000
+    expect(MAXED_HISTORY + MESSAGE_CAP + MEASURED_SYSTEM_NO_ATTACHMENTS).toBeLessThanOrEqual(chars)
+    expect(
+      chars - (MAXED_HISTORY + MESSAGE_CAP + MEASURED_SYSTEM_NO_ATTACHMENTS),
+      'the no-attachment margin moved — re-read the comment above, it quotes this number'
+    ).toBeLessThan(10_000)
   })
 })
