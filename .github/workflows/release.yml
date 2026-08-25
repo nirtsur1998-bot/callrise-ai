@@ -97,13 +97,44 @@ jobs:
         shell: bash
         run: npm run typecheck > typecheck.log 2>&1
 
-      - name: Test
-        shell: bash
-        run: npx vitest run > test.log 2>&1
-
+      # BUG-120 — BUILD BEFORE TEST. THE ORDER IS LOAD-BEARING, NOT STYLE.
+      #
+      # src/main/session-health/__tests__/real-worklet-render.test.ts:22 is
+      # `describe.skipIf(!hasBuiltWorklet)`, gated on
+      # out/renderer/assets/pcm-processor* existing -- which only appears after
+      # electron-vite build. With Test running first, those four tests were
+      # SKIPPED on every CI run this workflow has ever done, including the
+      # releases v1.3.4, v1.3.5 and v1.3.6.
+      #
+      # They are not ordinary tests. They load the real, unmodified, shipped
+      # pcm-processor.js and prove the mic channel and the other party's
+      # channel are not swapped. That file's own header records why they
+      # exist: the previous self-test called channel-test.ts's OWN
+      # reimplementation of the interleave logic, so "a real bug in the live
+      # worklet (e.g. mic/buyer channels swapped) could pass the self-test
+      # cleanly". The gap was closed with a real test, and then the pipeline
+      # never ran it.
+      #
+      # A channel swap would file every buyer utterance as the rep and vice
+      # versa: coaching scores and their quoted evidence, deal intelligence,
+      # objection mining, CRM notes and every memory extracted into the Sales
+      # Brain all read from speaker attribution. It would also INVERT consent
+      # retention, which decides what to strip by asking which speaker said a
+      # thing -- so on a call where the other party declined, their words
+      # would be the ones kept. And it would ship green through typecheck,
+      # the full suite and the packaged-build check.
+      #
+      # If you ever reorder these steps, the four tests go quiet again and
+      # nothing fails. Read the skip NAMES, not the count: the tally is
+      # environment-dependent (2147 passed / 5 skipped after a build vs
+      # 2143 / 9 without one -- same total, four tests moved, no code change).
       - name: Build renderer/main (electron-vite)
         shell: bash
         run: npx electron-vite build > vite-build.log 2>&1
+
+      - name: Test
+        shell: bash
+        run: npx vitest run > test.log 2>&1
 
       - name: Ensure GitHub release exists
         shell: bash
