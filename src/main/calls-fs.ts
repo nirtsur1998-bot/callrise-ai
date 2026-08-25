@@ -762,28 +762,20 @@ export function isOtherPartySpeaker(n: number, channel: number | undefined): boo
 }
 
 /**
- * Does this call's coaching thread get dropped for lack of recording consent?
+ * Does the other-party retention strip apply to this call?
  *
- * THE ONE DEFINITION of that condition on the main side, exported so the guard
- * and any caller answer it identically rather than each writing `!== true`.
+ * THE ONE DEFINITION of that condition. Renamed from `coachingHistoryDropped`
+ * when 1.3.9's whole-thread coachChat drop was reverted: the old name was
+ * about a consequence that no longer exists, and a predicate named after one
+ * caller's use of it invites the next caller to think it does not apply to
+ * them.
  *
- * The `consent != null` half is the part that is easy to get wrong and
- * expensive when you do: applyConsentRetention early-returns when there is NO
- * consent record at all, so a legacy call without one is never stripped.
- * `recordOtherParty !== true` alone is TRUE for such a call, and a UI built on
- * it would tell the rep their coaching history had been discarded when nothing
- * had been touched.
- *
- * The renderer cannot import this: src/main is outside its tsconfig scope, a
- * boundary this codebase already meets in three places (calendarMatch.ts,
- * DetectionOverlay.tsx, holdsUnreviewedOutput.ts), each resolved by
- * duplication plus a "keep in sync" comment -- which is principle 8's own tell
- * for a correspondence that will drift. Since the duplicate cannot be removed
- * here, it is instead PINNED: consent-ui-predicate-parity.test.ts reads both
- * sources and fails if the two conditions stop matching. Forgetting goes from
- * silent to red.
+ * The `consent != null` half is the part that is easy to get wrong: this guard
+ * early-returns when there is NO consent record at all, so a legacy call
+ * without one is never stripped. `recordOtherParty !== true` alone is TRUE for
+ * such a call.
  */
-export function coachingHistoryDropped(call: Pick<Call, 'consent'>): boolean {
+export function otherPartyRetentionApplies(call: Pick<Call, 'consent'>): boolean {
   return call.consent != null && call.consent.recordOtherParty !== true
 }
 
@@ -951,19 +943,38 @@ export const CALL_FIELD_RULES: { [K in keyof Required<Call>]: CallFieldRule } = 
 
   coachChat: {
     cls: 'DERIVED',
-    // THE WHOLE THREAD GOES, not the buyer-quoting turns. Founder's decision,
-    // 2026-08-25, and the reasoning is stronger than per-turn stripping: "A
-    // coaching thread with the assistant's turns removed is worse than no
-    // thread: it reads as a conversation and misrepresents what was said, and
-    // the rep can't tell which turns are missing."
+    // NO STRIPPER, and the DERIVED escape clause is exactly why: this thread is
+    // produced downstream of a getCall() read, so it cannot contain the other
+    // party's speech on a call where consent was absent.
     //
-    // A gapped thread is a FABRICATION — it presents as a complete exchange
-    // while being an edited one, with nothing marking the edit. Absence is
-    // honest; redaction that looks complete is not. The UI must say why the
-    // thread is absent so this reads as policy rather than data loss.
-    stripOtherParty: (call) => {
-      if (call.coachChat && call.coachChat.length > 0) call.coachChat = []
-    }
+    // 1.3.9 DROPPED THE WHOLE THREAD HERE AND THAT WAS WRONG. It destroyed the
+    // rep's own coaching conversation to prevent content that cannot be
+    // present. Four independent checks:
+    //
+    //   1. coachChat has exactly two writers, both in coaching-chat-ipc.ts,
+    //      both POST-call. No live path writes it.
+    //   2. Both read the call through getCall(), which runs this guard BEFORE
+    //      returning — so on an unconsented call the buyer's turns are gone
+    //      before the model sees anything. It cannot quote what it never saw.
+    //   3. coachChat is never synced (it is absent from callBackupPayload's
+    //      emitted set), so a restore cannot reintroduce a thread onto a call
+    //      whose consent later reads differently.
+    //   4. Consent is written ONCE, at saveCall, when randomUUID() mints the
+    //      id. Nothing mutates it afterwards — the only other touches
+    //      re-sanitize an existing value. A coachChat turn can only be written
+    //      to an id that already exists, so consent is always FINAL before any
+    //      turn exists. The interrupted-call recovery is not an exception: it
+    //      calls saveCall, which mints a NEW id that has never had a thread.
+    //
+    // The remaining path — a hand-edited file flipping the flag to false — makes
+    // the app MORE restrictive, not less. It cannot produce a leak this strip
+    // would have prevented; the dangerous direction (tampering it to `true`) is
+    // separately defended.
+    //
+    // The reasoning behind 1.3.9's drop was sound and still is: a gapped thread
+    // is a fabrication, because it presents as a complete exchange while being
+    // an edited one. That was an argument about HOW to remove buyer turns. It
+    // was never an argument that there are any.
   },
 
   summary: { cls: 'DERIVED' }, // produced downstream of getCall() — see CallFieldClass
@@ -1010,7 +1021,7 @@ function applyConsentRetention(call: Call): void {
   // can go consented → revoked/declined within one session AFTER buyer turns
   // were captured, so the current status must never short-circuit the strip.
   // Same predicate the UI asks, so the two can never answer differently.
-  if (!coachingHistoryDropped(call)) return
+  if (!otherPartyRetentionApplies(call)) return
 
   // Each rule strips its own field independently. There is no shared control
   // flow between them BY DESIGN: the previous version returned early from the

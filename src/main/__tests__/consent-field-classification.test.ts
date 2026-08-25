@@ -126,21 +126,48 @@ describe('BUG-119 — the guard derives from one classification', () => {
 
   // ---- coachChat: the WHOLE thread, not the buyer-quoting turns -----------
 
-  it('drops the coaching thread ENTIRELY, rather than serving a gapped one', async () => {
+  // EXPECTATION CORRECTED, NOT RELAXED — and this is the "canonized bug" case,
+  // so it is said here rather than quietly changed.
+  //
+  // 1.3.9 shipped a whole-thread drop and this test asserted it. The test was
+  // not hollow: it drove real code and would have caught a regression. The
+  // problem is that the behaviour it pinned was wrong. A coachChat turn on an
+  // unconsented call CANNOT contain the other party's speech -- both writers
+  // are post-call and read through getCall(), which strips before returning;
+  // the thread is never synced so a restore cannot reintroduce one; and
+  // consent is written once at saveCall and never mutated, so it is always
+  // final before any turn exists. The drop destroyed the rep's own coaching
+  // conversation to prevent content that cannot be there.
+  //
+  // The reasoning behind the drop was sound: a gapped thread IS a fabrication.
+  // That was an argument about how to remove buyer turns, never an argument
+  // that there are any.
+  it('KEEPS the coaching thread — it cannot contain the other party’s speech', async () => {
     const id = await revokedCall()
     await appendCoachChatTurn(
       dir,
       id,
       { text: 'What did they say about the incumbent?' },
-      { text: `They said: "${BUYER_WORDS}"` }
+      { text: 'They pushed back on timing, not price.' }
     )
 
     const call = await getCall(dir, id)
-    // Not "no buyer words" — NO THREAD. A thread with turns removed reads as a
-    // complete conversation while being an edited one, and the rep cannot tell
-    // which turns are missing. Absence is honest; redaction that looks complete
-    // is a fabrication.
-    expect(call?.coachChat ?? [], 'a gapped thread is worse than none').toHaveLength(0)
+    expect(
+      call?.coachChat ?? [],
+      'the rep’s own coaching conversation was destroyed'
+    ).toHaveLength(2)
+  })
+
+  it('PROVES the provenance claim: the coach is handed a transcript with no buyer turns', async () => {
+    // This is the guarantee the missing stripper now rests on, so it is pinned
+    // directly rather than left as a comment. getCall() is the exact call the
+    // coaching-chat IPC makes before building its prompt.
+    const id = await revokedCall()
+    const asTheCoachSeesIt = await getCall(dir, id)
+    const transcript = (asTheCoachSeesIt?.segments ?? []).map((s) => s.text).join(' ')
+
+    expect(transcript, 'the coach was shown the buyer’s words').not.toContain(BUYER_WORDS)
+    expect(transcript, 'the rep’s own words were removed too — over-stripping').toContain(REP_WORDS)
   })
 
   it('a CONSENTED call keeps its coaching thread (the control)', async () => {

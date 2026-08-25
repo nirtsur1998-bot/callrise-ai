@@ -29,12 +29,6 @@ interface CoachChatPanelProps {
   callId: string
   initialMessages: CoachChatMessage[]
   hasContact: boolean
-  /** The other party did not consent to recording, so this call's coaching
-   *  thread is not retained. Mirrors applyConsentRetention's own condition
-   *  in calls-fs.ts, which is the source of truth: a consent record that
-   *  EXISTS and whose recordOtherParty is not true. A call with NO consent
-   *  record at all is not stripped, so this must not fire for one. */
-  historyNotRetained?: boolean
 }
 
 function Bubble({
@@ -350,8 +344,7 @@ export function CoachChatPanel({
 export function CoachChatCard({
   callId,
   initialMessages,
-  hasContact,
-  historyNotRetained
+  hasContact
 }: CoachChatPanelProps): React.JSX.Element {
   return (
     <Card>
@@ -362,22 +355,6 @@ export function CoachChatCard({
           <Drama className="ml-1 h-3.5 w-3.5 text-faint" />
         </span>
       </div>
-      {/* BUG-119 — an absent thread must read as POLICY, not as data loss.
-          On a call where the other party did not consent to being recorded,
-          applyConsentRetention drops the coaching thread WHOLE rather than
-          removing the turns that quote them: a thread with turns silently
-          removed presents as a complete conversation while being an edited
-          one, and the rep cannot tell which turns are missing. Absence is
-          honest; redaction that looks complete is a fabrication.
-
-          Without this line the rep experiences a bug. It is part of that
-          change, not a follow-up to it. */}
-      {historyNotRetained && (
-        <p className="mb-3 text-[13px] text-muted">
-          Coaching history isn&rsquo;t kept for calls without recording consent. You can still ask
-          your coach about this call &mdash; this conversation just won&rsquo;t be saved.
-        </p>
-      )}
       <CoachChatPanel callId={callId} initialMessages={initialMessages} hasContact={hasContact} />
     </Card>
   )
