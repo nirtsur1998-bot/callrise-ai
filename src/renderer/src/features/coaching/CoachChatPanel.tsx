@@ -29,6 +29,12 @@ interface CoachChatPanelProps {
   callId: string
   initialMessages: CoachChatMessage[]
   hasContact: boolean
+  /** The other party did not consent to recording, so this call's coaching
+   *  thread is not retained. Mirrors applyConsentRetention's own condition
+   *  in calls-fs.ts, which is the source of truth: a consent record that
+   *  EXISTS and whose recordOtherParty is not true. A call with NO consent
+   *  record at all is not stripped, so this must not fire for one. */
+  historyNotRetained?: boolean
 }
 
 function Bubble({
@@ -153,7 +159,11 @@ const MODE_OPTIONS: { id: CoachChatMode; label: string }[] = [
 /** M23 Workstream B — chat with full call context (advisor Q&A) and a
  *  practice/roleplay toggle. Renders inside CallDetail's "Ask your coach"
  *  card. */
-export function CoachChatPanel({ callId, initialMessages, hasContact }: CoachChatPanelProps): React.JSX.Element {
+export function CoachChatPanel({
+  callId,
+  initialMessages,
+  hasContact
+}: CoachChatPanelProps): React.JSX.Element {
   const chat = useCoachChat(callId, initialMessages)
   const [input, setInput] = useState('')
   const [taskProposal, setTaskProposal] = useState<CoachChatTaskProposal | null>(null)
@@ -197,7 +207,13 @@ export function CoachChatPanel({ callId, initialMessages, hasContact }: CoachCha
           onChange={(next) => chat.setMode(next)}
         />
         {chat.mode === 'practice' && (
-          <Button variant="secondary" size="sm" icon={LogOut} onClick={() => void chat.endPractice()} disabled={chat.sending}>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={LogOut}
+            onClick={() => void chat.endPractice()}
+            disabled={chat.sending}
+          >
             End practice
           </Button>
         )}
@@ -205,8 +221,8 @@ export function CoachChatPanel({ callId, initialMessages, hasContact }: CoachCha
 
       {chat.mode === 'practice' && chat.messages.every((m) => m.mode !== 'practice') && (
         <p className="rounded-xl border border-warning/30 bg-warning-soft px-3.5 py-2.5 text-[12px] text-ink">
-          Practice mode: the coach will play the BUYER from this call, using their tone and objections.
-          Rehearse your opening, pricing conversation, or objection handling, then click{' '}
+          Practice mode: the coach will play the BUYER from this call, using their tone and
+          objections. Rehearse your opening, pricing conversation, or objection handling, then click{' '}
           <strong>End practice</strong> (or type it) for feedback.
         </p>
       )}
@@ -218,11 +234,17 @@ export function CoachChatPanel({ callId, initialMessages, hasContact }: CoachCha
         {chat.messages.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 py-6 text-center text-muted">
             <MessageSquare className="h-5 w-5 text-faint" />
-            <p className="text-[13px]">Ask anything about this call — or switch to Practice to rehearse.</p>
+            <p className="text-[13px]">
+              Ask anything about this call — or switch to Practice to rehearse.
+            </p>
           </div>
         ) : (
           chat.messages.map((m) => (
-            <Bubble key={m.id} message={m} onApplySuggestion={(s) => void chat.applySuggestion(m.id, s)} />
+            <Bubble
+              key={m.id}
+              message={m}
+              onApplySuggestion={(s) => void chat.applySuggestion(m.id, s)}
+            />
           ))
         )}
         {taskProposal && (
@@ -259,7 +281,13 @@ export function CoachChatPanel({ callId, initialMessages, hasContact }: CoachCha
 
       {chat.mode === 'advisor' && (
         <div className="flex flex-wrap gap-1.5">
-          <Button variant="secondary" size="sm" icon={Mail} onClick={() => void chat.draftFollowUpEmail()} disabled={chat.sending}>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={Mail}
+            onClick={() => void chat.draftFollowUpEmail()}
+            disabled={chat.sending}
+          >
             Draft follow-up email
           </Button>
           <Button
@@ -319,7 +347,12 @@ export function CoachChatPanel({ callId, initialMessages, hasContact }: CoachCha
 
 /** Wraps CoachChatPanel in the Card shell CallDetail.tsx expects, matching
  *  the existing "Sales coaching" card's header pattern. */
-export function CoachChatCard({ callId, initialMessages, hasContact }: CoachChatPanelProps): React.JSX.Element {
+export function CoachChatCard({
+  callId,
+  initialMessages,
+  hasContact,
+  historyNotRetained
+}: CoachChatPanelProps): React.JSX.Element {
   return (
     <Card>
       <div className="mb-4 flex items-center gap-2">
@@ -329,6 +362,22 @@ export function CoachChatCard({ callId, initialMessages, hasContact }: CoachChat
           <Drama className="ml-1 h-3.5 w-3.5 text-faint" />
         </span>
       </div>
+      {/* BUG-119 — an absent thread must read as POLICY, not as data loss.
+          On a call where the other party did not consent to being recorded,
+          applyConsentRetention drops the coaching thread WHOLE rather than
+          removing the turns that quote them: a thread with turns silently
+          removed presents as a complete conversation while being an edited
+          one, and the rep cannot tell which turns are missing. Absence is
+          honest; redaction that looks complete is a fabrication.
+
+          Without this line the rep experiences a bug. It is part of that
+          change, not a follow-up to it. */}
+      {historyNotRetained && (
+        <p className="mb-3 text-[13px] text-muted">
+          Coaching history isn&rsquo;t kept for calls without recording consent. You can still ask
+          your coach about this call &mdash; this conversation just won&rsquo;t be saved.
+        </p>
+      )}
       <CoachChatPanel callId={callId} initialMessages={initialMessages} hasContact={hasContact} />
     </Card>
   )
