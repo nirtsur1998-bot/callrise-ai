@@ -46,15 +46,35 @@ export function Modal({
   // repositioned (and clipped) the modal relative to a small scrolling
   // content div instead of the real viewport. A portal makes the modal immune
   // to that regardless of where in the tree it's opened from.
+  // BUG-047: close on backdrop click by checking the click landed EXACTLY on
+  // the backdrop element itself, not by stopping the panel's own mousedown
+  // from bubbling. The old approach (stopPropagation() on the panel) had a
+  // real, confirmed cost: it also silently absorbed every content picker's
+  // (ContactPicker, CountrySelect) own document-level "click outside to
+  // close" listener for ANY click elsewhere inside the same dialog, not
+  // just genuine backdrop clicks — see those components' own BUG-047
+  // comments. This is the standard, more robust pattern for exactly this
+  // "backdrop closes, content doesn't" requirement: nothing needs to be
+  // stopped, because a click on any DESCENDANT of the backdrop (the panel,
+  // or anything in it) can never satisfy `e.target === e.currentTarget`.
+  const closeIfClickedBackdrop = (e: React.MouseEvent): void => {
+    if (e.target === e.currentTarget) onClose()
+  }
+
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" onMouseDown={onClose}>
-      <div className="animate-scrim absolute inset-0 bg-black/50 backdrop-blur-[2px]" />
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center px-4"
+      onMouseDown={closeIfClickedBackdrop}
+    >
+      <div
+        className="animate-scrim absolute inset-0 bg-black/50 backdrop-blur-[2px]"
+        onMouseDown={closeIfClickedBackdrop}
+      />
       <div
         ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={labelledBy ?? (title ? headingId : undefined)}
-        onMouseDown={(e) => e.stopPropagation()}
         className={cn(
           'animate-pop relative w-full overflow-hidden rounded-2xl border border-line bg-surface shadow-pop',
           SIZE[size],

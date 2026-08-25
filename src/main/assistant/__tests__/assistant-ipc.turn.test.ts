@@ -205,16 +205,15 @@ const unboundMock = vi.hoisted(() => ({
   ),
   calls: [] as string[]
 }))
-vi.mock('../unbound-client', async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>
-  return {
-    ...actual,
-    detectUnboundClientMentions: async (message: string, dir: string) => {
-      unboundMock.calls.push(message)
-      return unboundMock.detect(message, dir)
-    }
+// Mocks ONLY the detector. unboundClientNotice is imported for real from
+// its leaf module, so the assertions below check the REAL prompt text
+// without dragging electron and the memory runtime into this file.
+vi.mock('../unbound-client', () => ({
+  detectUnboundClientMentions: async (message: string, dir: string) => {
+    unboundMock.calls.push(message)
+    return unboundMock.detect(message, dir)
   }
-})
+}))
 vi.mock('../../tasks-fs', () => ({ createTask: taskMock.create }))
 vi.mock('../../backup', () => ({ scheduleBackup: vi.fn() }))
 const suggestMock = vi.hoisted(() => ({

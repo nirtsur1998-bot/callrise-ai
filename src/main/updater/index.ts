@@ -116,6 +116,13 @@ export function registerUpdater(): void {
   // it's the user's own decision, never an updater that decides for them.
   // applyAutoUpdatePreference (below) sets the real values from the current
   // setting; these are just the safe starting point before that first read.
+  // M29 (founder decision 2026-08-24): electron-updater sends the per-install
+  // `.updaterId` UUID to the feed host as `x-user-staging-id` on every check
+  // (AppUpdater.js:386) — server-side staging support we don't use; the
+  // rollout decision is made locally from the file. Our requestHeaders are
+  // merged LAST (computeFinalHeaders, AppUpdater.js:333-338), so this blanks
+  // the header and the check carries nothing stable about the install.
+  autoUpdater.requestHeaders = { 'x-user-staging-id': '' }
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
   // A downgrade is the move an attacker makes: reinstall a version whose bugs

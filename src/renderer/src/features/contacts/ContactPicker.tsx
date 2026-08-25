@@ -40,8 +40,14 @@ export function ContactPicker({
     const onDown = (e: MouseEvent): void => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
     }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
+    // BUG-047: capture phase, not bubble — belt-and-suspenders alongside the
+    // real fix in Modal.tsx (which used to stopPropagation() every mousedown
+    // inside the dialog panel, silently absorbing this listener's chance to
+    // ever see a click on a different field in the same dialog; Modal.tsx no
+    // longer does that). Kept on capture anyway so this picker is correct
+    // regardless of what any future ancestor does with propagation.
+    document.addEventListener('mousedown', onDown, true)
+    return () => document.removeEventListener('mousedown', onDown, true)
   }, [open])
 
   const results = useMemo(() => {

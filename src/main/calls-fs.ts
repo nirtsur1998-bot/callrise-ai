@@ -798,6 +798,31 @@ function applyConsentRetention(call: Call): void {
   // consent was revoked is not.
   if (call.bookmarks && call.bookmarks.length > 0) call.bookmarks = []
 
+  // BUG-115 — the Deal Intelligence Radar Report. Each nudge carries an
+  // `evidenceQuote` of up to 400 characters that deal-tier1's prompt asks the
+  // model to reproduce "word for word ... Never paraphrase or invent it", with
+  // `evidenceRole` marking whose words they are. A nudge tagged 'other' is the
+  // buyer's own speech, so it goes when consent does — the same rule as their
+  // transcript turns and their resolved name.
+  //
+  // The whole nudge is dropped rather than just the quote blanked, for two
+  // reasons: sanitizeDealNudgeRecord treats a falsy evidenceQuote as malformed
+  // and drops the record anyway (so a blanked quote would not survive the next
+  // round-trip), and callBackupPayload already answers this exact question the
+  // same way for coaching — "keep the score/comment, DROP the verbatim
+  // evidence". healthScoreHistory is numbers, not words, and stays.
+  //
+  // POSITION IS LOAD-BEARING: this must sit ABOVE the two segment early-returns
+  // below. The second of them fires whenever no buyer segments needed removing,
+  // which is precisely the state a revoked call is in on its SECOND read — the
+  // transcript was already stripped the first time. Placed after, this strip
+  // would silently no-op on exactly the calls that need it most.
+  const di = call.dealIntelligence
+  if (di && Array.isArray(di.nudges)) {
+    const keptNudges = di.nudges.filter((n) => n.evidenceRole !== 'other')
+    if (keptNudges.length !== di.nudges.length) di.nudges = keptNudges
+  }
+
   if (!Array.isArray(call.segments)) return
   // A gap marker is not the buyer's speech — it belongs to nobody, so it
   // survives the strip regardless of the speaker id it happens to carry.
@@ -2034,6 +2059,27 @@ const MAX_CHAT_MESSAGES = 300
 // a boundary that doesn't match what the model was actually asked to produce.
 const MAX_CHAT_TEXT = 16_000
 
+/** What appendCoachChatTurn hands back: the saved call, plus the ids it just
+ *  MINTED for the two messages.
+ *
+ *  BUG-110 (hardening) — the ids exist so no caller has to work out which
+ *  stored message was which by POSITION. coaching-chat-ipc.ts used to reach
+ *  back `coachChat[length - 2]` to find the rep's message of the turn it had
+ *  just saved, which is correct only while the tail is a complete
+ *  user+assistant pair. Nothing enforces that (see prompt-budget.ts's guard
+ *  for the four other consumers relying on the same unenforced invariant),
+ *  and unlike those, this one does not fail loudly: `length - 2` landing on
+ *  the ASSISTANT message files a memory extracted from the rep's words under
+ *  the coach's id — no error, no rejection, just wrong provenance in Sales
+ *  Brain data, which is the one area where the consent posture assumes
+ *  provenance is exact. Returning the minted ids removes the inference
+ *  rather than making it more careful. */
+export interface CoachChatTurnResult {
+  call: Call
+  userMessageId: string
+  assistantMessageId: string
+}
+
 /** Appends ONE complete turn (user message + the assistant's full final
  *  reply) to this call's chat thread — never a partial/mid-stream message,
  *  see CoachChatMessage's doc comment. Oldest messages drop past
@@ -2043,31 +2089,33 @@ export async function appendCoachChatTurn(
   callId: string,
   userMessage: { text: string; mode?: CoachChatMode },
   assistantMessage: { text: string; mode?: CoachChatMode }
-): Promise<Call | null> {
+): Promise<CoachChatTurnResult | null> {
   return withCallLock(callId, async () => {
     const call = await getCall(dir, callId)
     if (!call) return null
     const now = new Date().toISOString()
-    const turn: CoachChatMessage[] = [
-      {
-        id: randomUUID(),
-        role: 'user',
-        text: userMessage.text.trim().slice(0, MAX_CHAT_TEXT),
-        createdAt: now,
-        mode: userMessage.mode
-      },
-      {
-        id: randomUUID(),
-        role: 'assistant',
-        text: assistantMessage.text.trim().slice(0, MAX_CHAT_TEXT),
-        createdAt: now,
-        mode: assistantMessage.mode
-      }
-    ]
+    const userEntry: CoachChatMessage = {
+      id: randomUUID(),
+      role: 'user',
+      text: userMessage.text.trim().slice(0, MAX_CHAT_TEXT),
+      createdAt: now,
+      mode: userMessage.mode
+    }
+    const assistantEntry: CoachChatMessage = {
+      id: randomUUID(),
+      role: 'assistant',
+      text: assistantMessage.text.trim().slice(0, MAX_CHAT_TEXT),
+      createdAt: now,
+      mode: assistantMessage.mode
+    }
+    const turn: CoachChatMessage[] = [userEntry, assistantEntry]
+    // The new turn is appended at the END, and slice(-N) keeps the LAST N, so
+    // the two messages just minted are always among the survivors — the ids
+    // returned below can never refer to something this write dropped.
     call.coachChat = [...(call.coachChat ?? []), ...turn].slice(-MAX_CHAT_MESSAGES)
     call.updatedAt = now
     await writeCall(dir, call)
-    return call
+    return { call, userMessageId: userEntry.id, assistantMessageId: assistantEntry.id }
   })
 }
 
@@ -2170,6 +2218,14 @@ export async function setCallDealIntelligence(
     if (!call) return null
     call.dealIntelligence = sanitizeDealIntelligenceRecord(record)
     call.updatedAt = new Date().toISOString()
+    // BUG-115, same shape as BUG-028's fix in addBookmark: re-apply retention on
+    // THIS write, not just on the next read. getCall() above stripped the call
+    // as of its own read, but `record` is a renderer-supplied blob assembled
+    // live — during buyer capture, before a mid-call revoke — so it can carry
+    // the other party's verbatim words into a call whose transcript is already
+    // clean. Without this the raw file on disk keeps them even though every
+    // app-level read filters them back out.
+    applyConsentRetention(call)
     await writeCall(dir, call)
     return call
   })

@@ -57,7 +57,9 @@ const DEFAULT_SETTINGS: AppSettings = {
     'memory-extract': { chain: [] },
     'assistant-chat': { chain: [] }
   },
-  autoUpdateEnabled: false,
+  autoUpdateEnabled: true,
+  autoUpdateMigratedToDefaultOn: true,
+  autoUpdateNoticePending: false,
   coach2: { enabled: false, methodology: 'blended' },
   contactIntelligence: { mode: 'off' },
   salesBrain: { enabled: false },

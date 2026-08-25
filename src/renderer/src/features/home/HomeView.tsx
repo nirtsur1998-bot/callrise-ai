@@ -19,6 +19,7 @@ import { Badge } from '@renderer/components/Badge'
 import { StatCard } from '@renderer/components/StatCard'
 import { AudioSourcesCard } from '@renderer/features/audio/AudioSourcesCard'
 import { NoiseCancellationCard } from '@renderer/features/audio/NoiseCancellationCard'
+import { AutoUpdateNoticeCard } from './AutoUpdateNoticeCard'
 import type { NavId } from '@renderer/features/navigation/nav-items'
 import { useCalls } from '@renderer/features/calls/useCalls'
 import { useTasks } from '@renderer/features/tasks/useTasks'
@@ -29,7 +30,11 @@ import { overallTier, TONE_TO_BADGE } from '@renderer/features/coaching/meta'
 /** Onboarding's Done step already offers to add this key, but a skip there
  *  left the only reminder buried in a one-time screen — this resurfaces it
  *  on Home (dismissible per-session) until the key is actually configured. */
-function MissingKeyBanner({ onNavigate }: { onNavigate: (id: NavId) => void }): React.JSX.Element | null {
+function MissingKeyBanner({
+  onNavigate
+}: {
+  onNavigate: (id: NavId) => void
+}): React.JSX.Element | null {
   const [missing, setMissing] = useState(false)
   const [dismissed, setDismissed] = useState(false)
 
@@ -133,6 +138,7 @@ export function HomeView({
   return (
     <div className="mx-auto max-w-3xl">
       <MissingKeyBanner onNavigate={onNavigate} />
+      <AutoUpdateNoticeCard onNavigate={onNavigate} />
       {/* Personal greeting */}
       <header className="mb-7">
         <h2 className="text-2xl font-semibold tracking-tight">

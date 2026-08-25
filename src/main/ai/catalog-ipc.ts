@@ -7,6 +7,13 @@ import { DEFAULT_CATALOG_CHAIN } from './complete-with-fallback'
 import { loadAppSettings, saveAppSettings } from '../app-settings'
 import type { AIPurpose } from './types'
 
+// BUG-079: must list every purpose the Settings picker (JOBS in
+// ModelAssignmentSection.tsx) actually renders a card for. This list was
+// left behind twice already when new jobs (coaching-chat, memory-extract)
+// were added to the UI but not here — both IPC handlers below silently
+// no-op for an unlisted purpose, so the picker snapped back to "Automatic"
+// with no error. 'other', 'memory-consolidate', and 'memory-reflect' are
+// deliberately excluded — those AIPurpose values have no card in JOBS.
 const ASSIGNABLE_PURPOSES: AIPurpose[] = [
   'coaching-cue',
   'summary',
@@ -15,6 +22,8 @@ const ASSIGNABLE_PURPOSES: AIPurpose[] = [
   'prep-brief',
   'deal-tier1',
   'deal-tier2',
+  'coaching-chat',
+  'memory-extract',
   // M28 — the Rise assistant chat. NOTE: BUG-079 (fixed in its own hotfix off
   // main) is this exact list drifting behind the Settings UI's job cards —
   // every purpose with a card in ModelAssignmentSection.tsx must be here.

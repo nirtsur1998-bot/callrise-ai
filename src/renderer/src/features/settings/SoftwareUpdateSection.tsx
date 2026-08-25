@@ -56,18 +56,15 @@ export function SoftwareUpdateSection(): React.JSX.Element {
     }
   }, [])
 
-  const runAction = useCallback(
-    async (action: () => Promise<UpdateStatus>) => {
-      setBusy(true)
-      try {
-        const next = await action()
-        if (mountedRef.current) setStatus(next)
-      } finally {
-        if (mountedRef.current) setBusy(false)
-      }
-    },
-    []
-  )
+  const runAction = useCallback(async (action: () => Promise<UpdateStatus>) => {
+    setBusy(true)
+    try {
+      const next = await action()
+      if (mountedRef.current) setStatus(next)
+    } finally {
+      if (mountedRef.current) setBusy(false)
+    }
+  }, [])
 
   const check = useCallback(() => runAction(() => window.api.updater.check()), [runAction])
   const download = useCallback(() => runAction(() => window.api.updater.download()), [runAction])
@@ -129,11 +126,15 @@ export function SoftwareUpdateSection(): React.JSX.Element {
 
   return (
     <Card className="mb-5">
-      <SettingRow title="Software update" description={statusLine(status, version)} control={action()} />
+      <SettingRow
+        title="Software update"
+        description={statusLine(status, version)}
+        control={action()}
+      />
       <div className="mt-3 border-t border-line-soft pt-3">
         <SettingRow
           title="Update automatically"
-          description="Download and install new versions on their own — no clicks needed. Off by default; the Check/Download/Restart buttons above still work either way."
+          description="On by default. CallRise checks GitHub for updates every few hours, downloads in the background, and installs when you quit — never mid-call. Updates are how privacy and security fixes reach you; the check sends no account information. Turn it off here anytime — the buttons above still work either way."
           control={
             <ToggleSwitch
               checked={settings.autoUpdateEnabled}

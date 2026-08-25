@@ -23,17 +23,25 @@ import { clientScope, type MemoryScope, type MemoryStatus } from './types'
 
 const MAX_RESULTS = 5
 
-/** M28 measured fix — vec_memories is a plain `vec0` table, so distances are
+/** BUG-080 — vec_memories is a plain `vec0` table, so distances are
  *  EUCLIDEAN (L2), not cosine: on MiniLM's unit vectors a natural-language
  *  paraphrase of a stored fact lands around L2 1.0–1.25 (cos-sim ~0.2–0.5).
  *  The original 0.6 here was written in cosine terms and, in L2 reality,
  *  demanded ~82% cosine similarity — so retrieval returned NOTHING for
- *  essentially every real question (retrieval-quality-eval baseline:
- *  recall 0/14 across two configs). 1.3 is the harness-chosen operating
- *  point from a 7-value sweep (recall 13/14, MRR 0.79, zero empty answers,
- *  zero scope violations; 1.4 added nothing). Consolidation's 0.35 dedupe
- *  threshold is the same L2 scale but deliberately unchanged — "probably
- *  the same fact" SHOULD demand near-identity. */
+ *  essentially every real question, silently, since M25. 1.3 is the
+ *  operating point chosen by M28's retrieval-quality harness from a 7-value
+ *  sweep (recall 0/14 → 13/14, MRR 0.79, zero empty answers, zero
+ *  cross-client scope violations; 1.4 added nothing — see the M28 branch's
+ *  docs/M28-retrieval-baseline.md). Consolidation's 0.35 dedupe threshold is
+ *  the same L2 scale but deliberately unchanged — "probably the same fact"
+ *  SHOULD demand near-identity.
+ *
+ *  READ THE 13/14 WITH ITS CONFIG (corrected 2026-08-24, BUG-096). That
+ *  figure is Rise in a conversation ALREADY BOUND to the client being asked
+ *  about. Active-only — what coaching chat uses — is 12/14, and Rise in an
+ *  UNBOUND "New chat" is 8/14, because the scope list below adds
+ *  clientScope() only when a contactId is supplied. All three are real; they
+ *  describe different situations, and only the last is the default one. */
 const MAX_DISTANCE = 1.3
 
 /** Foreground bound on the embedding step. embedText() has no timeout of its

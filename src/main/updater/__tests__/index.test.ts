@@ -38,6 +38,16 @@ const mocks = vi.hoisted(() => {
 })
 
 vi.mock('electron', () => mocks.electron)
+
+// M29: auto-update is ON by default now, and these tests used to INHERIT the
+// old off-default from real loadAppSettings() (whose app.getPath throws under
+// this electron mock, landing on DEFAULT_SETTINGS). The manual-mode tests'
+// premise is "auto mode off", so the pref is pinned here explicitly instead
+// of borrowed from whatever the product default happens to be.
+vi.mock('../../app-settings', () => ({
+  isAutoUpdateEnabled: () => false,
+  setAutoUpdateEnabledChangedListener: vi.fn()
+}))
 vi.mock('electron-updater', () => ({ autoUpdater: mocks.autoUpdater }))
 
 // M26 Batch 5 — registerUpdater() now registers a job type for the download
@@ -195,5 +205,21 @@ describe('registerUpdater — download as a job', () => {
     expect(mocks.enqueued).toEqual([])
     await invoke('updater:download')
     expect(mocks.enqueued).toEqual([])
+  })
+})
+
+describe('M29 — the update check carries nothing stable about the install', () => {
+  it('registerUpdater blanks the x-user-staging-id header electron-updater would otherwise send', async () => {
+    // electron-updater fills this header with the per-install .updaterId
+    // UUID on every check (AppUpdater.js:386) and merges OUR requestHeaders
+    // last — so registerUpdater must set it to the empty string. The staged
+    // rollout decision is made locally from the file, so blanking the
+    // header changes nothing about rollout behaviour.
+    process.env.UPDATE_FEED_URL = 'https://github.com/nirtsur1998-bot/callrise-ai'
+    const { registerUpdater } = await import('../index')
+    registerUpdater()
+    expect(
+      (mocks.autoUpdater as unknown as { requestHeaders: Record<string, string> }).requestHeaders
+    ).toEqual({ 'x-user-staging-id': '' })
   })
 })

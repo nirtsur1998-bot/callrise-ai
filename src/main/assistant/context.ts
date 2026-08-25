@@ -52,6 +52,11 @@ const SCOPE_RULE = (s: NonNullable<AssistantContextInput['scope']>): string =>
 
 export interface AssistantContext {
   system: string
+  /** MERGE (2026-08-25) — the two halves main's prompt-budget needs:
+   *  everything the budget may NOT cut, and the one bulky section it may
+   *  shrink (locally-extracted attachment text, appended last). */
+  systemFixed: string
+  trimmable: string
   /** Marker number (1-based) → citation, in CONTEXT numbering order. */
   citationsByMarker: Map<number, AssistantCitation>
 }
@@ -98,13 +103,34 @@ export function buildAssistantContext(input: AssistantContextInput): AssistantCo
     sections.push(`--- CONTEXT: ${section.title} ---\n${lines.join('\n')}`)
   }
 
+  // MERGE (2026-08-25) — attachment text is kept SEPARATE as well as joined.
+  //
+  // main's prompt-budget takes { systemFixed, trimmable } rather than one
+  // opaque `system`, because coaching-chat's trimmable section (the
+  // transcript) sits in the middle of its prompt and can only be addressed
+  // before the parts are joined. Rise's trimmable section is the attachment
+  // text, which is appended LAST — so the split here is exact, not a guess at
+  // an offset into a finished string.
+  //
+  // `system` is still returned, unchanged, so no other consumer is affected.
+  const attachmentSections: string[] = []
   for (const att of input.attachmentTexts ?? []) {
-    sections.push(
+    attachmentSections.push(
       `--- CONTEXT: ATTACHED FILE "${att.name}" (text extracted locally on the user's machine) ---\n${att.text}`
     )
   }
 
-  return { system: sections.join('\n\n'), citationsByMarker }
+  const systemFixed = sections.join('\n\n')
+  const trimmable = attachmentSections.join('\n\n')
+  return {
+    system: [systemFixed, trimmable].filter((s) => s.length > 0).join('\n\n'),
+    /** Everything the budget may NOT cut — rules, scope, profiles, lookups. */
+    systemFixed,
+    /** The one bulky section the budget may shrink: locally-extracted
+     *  attachment text. Empty when nothing is attached. */
+    trimmable,
+    citationsByMarker
+  }
 }
 
 /** Parse the reply's [n] markers against the CONTEXT numbering: returns the

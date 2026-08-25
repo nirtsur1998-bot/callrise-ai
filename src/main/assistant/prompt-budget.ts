@@ -1,25 +1,64 @@
-// AUDIT FIX (2026-08-24) — a TOTAL bound on the prompt.
+// BUG-108 (2026-08-24) — a TOTAL bound on the prompt.
 //
-// Every input was individually capped and nothing capped the sum. Measured
-// against the real buildAssistantContext: the system prompt is 26,458 chars
-// with no attachments and 267,016 chars with six text attachments
-// (MAX_EXTRACTED_CHARS = 40,000 each, appended by context.ts with no cap of
-// its own). Add history — MAX_HISTORY_MESSAGES 40 x MAX_INBOUND_CHARS 8,000 =
-// 320,000 — plus the current message, and ~595,000 chars (~149,000 tokens)
-// was reachable through the UI against models whose catalog entries declare a
-// 128,000-token window. `contextWindow` was declared and then never read by
-// any bound; its only consumer was a Settings label.
+// Every input to the coaching chat was capped individually and nothing
+// capped the sum. The individual caps, all real and all verified on main:
 //
-// Text attachments did not even trigger the existing history drop:
-// assistant-ipc dropped history only for images and PDFs, so six documents
-// and forty turns of history stacked.
+//   transcript          100,000  coaching-chat.ts MAX_TRANSCRIPT_CHARS
+//   inbound message       8,000  coaching-chat-ipc.ts:141
+//   history COUNT            40  coaching-chat-ipc.ts MAX_HISTORY_MESSAGES
+//   persisted message    16,000  calls-fs.ts MAX_CHAT_TEXT
 //
-// What overflow cost: the provider returns a 400, failure-class.ts classifies
-// status >= 400 as 'structural', and the walk marks that model broken and
-// then sends the SAME oversize prompt to the next one, blacklisting each in
-// turn. Before structural breaks were purpose-scoped (same day, separate
-// commit) that also took out live coaching. The user saw only
-// AllModelsExhaustedError, which never mentions size.
+// The trap is that the entry cap (8,000) and the persistence cap (16,000)
+// disagree, and the REPLAY path enforces neither — coaching-chat-ipc.ts:199
+// and :208 are a bare `map((m) => ({ role: m.role, content: m.text }))`, so
+// `.slice(-40)` bounds the count and nothing bounds each message's length on
+// the way back in. A 16,000-char persisted turn replays at 16,000.
+//
+// 16,000 is genuinely reachable, not just type-level: the follow-up-email
+// path (coaching-chat-ipc.ts:419) persists an assistant-role turn produced by
+// generatePostCallBrief, whose own maxTokens:4096 is ~16,000 chars — exactly
+// the persistence cap, and never routed through coaching's maxTokens:2048.
+//
+// So the ceiling is 20 user x 8,000 + 20 assistant x 16,000 = 480,000 of
+// history, + 100,000 transcript + 8,000 message = 588,000 chars ~= 147,000
+// tokens at 4 chars/token, against catalog entries declaring a 128,000-token
+// window. It does not fit even at the OPTIMISTIC density constant. Counting
+// the rest of the system prompt (call notes <= 20,000, KYC <= ~8,000, the
+// scorecard, Sales Brain) it is nearer 620,000.
+//
+// What overflow costs: the provider returns 400, failure-class.ts:41
+// classifies status >= 400 as 'structural', and the walk marks that model
+// broken and re-sends the IDENTICAL oversize prompt to the next entry,
+// blacklisting each in turn. The user sees only AllModelsExhaustedError,
+// which never mentions size.
+//
+// Blast radius — TWO ANSWERS, and the one that matters for users is the
+// worse one. State both or neither.
+//
+//   In the field: EVERY purpose goes dark for 4 hours. The released build is
+//   v1.3.3 (tag a084ad8), and `8192f85` is NOT an ancestor of it — verified,
+//   not assumed. Every installed copy keys `structuralBreaks` by catalogId
+//   alone, so one oversize coaching prompt blacklists that model for live
+//   cues, summaries, tasks, everything — exactly as BUG-097 did.
+//
+//   On main: coaching chat only. `cf053b9` (containing `8192f85`) re-keyed
+//   the map `purpose\0catalogId`. Merged, and at the time of writing
+//   UNRELEASED — main is 6 commits ahead of the tag.
+//
+// So containment is real but not yet reaching anyone, and the two states
+// diverge until a release ships. An earlier draft of this comment stated
+// only the main-branch answer and was quietly wrong about every machine
+// running the app. Containment limits the damage anyway; it never prevents
+// the overflow, which is what this module is for.
+//
+// MERGE-BOUNDARY OBLIGATION. claude/m28-rise carries its own copy of this
+// module at the same path, written first, for the Rise assistant. THIS file
+// is the canonical one: it takes the trim direction as a parameter precisely
+// so both features can share one budget instead of keeping two numbers that
+// are supposed to agree. At the M28 merge the resolution is "keep this file,
+// pass trimFrom:'tail' at Rise's call site" — NOT reconciling two diverged
+// copies. Two constants that must agree, in two files, with nothing linking
+// them, is the exact drift this module exists to end; do not re-create it.
 //
 // This module is pure and has no imports on purpose: the trimming policy is
 // the part worth testing directly, and it should be provable without standing
@@ -30,8 +69,29 @@ export interface BudgetMessage {
   content: string
 }
 
+/**
+ * Which END of the trimmable section to CUT when it has to shrink.
+ *
+ * 'head' — coaching chat. The section is the TRANSCRIPT, and the most recent
+ *   speech is what a coach is usually being asked about, so the start of the
+ *   call is what gives way. Note transcriptText() keeps the END for the same
+ *   reason, so both layers agree on one principle rather than fighting.
+ * 'tail' — the Rise assistant. The section is appended attachment text, and
+ *   cutting the head there would drop SCOPE_RULE, the instruction that stops
+ *   one client's data being discussed in another client's chat.
+ */
+export type TrimFrom = 'head' | 'tail'
+
 export interface PromptBudgetInput {
-  system: string
+  /** Every system-prompt char that is NOT the trimmable section — rules,
+   *  scope, scorecard, KYC, past calls, notes. Treated as a floor: this is
+   *  never cut, so a caller whose fixed section alone exceeds the budget
+   *  cannot be rescued here (see the `fits` field). */
+  systemFixed: string
+  /** The one bulky section the budget may shrink. Carries NO truncation
+   *  marker — the caller composes that, so the marker wording lives with the
+   *  feature and a second trim can never leave a fragment of a first one. */
+  trimmable: string
   history: BudgetMessage[]
   /** The turn's own message. Never trimmed here — it is already capped
    *  upstream, and silently truncating what the user just typed is the one
@@ -40,28 +100,34 @@ export interface PromptBudgetInput {
 }
 
 export interface PromptBudgetResult {
-  system: string
+  trimmable: string
   history: BudgetMessage[]
   /** What had to give, for logging and for the tests to assert on. */
   trim: {
     historyMessagesDropped: number
-    systemCharsDropped: number
+    trimmableCharsDropped: number
     /** True when anything at all was trimmed. */
     trimmed: boolean
   }
-  /**
-   * AUDIT FIX (2026-08-25) — read BEFORE any dropping, so it reports a
-   * GENUINELY broken pairing invariant (BUG-109) rather than the routine odd
-   * drop this function creates itself and then repairs.
+  /** True when the history handed IN already began on an assistant turn —
+   *  i.e. the user/assistant pairing invariant was broken before this module
+   *  touched anything.
    *
-   * Without the distinction the repair below is a detector that switches off
-   * the thing it detects: an input whose history already started on an
-   * assistant turn — which nothing on this branch should ever produce — would
-   * be silently corrected and look identical to the benign case. Mirrored
-   * from the coaching-chat module on `main`, whose author pointed out that my
-   * trimmer had the same blind spot.
-   */
+   *  The repair below makes such a history correct; this flag is what stops
+   *  it also making it INVISIBLE. Without it, an odd cap, a single unpaired
+   *  append, or a new consumer would be silently absorbed, and the only
+   *  evidence would be a turn quietly going missing — the bug becomes
+   *  undetectable rather than fixed.
+   *
+   *  Deliberately NOT set for the routine case where an odd number of drops
+   *  lands on an assistant boundary. That is the guard doing its ordinary job
+   *  on well-formed input, and counting it would bury the real signal in
+   *  noise. Only a genuine invariant violation is reported. */
   historyStartedOnAssistant: boolean
+  /** False when the fixed section plus the current message ALONE exceed the
+   *  budget — nothing this module is allowed to cut can fix that, so it is
+   *  reported rather than hidden behind a result that looks fitted. */
+  fits: boolean
 }
 
 /**
@@ -76,8 +142,8 @@ export const CHARS_PER_TOKEN = 4
 /**
  * Fraction of the window this prompt may occupy. The remainder covers the
  * completion, the provider's own message scaffolding, and the ratio error
- * above. 70% of a 128,000-token window is ~89,600 tokens (~358,000 chars),
- * far above any ordinary turn and far below the ~149,000 tokens that used to
+ * above. 70% of a 128,000-token window is ~89,600 tokens (358,400 chars),
+ * far above any ordinary turn and far below the ~147,000 tokens that used to
  * be reachable.
  */
 export const PROMPT_WINDOW_FRACTION = 0.7
@@ -91,85 +157,98 @@ export function budgetCharsFor(contextWindowTokens: number): number {
   return Math.floor(contextWindowTokens * PROMPT_WINDOW_FRACTION * CHARS_PER_TOKEN)
 }
 
-function sizeOf(input: PromptBudgetInput): number {
-  let n = input.system.length + input.message.length
-  for (const m of input.history) n += m.content.length
+/** One wording family for every truncation notice, so the two features
+ *  cannot drift into describing the same event differently. The founder's
+ *  condition on this fix: when a transcript IS truncated the prompt must say
+ *  so explicitly, because a coach reasoning about a call it cannot fully see
+ *  should know that rather than confidently characterising an opening it
+ *  never read. */
+export function truncationMarker(whatWasOmitted: string): string {
+  return `[Context truncated to fit the model's limit — ${whatWasOmitted} was omitted.]`
+}
+
+function sizeOf(
+  systemFixed: string,
+  trimmable: string,
+  history: BudgetMessage[],
+  message: string
+): number {
+  let n = systemFixed.length + trimmable.length + message.length
+  for (const m of history) n += m.content.length
   return n
 }
 
 /**
  * Fit a prompt into `budgetChars`, degrading in a fixed priority order:
  *
- *   1. Drop history, OLDEST first. Recent turns carry the thread; the
- *      oldest are the cheapest thing to lose and the least likely to be
- *      referenced.
- *   2. Only if the system prompt alone still overflows, truncate its TAIL,
- *      leaving a visible marker. The tail is where context.ts appends
- *      attachment text, so this cuts the bulky, most-recently-added material
- *      and leaves the rules, scope and profile sections at the top intact.
- *      Cutting the head instead would drop the SCOPE_RULE — the instruction
- *      that stops one client's data being discussed in another's chat.
+ *   1. Drop history, OLDEST first. Recent turns carry the thread; the oldest
+ *      are the cheapest thing to lose and the least likely to be referenced.
+ *   2. Only if it still overflows, shrink `trimmable`, cutting the end named
+ *      by `trimFrom`.
  *
- * The current message is never touched.
+ * The current message and `systemFixed` are never touched.
+ *
+ * History is never left starting on an assistant turn. Turns are persisted in
+ * user/assistant PAIRS, so an unguarded one-at-a-time drop can land on an odd
+ * boundary and hand the provider a sequence that still ALTERNATES but begins
+ * on an assistant turn — itself invalid, and the failure coaching-chat-ipc.ts
+ * already documents at its userMode assignment. It looks fine in a debugger,
+ * which is exactly why it survives review. Trading one extra dropped turn for
+ * that is free, and REPAIRING here beats asserting: this runs mid-call, so a
+ * turn the rep is waiting on should be fixed, not failed.
+ *
+ * Worth knowing before changing anything nearby: FOUR existing consumers
+ * already depend on that pairing invariant and NONE of them enforce, assert or
+ * mention it — the advisor-history mode filter and trailingPracticeMessages()
+ * remove whole pairs only because a pair can never straddle two modes, and
+ * MAX_HISTORY_MESSAGES (40) and MAX_CHAT_MESSAGES (300) land on even offsets
+ * only because both happen to be EVEN. Make either odd, or append a single
+ * unpaired message anywhere, and all four break silently. (Enumerated by the
+ * M29 session while this was being written; the same latent bug was found and
+ * fixed in Rise's own trimmer at ede2deb.)
  */
 export function fitPromptToBudget(
   input: PromptBudgetInput,
-  budgetChars: number
+  budgetChars: number,
+  trimFrom: TrimFrom
 ): PromptBudgetResult {
+  const { systemFixed, message } = input
   const history = [...input.history]
-  // Captured BEFORE the loop: afterwards it cannot be told apart from the
-  // odd-drop boundary this function creates on its own.
-  const historyStartedOnAssistant = history.length > 0 && history[0].role === 'assistant'
+  let trimmable = input.trimmable
   let historyMessagesDropped = 0
-  let systemCharsDropped = 0
+  let trimmableCharsDropped = 0
 
-  while (sizeOf({ ...input, history }) > budgetChars && history.length > 0) {
+  // Read BEFORE anything is dropped: this is the invariant violation itself,
+  // not the routine odd-drop boundary the guard below also handles. Pure
+  // boolean off an already-materialised array — it cannot throw, so it can
+  // never alter the outcome of the call it is observing.
+  const historyStartedOnAssistant = history.length > 0 && history[0].role === 'assistant'
+
+  while (sizeOf(systemFixed, trimmable, history, message) > budgetChars && history.length > 0) {
     history.shift()
     historyMessagesDropped++
   }
-
-  // AUDIT FIX (2026-08-24) — never leave the history starting on an assistant
-  // turn. Found by the BUG-108 hotfix session hitting the same latent bug in
-  // coaching chat and telling me to check here; it was real.
-  //
-  // Turns persist in PAIRS (conversations-fs appendTurn writes user then
-  // assistant), so dropping one at a time lands on an odd boundary half the
-  // time and yields [assistant, user, assistant, …]. That still alternates,
-  // which is why it is easy to miss — but the FIRST message being an
-  // assistant turn is itself invalid for Anthropic's API, and
-  // coaching-chat-ipc.ts:177 records providers rejecting malformed sequences
-  // "outright as an invalid, non-alternating message sequence".
-  //
-  // Reachable, not theoretical: the budget genuinely bites on a maxed-out
-  // conversation (320,000 history + 8,000 message + a ~26,458-char system
-  // prompt leaves only ~1% margin), so odd-numbered drops happen in normal
-  // use, not just at the type-level ceiling.
-  //
-  // Dropping one MORE can only shrink the prompt, so it cannot break the
-  // budget invariant established above.
   if (history.length > 0 && history[0].role === 'assistant') {
     history.shift()
     historyMessagesDropped++
   }
 
-  let system = input.system
-  const overflow = system.length + input.message.length - budgetChars
+  const overflow = sizeOf(systemFixed, trimmable, history, message) - budgetChars
   if (overflow > 0) {
-    const marker =
-      '\n\n[Context truncated to fit the model\'s limit — some attachment text was omitted.]'
-    const keep = Math.max(0, system.length - overflow - marker.length)
-    systemCharsDropped = system.length - keep
-    system = system.slice(0, keep) + marker
+    const keep = Math.max(0, trimmable.length - overflow)
+    trimmableCharsDropped = trimmable.length - keep
+    trimmable = trimFrom === 'head' ? trimmable.slice(trimmable.length - keep) : trimmable.slice(0, keep)
   }
 
   return {
-    system,
+    trimmable,
     history,
     trim: {
       historyMessagesDropped,
-      systemCharsDropped,
-      trimmed: historyMessagesDropped > 0 || systemCharsDropped > 0
+      trimmableCharsDropped,
+      trimmed: historyMessagesDropped > 0 || trimmableCharsDropped > 0
     },
-    historyStartedOnAssistant
+    historyStartedOnAssistant,
+    fits: sizeOf(systemFixed, trimmable, history, message) <= budgetChars
   }
 }

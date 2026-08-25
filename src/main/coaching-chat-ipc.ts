@@ -33,8 +33,15 @@ import {
   buildEndPracticeSystemPrompt,
   isEndPracticeMessage,
   extractContextSuggestions,
-  type PastCallSummary
+  callTranscript,
+  type PastCallSummary,
+  type TranscriptSection
 } from './coaching-chat'
+import {
+  fitPromptToBudget,
+  budgetCharsFor,
+  DEFAULT_CONTEXT_WINDOW_TOKENS
+} from './assistant/prompt-budget'
 import { runMemoryExtractionForChatMessage } from './memory/memory-hooks'
 import { businessProfileSection, clientProfileSection, repProfileSection } from './memory/profile-injection'
 import { retrieveRelevantMemories } from './memory/rag'
@@ -157,12 +164,20 @@ async function handleSend(
   const salesBrainContext =
     `${repProfileSection('full')}${businessProfileSection('full')}${clientProfileSection(call.contactId ?? null, 'full')}` +
     (await retrieveRelevantMemories(message, call.contactId ?? null))
-  const context = assembleChatContext({ call, contact, pastCalls, salesBrainContext })
   const history = call.coachChat ?? []
   const endingPractice = mode === 'practice' && isEndPracticeMessage(message)
 
-  let system: string
-  let messagesForModel: { role: 'user' | 'assistant'; content: string }[]
+  // BUG-108 — the system prompt is built LAST, from a transcript the budget
+  // below has already fitted. Each branch therefore records HOW to build its
+  // system prompt rather than building it, and keeps the replayed history
+  // separate from the turn's own message (the budget may drop history; it
+  // must never touch the message).
+  let buildSystem: (context: string) => string
+  let historyForModel: { role: 'user' | 'assistant'; content: string }[]
+  // '' for end-practice, whose feedback is about the roleplay that already
+  // happened — that branch appends no new user turn, and the budget must
+  // account for its absence rather than assume a trailing message.
+  let trailingMessage: string
   // The ASSISTANT reply's own mode tag — 'advisor' both for normal advisor
   // replies and for end-practice feedback (the feedback itself is coaching,
   // not roleplay), 'practice' only for in-character buyer lines.
@@ -179,37 +194,117 @@ async function handleSend(
 
   if (endingPractice) {
     const focusSkill = call.coaching?.focusSkillAtCoaching
-    system = buildEndPracticeSystemPrompt(context, focusSkill ? SKILL_LABEL[focusSkill.skill] : null)
+    buildSystem = (context) =>
+      buildEndPracticeSystemPrompt(context, focusSkill ? SKILL_LABEL[focusSkill.skill] : null)
     const practiceTail = startFreshPractice ? [] : trailingPracticeMessages(history)
-    messagesForModel = practiceTail.map((m) => ({ role: m.role, content: m.text }))
-    if (messagesForModel.length === 0) {
-      messagesForModel = [{ role: 'user', content: '(No practice turns were recorded — just acknowledge that briefly and encourage them to try practice mode again.)' }]
-    }
+    historyForModel = practiceTail.map((m) => ({ role: m.role, content: m.text }))
+    trailingMessage = ''
     replyMode = 'advisor'
     userMode = 'advisor'
   } else if (mode === 'practice') {
-    system = buildPracticeSystemPrompt(context)
+    buildSystem = buildPracticeSystemPrompt
     // startFreshPractice: the rep switched INTO practice mode again (even
     // within the same call) — never seed a new rehearsal attempt with a
     // PRIOR, unrelated practice session's lines just because nothing
     // formally "ended" the old one (the rep may have simply tabbed over to
     // Advisor to glance at the scorecard, then back).
     const practiceTail = startFreshPractice ? [] : trailingPracticeMessages(history)
-    messagesForModel = [
-      ...practiceTail.slice(-MAX_HISTORY_MESSAGES).map((m) => ({ role: m.role, content: m.text })),
-      { role: 'user', content: message }
-    ]
+    historyForModel = practiceTail
+      .slice(-MAX_HISTORY_MESSAGES)
+      .map((m) => ({ role: m.role, content: m.text }))
+    trailingMessage = message
     replyMode = 'practice'
     userMode = 'practice'
   } else {
-    system = buildAdvisorSystemPrompt(context)
+    buildSystem = buildAdvisorSystemPrompt
     const advisorHistory = history.filter((m) => m.mode !== 'practice')
-    messagesForModel = [
-      ...advisorHistory.slice(-MAX_HISTORY_MESSAGES).map((m) => ({ role: m.role, content: m.text })),
-      { role: 'user', content: message }
-    ]
+    historyForModel = advisorHistory
+      .slice(-MAX_HISTORY_MESSAGES)
+      .map((m) => ({ role: m.role, content: m.text }))
+    trailingMessage = message
     replyMode = 'advisor'
     userMode = 'advisor'
+  }
+
+  // BUG-108 — the TOTAL bound. Every input here was capped individually and
+  // nothing capped the sum: 588,000 chars (~147,000 tokens at 4 chars/token)
+  // was reachable against a declared 128,000-token window, because the entry
+  // cap (8,000, :141) and the persistence cap (MAX_CHAT_TEXT 16,000) disagree
+  // and the replay path enforces neither. Overflow returns a 400, which
+  // failure-class.ts calls 'structural', and the walk then re-sends the SAME
+  // oversize prompt to the next model, blacklisting each in turn for 4 hours
+  // behind an AllModelsExhaustedError that never mentions size. On the
+  // RELEASED build (v1.3.3) that break is keyed by catalogId alone, so it
+  // takes down every AI feature, not just this one; cf053b9 purpose-scopes it
+  // but is merged-and-unreleased. See prompt-budget.ts's header for both
+  // numbers — do not quote just the main-branch one.
+  //
+  // Applied HERE, at assembly, for two reasons. It covers the
+  // draftFollowUpEmail path (:419 persists an assistant turn from a different
+  // generator, bounded only by MAX_CHAT_TEXT) because by this point that text
+  // is simply history. And the transcript is only separately addressable
+  // before the context parts are joined — afterwards the blob is opaque and
+  // trimming its head would cut the role instructions, not the transcript.
+  const transcript = callTranscript(call.segments)
+  const assemble = (t: TranscriptSection): string =>
+    buildSystem(assembleChatContext({ call, contact, pastCalls, salesBrainContext, transcript: t }))
+  // The floor the budget may not cut: scorecard, KYC, past calls, notes,
+  // Sales Brain, role instructions. Measured with an empty transcript but
+  // truncated:true so the marker's own length is reserved unconditionally —
+  // if the transcript turns out NOT to be truncated the real prompt is one
+  // marker shorter than accounted for, i.e. under budget, never over.
+  const systemFixed = assemble({ text: '', truncated: true })
+  const budget = fitPromptToBudget(
+    { systemFixed, trimmable: transcript.text, history: historyForModel, message: trailingMessage },
+    budgetCharsFor(DEFAULT_CONTEXT_WINDOW_TOKENS),
+    // 'head' — give up the START of the call. callTranscript() keeps the END
+    // for the same reason; both layers agree that recent speech is what a
+    // coach is being asked about.
+    'head'
+  )
+  const system = assemble({
+    text: budget.trimmable,
+    truncated: transcript.truncated || budget.trim.trimmableCharsDropped > 0
+  })
+  let messagesForModel: { role: 'user' | 'assistant'; content: string }[] = [
+    ...budget.history,
+    ...(trailingMessage ? [{ role: 'user' as const, content: trailingMessage }] : [])
+  ]
+  if (messagesForModel.length === 0) {
+    messagesForModel = [{ role: 'user', content: '(No practice turns were recorded — just acknowledge that briefly and encourage them to try practice mode again.)' }]
+  }
+  if (budget.trim.trimmed) {
+    console.warn(
+      '[coaching-chat] prompt trimmed to fit the context budget:',
+      `${budget.trim.historyMessagesDropped} history message(s) dropped, ` +
+        `${budget.trim.trimmableCharsDropped} transcript char(s) omitted`
+    )
+  }
+  // The guard in fitPromptToBudget REPAIRS a history that begins on an
+  // assistant turn, which is right for a live call — but a silent repair also
+  // makes the underlying breakage undetectable. Four consumers depend on the
+  // user/assistant pairing invariant and none enforce it, so if it ever does
+  // break (an odd cap, a single unpaired append, a new consumer) this line is
+  // the only evidence anyone would get. Try-wrapped and last, so an
+  // observation can never alter the turn it is observing.
+  try {
+    if (budget.historyStartedOnAssistant) {
+      console.warn(
+        '[coaching-chat] coachChat history for call',
+        callId,
+        'began on an assistant turn — the user/assistant pairing invariant is broken upstream.',
+        'The prompt was repaired for this turn; the cause has NOT been fixed.'
+      )
+    }
+  } catch {
+    // An observation must never break a live coaching turn.
+  }
+  if (!budget.fits) {
+    // The fixed floor alone exceeds the budget — nothing the bound is allowed
+    // to cut can fix it. Logged rather than hidden behind a result that looks
+    // fitted; the request still goes out, because a degraded answer beats
+    // refusing a turn the rep is waiting on mid-call.
+    console.warn('[coaching-chat] prompt still exceeds the budget after trimming — fixed context alone is too large')
   }
 
   const stream = streamWithFallback({
@@ -277,10 +372,13 @@ async function handleSend(
   // the kind of thing this feature must never do) and never the end-
   // practice control phrase itself.
   if (mode === 'advisor' && !endingPractice) {
-    const userMessageId = saved.coachChat?.[saved.coachChat.length - 2]?.id
-    if (userMessageId) {
-      void runMemoryExtractionForChatMessage(callId, userMessageId, message).catch(() => {})
-    }
+    // BUG-110 (hardening) — this was `saved.coachChat[length - 2]?.id`,
+    // inferring the rep's message by position. Correct only while the tail is
+    // a complete user+assistant pair, which nothing enforces; landing one off
+    // would file a memory extracted from the REP's words under the coach's
+    // id, silently and with no error. appendCoachChatTurn now returns the id
+    // it minted, so there is no inference left to get wrong.
+    void runMemoryExtractionForChatMessage(callId, saved.userMessageId, message).catch(() => {})
   }
 
   return { ok: true, reply: full, suggestions }

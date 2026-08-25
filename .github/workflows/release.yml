@@ -27,6 +27,21 @@ on:
       version:
         description: "Version to tag and release (e.g. 1.1.7) — must match package.json, or this will fail"
         required: true
+      rollout_percent:
+        description: "Staged rollout percentage (0-100). Installs whose stable cohort number falls under this see the update; everyone else sees 'up to date'. 100 = everyone at once."
+        required: false
+        default: "10"
+
+# M29 A4.2 — every release is born a DRAFT and only flipped live as the very
+# last step, after every asset (installers + the patched latest.yml) is in
+# place. A draft is invisible to electron-updater (/releases/latest skips
+# drafts), so a failure anywhere in this job leaves NO user-visible release
+# and no half-uploaded manifest — the failure mode is "nothing shipped",
+# never "everyone got a torn release". Tag pushes default to a 10% staged
+# rollout; ramping afterwards is the runbook's one-asset edit
+# (docs/M29-rollout-runbook.md in the app repo).
+env:
+  ROLLOUT_DEFAULT: "10"
 
 permissions:
   contents: write
@@ -112,7 +127,12 @@ jobs:
           if gh release view "$TAG" > /dev/null 2>&1; then
             echo "Release $TAG already exists - reusing it."
           else
-            gh release create "$TAG" --title "$TAG" --notes "Automated release $TAG." --repo "${{ github.repository }}"
+            # M29 A4.2: born a DRAFT. electron-builder's GitHub publisher
+            # returns an existing draft with a matching tag no matter what
+            # releaseType says (electron-publish gitHubPublisher.js:69-71),
+            # so both targets upload into this same invisible draft. The
+            # flip to live happens only in the last step below.
+            gh release create "$TAG" --draft --title "$TAG" --notes "Automated release $TAG." --repo "${{ github.repository }}"
           fi
 
       - name: Package + publish (electron-builder)
@@ -120,6 +140,56 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win --x64 --publish always > electron-builder.log 2>&1
+
+      - name: Stage rollout percentage + go live (the release stops being a draft HERE)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then TAG="${{ inputs.version }}"; fi
+          TAG="v$TAG"
+          PERCENT="${{ inputs.rollout_percent }}"
+          if [ -z "$PERCENT" ]; then PERCENT="$ROLLOUT_DEFAULT"; fi
+          # An unparseable percentage must fail loudly here, in CI, where it
+          # costs nothing — electron-updater treats a NaN stagingPercentage
+          # as 100% with only a warning, which is the wrong place to learn
+          # about a typo (docs/M29-rollout-runbook.md §1.5).
+          if ! [[ "$PERCENT" =~ ^[0-9]+$ ]] || [ "$PERCENT" -gt 100 ]; then
+            echo "::error::rollout_percent must be an integer 0-100, got: $PERCENT"
+            exit 1
+          fi
+          if [ ! -f dist/latest.yml ]; then
+            echo "::error::dist/latest.yml was not produced by electron-builder - refusing to go live without a manifest."
+            exit 1
+          fi
+          if [ "$PERCENT" -lt 100 ]; then
+            printf '\nstagingPercentage: %s\n' "$PERCENT" >> dist/latest.yml
+            gh release upload "$TAG" dist/latest.yml --clobber --repo "${{ github.repository }}"
+            # Prove the patched manifest is the one on the release - read it
+            # back rather than trusting the upload's exit code.
+            rm -rf _verify && mkdir _verify
+            gh release download "$TAG" --pattern latest.yml --dir _verify --repo "${{ github.repository }}"
+            grep -q "^stagingPercentage: $PERCENT$" _verify/latest.yml || {
+              echo "::error::re-downloaded latest.yml does not carry stagingPercentage: $PERCENT - leaving the release as a draft."
+              exit 1
+            }
+            echo "Manifest staged at $PERCENT%."
+          else
+            echo "Rollout 100% - manifest left pristine."
+          fi
+          # A semver-prerelease tag (v1.4.0-test.1, v1.4.0-beta.2) goes live
+          # as a GitHub PRERELEASE: visible on the releases page, but
+          # /releases/latest ignores prereleases, so the shipped updater
+          # (allowPrerelease=false) never sees it. That is the test channel.
+          if [[ "$TAG" == *-* ]]; then
+            gh release edit "$TAG" --draft=false --prerelease --repo "${{ github.repository }}"
+            echo "Published $TAG as a PRERELEASE (invisible to the updater)."
+          else
+            gh release edit "$TAG" --draft=false --latest --repo "${{ github.repository }}"
+            echo "Published $TAG live at $PERCENT% rollout."
+          fi
 
       - name: Bundle failure diagnostics into one file
         if: always()

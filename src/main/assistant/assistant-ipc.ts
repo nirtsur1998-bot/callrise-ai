@@ -23,6 +23,7 @@ import { noCapableModelMessage } from '../ai/capability-copy'
 import {
   fitPromptToBudget,
   budgetCharsFor,
+  truncationMarker,
   DEFAULT_CONTEXT_WINDOW_TOKENS
 } from './prompt-budget'
 import type { AIMessage } from '../ai/types'
@@ -41,7 +42,8 @@ import { extractContextSuggestions } from '../coaching-chat'
 import type { CoachChatContextSuggestion } from '../calls-fs'
 import type { MemoryCategory, MemoryScope } from '../memory/types'
 import { buildAssistantContext, citationsUsedIn } from './context'
-import { detectUnboundClientMentions, unboundClientNotice } from './unbound-client'
+import { detectUnboundClientMentions } from './unbound-client'
+import { unboundClientNotice } from './unbound-client-notice'
 import {
   deleteVoiceNote,
   readVoiceNote,
@@ -434,11 +436,52 @@ async function handleSend(
     // Note the earlier drop-history rule fired only for images and PDFs, so
     // TEXT attachments — the bulkiest input there is — stacked with full
     // history. This bound covers every source uniformly instead.
+    // MERGE (2026-08-25) — ported to main's canonical prompt-budget signature.
+    //
+    // It takes { systemFixed, trimmable } rather than one opaque `system`,
+    // because coaching-chat's trimmable section (the transcript) sits in the
+    // MIDDLE of its prompt and can only be addressed before the parts are
+    // joined. Rise's trimmable section is the attachment text, appended last,
+    // so context.ts hands both halves over directly rather than this code
+    // guessing at an offset into a finished string.
+    //
+    // 'tail' is Rise's direction and it is load-bearing: it keeps the HEAD of
+    // the trimmable section, and cutting the head instead would drop
+    // SCOPE_RULE — the instruction that stops one client's data being
+    // discussed in another client's chat. main's suite already asserts this
+    // direction ("trimFrom 'tail' keeps the START — the direction Rise needs
+    // for SCOPE_RULE"), written before Rise arrived.
     const budget = fitPromptToBudget(
-      { system: context.system, history: rawHistory, message },
-      budgetCharsFor(DEFAULT_CONTEXT_WINDOW_TOKENS)
+      {
+        systemFixed: context.systemFixed,
+        trimmable: context.trimmable,
+        history: rawHistory,
+        message
+      },
+      budgetCharsFor(DEFAULT_CONTEXT_WINDOW_TOKENS),
+      'tail'
     )
     const history = budget.history
+    // The marker is composed by the CALLER now, so a second trim can never
+    // leave a fragment of a first one, and the wording lives with the feature.
+    const trimmedTail =
+      budget.trim.trimmableCharsDropped > 0
+        ? budget.trimmable + truncationMarker('some attachment text')
+        : budget.trimmable
+    const systemPrompt = [context.systemFixed, trimmedTail]
+      .filter((s) => s.length > 0)
+      .join('\n\n')
+
+    if (!budget.fits) {
+      // The fixed floor plus the user's own message already exceed the budget,
+      // so nothing this module is allowed to cut can rescue it. Reported
+      // rather than hidden behind a result that looks fitted.
+      console.warn(
+        '[assistant] prompt does not fit even after trimming everything trimmable —',
+        'the fixed sections alone exceed the budget:',
+        conversationId
+      )
+    }
     if (budget.historyStartedOnAssistant) {
       // Not the routine odd-drop boundary — this history was ALREADY
       // malformed on arrival, which nothing should be able to produce. The
@@ -454,14 +497,14 @@ async function handleSend(
       console.warn(
         '[assistant] prompt trimmed to fit the context budget:',
         `${budget.trim.historyMessagesDropped} history message(s) dropped, ` +
-          `${budget.trim.systemCharsDropped} system char(s) truncated`
+          `${budget.trim.trimmableCharsDropped} attachment char(s) truncated`
       )
     }
 
     broadcast('assistant:phase', { conversationId, phase: 'thinking' })
     const stream = streamWithFallback({
       purpose: 'assistant-chat',
-      system: budget.system,
+      system: systemPrompt,
       messages: [...history, { role: 'user', content: message }],
       maxTokens: MAX_TOKENS,
       signal: turn.controller.signal,
