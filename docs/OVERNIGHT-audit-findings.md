@@ -19,7 +19,23 @@ below carries the reporting agent's own confidence and its own "what I could not
 verify" note, preserved verbatim rather than smoothed over. Treat them as
 **high-quality leads with file:line evidence**, not as established defects.
 
-**Five branches now exist, all off `main`, all UNPUSHED, and none of them is this branch**
+> ### ⚠️ UPDATE 2026-08-25, later — THESE BRANCHES ARE NOW PUSHED, AND BUG-115 SHIPPED
+>
+> Every statement below about branches being unpushed was true when written and is now false.
+> The founder had M29 push all of them, because the new built-vs-shipped report can only see
+> **pushed refs** — so verified work sitting unpushed was invisible to the one report designed
+> to find invisible verified work. Verified against the remote: all six `fix/*` branches and
+> `claude/overnight-audit` are on origin at exactly their local hashes.
+>
+> **BUG-115 is merged and released as v1.3.5.** **BUG-120 is fixed and shipped** — CI now runs
+> the electron-vite build BEFORE vitest, plus a CI assertion pinning that order so it cannot
+> silently regress; two releases have run those four channel-swap tests for real, 4 of 4.
+>
+> `main` has moved well past `f5d357e` (v1.3.9 at time of writing). **Re-read §9 HANDOFF and
+> `docs/HANDOFF.md` for current state; treat branch/ship claims in the body below as
+> historical.**
+
+**Five branches now exist, all off `main`, all UNPUSHED (see the update above — they are now pushed), and none of them is this branch**
 (this one still contains only this document):
 
 | Branch | Commit | What |
@@ -57,7 +73,7 @@ Ranked by (severity × how easily a normal user reaches it). All three are
 > **This is the one exception to the "unverified" banner above.** I ran the adversarial
 > pass on it by hand and closed every refutation route (see the checklist at the end of this
 > entry). Fixed on branch `fix/BUG-111-pause-ends-call` off `main`, commit `47a44f3`,
-> **unpushed**. Typecheck exit 0; full suite exit 0, 217 files, 2148 passed / 9 skipped
+> **now pushed, and SHIPPED as v1.3.5**. Typecheck exit 0; full suite exit 0, 217 files, 2148 passed / 9 skipped
 > — **+5 on the 2143 baseline, matching the five tests added**, which is how I know they ran.
 > Both halves of the fix red-checked independently, each reversion verified as actually
 > applied to the file before the run was interpreted (species 20).
@@ -682,7 +698,7 @@ does not become the stale privileged doc this audit keeps finding.**
 
 ### State of the branches
 `claude/overnight-audit` holds this document and nothing else. Five fix branches exist off
-`main`, all **unpushed** — see the table at the top. `main` is untouched. Nothing under
+`main`, all **now PUSHED** (they were unpushed when this was written) — see the table at the top. `main` is untouched. Nothing under
 M28's or M29's paths was modified by any of them.
 
 ### Logged for the other sessions
@@ -758,7 +774,7 @@ both solid.
 3. **Then the four other dead agents:** IPC contract drift (it had found an escape hatch
    and died before reporting it — re-run it first of the four), coaching/knowledge/
    analytics, updater/packaging/native, dead code.
-4. **Fix order once verified:** field-critical on a separate branch off `main`, unpushed,
+4. **Fix order once verified:** field-critical on a separate branch off `main` — and PUSH it (policy changed 2026-08-25: the built-vs-shipped report can only see pushed refs, so unpushed verified work is invisible to the report designed to find exactly that),
    flagged loudly. LIVE-1 is the best first fix — highest severity, no race needed, and
    the smallest surface.
 5. **Do not fix without a red-check**, and **verify the reversion actually applied**

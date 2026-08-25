@@ -198,6 +198,47 @@ work.
 
 ---
 
+## 2b. WHAT CHANGED AFTER THIS HANDOFF WAS WRITTEN (2026-08-25, later)
+
+Relayed by M29 and **independently verified here**, not taken on report:
+
+- **All six `fix/*` branches and `claude/overnight-audit` are now PUSHED**, at the founder's
+  instruction. Confirmed against the remote at exactly their local hashes.
+  **The reason is the important part:** the new built-vs-shipped report can only see *pushed
+  refs*, so verified work sitting unpushed was invisible to the one report designed to find
+  invisible verified work. **Policy change: push verified branches.** Everything in
+  `docs/OVERNIGHT-audit-findings.md` describing them as unpushed is historical; that document
+  now carries an update block saying so.
+- **BUG-120 is fixed and shipped, and better than what I proposed.** I suggested swapping the
+  two CI steps; the fix does that *and* adds a CI assertion pinning the order so it cannot
+  silently regress. Verified on `origin/main`: electron-vite build at line 131, Test at 135,
+  the guard at 203. Two releases have now run those four channel-swap tests for real — 4 of 4.
+- M29 scanned every branch of mine for plausible-format secrets. One hit, `default-config.ts:13`,
+  the Supabase anon key — public by design, already on main, already accepted. **Nothing of
+  mine is armed.**
+
+### ⚠️ BUG-124 IS MINE TO FIX, AND IT IS BUG-116's OWN PREDICTION COMING TRUE
+
+`electron-builder.yml`'s `files:` is a denylist and `scripts/` is not on it, so all nine dev
+scripts (~60 KB) are packaged into `app.asar`. M29 found it while adding a single file and
+**deliberately did not fix it, because `electron-builder.yml` is BUG-117's file and therefore
+mine.** Correct call.
+
+The framing worth keeping: BUG-116's own commit message argued for deleting the two artifacts
+rather than extending the denylist, because extending it *"fixes these two and leaves the next
+stray artifact for whoever comes after."* **The next stray artifact showed up about four
+hours later, by accident.** The argument for inverting `files:` to an allowlist now has a
+dated instance rather than a prediction.
+
+**Do NOT apply `'!scripts/**'` on a code read alone.** `scripts/apply-fuses.js` is wired as an
+`afterPack` hook and `scripts/verify-build-inputs.js` as `beforePack` (BUG-117). Whether
+excluding `scripts/**` from the *asar* breaks hooks that run from the *repo* at package time
+is exactly the kind of thing that reads safe and isn't. **Confirm with a real `build:unpack`,
+then check both hooks still fire** — the log lines `[verify-build-inputs] win32: all 2
+required build inputs present` and `[fuses] locked win32:` are the proof.
+
+---
+
 ## 3b. A PROCESS PROBLEM TO HAND ON — the tracker has no owner
 
 **Two ID collisions happened in one night**, in two different shared documents, because two
