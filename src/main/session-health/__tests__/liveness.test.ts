@@ -23,6 +23,96 @@ describe('LivenessWatchdog', () => {
     expect(verdict.forMs).toBeGreaterThanOrEqual(HEALTH_TUNING.noAudioMs)
   })
 
+  // BUG-111 — the rep pressing Pause is not a dead microphone.
+  //
+  // Pause is renderer-local: `togglePause` only calls `recorder.setPaused(true)`,
+  // which stops handing chunks to `sendAudio`. Main therefore sees no audio at
+  // all, `lastAudioMs` freezes, and after `noAudioMs` the watchdog declared
+  // 'capture-dead' — which ends and saves the call and shows the rep
+  // "Microphone disconnected". A 15-second pause cost a live call.
+  //
+  // Note `setSending(false)` could never have fixed this: the capture-dead
+  // branch is evaluated BEFORE the `sending` guard, and deliberately so — a
+  // dead microphone matters whether or not we are streaming. Pause needs its
+  // own signal, which is what `setCapturePaused` is.
+  it('does not declare capture dead while capture is deliberately paused', () => {
+    const w = new LivenessWatchdog()
+    w.start(0)
+    w.onAudio(0, 0.4)
+    w.onServerMessage(0)
+
+    w.setCapturePaused(true, 1000)
+
+    // Well past the threshold, with no audio at all — the pre-fix behaviour.
+    const verdict = w.evaluate(HEALTH_TUNING.noAudioMs * 3)
+    expect(verdict.state).not.toBe('capture-dead')
+  })
+
+  // The half that is easy to get wrong: if resuming does not rebase the audio
+  // clock, the pause's own silence is still on the books and capture-dead
+  // fires on the very next tick — turning a fixed bug into a delayed one.
+  it('rebases the audio clock on resume, so the pause itself never counts', () => {
+    const w = new LivenessWatchdog()
+    w.start(0)
+    w.onAudio(0, 0.4)
+    w.onServerMessage(0)
+
+    const pausedAt = 1000
+    const resumedAt = pausedAt + HEALTH_TUNING.noAudioMs * 3
+    w.setCapturePaused(true, pausedAt)
+    w.setCapturePaused(false, resumedAt)
+
+    // One tick after resuming, before any real frame has had time to arrive.
+    expect(w.evaluate(resumedAt + 1).state).not.toBe('capture-dead')
+  })
+
+  // ...and the guard must not become a permanent off switch: a microphone that
+  // genuinely dies after a resume still has to be caught.
+  it('still declares capture dead after a resume when audio really stops', () => {
+    const w = new LivenessWatchdog()
+    w.start(0)
+    w.onAudio(0, 0.4)
+    w.onServerMessage(0)
+    w.setCapturePaused(true, 1000)
+    w.setCapturePaused(false, 5000)
+
+    expect(w.evaluate(5000 + HEALTH_TUNING.noAudioMs + 1).state).toBe('capture-dead')
+  })
+
+  // A restart must not inherit a stale pause, or the watchdog is silently
+  // disarmed for the whole next session.
+  it('clears the paused flag on start(), so a restart re-arms the watchdog', () => {
+    const w = new LivenessWatchdog()
+    w.start(0)
+    w.setCapturePaused(true, 1000)
+
+    w.start(10_000)
+    w.onServerMessage(10_000)
+
+    expect(w.evaluate(10_000 + HEALTH_TUNING.noAudioMs + 1).state).toBe('capture-dead')
+  })
+
+  // The pause flag is the rep's INTENT, and intent outlives a lid-close. The
+  // sleep-recovery path in transcription.ts restarts the clocks on a session
+  // that is still live, so it has to carry this across by hand — start() alone
+  // would clear it and re-arm capture-dead against a still-paused renderer.
+  it('exposes the paused flag so sleep recovery can carry it across a restart', () => {
+    const w = new LivenessWatchdog()
+    w.start(0)
+    expect(w.isCapturePaused()).toBe(false)
+
+    w.setCapturePaused(true, 1000)
+    expect(w.isCapturePaused()).toBe(true)
+
+    // What the sleep path does: read, restart, re-apply.
+    const wasPaused = w.isCapturePaused()
+    w.start(50_000)
+    expect(w.isCapturePaused()).toBe(false) // start() really does clear it
+    if (wasPaused) w.setCapturePaused(true, 50_000)
+
+    expect(w.evaluate(50_000 + HEALTH_TUNING.noAudioMs * 2).state).not.toBe('capture-dead')
+  })
+
   // readyState === OPEN is not a liveness check: a half-open TCP socket keeps
   // reporting OPEN for the whole retransmit window while nothing gets through.
   it('declares the socket dead when the server goes quiet while we stream', () => {

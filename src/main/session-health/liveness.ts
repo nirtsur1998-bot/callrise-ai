@@ -43,6 +43,11 @@ export class LivenessWatchdog {
   private startedMs = -Infinity
   private sending = false
 
+  /** The rep deliberately paused capture. Distinct from `sending`, which is
+   *  about the SOCKET — this one is about the microphone, and it is the only
+   *  thing that may suppress the capture-dead verdict. See setCapturePaused. */
+  private capturePaused = false
+
   /** Session start (or restart). Both clocks begin from here. */
   start(atMs: number): void {
     this.startedMs = atMs
@@ -51,6 +56,9 @@ export class LivenessWatchdog {
     this.lastServerMessageMs = atMs
     this.lastSilenceFillMs = -Infinity
     this.sending = false
+    // A restart must never inherit a stale pause, or the watchdog would be
+    // silently disarmed for the whole next session.
+    this.capturePaused = false
   }
 
   /** An audio frame arrived from the capture pipeline. */
@@ -84,11 +92,37 @@ export class LivenessWatchdog {
     this.sending = sending
   }
 
+  /** BUG-111 — the rep pressed Pause. Capture stopping on purpose is not a
+   *  dead microphone, and main cannot tell the difference on its own: pause is
+   *  renderer-local (`recorder.setPaused`), so from here it looks exactly like
+   *  the mic vanishing. Without this, a pause longer than `noAudioMs` ended and
+   *  saved the call and told the rep their microphone was disconnected.
+   *
+   *  Note `setSending(false)` could not have covered this. The capture-dead
+   *  branch is evaluated BEFORE the `sending` guard, deliberately — a dead
+   *  microphone matters whether or not we are streaming — so pause needs a
+   *  signal of its own.
+   *
+   *  `atMs` rebases the audio clock on RESUME. Without that rebase the pause's
+   *  own silence is still on the books and capture-dead fires on the very next
+   *  tick, which would turn this into a delayed version of the same bug. */
+  setCapturePaused(paused: boolean, atMs: number): void {
+    this.capturePaused = paused
+    if (!paused) this.lastAudioMs = atMs
+  }
+
+  /** Whether the rep currently has capture paused. Read by the sleep-recovery
+   *  path, which restarts the clocks on a session that is still live and must
+   *  not silently re-arm a watchdog the rep deliberately paused. */
+  isCapturePaused(): boolean {
+    return this.capturePaused
+  }
+
   evaluate(atMs: number): LivenessVerdict {
     if (this.startedMs === -Infinity) return { state: 'ok', forMs: 0 }
 
     const sinceAudio = atMs - this.lastAudioMs
-    if (sinceAudio >= HEALTH_TUNING.noAudioMs) {
+    if (!this.capturePaused && sinceAudio >= HEALTH_TUNING.noAudioMs) {
       return { state: 'capture-dead', forMs: sinceAudio }
     }
 

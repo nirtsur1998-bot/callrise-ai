@@ -126,6 +126,9 @@ export interface TranscriptionApi {
   sendAudio: (chunk: ArrayBuffer, producerId?: number) => void
   requestAudioPort: () => void
   reportAudioDropped: (frames: number, producerId?: number) => void
+  /** BUG-111 — tell main the rep paused/resumed capture, so the liveness
+   *  watchdog does not mistake a deliberate pause for a dead microphone. */
+  setPaused: (paused: boolean, producerId?: number) => void
   /** `session: null` is the ONLY affirmative "there is no call in progress"
    *  answer in the system. Nothing else may conclude that — not a timeout,
    *  not a default. */
