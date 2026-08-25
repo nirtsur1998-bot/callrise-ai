@@ -1,6 +1,6 @@
 {
   "name": "callrise-ai",
-  "version": "1.3.9",
+  "version": "1.3.3",
   "description": "CallRise AI — desktop AI assistant for sales calls",
   "main": "./out/main/index.js",
   "author": "",

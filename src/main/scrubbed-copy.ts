@@ -13,7 +13,7 @@
 // mechanism, no drift — the same rule A5.2 applied to snapshotMemoryDb.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { scrub } from './scrub'
+import { scrub } from './telemetry/scrub'
 
 /**
  * Copy `src` to `destPath` with EVERY LINE scrubbed.

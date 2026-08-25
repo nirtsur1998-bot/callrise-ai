@@ -1,3 +1,5 @@
+import { signalNativeLoad } from '../../telemetry/signals'
+import { errorClassOf } from '../../telemetry/capture'
 import { app } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
@@ -64,8 +66,10 @@ function loadNativeAddon(): { addon: NativeAddon | null; error: unknown } {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const addon = require(resolveAddonPath()) as NativeAddon
+    signalNativeLoad({ module: 'win-audio-sessions', ok: true }) // M29 A2 — once per process
     return { addon, error: null }
   } catch (error) {
+    signalNativeLoad({ module: 'win-audio-sessions', ok: false, errorClass: errorClassOf(error) })
     return { addon: null, error }
   }
 }

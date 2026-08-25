@@ -66,6 +66,28 @@ export function AppSection(): React.JSX.Element {
 
   const osName = isMac ? 'macOS' : isWindows ? 'Windows' : 'your computer'
 
+  // M29 A5.4 — support bundle: one click, a dated folder in Downloads with a
+  // readable summary and the scrubbed diagnostic files, ready to attach to
+  // an email. Separate from Tier 1's own "Export diagnostics" (audio-engine
+  // logs only) — this covers the whole app.
+  const [bundling, setBundling] = useState(false)
+  const [bundleStatus, setBundleStatus] = useState<string | null>(null)
+
+  const onCreateSupportBundle = useCallback(async (): Promise<void> => {
+    setBundling(true)
+    try {
+      const r = await window.api.support.createBundle()
+      if (!mountedRef.current) return
+      setBundleStatus(
+        r.ok && r.path
+          ? `Created ${r.path.split(/[\\/]/).pop()} — the folder just opened. Attach it to your email.`
+          : 'Could not create the support bundle — try again, or use "Open log file" above and attach that instead.'
+      )
+    } finally {
+      if (mountedRef.current) setBundling(false)
+    }
+  }, [])
+
   return (
     <>
       <Card className="mb-5">
@@ -111,6 +133,25 @@ export function AppSection(): React.JSX.Element {
               className="rounded-lg border border-line px-3.5 py-2 text-sm font-medium text-muted transition hover:bg-elevated hover:text-ink"
             >
               Open log file
+            </button>
+          }
+        />
+      </Card>
+      <Card className="mb-5">
+        <SettingRow
+          title="Support bundle"
+          description={
+            bundleStatus ??
+            'One click collects the fallback log, job history, and diagnostic files into a folder you can email support — no transcripts, memories, contacts, or keys.'
+          }
+          control={
+            <button
+              type="button"
+              disabled={bundling}
+              onClick={() => void onCreateSupportBundle()}
+              className="rounded-lg border border-line px-3.5 py-2 text-sm font-medium text-muted transition hover:bg-elevated hover:text-ink disabled:opacity-60"
+            >
+              {bundling ? 'Creating…' : 'Create support bundle'}
             </button>
           }
         />

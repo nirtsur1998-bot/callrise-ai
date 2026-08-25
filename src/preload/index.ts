@@ -78,7 +78,8 @@ const api = {
       question: string,
       callId?: string,
       includesBuyerContent?: boolean
-    ) => ipcRenderer.invoke('live:askCoach', { transcript, question, callId, includesBuyerContent }),
+    ) =>
+      ipcRenderer.invoke('live:askCoach', { transcript, question, callId, includesBuyerContent }),
     // M26 4.5 (BUG-055) / M27 E1 — callId + includesBuyerContent let main
     // check fresh consent before a pass that may include buyer-attributed
     // content ever reaches an AI prompt. See main/live-cue.ts's own doc
@@ -265,6 +266,8 @@ const api = {
       subscribe<string>('prepBrief:openRequested', cb)
   },
   salesBrain: {
+    // M29 A5.3 — one-click consistent snapshot of memory.db while the app runs.
+    exportSnapshot: () => ipcRenderer.invoke('salesBrain:exportSnapshot'),
     onboarding: {
       status: () => ipcRenderer.invoke('salesBrain:onboarding:status'),
       submitAnswer: (topicId: string, answer: string) =>
@@ -487,8 +490,11 @@ const api = {
     // Collects engine logs + status + app state into one zip via a save
     // dialog. The renderer passes device LABELS (names only) because
     // enumerateDevices() only exists on its side of the bridge.
-    exportDiagnostics: (info: { deviceLabels?: string[]; tier1Enabled?: boolean; denoiseStrength?: string }) =>
-      ipcRenderer.invoke('tier1:exportDiagnostics', info),
+    exportDiagnostics: (info: {
+      deviceLabels?: string[]
+      tier1Enabled?: boolean
+      denoiseStrength?: string
+    }) => ipcRenderer.invoke('tier1:exportDiagnostics', info),
     onStatus: (cb: (status: unknown) => void) => subscribe('tier1:status', cb),
     // Audio frames. Deliberately NOT routed through `subscribe`'s generic
     // path: this fires ~100x/second and the payload is a transferred
@@ -534,6 +540,11 @@ const api = {
     logRendererError: (scope: string, message: string) =>
       ipcRenderer.invoke('app:logRendererError', scope, message)
   },
+  // M29 A5.4 — the support bundle: fallback log, purpose health, job
+  // history, versions, device basics, in one folder, ready to email.
+  support: {
+    createBundle: () => ipcRenderer.invoke('support:createBundle')
+  },
   detection: {
     getState: () => ipcRenderer.invoke('detection:getState') as Promise<DetectorState | undefined>,
     captureStarted: (payload: { callId: string; sessionId: string }) =>
@@ -565,6 +576,16 @@ const api = {
     requestTogglePause: () => ipcRenderer.invoke('detection:requestTogglePause'),
     onRequestStopCapture: (cb: () => void) => subscribe('detection:requestStopCapture', cb),
     onRequestTogglePause: (cb: () => void) => subscribe('detection:requestTogglePause', cb)
+  },
+  // M29 A1.3 — opt-in diagnostics: consent, the anonymous id, and the real
+  // queued payloads (Settings → Privacy → Diagnostics & telemetry).
+  telemetry: {
+    getState: () => ipcRenderer.invoke('telemetry:getState'),
+    setConsent: (value: 'on' | 'off') => ipcRenderer.invoke('telemetry:setConsent', value),
+    clearQueue: () => ipcRenderer.invoke('telemetry:clearQueue'),
+    clearSent: () => ipcRenderer.invoke('telemetry:clearSent'),
+    featureOpened: (feature: string) => ipcRenderer.invoke('telemetry:featureOpened', feature),
+    flushNow: () => ipcRenderer.invoke('telemetry:flushNow')
   },
   updater: {
     status: () => ipcRenderer.invoke('updater:status'),

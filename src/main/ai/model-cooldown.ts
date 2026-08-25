@@ -22,7 +22,7 @@
 // Keyed by catalogId, not provider: Groq and Gemini rate-limit per MODEL, so
 // a sibling model on the same key is often still usable. A genuine
 // account-wide limit simply marks each model as it is tried.
-import type { AIPurpose, CooldownTier } from './types'
+import type { CooldownTier } from './types'
 import { isPacedFor } from './model-pacing'
 
 /** Used when the provider rate-limits us but says nothing about when to come
@@ -192,72 +192,20 @@ export function markPeriodExhausted(
  *  get proof. */
 export const STRUCTURAL_BREAK_MS = 4 * 60 * 60_000 // 4h
 
-/**
- * AUDIT FIX (2026-08-24) — keyed by PURPOSE + catalogId, not catalogId alone.
- *
- * The doc comment above has always described the condition correctly: "a 400
- * on this exact request shape". The storage contradicted it. A 400 is by
- * construction a statement about the REQUEST, and a different purpose sends a
- * different request — so punishing the model everywhere, for four hours, on
- * the evidence of one purpose's request was a category error.
- *
- * What it cost in the field: attaching one PDF in Rise sends an OpenAI-only
- * `type:'file'` part to providers that reject it; each 400 blacklisted that
- * model globally, and on a fresh install every purpose falls through to the
- * SHARED synthetic `legacy:${provider.id}` step, with
- * LEGACY_TAIL_MAX['coaching-cue'] = 0 making coaching-cue's chain exactly one
- * entry long. So a single PDF in a chat window killed live call coaching for
- * four hours, with no message naming the cause and no UI to clear it. An
- * oversize prompt fired the same mechanism.
- *
- * Purpose-scoping keeps the protection where the evidence applies — a
- * genuinely broken integration still stops being retried for the purpose that
- * proved it broken — while making cross-purpose damage structurally
- * impossible rather than merely unlikely.
- *
- * NUL as the separator: no AIPurpose or catalogId contains one, so no two
- * distinct (purpose, catalogId) pairs can collide.
- */
-const structuralBreaks = new Map<string, number>() // `purpose\0catalogId` -> expiry
+const structuralBreaks = new Map<string, number>() // catalogId -> expiry, same shape as `cooldowns`
 
-const NUL = String.fromCharCode(0)
-function breakKey(purpose: AIPurpose, catalogId: string): string {
-  return `${purpose}${NUL}${catalogId}`
-}
-
-export function markStructurallyBroken(catalogId: string, now: number, purpose: AIPurpose): void {
+export function markStructurallyBroken(catalogId: string, now: number): void {
   const until = now + STRUCTURAL_BREAK_MS
-  const key = breakKey(purpose, catalogId)
-  const existing = structuralBreaks.get(key)
+  const existing = structuralBreaks.get(catalogId)
   if (existing !== undefined && existing >= until) return
-  structuralBreaks.set(key, until)
+  structuralBreaks.set(catalogId, until)
 }
 
-/**
- * `purpose: null` means "no particular purpose is being asked about" and
- * always answers false — the honest answer for a purpose-scoped record. A
- * break proven by ONE purpose's request says nothing about whether a
- * background summarisation job can use the model. Only hasUsableAiCapacity
- * passes null, and deferring every background job because one interactive
- * chat request 400'd is exactly the cross-purpose damage this scoping exists
- * to end.
- *
- * Deliberately names no specific purpose: the principle holds for any pair,
- * and this block is a backport candidate to `main`, which does not have
- * every purpose this branch does. A comment that cites an identifier the
- * target branch lacks is a small lie that ships.
- */
-export function isStructurallyBroken(
-  catalogId: string,
-  now: number,
-  purpose: AIPurpose | null
-): boolean {
-  if (purpose === null) return false
-  const key = breakKey(purpose, catalogId)
-  const until = structuralBreaks.get(key)
+export function isStructurallyBroken(catalogId: string, now: number): boolean {
+  const until = structuralBreaks.get(catalogId)
   if (until === undefined) return false
   if (until <= now) {
-    structuralBreaks.delete(key)
+    structuralBreaks.delete(catalogId)
     return false
   }
   return true
@@ -307,15 +255,9 @@ export function isUsableFor(
    *  never drift apart (the exact failure mode this codebase's own taxonomy
    *  warns about for duplicated encodings). Every existing caller omits it
    *  and is completely unaffected. */
-  opts?: {
-    ignorePacing?: boolean
-    /** The purpose whose chain this model is being considered for. Required
-     *  to consult purpose-scoped structural breaks; `null` (or omitted)
-     *  skips that check — see isStructurallyBroken. */
-    purpose?: AIPurpose | null
-  }
+  opts?: { ignorePacing?: boolean }
 ): boolean {
-  if (isStructurallyBroken(catalogId, now, opts?.purpose ?? null)) return false
+  if (isStructurallyBroken(catalogId, now)) return false
   if (!opts?.ignorePacing && isPacedFor(catalogId, now, callerTier)) return false
   const entry = cooldowns.get(catalogId)
   if (entry === undefined) return true
@@ -332,17 +274,9 @@ export function isUsableFor(
  *  LAST failure was classified as, and resets the escalation streak — a
  *  model that just worked has earned back the ordinary default, not a
  *  progressively longer wait from failures before it recovered. */
-export function clearCooldown(catalogId: string, purpose: AIPurpose): void {
+export function clearCooldown(catalogId: string): void {
   cooldowns.delete(catalogId)
-  // AUDIT FIX (2026-08-24) — clears THIS purpose's break only. A structural
-  // break records "this purpose's request shape is rejected by this model";
-  // a success on some other purpose is not evidence about that shape, so it
-  // must not clear it. Cooldowns and the transient streak stay catalogId-wide
-  // because a rate limit genuinely is a property of the model, not the
-  // request. Before purpose-scoping, this line deleted a bare catalogId key —
-  // after it, that key never exists, so leaving it unchanged would have made
-  // every structural break un-clearable until its 4h TTL expired.
-  structuralBreaks.delete(breakKey(purpose, catalogId))
+  structuralBreaks.delete(catalogId)
   transientStreak.delete(catalogId)
 }
 
@@ -351,18 +285,10 @@ export function clearCooldown(catalogId: string, purpose: AIPurpose): void {
  *  (isUsableFor) doesn't count: reporting its expiry as "the wait" would
  *  overstate how long a durable caller is actually blocked, since it isn't
  *  blocked by that entry at all. */
-export function soonestExpiry(
-  catalogIds: string[],
-  now: number,
-  callerTier: CooldownTier,
-  /** AUDIT FIX (2026-08-24) — without this the structural-break check inside
-   *  isUsableFor is skipped, and a model broken for this purpose is reported
-   *  as already available. */
-  purpose?: AIPurpose
-): number | null {
+export function soonestExpiry(catalogIds: string[], now: number, callerTier: CooldownTier): number | null {
   let soonest: number | null = null
   for (const id of catalogIds) {
-    if (isUsableFor(id, now, callerTier, { purpose })) continue
+    if (isUsableFor(id, now, callerTier)) continue
     const entry = cooldowns.get(id)
     if (!entry) continue
     if (soonest === null || entry.until < soonest) soonest = entry.until

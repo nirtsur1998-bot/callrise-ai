@@ -19,6 +19,31 @@ const BACKFILL_JOB_TYPE = 'salesBrain:backfill'
  * re-runnable here any time.
  */
 export function SalesBrainSection(): React.JSX.Element {
+  const [exporting, setExporting] = useState(false)
+  const [exportStatus, setExportStatus] = useState<string | null>(null)
+
+  const onExport = async (): Promise<void> => {
+    setExporting(true)
+    try {
+      const r = await window.api.salesBrain.exportSnapshot()
+      if (r.ok && r.path) {
+        setExportStatus(
+          `Exported to ${r.path} (${Math.max(1, Math.round((r.bytes ?? 0) / 1024))} KB). The folder just opened.`
+        )
+      } else if (r.canceled) {
+        setExportStatus(null)
+      } else if (r.reason === 'no-memory-db') {
+        setExportStatus('Nothing to export yet — the Sales Brain has no memories on this machine.')
+      } else {
+        setExportStatus(
+          'Export failed — try again, or use the manual copy (quit the app, copy memory.db + its -wal/-shm files).'
+        )
+      }
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const { settings, update } = useAppSettings()
   const enabled = settings.salesBrain.enabled
   const [showInterview, setShowInterview] = useState(false)
@@ -159,6 +184,29 @@ export function SalesBrainSection(): React.JSX.Element {
 
       {enabled && (
         <Card className="mb-5">
+          <SettingRow
+            title="Export Sales Brain"
+            description={
+              exportStatus ??
+              'One click writes a complete, consistent copy of your Sales Brain to a file you choose — safe while the app is running. Drop it in Drive or on a USB stick; restoring is copying it back as memory.db.'
+            }
+            control={
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={Download}
+                disabled={exporting}
+                onClick={() => void onExport()}
+              >
+                Export…
+              </Button>
+            }
+          />
+        </Card>
+      )}
+
+      {enabled && (
+        <Card className="mb-5">
           <div className="flex items-center gap-3">
             <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-elevated text-accent">
               <Brain className="h-4 w-4" />
@@ -181,12 +229,14 @@ export function SalesBrainSection(): React.JSX.Element {
               icon={RotateCcw}
               onClick={() => {
                 const alreadyDone = status?.status === 'finished' || status?.status === 'skipped'
-                void (alreadyDone ? window.api.salesBrain.onboarding.restart() : Promise.resolve()).then(() =>
-                  setShowInterview(true)
-                )
+                void (
+                  alreadyDone ? window.api.salesBrain.onboarding.restart() : Promise.resolve()
+                ).then(() => setShowInterview(true))
               }}
             >
-              {status?.status === 'finished' || status?.status === 'skipped' ? 'Run again' : 'Continue'}
+              {status?.status === 'finished' || status?.status === 'skipped'
+                ? 'Run again'
+                : 'Continue'}
             </Button>
           </div>
         </Card>
@@ -201,8 +251,9 @@ export function SalesBrainSection(): React.JSX.Element {
             <div className="min-w-0 flex-1">
               <h3 className="text-sm font-semibold">Import your past history</h3>
               <p className="text-[12px] text-faint">
-                Seed Sales Brain from contacts and deals you've already tracked — instant, no AI cost. Optionally
-                also scan past calls (uses your own AI provider, slower, and not free on your account).
+                Seed Sales Brain from contacts and deals you've already tracked — instant, no AI
+                cost. Optionally also scan past calls (uses your own AI provider, slower, and not
+                free on your account).
               </p>
               <label className="mt-2 flex items-center gap-2 text-[12px] text-muted">
                 <input
@@ -226,11 +277,14 @@ export function SalesBrainSection(): React.JSX.Element {
               )}
               {importing && backfillJob?.progress.mode === 'stages' && (
                 <p className="mt-1 text-[11px] text-accent">
-                  {backfillJob.progress.stageLabel} — safe to leave this screen, tracked in Activity too.
+                  {backfillJob.progress.stageLabel} — safe to leave this screen, tracked in Activity
+                  too.
                 </p>
               )}
               {backfillJob?.state === 'succeeded' && (
-                <p className="mt-1 text-[11px] text-success">{backfillJob.resultRef ?? 'Import complete.'}</p>
+                <p className="mt-1 text-[11px] text-success">
+                  {backfillJob.resultRef ?? 'Import complete.'}
+                </p>
               )}
               {backfillJob?.state === 'failed' && (
                 <p className="mt-1 text-[11px] text-danger">

@@ -1,14 +1,3 @@
-// Backported from the M29 branch for BUG-094, and deliberately MOVED out of
-// `telemetry/` on the way: this file has nothing to do with telemetry. Its
-// only import is `node:os` -- no config, no consent state, no network, no
-// queue. It is a pure string function. Leaving it under `telemetry/` on a
-// branch where telemetry does not exist would have been a path that lies
-// about what shipped.
-//
-// Its consumer here is the diagnostics export (scrubbed-copy.ts ->
-// tier1-diagnostics.ts). When M29 merges, telemetry becomes a SECOND
-// consumer of this same file -- one scrubber, two callers, which is the
-// whole point (principle 8: one definition, no copies to drift).
 // M29 A1.0 — the scrubber. P0 for Workstream A: nothing leaves the machine
 // (telemetry, support bundle, diagnostics zip) and nothing is written to the
 // local log without passing through `scrub()` first.

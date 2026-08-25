@@ -34,6 +34,8 @@
 // In every failure case, the ORIGINAL call/contact/task data (everything
 // this app stored before Sales Brain existed) is completely untouched —
 // this module only ever reads/writes the separate memory.db file.
+import { signalNativeLoad } from '../telemetry/signals'
+import { errorClassOf } from '../telemetry/capture'
 import { copyFileSync, existsSync, rmSync } from 'node:fs'
 // M27 J3 — type-only. better-sqlite3's actual native module is loaded lazily
 // inside openMemoryDb(), below, not here — see that function's own doc
@@ -54,7 +56,13 @@ function preMigrationBackupPath(dbPath: string): string {
 export type MigrateResult =
   | { ok: true; migrated: boolean; fromVersion: number; toVersion: number }
   | { ok: false; reason: 'newer-than-app'; fileVersion: number; appVersion: number }
-  | { ok: false; reason: 'migration-failed'; fileVersion: number; targetVersion: number; error: string }
+  | {
+      ok: false
+      reason: 'migration-failed'
+      fileVersion: number
+      targetVersion: number
+      error: string
+    }
 
 /** Opens (creating if needed) the memory DB and loads the sqlite-vec
  *  extension into it. Does NOT migrate — call migrate() separately so a
@@ -109,15 +117,33 @@ export function resolveVecExtensionPath(resolved: string): string {
  * first call exactly as well as a dynamic import would, without the ripple.
  */
 export function openMemoryDb(dbPath: string): Database.Database {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const DatabaseCtor = require('better-sqlite3') as typeof Database
-  const db = new DatabaseCtor(dbPath)
+  // M29 A2 — native.load signals (once per module per process, in signals.ts):
+  // this is the exact class of the Sales-Brain-dead-on-a-clean-Windows
+  // failure (be512bc): loads on every dev box and CI runner, dies with
+  // ERR_MOD_NOT_FOUND on real installs. Failures rethrow — behaviour is
+  // byte-identical to before; the signal is a side observation.
+  let db: Database.Database
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const DatabaseCtor = require('better-sqlite3') as typeof Database
+    db = new DatabaseCtor(dbPath)
+    signalNativeLoad({ module: 'better-sqlite3', ok: true })
+  } catch (err) {
+    signalNativeLoad({ module: 'better-sqlite3', ok: false, errorClass: errorClassOf(err) })
+    throw err
+  }
   db.pragma('journal_mode = WAL') // same durability/perf tradeoff every other SQLite app on desktop makes
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const sqliteVec = require('sqlite-vec') as typeof import('sqlite-vec')
-  // NOT sqliteVec.load(db) — that uses the raw require.resolve path, which
-  // is broken inside a packaged app. See resolveVecExtensionPath above.
-  db.loadExtension(resolveVecExtensionPath(sqliteVec.getLoadablePath()))
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const sqliteVec = require('sqlite-vec') as typeof import('sqlite-vec')
+    // NOT sqliteVec.load(db) — that uses the raw require.resolve path, which
+    // is broken inside a packaged app. See resolveVecExtensionPath above.
+    db.loadExtension(resolveVecExtensionPath(sqliteVec.getLoadablePath()))
+    signalNativeLoad({ module: 'sqlite-vec', ok: true })
+  } catch (err) {
+    signalNativeLoad({ module: 'sqlite-vec', ok: false, errorClass: errorClassOf(err) })
+    throw err
+  }
   return db
 }
 
@@ -125,7 +151,7 @@ export function openMemoryDb(dbPath: string): Database.Database {
  *  file from a backup — leaving a stale `-wal`/`-shm` next to a just-restored
  *  `memory.db` risks SQLite reading inconsistent state on next open (they're
  *  keyed to match their main file's prior state, not the restored one). */
-function removeWalSidecars(dbPath: string): void {
+export function removeWalSidecars(dbPath: string): void {
   for (const suffix of ['-wal', '-shm']) {
     try {
       rmSync(`${dbPath}${suffix}`, { force: true })
@@ -175,7 +201,9 @@ export async function migrate(
     return { ok: false, reason: 'newer-than-app', fileVersion, appVersion: targetVersion }
   }
 
-  const pending = migrations.filter((m) => m.version > fileVersion).sort((a, b) => a.version - b.version)
+  const pending = migrations
+    .filter((m) => m.version > fileVersion)
+    .sort((a, b) => a.version - b.version)
 
   // Nothing to protect on a brand-new (version 0, no tables) file — skip the
   // backup step rather than writing a pointless empty-DB backup every first

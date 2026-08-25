@@ -627,7 +627,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   // + keys, and so the "everything is cooling down" case below can tell the
   // difference between "you have no keys" and "your keys need a minute".
   const startedNow = Date.now()
-  const chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier, { purpose }))
+  const chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier))
 
   if (chain.length === 0) {
     // Every model is in cooldown. Refusing here is the POINT: walking the
@@ -637,8 +637,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     const until = soonestExpiry(
       capable.map((s) => s.catalogId),
       startedNow,
-      tier,
-      purpose
+      tier
     )
     const secs = until ? Math.max(1, Math.ceil((until - startedNow) / 1000)) : 60
     void recordAiFailure(purpose, { reason: 'rate-limit', providerId: null })
@@ -740,7 +739,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
       // '' modelId is a legacy step - let the provider use its own default.
       const result = await completeWithSameModelRetry(provider, req, step.modelId, attemptSignal, purpose)
       // Proof the limit lifted — trust that over any earlier estimate.
-      clearCooldown(step.catalogId, purpose)
+      clearCooldown(step.catalogId)
       // BUG-058 remainder — a success is real evidence this model's capacity
       // was just spent, exactly like a rate-limit failure below is; a
       // DIFFERENT durable purpose asking again in the next few seconds
@@ -809,7 +808,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
         // above) — checking the raw reason string here, not re-deriving from
         // failureClass (which would also say 'structural' for auth), avoids
         // two independent encodings of the same exclusion drifting apart.
-        markStructurallyBroken(step.catalogId, Date.now(), purpose)
+        markStructurallyBroken(step.catalogId, Date.now())
       }
       attempts.push({
         catalogId: step.catalogId,
@@ -904,7 +903,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
   // consumer, and it is interactive, so spending its first attempt on a model
   // we already know is limited is the most visible possible version of this.
   const startedNow = Date.now()
-  const chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier, { purpose }))
+  const chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier))
 
   let resolveFinal!: (v: { text: string; model: string; usage: AICompletionResult['usage'] }) => void
   let rejectFinal!: (e: unknown) => void
@@ -951,8 +950,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       const until = soonestExpiry(
         capable.map((s) => s.catalogId),
         startedNow,
-        tier,
-        purpose
+        tier
       )
       const secs = until ? Math.max(1, Math.ceil((until - startedNow) / 1000)) : 60
       void recordAiFailure(purpose, { reason: 'rate-limit', providerId: null })
@@ -1053,7 +1051,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
             yield chunk
           }
           const usage = await streamResult.usage
-          clearCooldown(step.catalogId, purpose)
+          clearCooldown(step.catalogId)
           // BUG-058 remainder — same reasoning as completeWithFallback: mark
           // on the real outcome (success), never on a plain failure.
           markUsed(step.catalogId, Date.now(), tier)
@@ -1108,7 +1106,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           markUsed(step.catalogId, Date.now(), tier)
           noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
         } else if (failureClass === 'structural' && reason !== 'auth') {
-          markStructurallyBroken(step.catalogId, Date.now(), purpose)
+          markStructurallyBroken(step.catalogId, Date.now())
         }
         attempts.push({
           catalogId: step.catalogId,

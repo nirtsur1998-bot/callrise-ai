@@ -11,13 +11,17 @@ import {
   Paperclip,
   BookOpen,
   SlidersHorizontal,
-  Contact
+  Contact,
+  Brain
 } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { cn } from '@renderer/lib/cn'
 import { isMac } from '@renderer/lib/platform'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
-import { useAppSettings } from '@renderer/features/settings/useAppSettings'
+import {
+  useAppSettings,
+  type BackupSyncScope
+} from '@renderer/features/settings/useAppSettings'
 import { useBackupStatus, type SyncPhase } from './useBackupStatus'
 
 /** Plain-language size + direction of the device-vs-server clock difference,
@@ -82,8 +86,19 @@ const ALWAYS_SYNCED: { icon: typeof ListChecks; label: string }[] = [
   { icon: PhoneCall, label: 'Call titles, summaries & coaching scores' }
 ]
 
-type SyncScopeKey =
-  'transcripts' | 'attachments' | 'knowledgeBase' | 'settingsPersonalization' | 'contacts'
+// BUG-091 — DERIVED, never hand-listed. This was a literal five-key union
+// while main's BackupSyncScope declared six. Because it was an independent
+// copy rather than a derivation, TypeScript could not see the disagreement:
+// `salesBrain` had NO writer anywhere in the renderer (setScope below is the
+// only place syncScope is ever set), so the flag defaulted false, could not
+// be turned on, and BOTH Sales Brain cloud paths — upload and restore — were
+// unreachable from the product. Three bugs (BUG-087/088/089) were "fixed"
+// inside functions nothing could call.
+//
+// Now a compile error if the two ever disagree again. A runtime pin in
+// src/main/__tests__/sync-scope-no-drift.test.ts covers the main<->preload
+// hop, which types alone cannot (preload re-declares the interface).
+type SyncScopeKey = keyof BackupSyncScope
 
 const OPTIONAL_ITEMS: { key: SyncScopeKey; icon: typeof ListChecks; label: string }[] = [
   { key: 'transcripts', icon: MessagesSquare, label: 'Call recordings & transcripts' },
@@ -94,7 +109,12 @@ const OPTIONAL_ITEMS: { key: SyncScopeKey; icon: typeof ListChecks; label: strin
     icon: SlidersHorizontal,
     label: 'App settings & personalization'
   },
-  { key: 'contacts', icon: Contact, label: 'Contacts & deals' }
+  { key: 'contacts', icon: Contact, label: 'Contacts & deals' },
+  {
+    key: 'salesBrain',
+    icon: Brain,
+    label: 'Sales Brain memories'
+  }
 ]
 
 /**

@@ -25,6 +25,7 @@ import { AlertsSection } from '@renderer/features/alerts/AlertsSection'
 import { AppSection } from './AppSection'
 import { AppearanceSection } from './AppearanceSection'
 import { PrivacyDataPage } from './PrivacyDataPage'
+import { TelemetrySection } from './TelemetrySection'
 import { JobInspectorSection } from './JobInspectorSection'
 
 const PAGE_CONTENT: Record<SettingsPageId, React.ComponentType> = {
@@ -49,6 +50,7 @@ const PAGE_CONTENT: Record<SettingsPageId, React.ComponentType> = {
   app: AppSection,
   appearance: AppearanceSection,
   'privacy-data': PrivacyDataPage,
+  telemetry: TelemetrySection,
   'jobs-inspector': JobInspectorSection
 }
 

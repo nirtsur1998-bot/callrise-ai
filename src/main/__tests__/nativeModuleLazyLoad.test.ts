@@ -71,5 +71,11 @@ describe('M27 J3 — no eager top-level import of a native module anywhere in sr
       }
     }
     expect(offenders).toEqual([])
-  })
+    // 30s rather than the 5s default: this walks and reads EVERY .ts file
+    // under src/main, so it is I/O-bound and tips over the default when the
+    // full suite saturates the machine (observed twice on 2026-08-24; 239ms
+    // in isolation). Pre-existing flake, unrelated to what it asserts — the
+    // assertion is a static check that either holds or does not, so extra
+    // headroom cannot mask a regression.
+  }, 30_000)
 })

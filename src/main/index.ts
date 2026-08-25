@@ -6,12 +6,21 @@
 // TEMPORARY: added to chase a real Windows launch failure that produces zero
 // output through every normal channel (console, --enable-logging, Event
 // Viewer, WER) - remove once that's root-caused.
-import { writeFileSync } from 'fs'
+import { statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join as joinPathForCrashLog } from 'path'
 const crashLogPath = joinPathForCrashLog(tmpdir(), 'callrise-startup-crash.log')
+// M29 A1.2: this file had no cap and gained five lines on every launch for
+// the life of the machine (docs/M29-audit.md §1.4). Stop appending past 1 MB;
+// the persistent, rotated, scrubbed log in log.ts is the real record.
+const CRASH_LOG_MAX_BYTES = 1024 * 1024
 function writeCrashLog(label: string, err: unknown): void {
   try {
+    try {
+      if (statSync(crashLogPath).size > CRASH_LOG_MAX_BYTES) return
+    } catch {
+      /* no file yet — fine */
+    }
     const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
     writeFileSync(crashLogPath, `[${new Date().toISOString()}] ${label}\n${detail}\n`, {
       flag: 'a'
@@ -25,13 +34,19 @@ process.on('unhandledRejection', (err) => writeCrashLog('unhandledRejection', er
 writeCrashLog('process started', 'reached top of main/index.ts')
 
 import { config as loadEnv } from 'dotenv'
-import { app, shell, BrowserWindow, session, dialog } from 'electron'
+import { app, shell, BrowserWindow, session, dialog, crashReporter } from 'electron'
 import { join, dirname } from 'path'
 import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { DEFAULT_CONFIG } from './default-config'
 import { clearActiveConsent } from './consent-gate'
 import { registerCrashLogging, registerLog } from './log'
+import { captureChildGone, captureRendererGone } from './telemetry/capture'
+import { setupTelemetry, recordLaunch, recordQuit } from './telemetry/setup'
+import { registerSalesBrainExport } from './memory/export-ipc'
+import { registerSupportBundle } from './support-bundle'
+import { setIngestConfig, startTelemetrySchedule, stopTelemetrySchedule } from './telemetry/flush'
+import { registerTelemetryIpc } from './telemetry/ipc'
 import { JobManager, reportPersistFailure } from './jobs/JobManager'
 import { hasUsableAiCapacity, hasUsableCapacityForPurpose } from './ai/capacity'
 import type { AIPurpose } from './ai/types'
@@ -51,6 +66,50 @@ const userDataDir = join(app.getPath('appData'), 'sales-os')
 app.setPath('userData', userDataDir)
 
 registerCrashLogging()
+
+// M29 A1.3 — make the telemetry front door live. It still writes NOTHING
+// unless userData/telemetry-consent.json says 'on' (device-local, never
+// backed up — see telemetry/consent.ts for why it is not in app-settings).
+setupTelemetry({
+  userDataDir,
+  appVersion: app.getVersion(),
+  crashDumpsDir: app.getPath('crashDumps')
+})
+
+// M29 A1.2 — native crash capture, LOCAL ONLY. A hard process death (the
+// onnxruntime / better-sqlite3 class of failure that no JS handler ever sees)
+// leaves a minidump under app.getPath('crashDumps'). uploadToServer is false
+// and there is no submitURL: the dump never leaves the machine — it is
+// process memory and could hold a transcript. What opt-in telemetry gets is
+// only a COUNT of new dumps at the next launch (telemetry/native-crashes.ts).
+// Must run before any renderer or child process is spawned.
+try {
+  // ⛔ DO NOT SET uploadToServer: true. Not for a debugging session, not
+  // "temporarily", not behind a flag.
+  //
+  // A minidump is a snapshot of PROCESS MEMORY. For this app that memory holds
+  // live transcript text, buyer speech, contact and deal records, and any AI
+  // provider key currently in use. Flipping this one boolean turns the crash
+  // reporter into the single largest content-egress path in the product —
+  // larger than telemetry, the support bundle and the diagnostics zip
+  // combined, and unlike all three it is not scrubbable: there is no field
+  // list to redact, it is raw memory.
+  //
+  // The M29 correctness audit rated this the highest-consequence single line
+  // in the codebase. The dumps are kept locally on purpose; what opt-in
+  // telemetry ever learns is a COUNT of new dumps at the next launch
+  // (telemetry/native-crashes.ts). If you need the dump itself, read it on the
+  // machine that produced it.
+  crashReporter.start({ uploadToServer: false, compress: true })
+} catch {
+  /* a crash reporter that can't start is not worth crashing over */
+}
+
+// GPU / utility / network child processes dying is the other crash class
+// JavaScript never sees. Counted, never detailed.
+app.on('child-process-gone', (_event, details) => {
+  captureChildGone(details)
+})
 
 // Deep link (M19 Task 3B): callrise://meeting/<eventId> jumps straight to a
 // meeting's prep brief — e.g. tapped from a Telegram/email meeting_starting
@@ -135,6 +194,13 @@ if (envPaths.length > 0) loadEnv({ path: envPaths })
 for (const [key, value] of Object.entries(DEFAULT_CONFIG)) {
   if (!process.env[key]) process.env[key] = value
 }
+// M29 A1.4 — where opt-in telemetry goes: the same Supabase project, via a
+// plain fetch with the PUBLIC anon key only (telemetry/transport.ts). Read
+// lazily so a developer .env pointing elsewhere is honoured.
+setIngestConfig(() => ({
+  url: process.env.SUPABASE_URL ?? '',
+  anonKey: process.env.SUPABASE_ANON_KEY ?? ''
+}))
 import icon from '../../resources/icon.png?asset'
 import {
   registerTranscription,
@@ -298,6 +364,7 @@ function createWindow(): void {
   // handleRenderProcessGone's own doc comment for why ordering matters.
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error(`[main] render-process-gone: ${details.reason}`)
+    captureRendererGone(details) // M29 A1.2 — reason + exit code only; opt-in
     handleRenderProcessGone()
   })
 
@@ -548,6 +615,8 @@ app.whenReady().then(async () => {
   registerOnboarding()
   registerBackfill()
   registerMemoryCenter()
+  registerSalesBrainExport() // M29 A5.3
+  registerSupportBundle() // M29 A5.4
   registerVirtualMic()
   // M27 — Tier 1: driver-free noise cancellation for CallRise's own call
   // audio (Windows). Deliberately separate from registerVirtualMic() above,
@@ -562,6 +631,7 @@ app.whenReady().then(async () => {
   registerLaunchAtLogin()
   registerActiveApp()
   registerLog()
+  registerTelemetryIpc() // M29 A1.3
   registerAlerts()
   registerPrepBrief()
   registerCoachingChat()
@@ -582,6 +652,10 @@ app.whenReady().then(async () => {
 
   createWindow()
   writeCrashLog('createWindow returned', 'BrowserWindow constructed without throwing')
+  // M29 A1.3 — with consent on: count native dumps since last launch, mark
+  // the session started. With consent off/unasked: a no-op, by construction.
+  recordLaunch()
+  startTelemetrySchedule() // 30 s after launch, then every 6 h; no-op unless consent is on
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -596,6 +670,8 @@ let quitConfirmed = false
 
 app.on('before-quit', (event) => {
   if (quitConfirmed) {
+    recordQuit() // M29 A1.3 — a clean end; its absence is what 'crashed' means
+    stopTelemetrySchedule()
     disposeTranscription()
     disposeVirtualMic()
     disposeTier1()

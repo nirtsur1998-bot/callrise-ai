@@ -113,17 +113,18 @@ describe('B3 — shapes the sweep found and dropped as "no egress path today"', 
   it('a Mistral-shaped key is redacted', () => {
     // ASSEMBLED AT RUNTIME, NEVER WRITTEN AS A LITERAL. GitHub push protection
     // scans SOURCE, and a 32-char Mistral-shaped string blocks the push even
-    // when it is obviously synthetic -- which it did, on this exact line. The
-    // options were to whitelist the pattern in the repo's secret-scanning
-    // settings or to stop having a literal; whitelisting would train everyone
-    // to click through a real one later.
+    // when it is obviously synthetic. It did exactly that to `main` when this
+    // file's twin was backported for BUG-094, and it would have blocked this
+    // branch too.
+    //
+    // The options were to whitelist the pattern in the repo's secret-scanning
+    // settings, or to stop having a literal. Whitelisting trains everyone to
+    // click through a real one later.
     //
     // The VALUE is unchanged -- the scrubber still sees a complete,
-    // correctly-shaped key, so this test exercises exactly the rule it always
-    // did. Only its spelling in this file changed.
-    //
-    // M29's copy of this file (src/main/telemetry/__tests__/) still carries the
-    // literal and WILL hit the same block when that branch merges.
+    // correctly-shaped key -- so this exercises exactly the rule it always did.
+    // Only its spelling in this file changed. Principle 8 pointed at a scanner:
+    // do not make the check tolerate the literal, make there be no literal.
     const fakeKey = ['aB3dE5gH7jK9', 'mN1pQ3sT5vW7', 'yZ9bD1fH'].join('')
     const out = scrub(`MISTRAL_API_KEY=${fakeKey}`)
     expect(out).not.toContain(fakeKey)

@@ -36,7 +36,6 @@ import { overallTier, TONE_TO_BADGE, speakerLabel } from '@renderer/features/coa
 import { Badge } from '@renderer/components/Badge'
 import { GenerateTasksDialog } from '@renderer/features/tasks/GenerateTasksDialog'
 import { CoachReportView, CoachLoading } from '@renderer/features/coaching/CoachReportView'
-import { coachingHistoryDropped } from './consentRetention'
 import { CoachChatCard } from '@renderer/features/coaching/CoachChatPanel'
 import { MineTestPanel } from '@renderer/features/objection-library/MineTestPanel'
 import { useJobByTarget } from '@renderer/features/jobs/useJobByTarget'
@@ -1073,7 +1072,6 @@ export function CallDetail({
           callId={callId}
           initialMessages={call.coachChat ?? []}
           hasContact={!!call.contactId}
-          historyNotRetained={coachingHistoryDropped(call)}
         />
 
         {/* Commitments (§4.7) — who promised what */}

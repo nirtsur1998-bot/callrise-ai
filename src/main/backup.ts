@@ -10,6 +10,8 @@
 // crash-safe (no watermark that could skip a record). Idempotency + "newest
 // wins" are enforced by the DB (primary key (user_id, id) + the server-side
 // trigger), so re-pushing an unchanged or older record is a harmless no-op.
+import { signalBackupStepFailed } from './telemetry/signals'
+import { localMemoryCount } from './memory/memory-count'
 import { app, ipcMain, shell, BrowserWindow } from 'electron'
 import { join, dirname } from 'node:path'
 import { promises as fs } from 'node:fs'
@@ -26,7 +28,8 @@ import {
   type Call
 } from './calls-fs'
 import { listEntries, importEntry, type KnowledgeEntry } from './knowledge-fs'
-import { memoryDbPath } from './memory/db'
+import { memoryDbPath, removeWalSidecars } from './memory/db'
+import { snapshotMemoryDb } from './memory/snapshot'
 import { listContacts, importContact, type Contact } from './contacts-fs'
 import { listDeals, importDeal, type Deal } from './deals-fs'
 import { loadDealStagesMeta, applyPulledDealStages } from './deal-stages'
@@ -49,6 +52,25 @@ import { getJobManager } from './jobs/instance'
 import type { Job } from './jobs/types'
 import { NO_AI_PURPOSE } from './jobs/types'
 
+/** M29 A2 — BUG-087's lesson: EVERY best-effort sub-step failure also counts
+ *  into the aggregate signal (step + short code, never the error text), so a
+ *  step that fails for everyone forever is a dashboard row, not archaeology.
+ *
+ *  The word "every" here is a promise to enumerate, not emphasis. It was FALSE
+ *  from A5.2 until 2026-08-24: the Sales Brain snapshot-read catch was a bare
+ *  `return`, found by the sweep (H5) and fixed in the same pass that restored
+ *  this sentence. If you add a best-effort catch in this file, it counts — or
+ *  this sentence has to change again. */
+function reportBackupStep(step: string, err: unknown): void {
+  const e = err as { code?: unknown; statusCode?: unknown; status?: unknown; name?: unknown } | null
+  const raw = e?.code ?? e?.statusCode ?? e?.status ?? e?.name
+  const code =
+    (typeof raw === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(raw) && raw) ||
+    (typeof raw === 'number' && String(raw)) ||
+    undefined
+  signalBackupStepFailed({ step, code: code || undefined })
+}
+
 /** M26 Phase 3 — the visible sync job. Registered from registerBackup(),
  *  which runs after main creates the shared JobManager. */
 const SYNC_JOB_TYPE = 'backup:sync'
@@ -69,6 +91,7 @@ function startSyncJob(): string | null {
     return manager.enqueue(SYNC_JOB_TYPE, {}).id
   } catch (err) {
     console.error('[backup] could not start the sync job:', err)
+    reportBackupStep('syncJobStart', err)
     return null
   }
 }
@@ -463,23 +486,81 @@ async function downloadMissingAttachments(
  *  and its own doc comment for why whole-file, not row-per-record, is the
  *  correct v1 here. A no-op (not an error) if Sales Brain was never turned
  *  on — there's simply no file to upload yet. */
-async function uploadSalesBrainDb(
+// Exported for the BUG-088/BUG-089 regression tests, which drive it with a
+// stubbed Supabase client against a real on-disk WAL fixture.
+export async function uploadSalesBrainDb(
   client: NonNullable<ReturnType<typeof getSupabaseClient>>,
   userId: string
 ): Promise<void> {
   const dbPath = memoryDbPath(app.getPath('userData'))
+  // BUG-088 — never fs.readFile(dbPath) here: memory.db runs in WAL mode and
+  // the main file can be DAYS staler than the -wal sidecar (nine days on the
+  // founder's own machine when this was found). snapshotMemoryDb is the one
+  // shared mechanism (the Export button uses the same call); it reads
+  // through the WAL and yields a single consistent file.
+  // BUG-092, the irreversible half. Supabase Storage upsert has no version
+  // history, so an empty upload is unrecoverable. This gate is INDEPENDENT of
+  // the restore guard above on purpose: if that one is ever wrong, this still
+  // refuses. Founder's call — a hard block, not a warning: an upload we skip
+  // is recoverable, an overwrite is not.
+  const localForUpload = localMemoryCount(dbPath)
+  if (localForUpload.ok && localForUpload.count === 0) {
+    let cloudHasSomething = false
+    try {
+      const { data } = await client.storage.from('sales-brain').list(userId, { limit: 100 })
+      cloudHasSomething = Array.isArray(data) && data.some((o) => o?.name === 'memory.db')
+    } catch {
+      // Cannot tell what is up there — assume something is, and refuse. The
+      // safe direction when uncertain is "do not overwrite".
+      cloudHasSomething = true
+    }
+    if (cloudHasSomething) {
+      console.error(
+        '[backup] refusing to upload an EMPTY Sales Brain over an existing cloud copy'
+      )
+      reportBackupStep('salesBrainUploadRefusedEmpty', { code: 'empty-local' })
+      return
+    }
+  }
+
+  const snapshotPath = `${dbPath}.upload-snapshot`
+  const snap = await snapshotMemoryDb(dbPath, snapshotPath)
+  if (!snap.ok) {
+    if (snap.reason !== 'no-memory-db') {
+      console.error('[backup] Sales Brain snapshot for upload failed:', snap.errorClass)
+      reportBackupStep('salesBrainSnapshot', { code: snap.errorClass })
+    }
+    return // never upload a possibly-stale raw read as a fallback
+  }
   let data: Buffer
   try {
-    data = await fs.readFile(dbPath)
-  } catch {
-    return // Sales Brain never enabled, or no memory yet — nothing to upload
+    data = await fs.readFile(snapshotPath)
+  } catch (err) {
+    // M29 sweep finding H5: this catch used to be a bare `return`. The
+    // snapshot succeeded, the read of it failed (an AV scanner holding a
+    // file created milliseconds earlier is the realistic case on Windows),
+    // and NOTHING recorded it — no log line, no signal, no state. Because it
+    // returns rather than throws, pushAll then wrote lastPushError: undefined
+    // and reported a clean backup, so the card said "Backed up just now"
+    // forever while the Sales Brain had never been uploaded. That is BUG-087's
+    // exact shape reintroduced inside BUG-088's own fix, and it made this
+    // module's header claim ("every best-effort sub-step failure also counts")
+    // false. Counted now, so the header can say "every" truthfully.
+    console.error('[backup] Sales Brain snapshot read failed:', err)
+    reportBackupStep('salesBrainSnapshotRead', err)
+    return
+  } finally {
+    await fs.unlink(snapshotPath).catch(() => {})
   }
   const bucket = client.storage.from('sales-brain')
   const { error } = await bucket.upload(`${userId}/memory.db`, data, {
     upsert: true,
     contentType: 'application/octet-stream'
   })
-  if (error) console.error('[backup] Sales Brain DB upload failed:', error.message)
+  if (error) {
+    console.error('[backup] Sales Brain DB upload failed:', error.message)
+    reportBackupStep('salesBrainUpload', error)
+  }
 }
 
 /** The counterpart to uploadSalesBrainDb — pulls the cloud copy down ONLY
@@ -490,16 +571,57 @@ async function uploadSalesBrainDb(
  *  the safer default is "a brand new machine gets the cloud copy once,
  *  after that local always wins" until real multi-device merge exists (see
  *  this module's own doc comment on BackupSyncScope.salesBrain). */
-async function downloadSalesBrainDb(
+// Exported for the BUG-089 regression test (stale-sidecars fixture).
+export async function downloadSalesBrainDb(
   client: NonNullable<ReturnType<typeof getSupabaseClient>>,
   userId: string
 ): Promise<void> {
   const dbPath = memoryDbPath(app.getPath('userData'))
-  try {
-    await fs.access(dbPath)
-    return // already have a local copy — never overwrite it from the cloud
-  } catch {
-    /* no local file yet — try to fetch one */
+
+  // BUG-092 — this used to be an EXISTENCE test (`await fs.access(dbPath)`),
+  // which asks the wrong question. openMemoryDb creates the file with
+  // `new DatabaseCtor(dbPath)` BEFORE the WAL pragma or loadExtension can
+  // throw, so a failed init leaves a 0-byte husk; and a freshly-enabled Sales
+  // Brain is schema-only (8192 bytes, zero rows). Both read as "local truth
+  // worth protecting", so the restore was skipped — and the husk was then
+  // uploaded over the only cloud copy with upsert:true. A user reached this by
+  // doing exactly the right thing: turning the backup on to get their
+  // memories back.
+  //
+  // The decision table (founder-approved 2026-08-24). The guiding rule for the
+  // uncertain row is theirs: "when the choice is 'might lose data' vs 'might
+  // leave clutter', clutter wins."
+  //
+  //   no file                 -> restore            (unchanged)
+  //   >=1 memory row          -> DO NOT restore     (the M25 invariant, intact)
+  //   0 memory rows           -> restore            (an empty brain is not local truth)
+  //   unopenable / corrupt    -> rename aside, THEN restore
+  const local = localMemoryCount(dbPath)
+  if (local.ok && local.count > 0) {
+    return // real local memories — never overwrite them from the cloud
+  }
+  if (!local.ok && local.reason === 'unreadable') {
+    // Never destroy a file we merely failed to read: it may be recoverable by
+    // hand, and a stray file on disk costs nothing next to losing a brain.
+    try {
+      const asideName = `${dbPath}.local-unreadable-${new Date()
+        .toISOString()
+        .replace(/[:.]/g, '-')}`
+      await fs.rename(dbPath, asideName)
+      console.error(`[backup] local memory.db unreadable (${local.errorClass}); moved to ${asideName}`)
+      reportBackupStep('salesBrainLocalUnreadable', { code: local.errorClass })
+    } catch (err) {
+      // If we cannot even move it aside, do NOT restore over it.
+      console.error('[backup] could not move unreadable memory.db aside:', err)
+      reportBackupStep('salesBrainAsideFailed', err)
+      return
+    }
+    // The sidecars belonged to the file we just moved aside; they must not be
+    // left pointing at whatever lands here next (BUG-089's hazard, reached by
+    // a different route). The restore path below clears them again before it
+    // writes — that call stays, because the 0-rows and no-file rows reach it
+    // without passing through here.
+    removeWalSidecars(dbPath)
   }
   try {
     const bucket = client.storage.from('sales-brain')
@@ -507,6 +629,12 @@ async function downloadSalesBrainDb(
     if (error || !data) return
     const buf = Buffer.from(await data.arrayBuffer())
     await fs.mkdir(dirname(dbPath), { recursive: true })
+    // BUG-089 — a stale -wal/-shm left beside a just-restored main file makes
+    // SQLite read inconsistent state (silently wrong memories, no error).
+    // removeWalSidecars was written for exactly this hazard; this path was
+    // unreachable while the bucket didn't exist (taxonomy species 24) and
+    // never got the call.
+    removeWalSidecars(dbPath)
     await fs.writeFile(dbPath, buf)
   } catch {
     /* best-effort — a missing/failed download just means Sales Brain starts fresh on this machine */
@@ -544,6 +672,7 @@ export async function pushAll(): Promise<BackupResult> {
       await drainPendingScrubs(client, userId)
     } catch (err) {
       console.error('[backup] scrub drain failed:', err)
+      reportBackupStep('scrubDrain', err)
     }
 
     // Tombstones are included so DELETIONS propagate: tasks carry `deleted`;
@@ -605,6 +734,7 @@ export async function pushAll(): Promise<BackupResult> {
         await upsertRows(client, 'backup_knowledge', knowledgeRows, skewMs)
       } catch (err) {
         console.error('[backup] knowledge-base push failed:', err)
+        reportBackupStep('knowledgePush', err)
       }
     }
     if (syncScope.settingsPersonalization) {
@@ -621,6 +751,7 @@ export async function pushAll(): Promise<BackupResult> {
         if (error) throw new Error(error.message)
       } catch (err) {
         console.error('[backup] settings push failed:', err)
+        reportBackupStep('settingsPush', err)
       }
     }
     if (syncScope.attachments) {
@@ -628,6 +759,7 @@ export async function pushAll(): Promise<BackupResult> {
         await uploadAttachments(client, userId, calls)
       } catch (err) {
         console.error('[backup] attachment upload failed:', err)
+        reportBackupStep('attachmentUpload', err)
       }
     }
     if (syncScope.salesBrain) {
@@ -635,6 +767,7 @@ export async function pushAll(): Promise<BackupResult> {
         await uploadSalesBrainDb(client, userId)
       } catch (err) {
         console.error('[backup] Sales Brain DB upload failed:', err)
+        reportBackupStep('salesBrainUpload', err)
       }
     }
     if (syncScope.contacts) {
@@ -650,6 +783,7 @@ export async function pushAll(): Promise<BackupResult> {
         await upsertRows(client, 'backup_contacts', contactRows, skewMs)
       } catch (err) {
         console.error('[backup] contacts push failed:', err)
+        reportBackupStep('contactsPush', err)
       }
       // Deals travel with contacts (same toggle) — a restored contact list
       // without its deals is half a CRM. Same isolation discipline: a missing
@@ -666,6 +800,7 @@ export async function pushAll(): Promise<BackupResult> {
         await upsertRows(client, 'backup_deals', dealRows, skewMs)
       } catch (err) {
         console.error('[backup] deals push failed:', err)
+        reportBackupStep('dealsPush', err)
       }
       // The stage list the deals point into — single row per user, like
       // backup_settings. Without it, restored deals on a new machine land in
@@ -681,6 +816,7 @@ export async function pushAll(): Promise<BackupResult> {
         if (error) throw new Error(error.message)
       } catch (err) {
         console.error('[backup] deal-stages push failed:', err)
+        reportBackupStep('dealStagesPush', err)
       }
     }
 
@@ -691,6 +827,7 @@ export async function pushAll(): Promise<BackupResult> {
       await processPendingBlobDeletes(client, userId)
     } catch (err) {
       console.error('[backup] blob-delete drain failed:', err)
+      reportBackupStep('blobDeleteDrain', err)
     }
 
     await writeState({
@@ -866,6 +1003,7 @@ export async function pullAll(): Promise<RestoreResult> {
         if (knowledgeChanged > 0) notifyDataChanged() // Knowledge Base refresh
       } catch (err) {
         console.error('[backup] knowledge-base pull failed:', err)
+        reportBackupStep('knowledgePull', err)
       }
     }
     if (syncScope.settingsPersonalization) {
@@ -893,6 +1031,7 @@ export async function pullAll(): Promise<RestoreResult> {
         }
       } catch (err) {
         console.error('[backup] settings pull failed:', err)
+        reportBackupStep('settingsPull', err)
       }
     }
     if (syncScope.attachments) {
@@ -901,6 +1040,7 @@ export async function pullAll(): Promise<RestoreResult> {
         await downloadMissingAttachments(client, userId, currentCalls)
       } catch (err) {
         console.error('[backup] attachment download failed:', err)
+        reportBackupStep('attachmentDownload', err)
       }
     }
     if (syncScope.salesBrain) {
@@ -908,6 +1048,7 @@ export async function pullAll(): Promise<RestoreResult> {
         await downloadSalesBrainDb(client, userId)
       } catch (err) {
         console.error('[backup] Sales Brain DB download failed:', err)
+        reportBackupStep('salesBrainDownload', err)
       }
     }
     if (syncScope.contacts) {
@@ -927,6 +1068,7 @@ export async function pullAll(): Promise<RestoreResult> {
         if (contactsChanged > 0) notifyDataChanged() // Contacts refresh
       } catch (err) {
         console.error('[backup] contacts pull failed:', err)
+        reportBackupStep('contactsPull', err)
       }
       // Stage list BEFORE deals, so restored deals point at stages that exist.
       try {
@@ -948,6 +1090,7 @@ export async function pullAll(): Promise<RestoreResult> {
         }
       } catch (err) {
         console.error('[backup] deal-stages pull failed:', err)
+        reportBackupStep('dealStagesPull', err)
       }
       try {
         const dealRows = await fetchAllRows(client, 'backup_deals', userId)
@@ -965,6 +1108,7 @@ export async function pullAll(): Promise<RestoreResult> {
         if (dealsChanged > 0) notifyDataChanged() // Deals refresh
       } catch (err) {
         console.error('[backup] deals pull failed:', err)
+        reportBackupStep('dealsPull', err)
       }
     }
 

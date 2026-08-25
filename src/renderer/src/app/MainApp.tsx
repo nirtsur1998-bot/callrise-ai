@@ -74,6 +74,13 @@ export function MainApp({
   const { mode: themeMode, setMode: setThemeMode } = useTheme()
   const activeItem = NAV_ITEMS.find((item) => item.id === active) ?? NAV_ITEMS[0]
 
+  // M29 A3 — one coarse usage counter per section OPEN, from the single
+  // place every navigation path (sidebar, palette, deep link) converges.
+  // Consent-gated and allowlisted in main; a failure is nobody's problem.
+  useEffect(() => {
+    window.api.telemetry.featureOpened(active).catch(() => {})
+  }, [active])
+
   // "We noticed a call" — a known-calling-app (WhatsApp, Zoom, Teams, …)
   // became frontmost while the rep was away. With auto-transcribe off, this
   // shows a top banner the rep must explicitly accept; with it on, we skip

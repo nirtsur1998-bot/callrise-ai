@@ -166,7 +166,7 @@ describe('the cooldown store', () => {
   it('a success clears it — evidence beats estimate', () => {
     const now = 1_000_000
     markRateLimited('m', 60_000, now, DURABLE)
-    clearCooldown('m', 'coaching-cue')
+    clearCooldown('m')
     expect(isCoolingDown('m', now)).toBe(false)
   })
 })
@@ -221,7 +221,7 @@ describe('escalating backoff — repeated no-hint misses (BUG-057 Phase 4)', () 
   it('clearCooldown resets the streak — a later no-hint miss starts back at the base default', () => {
     const now = 1_000_000
     markRateLimited('m', undefined, now, DURABLE)
-    clearCooldown('m', 'coaching-cue')
+    clearCooldown('m')
 
     const later = now + 999_999
     markRateLimited('m', undefined, later, DURABLE)
@@ -341,73 +341,32 @@ describe('the spiral, through the real chain walk', () => {
 // cooldown map never had: "don't retry, but for a much longer/different
 // reason than an ordinary rate limit."
 describe('structural breaks — self-healing, not permanent (first-pass fatal #1, fixed)', () => {
-  const PUR = 'coaching-cue' as const
-
   it('marks a model unusable immediately', () => {
     const now = 1_000_000
-    markStructurallyBroken('m', now, PUR)
-    expect(isStructurallyBroken('m', now, PUR)).toBe(true)
-    expect(isUsableFor('m', now, DURABLE, { purpose: PUR })).toBe(false)
+    markStructurallyBroken('m', now)
+    expect(isStructurallyBroken('m', now)).toBe(true)
+    expect(isUsableFor('m', now, DURABLE)).toBe(false)
   })
 
   it('self-heals after STRUCTURAL_BREAK_MS — fails on the first pass\'s permanent-map shape', () => {
     const now = 1_000_000
-    markStructurallyBroken('m', now, PUR)
-    expect(isStructurallyBroken('m', now + STRUCTURAL_BREAK_MS - 1, PUR)).toBe(true)
-    expect(isStructurallyBroken('m', now + STRUCTURAL_BREAK_MS + 1, PUR)).toBe(false)
+    markStructurallyBroken('m', now)
+    expect(isStructurallyBroken('m', now + STRUCTURAL_BREAK_MS - 1)).toBe(true)
+    expect(isStructurallyBroken('m', now + STRUCTURAL_BREAK_MS + 1)).toBe(false)
   })
 
   it('a success clears it early — proof beats the guess', () => {
     const now = 1_000_000
-    markStructurallyBroken('m', now, PUR)
-    clearCooldown('m', 'coaching-cue')
-    expect(isStructurallyBroken('m', now, PUR)).toBe(false)
-  })
-
-  // AUDIT FIX (2026-08-24) — THE containment property, and the reason the
-  // map is keyed by purpose at all. A 400 is a statement about one request;
-  // before this it disabled the model for every purpose in the app for four
-  // hours. On a fresh install every purpose falls through to the SHARED
-  // synthetic legacy step and LEGACY_TAIL_MAX['coaching-cue'] = 0 makes
-  // coaching-cue's chain exactly one entry long — so one PDF attached in a
-  // Rise chat killed live call coaching until the TTL expired, with nothing
-  // naming the cause and no way to clear it.
-  it('a break proven by one purpose does NOT disable the model for another', () => {
-    const now = 1_000_000
-    markStructurallyBroken('m', now, 'coaching-chat')
-
-    expect(isStructurallyBroken('m', now, 'coaching-chat')).toBe(true)
-    expect(
-      isStructurallyBroken('m', now, 'coaching-cue'),
-      'a 400 on a Rise chat request disabled live coaching cues — the exact ' +
-        'cross-purpose damage this scoping exists to prevent'
-    ).toBe(false)
-    expect(isUsableFor('m', now, DURABLE, { purpose: 'coaching-cue' })).toBe(true)
-    expect(isUsableFor('m', now, DURABLE, { purpose: 'coaching-chat' })).toBe(false)
-  })
-
-  // A success is proof about the purpose that produced it, and nothing more.
-  it("a success on one purpose does not clear another purpose's break", () => {
-    const now = 1_000_000
-    markStructurallyBroken('m', now, 'coaching-chat')
-    clearCooldown('m', 'coaching-cue')
-    expect(isStructurallyBroken('m', now, 'coaching-chat')).toBe(true)
-    clearCooldown('m', 'coaching-chat')
-    expect(isStructurallyBroken('m', now, 'coaching-chat')).toBe(false)
-  })
-
-  it('with no purpose in question a structural break does not apply', () => {
-    const now = 1_000_000
-    markStructurallyBroken('m', now, 'coaching-chat')
-    expect(isStructurallyBroken('m', now, null)).toBe(false)
-    expect(isUsableFor('m', now, DURABLE)).toBe(true)
+    markStructurallyBroken('m', now)
+    clearCooldown('m')
+    expect(isStructurallyBroken('m', now)).toBe(false)
   })
 
   it('does not shorten an existing break — the same never-shorten rule as an ordinary cooldown', () => {
     const now = 1_000_000
-    markStructurallyBroken('m', now, PUR)
-    markStructurallyBroken('m', now + 1000, PUR) // a later mark, shorter remaining TTL from its own perspective
-    expect(isStructurallyBroken('m', now + STRUCTURAL_BREAK_MS - 1, PUR)).toBe(true)
+    markStructurallyBroken('m', now)
+    markStructurallyBroken('m', now + 1000) // a later mark, shorter remaining TTL from its own perspective
+    expect(isStructurallyBroken('m', now + STRUCTURAL_BREAK_MS - 1)).toBe(true)
   })
 })
 
@@ -431,7 +390,7 @@ describe('period-exhausted — a much longer wait than an ordinary rate limit', 
     const now = 1_000_000
     markPeriodExhausted('m', 5_000, now, DURABLE)
     expect(isCoolingDown('m', now)).toBe(true)
-    expect(isUsableFor('m', now, DURABLE, { purpose: 'coaching-cue' })).toBe(false)
+    expect(isUsableFor('m', now, DURABLE)).toBe(false)
   })
 
   describe('BUG-058 Phase 3 — resetsAt replaces the 1h guess, but never beats an explicit retryAfterMs', () => {
@@ -591,7 +550,7 @@ describe('the taxonomy, through the real chain walk', () => {
     // condition — verified by making that one-line change locally and
     // watching this assertion flip red, then reverting it.
     for (const attempt of attempts) {
-      expect(isStructurallyBroken(attempt.catalogId, Date.now(), 'coaching-cue')).toBe(false)
+      expect(isStructurallyBroken(attempt.catalogId, Date.now())).toBe(false)
     }
   })
 
@@ -661,8 +620,8 @@ describe('tiered cooldown — durable bypasses live, never durable, never struct
     // into a request the system already knows will fail deterministically.
     const now = 1_000_000
     markRateLimited('m', 5_000, now, 'live')
-    markStructurallyBroken('m', now, 'coaching-cue')
-    expect(isUsableFor('m', now, 'durable', { purpose: 'coaching-cue' })).toBe(false)
+    markStructurallyBroken('m', now)
+    expect(isUsableFor('m', now, 'durable')).toBe(false)
   })
 
   it('period-exhausted cooldowns follow the same tiering as ordinary rate limits', () => {

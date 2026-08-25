@@ -19,53 +19,19 @@ import {
 import type { Contact } from './contacts-fs'
 import { SKILL_LABEL } from './coaching/skill-graph'
 import { CATEGORY_SCOPE_KIND, MEMORY_CATEGORIES, clientScope, type MemoryCategory } from './memory/types'
-import { truncationMarker } from './assistant/prompt-budget'
 
-// BUG-108 — a first-layer cap only. It is NOT a bound on the prompt: the
-// system prompt also carries the scorecard, KYC, past calls and notes, and
-// history is replayed on top, so the TOTAL is bounded in coaching-chat-ipc.ts
-// via fitPromptToBudget(). The comment that used to sit here claimed this
-// constant "leaves headroom for system prompt + history + reply" — that was
-// reasoning, not a bound, and the sum overflowed a 128,000-token window.
-export const MAX_TRANSCRIPT_CHARS = 100_000
+const MAX_TRANSCRIPT_CHARS = 100_000 // leaves headroom for system prompt + history + reply, unlike a one-shot report
 
-/** BUG-108 — keeps the END of the call, not the start.
- *
- *  This was `.slice(0, MAX_TRANSCRIPT_CHARS)`, which dropped the end. That is
- *  backwards for coaching: the most recent part of a call — the close, the
- *  objections, the next steps — is what a rep is usually asking about, and
- *  keeping only the opening meant a long call was coached on its warm-up.
- *  The budget in coaching-chat-ipc.ts trims from the START of what survives
- *  here, so both layers now agree on one principle instead of fighting.
- *
- *  Note: src/main/memory/extraction.ts has its own MAX_TRANSCRIPT_CHARS of
- *  the same value, still slicing from the start. Different feature, nothing
- *  links the two, and reversing it is a behaviour change nobody asked for —
- *  flagged, deliberately untouched. */
-export interface TranscriptSection {
-  /** Raw transcript text, carrying NO truncation marker — the marker is
-   *  composed once in assembleChatContext, after the budget has had its say,
-   *  so a second trim can never leave a fragment of a first one. */
-  text: string
-  truncated: boolean
-}
-
-export function callTranscript(segments: CallSegment[]): TranscriptSection {
+function transcriptText(segments: CallSegment[]): string {
   // speechSegments() first — raw segments can carry kind:'gap' silence
   // markers (no real speaker said anything), which every other AI
   // prompt-builder in this app already excludes; including them here would
   // attribute empty/filler lines to a fake speaker turn.
-  const full = speechSegments(segments)
+  return speechSegments(segments)
     .map((s) => `Speaker ${s.speaker + 1}: ${s.text}`)
     .join('\n')
-  const text = full.slice(-MAX_TRANSCRIPT_CHARS)
-  return { text, truncated: text.length < full.length }
+    .slice(0, MAX_TRANSCRIPT_CHARS)
 }
-
-/** Shown to the model whenever the transcript it can see is not the whole
- *  call. A coach reasoning about a call it cannot fully see should know
- *  that, rather than confidently characterising an opening it never read. */
-export const TRANSCRIPT_TRUNCATED_MARKER = truncationMarker('the earlier part of this call')
 
 export interface PastCallSummary {
   title: string
@@ -85,28 +51,13 @@ export interface ChatContextInput {
    *  compiled yet — same "absent, not an empty section" contract as every
    *  other profile-injection.ts consumer. */
   salesBrainContext?: string
-  /** BUG-108 — a transcript the caller has already fitted to the prompt
-   *  budget. Omitted means "use this call's own MAX_TRANSCRIPT_CHARS-capped
-   *  transcript", which is what every non-budgeted caller wants. The send
-   *  path in coaching-chat-ipc.ts passes an explicitly budgeted one, which is
-   *  why the transcript has to be addressable HERE, at assembly: once the
-   *  parts are joined and handed to buildAdvisorSystemPrompt() the blob is
-   *  opaque, and trimming its head would cut the role instructions and
-   *  SHARED_GROUNDING rather than the transcript. */
-  transcript?: TranscriptSection
 }
 
 /** Everything the coaching chat is allowed to know about, assembled once
  *  and sent as the `system` block on every turn (stateless per-request,
  *  like every other AI call in this app — there is no server-side
  *  conversation state to lean on). */
-export function assembleChatContext({
-  call,
-  contact,
-  pastCalls,
-  salesBrainContext,
-  transcript
-}: ChatContextInput): string {
+export function assembleChatContext({ call, contact, pastCalls, salesBrainContext }: ChatContextInput): string {
   const parts: string[] = []
   parts.push(`Call: "${call.title}" on ${new Date(call.createdAt).toLocaleString()}`)
   if (salesBrainContext) parts.push(salesBrainContext.trim())
@@ -140,10 +91,7 @@ export function assembleChatContext({
     }
   }
 
-  const t = transcript ?? callTranscript(call.segments)
-  parts.push(
-    `--- TRANSCRIPT ---\n${t.truncated ? `${TRANSCRIPT_TRUNCATED_MARKER}\n` : ''}${t.text}`
-  )
+  parts.push(`--- TRANSCRIPT ---\n${transcriptText(call.segments)}`)
 
   if (contact) {
     parts.push(`--- CONTACT / KYC RECORD ---\n${formatContactContext(contact)}`)

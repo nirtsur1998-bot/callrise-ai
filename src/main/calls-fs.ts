@@ -699,25 +699,6 @@ export function attachmentBlobPath(dir: string, attachmentId: string, ext: strin
 }
 
 async function writeCall(dir: string, call: Call): Promise<void> {
-  // BUG-119 — THE GUARD RUNS HERE, at the single write chokepoint, not at each
-  // writer's own discretion.
-  //
-  // Every instance of this bug family has been a WRITER that forgot the guard,
-  // never a guard that got the answer wrong: BUG-014, BUG-028 (addBookmark),
-  // BUG-115 (setCallDealIntelligence), and — found by BUG-119's own test suite
-  // asserting on the FILE rather than on getCall's return value —
-  // setCallCommitments, appendCommitment and appendCoachChatTurn, all three of
-  // which wrote the other party's words to disk unguarded. The read path
-  // filtered them back out, so nothing was visibly wrong; the raw JSON kept
-  // them.
-  //
-  // Twenty-five call sites reach this function. Asking each to remember is the
-  // same hand-maintained correspondence the classification exists to abolish,
-  // so it is applied once, here, where it cannot be forgotten. Idempotent: the
-  // strippers are filters, and re-running them on already-clean data is a
-  // no-op. A tombstone carries no consent record, so the guard returns
-  // immediately for it.
-  applyConsentRetention(call)
   await writeJsonAtomic(join(dir, `${call.id}.json`), call)
 }
 
@@ -762,266 +743,74 @@ export function isOtherPartySpeaker(n: number, channel: number | undefined): boo
 }
 
 /**
- * Does this call's coaching thread get dropped for lack of recording consent?
+ * Recording-consent RETENTION guard (M12 Step 6, extended M19 Task 2). Buyer
+ * capture only ever runs after consent (status becomes 'consented'); if
+ * recording the other party isn't (still) permitted (recordOtherParty !==
+ * true — e.g. "turn recording off", a mid-call decline, or a file tampered
+ * to drop the flag), the other party's captured turns are removed — AND, as
+ * of M19, their resolved NAME too (speakerIdentities). A revoked call with
+ * its transcript stripped but the buyer's real name still attached would
+ * violate the exact invariant this function exists to enforce: a name is
+ * personal data same as the words themselves. Runs on save AND read AND
+ * list, so a revoked/hand-edited call can never surface either.
  *
- * THE ONE DEFINITION of that condition on the main side, exported so the guard
- * and any caller answer it identically rather than each writing `!== true`.
- *
- * The `consent != null` half is the part that is easy to get wrong and
- * expensive when you do: applyConsentRetention early-returns when there is NO
- * consent record at all, so a legacy call without one is never stripped.
- * `recordOtherParty !== true` alone is TRUE for such a call, and a UI built on
- * it would tell the rep their coaching history had been discarded when nothing
- * had been touched.
- *
- * The renderer cannot import this: src/main is outside its tsconfig scope, a
- * boundary this codebase already meets in three places (calendarMatch.ts,
- * DetectionOverlay.tsx, holdsUnreviewedOutput.ts), each resolved by
- * duplication plus a "keep in sync" comment -- which is principle 8's own tell
- * for a correspondence that will drift. Since the duplicate cannot be removed
- * here, it is instead PINNED: consent-ui-predicate-parity.test.ts reads both
- * sources and fails if the two conditions stop matching. Forgetting goes from
- * silent to red.
+ * A call can mix mono and channel-tagged segments (the mid-call "enable buyer
+ * capture" switch) — each key/segment is judged by ITS OWN regime, via the
+ * `mono/` key prefix or CallSegment.channel's presence, never by a single
+ * call-wide flag. (An earlier per-call `buyerCaptureUsed` flag made exactly
+ * that mistake: it applied the channel-based strip to EVERY segment once
+ * buyer capture had run at all, including earlier mono-regime segments from
+ * before the mid-call switch.)
  */
-export function coachingHistoryDropped(call: Pick<Call, 'consent'>): boolean {
-  return call.consent != null && call.consent.recordOtherParty !== true
-}
+function applyConsentRetention(call: Call): void {
+  const c = call.consent
+  // Keyed purely on the sanitized recordOtherParty flag, NOT on status: a call
+  // can go consented → revoked/declined within one session AFTER buyer turns
+  // were captured, so the current status must never short-circuit the strip.
+  if (!c || c.recordOtherParty === true) return
 
-/**
- * WHOSE CONTENT EACH FIELD OF A CALL CARRIES.
- *
- * One classification. Both privacy guards consult it; neither keeps a list of
- * its own. They then take DIFFERENT actions from the same answer, because they
- * guard different boundaries — see each guard's docblock.
- *
- * WHY BY OWNER RATHER THAN BY "STRIP OR KEEP". The obvious design is a closed
- * literal of what is safe to keep, dropping everything else. It destroys data:
- * `notes` is free text the REP typed, and `commitments` includes the rep's own
- * promises. Dropping unlisted fields would delete the rep's work because the
- * buyer declined recording — data loss wearing a privacy justification. So a
- * field is classified by whose content it carries, and the action follows.
- */
-export type CallFieldClass =
-  /** Verbatim or near-verbatim words of the other party. */
-  | 'BUYER_SPEECH'
-  /** Who the other party is, rather than what they said. A name is personal
-   *  data exactly as much as the words are. */
-  | 'BUYER_IDENTITY'
-  /** The rep's own words and actions. Survives consent loss — it was never the
-   *  other party's to withhold. */
-  | 'REP_CONTENT'
-  /** Model output computed over a transcript.
-   *
-   *  THE LOAD-BEARING RULE, and it is currently true only by accident: a
-   *  DERIVED field is safe to keep ONLY IF it is produced downstream of a
-   *  `getCall()` read. getCall runs applyConsentRetention BEFORE returning, so
-   *  a generator reading through it can never see the buyer's turns on an
-   *  unconsented call — its output cannot contain their words.
-   *
-   *  Anything written from a renderer-supplied blob, or from a direct file
-   *  read, bypasses that and CAN carry speech captured before a mid-call
-   *  revoke. That is exactly why `dealIntelligence` was BUG-115 and `coaching`
-   *  was not: same class, different provenance. If you add a DERIVED field,
-   *  check its provenance before giving it no stripper. */
-  | 'DERIVED'
-  /** Content of an uploaded file and any AI summary of it. Neither party's
-   *  speech — third-party content with its own rules. It is its own class
-   *  precisely because forcing it into buyer-or-not is what let it slip both
-   *  guards' lists. */
-  | 'DOCUMENT'
-  /** Timestamps, ids, flags. No content of anyone's. */
-  | 'METADATA'
-
-interface CallFieldRule {
-  readonly cls: CallFieldClass
-  /** How to remove the other party's contribution from this field when consent
-   *  is absent. OMITTED means there is nothing to remove — not that the field
-   *  was forgotten. Every omission below is accompanied by the reason. */
-  readonly stripOtherParty?: (call: Call) => void
-}
-
-/**
- * EXHAUSTIVE over `Required<Call>`. Adding a field to the Call record without
- * classifying it here is a COMPILE ERROR, not a runtime leak. That is the
- * entire point: BUG-014, BUG-028 and BUG-115 were three separate discoveries
- * that a hand-maintained allowlist had fallen behind a growing type.
- */
-export const CALL_FIELD_RULES: { [K in keyof Required<Call>]: CallFieldRule } = {
-  // ---- CallBase ----------------------------------------------------------
-  id: { cls: 'METADATA' },
-  title: { cls: 'DERIVED' }, // set by the rep or derived post-save; never from a live blob
-  createdAt: { cls: 'METADATA' },
-  updatedAt: { cls: 'METADATA' },
-  durationMs: { cls: 'METADATA' },
-  contactId: { cls: 'METADATA' },
-  callType: { cls: 'METADATA' },
-  salesBrainExcluded: { cls: 'METADATA' },
-
-  // preview and speakerCount are both computed FROM segments, so `segments`
-  // rewrites all three together below. Giving them their own strippers would
-  // either double-handle or reintroduce an ordering dependency between rules.
-  preview: { cls: 'BUYER_SPEECH' },
-  speakerCount: { cls: 'METADATA' },
-
-  // ---- Call --------------------------------------------------------------
-  segments: {
-    cls: 'BUYER_SPEECH',
-    stripOtherParty: (call) => {
-      if (!Array.isArray(call.segments)) return
-      // A gap marker is not the buyer's speech — it belongs to nobody, so it
-      // survives the strip regardless of the speaker id it happens to carry.
-      const kept = call.segments.filter(
-        (seg) => seg.kind === 'gap' || !isOtherPartySpeaker(seg.speaker, seg.channel)
-      )
-      if (kept.length === call.segments.length) return
-      call.segments = kept
-      call.preview = speechSegments(kept)
-        .map((seg) => seg.text)
-        .join(' ')
-        .slice(0, 160)
-      call.speakerCount = countSpeakers(kept)
-    }
-  },
-
-  speakerIdentities: {
-    cls: 'BUYER_IDENTITY',
-    stripOtherParty: (call) => {
-      if (!call.speakerIdentities) return
-      const keys = Object.keys(call.speakerIdentities)
-      const keptKeys = keys.filter((k) => {
-        const n = speakerNumberFromKey(k)
-        if (n === null) return true // malformed key — nothing to strip, keep as-is
-        // In multichannel, speaker IS the channel (speakerIdentityKey's own
-        // format: `ch{channel}/spk{speaker}` with the two always equal) — so
-        // the parsed number doubles as the channel value. `mono/` keys have none.
-        return !isOtherPartySpeaker(n, k.startsWith('mono/') ? undefined : n)
-      })
-      if (keptKeys.length === keys.length) return
+  if (call.speakerIdentities) {
+    const keys = Object.keys(call.speakerIdentities)
+    const keptKeys = keys.filter((k) => {
+      const n = speakerNumberFromKey(k)
+      if (n === null) return true // malformed key — nothing to strip, keep as-is
+      // In multichannel, speaker IS the channel (speakerIdentityKey's own
+      // format: `ch{channel}/spk{speaker}` with the two always equal) — so the
+      // parsed number doubles as the channel value. `mono/` keys have none.
+      return !isOtherPartySpeaker(n, k.startsWith('mono/') ? undefined : n)
+    })
+    if (keptKeys.length !== keys.length) {
       const next: Record<string, SpeakerIdentityRecord> = {}
       for (const k of keptKeys) next[k] = call.speakerIdentities[k]
       call.speakerIdentities = next
     }
-  },
-
-  bookmarks: {
-    cls: 'BUYER_SPEECH',
-    // Flattened, unattributed text — captureClip snapshots the last few turns
-    // on screen with no per-speaker filtering, and nothing on the Bookmark
-    // shape (id/atMs/text/createdAt) could drive a surgical strip. NO SAFE
-    // PARTIAL EXISTS, so the whole field goes. Losing a rep-only bookmark is
-    // an acceptable cost; keeping the buyer's verbatim words is not.
-    stripOtherParty: (call) => {
-      if (call.bookmarks && call.bookmarks.length > 0) call.bookmarks = []
-    }
-  },
-
-  dealIntelligence: {
-    cls: 'DERIVED',
-    // BUG-115. Assembled LIVE in the renderer and handed to
-    // setCallDealIntelligence, so it does NOT come downstream of a getCall()
-    // read — the DERIVED escape clause does not apply and it needs a stripper.
-    // Each nudge carries an evidenceQuote the model was told to reproduce
-    // "word for word", with evidenceRole marking whose words. The whole nudge
-    // goes rather than blanking the quote: sanitizeDealNudgeRecord treats a
-    // falsy quote as malformed and drops the record anyway.
-    // healthScoreHistory is numbers, not words, and stays.
-    stripOtherParty: (call) => {
-      const di = call.dealIntelligence
-      if (!di || !Array.isArray(di.nudges)) return
-      const keptNudges = di.nudges.filter((n) => n.evidenceRole !== 'other')
-      if (keptNudges.length !== di.nudges.length) di.nudges = keptNudges
-    }
-  },
-
-  commitments: {
-    cls: 'DERIVED',
-    // Owner-split. `owner: 'rep'` is the rep's own promise and survives.
-    // `owner: 'prospect'` is a record of what the BUYER said, in the buyer's
-    // own terms (the field's own doc: "in the promiser's own terms") — which
-    // is precisely the thing consent was declined for. Founder's decision,
-    // 2026-08-25: strip them, and accept losing the feature on those calls,
-    // because the alternative is keeping the buyer's promises after they
-    // refused to be recorded.
-    stripOtherParty: (call) => {
-      if (!Array.isArray(call.commitments)) return
-      const kept = call.commitments.filter((m) => m.owner !== 'prospect')
-      if (kept.length !== call.commitments.length) call.commitments = kept
-    }
-  },
-
-  coachChat: {
-    cls: 'DERIVED',
-    // THE WHOLE THREAD GOES, not the buyer-quoting turns. Founder's decision,
-    // 2026-08-25, and the reasoning is stronger than per-turn stripping: "A
-    // coaching thread with the assistant's turns removed is worse than no
-    // thread: it reads as a conversation and misrepresents what was said, and
-    // the rep can't tell which turns are missing."
-    //
-    // A gapped thread is a FABRICATION — it presents as a complete exchange
-    // while being an edited one, with nothing marking the edit. Absence is
-    // honest; redaction that looks complete is not. The UI must say why the
-    // thread is absent so this reads as policy rather than data loss.
-    stripOtherParty: (call) => {
-      if (call.coachChat && call.coachChat.length > 0) call.coachChat = []
-    }
-  },
-
-  summary: { cls: 'DERIVED' }, // produced downstream of getCall() — see CallFieldClass
-  coaching: { cls: 'DERIVED' }, // produced downstream of getCall() — verified, BUG-119 §2
-  attachments: { cls: 'DOCUMENT' }, // never syncs; local retention is a separate question
-  consent: { cls: 'METADATA' }, // the flag itself, not content
-  objectionsMinedAt: { cls: 'METADATA' },
-  crmNoteGeneratedAt: { cls: 'METADATA' },
-  deleted: { cls: 'METADATA' },
-  notes: { cls: 'REP_CONTENT' } // the rep typed it; the buyer has no claim on it
-}
-
-/**
- * WHAT MUST NOT PERSIST LOCALLY WHEN THE OTHER PARTY DID NOT CONSENT.
- *
- * That sentence is the whole scope, and it is deliberately narrow. This guard
- * is NOT "the privacy guarantee" — there is a second one, `callBackupPayload`,
- * which answers a different question at a different boundary ("what may EVER
- * leave this device", and it applies to consented calls too). Neither is a
- * superset of the other and neither should be folded into the other.
- *
- * BUG-119, species 42: both functions previously described themselves as "the
- * privacy guarantee". A careful read of the pair concluded they were one
- * guarantee that had drifted, and produced an instruction to unify them —
- * which would have been a real regression dressed as a cleanup. A definite
- * article is a claim of uniqueness that nothing enforces. Both docblocks now
- * name their BOUNDARY and their QUESTION instead of their rank.
- *
- * Buyer capture only ever runs after consent (status becomes 'consented'); if
- * recording the other party isn't (still) permitted (recordOtherParty !== true
- * — "turn recording off", a mid-call decline, or a file tampered to drop the
- * flag) the other party's contribution is removed. Runs on save AND read AND
- * list, so a revoked or hand-edited call can never surface it.
- *
- * HOW IT DECIDES: it does not carry its own list. Every decision comes from
- * CALL_FIELD_RULES below, which is exhaustive over `Required<Call>` — so a new
- * field on the record cannot be added without classifying it, and an
- * unclassified field is a COMPILE ERROR rather than a silent leak. That is the
- * fix for the shape that produced BUG-014, BUG-028 and BUG-115: three separate
- * discoveries that an allowlist had fallen behind a growing type.
- */
-function applyConsentRetention(call: Call): void {
-  // Keyed purely on the sanitized recordOtherParty flag, NOT on status: a call
-  // can go consented → revoked/declined within one session AFTER buyer turns
-  // were captured, so the current status must never short-circuit the strip.
-  // Same predicate the UI asks, so the two can never answer differently.
-  if (!coachingHistoryDropped(call)) return
-
-  // Each rule strips its own field independently. There is no shared control
-  // flow between them BY DESIGN: the previous version returned early from the
-  // whole function when `segments` was absent or unchanged, which meant a
-  // strip placed after that point silently no-opped on exactly the calls that
-  // needed it most (a revoked call on its SECOND read has already had its
-  // transcript removed). Independent strippers make that hazard structurally
-  // impossible rather than warning about it in a comment.
-  for (const rule of Object.values(CALL_FIELD_RULES)) {
-    rule.stripOtherParty?.(call)
   }
+
+  // Bookmarks ("clip this") are flattened, unattributed text — captureClip
+  // snapshots the last few turns on screen with no per-speaker filtering, so
+  // a bookmark taken during buyer capture routinely contains the other
+  // party's own words with nothing on the Bookmark shape (id/atMs/text/
+  // createdAt — no channel, no speaker) that a later pass could use to strip
+  // surgically. Unlike segments, there is no safe partial strip available,
+  // so — same as this function's segments/speakerIdentities handling —
+  // consent-off means the whole field goes. Losing a rep-only bookmark this
+  // way is an acceptable cost; keeping the buyer's verbatim words after
+  // consent was revoked is not.
+  if (call.bookmarks && call.bookmarks.length > 0) call.bookmarks = []
+
+  if (!Array.isArray(call.segments)) return
+  // A gap marker is not the buyer's speech — it belongs to nobody, so it
+  // survives the strip regardless of the speaker id it happens to carry.
+  const kept = call.segments.filter(
+    (s) => s.kind === 'gap' || !isOtherPartySpeaker(s.speaker, s.channel)
+  )
+  if (kept.length === call.segments.length) return
+  call.segments = kept
+  call.preview = speechSegments(kept)
+    .map((s) => s.text)
+    .join(' ')
+    .slice(0, 160)
+  call.speakerCount = countSpeakers(kept)
 }
 
 export async function saveCall(dir: string, input: CallSaveInput): Promise<CallSummary> {
@@ -1167,24 +956,7 @@ export async function deleteCall(dir: string, id: string): Promise<{ ok: boolean
  *   - coaching `evidence` — verbatim buyer/rep quotes → the whole evidence object
  *     is dropped from strength / every dimension / every improvement
  *   - attachment file contents and their AI summaries → only name/size metadata
- * WHAT MAY NEVER LEAVE THIS DEVICE. That is this function's whole question,
- * and it is NOT the same question applyConsentRetention answers.
- *
- * BUG-119, species 42: both functions used to describe themselves as "the
- * privacy guarantee". They are two guards at two boundaries. This one asks
- * what may leave the device and applies to EVERY call, consented or not --
- * `segments` is forced to [] even when the buyer explicitly agreed to be
- * recorded. applyConsentRetention asks what may persist LOCALLY when the
- * other party did NOT consent, and does nothing at all when they did.
- * Neither is a superset of the other; neither should be folded into the
- * other. A reader who took both definite articles at face value concluded
- * they had drifted and proposed unifying them, which would have been a real
- * regression dressed as a cleanup.
- *
- * Both guards read the SAME classification (CALL_FIELD_RULES) for whose
- * content a field carries, and take different ACTIONS from that one answer.
- *
- * Pure + unit-provable.
+ * Pure + unit-provable; this function is the privacy guarantee for the push.
  */
 export function callBackupPayload(call: Call): Record<string, unknown> {
   const c = call.coaching
@@ -1317,10 +1089,7 @@ function sanitizeBackupAttachment(value: unknown): Attachment | null {
  *
  * UNLIKE tasks/events, the call cloud payload is a deliberately LOSSY
  * projection — it never carries the transcript, preview, or attachment AI
- * summaries -- see callBackupPayload, which decides what may never leave the
- * device. (BUG-119/species 42: this said "the privacy guarantee", a THIRD
- * site inheriting a definite article that was already ambiguous between two
- * different guards. Named by its function now.) So this importer MERGES onto the current
+ * summaries (the privacy guarantee). So this importer MERGES onto the current
  * on-disk record instead of replacing it: those local-only fields are always
  * preserved from THIS machine's copy, never taken from (or blanked by) the
  * cloud row. Blindly replacing the whole record — as a full-mirror importer
@@ -2265,27 +2034,6 @@ const MAX_CHAT_MESSAGES = 300
 // a boundary that doesn't match what the model was actually asked to produce.
 const MAX_CHAT_TEXT = 16_000
 
-/** What appendCoachChatTurn hands back: the saved call, plus the ids it just
- *  MINTED for the two messages.
- *
- *  BUG-110 (hardening) — the ids exist so no caller has to work out which
- *  stored message was which by POSITION. coaching-chat-ipc.ts used to reach
- *  back `coachChat[length - 2]` to find the rep's message of the turn it had
- *  just saved, which is correct only while the tail is a complete
- *  user+assistant pair. Nothing enforces that (see prompt-budget.ts's guard
- *  for the four other consumers relying on the same unenforced invariant),
- *  and unlike those, this one does not fail loudly: `length - 2` landing on
- *  the ASSISTANT message files a memory extracted from the rep's words under
- *  the coach's id — no error, no rejection, just wrong provenance in Sales
- *  Brain data, which is the one area where the consent posture assumes
- *  provenance is exact. Returning the minted ids removes the inference
- *  rather than making it more careful. */
-export interface CoachChatTurnResult {
-  call: Call
-  userMessageId: string
-  assistantMessageId: string
-}
-
 /** Appends ONE complete turn (user message + the assistant's full final
  *  reply) to this call's chat thread — never a partial/mid-stream message,
  *  see CoachChatMessage's doc comment. Oldest messages drop past
@@ -2295,33 +2043,31 @@ export async function appendCoachChatTurn(
   callId: string,
   userMessage: { text: string; mode?: CoachChatMode },
   assistantMessage: { text: string; mode?: CoachChatMode }
-): Promise<CoachChatTurnResult | null> {
+): Promise<Call | null> {
   return withCallLock(callId, async () => {
     const call = await getCall(dir, callId)
     if (!call) return null
     const now = new Date().toISOString()
-    const userEntry: CoachChatMessage = {
-      id: randomUUID(),
-      role: 'user',
-      text: userMessage.text.trim().slice(0, MAX_CHAT_TEXT),
-      createdAt: now,
-      mode: userMessage.mode
-    }
-    const assistantEntry: CoachChatMessage = {
-      id: randomUUID(),
-      role: 'assistant',
-      text: assistantMessage.text.trim().slice(0, MAX_CHAT_TEXT),
-      createdAt: now,
-      mode: assistantMessage.mode
-    }
-    const turn: CoachChatMessage[] = [userEntry, assistantEntry]
-    // The new turn is appended at the END, and slice(-N) keeps the LAST N, so
-    // the two messages just minted are always among the survivors — the ids
-    // returned below can never refer to something this write dropped.
+    const turn: CoachChatMessage[] = [
+      {
+        id: randomUUID(),
+        role: 'user',
+        text: userMessage.text.trim().slice(0, MAX_CHAT_TEXT),
+        createdAt: now,
+        mode: userMessage.mode
+      },
+      {
+        id: randomUUID(),
+        role: 'assistant',
+        text: assistantMessage.text.trim().slice(0, MAX_CHAT_TEXT),
+        createdAt: now,
+        mode: assistantMessage.mode
+      }
+    ]
     call.coachChat = [...(call.coachChat ?? []), ...turn].slice(-MAX_CHAT_MESSAGES)
     call.updatedAt = now
     await writeCall(dir, call)
-    return { call, userMessageId: userEntry.id, assistantMessageId: assistantEntry.id }
+    return call
   })
 }
 
@@ -2424,14 +2170,6 @@ export async function setCallDealIntelligence(
     if (!call) return null
     call.dealIntelligence = sanitizeDealIntelligenceRecord(record)
     call.updatedAt = new Date().toISOString()
-    // BUG-115, same shape as BUG-028's fix in addBookmark: re-apply retention on
-    // THIS write, not just on the next read. getCall() above stripped the call
-    // as of its own read, but `record` is a renderer-supplied blob assembled
-    // live — during buyer capture, before a mid-call revoke — so it can carry
-    // the other party's verbatim words into a call whose transcript is already
-    // clean. Without this the raw file on disk keeps them even though every
-    // app-level read filters them back out.
-    applyConsentRetention(call)
     await writeCall(dir, call)
     return call
   })

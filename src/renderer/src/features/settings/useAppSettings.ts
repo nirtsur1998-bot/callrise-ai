@@ -3,6 +3,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 export type AppSettings = Awaited<ReturnType<typeof window.api.settings.get>>
 export type AppSettingsPatch = Parameters<typeof window.api.settings.update>[0]
 export type SummaryLanguage = AppSettings['summaryLanguage']
+/** BUG-091: derived, never retyped. The Backup card hand-wrote its own
+ *  five-key union of these keys while main declared six, so `salesBrain`
+ *  had no writer anywhere in the renderer and both Sales Brain cloud paths
+ *  were unreachable. Deriving makes the next such drift a compile error. */
+export type BackupSyncScope = AppSettings['syncScope']
 export type CrmSettings = AppSettings['crm']
 export type AiModelAssignments = AppSettings['aiModelAssignments']
 export type Coach2Settings = AppSettings['coach2']

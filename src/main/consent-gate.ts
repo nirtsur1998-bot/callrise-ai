@@ -24,6 +24,29 @@ import { app } from 'electron'
 import { join } from 'node:path'
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs'
 import { sanitizeConsent, type ConsentRecord } from './calls-fs'
+import { signalConsentFlowError } from './telemetry/signals'
+
+/**
+ * M29 A2 — an aggregate counter for gate I/O failures (op + short fs code,
+ * never the call id, never who, never the method). A consent write failing
+ * is fail-closed and CORRECT — but today it is also invisible (audit §1.5),
+ * and a spike of these in the field means people are being denied a
+ * capability they said yes to. Wrapped in its own try even though record()
+ * is proven never-throwing: in this file, a telemetry call must not be able
+ * to alter a gate outcome under any circumstances, including ones the
+ * telemetry module's own tests never imagined.
+ */
+function reportGateError(op: 'write' | 'read' | 'clear', err: unknown): void {
+  try {
+    const code = (err as { code?: unknown } | null)?.code
+    signalConsentFlowError({
+      op,
+      code: typeof code === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(code) ? code : undefined
+    })
+  } catch {
+    /* never — but if ever, the gate's own behaviour is already decided */
+  }
+}
 
 export interface ActiveConsent {
   /** M27 E1 — the CALL this consent belongs to, not the transcription
@@ -83,8 +106,9 @@ export function persistActiveConsent(callId: string, raw: unknown): boolean {
     mkdirSync(dir, { recursive: true })
     writeFileSync(gatePath(), JSON.stringify(payload, null, 2), 'utf8')
     return true
-  } catch {
+  } catch (err) {
     // A gate that cannot be written is a gate that must not open.
+    reportGateError('write', err) // M29 A2 — counted; the outcome is unchanged
     return false
   }
 }
@@ -102,7 +126,12 @@ export function readActiveConsent(): ActiveConsent | null {
       consent,
       persistedAt: typeof parsed.persistedAt === 'string' ? parsed.persistedAt : ''
     }
-  } catch {
+  } catch (err) {
+    // ENOENT is the NORMAL state (no active consent) and must not count —
+    // only a file that exists but cannot be read/parsed is a flow error.
+    if ((err as { code?: unknown } | null)?.code !== 'ENOENT') {
+      reportGateError('read', err) // M29 A2 — counted; the outcome is unchanged
+    }
     return null
   }
 }
@@ -110,8 +139,13 @@ export function readActiveConsent(): ActiveConsent | null {
 export function clearActiveConsent(): void {
   try {
     unlinkSync(gatePath())
-  } catch {
+  } catch (err) {
     /* already gone, which is the state we wanted */
+    if ((err as { code?: unknown } | null)?.code !== 'ENOENT') {
+      // Anything else (EPERM, EBUSY…) means a stale grant might LINGER —
+      // the one direction this gate must never fail in. Counted.
+      reportGateError('clear', err) // M29 A2 — behaviour unchanged
+    }
   }
 }
 
