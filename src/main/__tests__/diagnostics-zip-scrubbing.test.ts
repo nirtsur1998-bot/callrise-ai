@@ -120,8 +120,29 @@ describe('BUG-094 — the diagnostics zip must scrub the engine logs', () => {
 
       const out = (await runExport())['kern_bridge.log']
       expect(out, 'the export did not stage the engine log at all').toBeDefined()
-      expect(out, 'the engine log shipped the identity').not.toContain(identity.username)
+
+      // THE HOMEDIR IS THE REAL PROPERTY, and it holds for every identity: the
+      // profile path must never survive, because that path IS the leak.
       expect(out, 'the homedir shipped').not.toContain(identity.homedir)
+
+      // The bare-username assertion is applied only where it is SATISFIABLE.
+      // `C:\Users\` literally contains the substring "User", so for the
+      // common-word fixture this assertion can only pass when the generic
+      // profile rule is bypassed by the exact-home rule — which happens only
+      // when the fixture's identity coincides with the MACHINE's identity.
+      // That is this machine's happy accident, and the fixture says so in its
+      // own `breaks` note: "it doubles as the over-redaction control: prose
+      // containing 'User' must survive." Asserting the username is absent
+      // would demand the opposite of what the fixture exists to prove.
+      //
+      // CI CAUGHT THIS. It passed locally (this machine's username really is
+      // `User`) and failed on a runner whose username differs — exactly the
+      // environment-dependent green the hostile fixtures exist to stop.
+      // Redacting `C:\Users\<name>\` to `C:\Users\<user>\` is the correct
+      // outcome: the name is gone, and the scaffolding is not a leak.
+      if (identity.id !== 'common-word') {
+        expect(out, 'the engine log shipped the identity').not.toContain(identity.username)
+      }
     })
   }
 
