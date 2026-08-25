@@ -568,6 +568,111 @@ both solid.
 
 ## 9. HANDOFF — what the next session should do, in order
 
+**Updated after the second wave. The original list said "run the consent enumeration" — that
+is now DONE and it found BUG-115. This section is rewritten rather than appended to, so it
+does not become the stale privileged doc this audit keeps finding.**
+
+1. **Verify before fixing, always.** Five things were verified and fixed tonight; everything in
+   §10 and most of §2 was not. The three that would change a user's life if true and are
+   cheapest to settle: **P-3** (extract a built asar — one command settles whether 2.1 MB of
+   git history ships to users), **P-1** (rename `build/virtualmic-win/` and run a build; watch
+   it warn instead of fail), **D-2** (pause detection mid-capture and see whether the call ever
+   ends).
+2. **Finish the consent enumeration's own loose end.** `applyConsentRetention` is still an
+   allowlist over a Call shape that has outgrown it. Only `dealIntelligence` was reachable
+   today — that is a property of the call graph, not the guard. Inverting it to a closed
+   literal (the way `deleteCall`'s tombstone does) is a design change and wants a decision.
+   Also unresolved from that pass: `live:suggestQuestion` is a registered, ungated IPC surface
+   with no current renderer caller, and the four live-AI consent gates default to ALLOWED when
+   `includesBuyerContent` is missing rather than failing closed.
+3. **The dead auditors still owed:** coaching / knowledge / analytics, and dead-code /
+   type-safety. Neither has run.
+4. **Then the unverified Criticals from §2** — CAL-1, CAL-4, LIVE-2 — in that order.
+5. **Red-check every fix, anchor every reversion on UNIQUE context, and verify it applied
+   per-function.** Tonight a scripted reversion silently deleted BUG-028's live consent guard
+   out of `addBookmark` while reporting success, because the three-line pattern occurs twice
+   in that file.
+
+### Decision-gated — do NOT implement without the founder
+- **CAL-4 / BUG-113** — pulling remote calendar edits changes what data is stored and which
+  side wins a conflict.
+- **CAL-1 / BUG-112** — where and how a sync failure is surfaced. The false comment that
+  justified having no surface is already corrected (`6f845da`); the UI itself is a product call.
+- **Inverting `applyConsentRetention` to a closed literal** (item 2 above).
+- **JOBS-11** — adding a size/age bound to retention changes what gets deleted.
+- **Any change to the 6 s undo window or the delete-confirm model** (§8 items 3, 4, 9).
+- **P-7** — whether Windows arm64 is a supported target at all, or should be dropped from
+  `electron-builder.yml` to match what CI actually builds.
+
+### State of the branches
+`claude/overnight-audit` holds this document and nothing else. Five fix branches exist off
+`main`, all **unpushed** — see the table at the top. `main` is untouched. Nothing under
+M28's or M29's paths was modified by any of them.
+
+### Logged for the other sessions
+- **M29 / whoever owns contacts+deals:** `contacts-fs.ts:204` and `deals-fs.ts:109` both do
+  `new Date(t).toISOString().slice(0, 10)` — the exact UTC-slice-of-a-date-only-value that
+  `google-sync.ts:30-31` explicitly bans, and the same defect as CAL-7.
+- **M29 / `backup.ts`:** P-9 — a cloud settings pull can re-enable an explicit auto-update
+  "off". `syncScope` is already protected per-device on exactly this reasoning.
+- **M28 / `src/main/ai/providers/`:** T6/T7's seven uncovered provider call sites. The tests
+  are in my scope; those call sites are not.
+
+---
+
+## 10. SECOND WAVE — the relaunched auditors (ALL UNVERIFIED unless marked)
+
+Four of the dead auditors were relaunched when the usage window reset. One produced BUG-115
+(§ above, verified and fixed). The other three returned large reports that **I did not have
+capacity to verify**. They are recorded here as leads with the reporting agent's own
+confidence, and every one of them needs the same treatment BUG-111/114/115 got before it is
+believed. Where an agent stated its own limits, those are preserved.
+
+### Packaging / updater / native — the area with the worst track record here
+
+| # | Finding | Sev | Verified? |
+|---|---|---|---|
+| P-1 | **`extraResources` WARNS and continues when its source is missing** — `fileMatcher.js:266-275` logs `file source doesn't exist` and returns. Both platform blocks in `electron-builder.yml` claim it "fails the build" / "fails loudly". Latent on Windows (binaries committed); **present-tense on macOS**, where the source is a sibling checkout `../salesos-virtualmic` and there is no macOS CI at all → a silent no-denoiser `.dmg` | CRIT | ❌ |
+| P-2 | **Nothing is disposed on the normal quit path.** `index.ts:597` `before-quit` only reaches the dispose block when `quitConfirmed` is already true; with no jobs running it sets the flag and returns, and `before-quit` is not re-emitted. `disposeTier1()` is the only thing that kills `kern_bridge.exe` | HIGH | ❌ |
+| P-3 | **`M18final.bundle` (1.19 MB) + `M18final.patch` (963 KB) appear to ship inside `app.asar`** — a git bundle of a full branch plus 39 commit patches, matched by no exclusion. Agent verified the matcher semantics from electron-builder's own source but **did not extract a built asar** | HIGH | ❌ |
+| P-4 | Species 11 still true and **structurally permanent**: native addons are built for Electron's ABI (140) while vitest runs under system Node (147), so `adapterContract.test.ts`'s win32 block can never load the addon — green, unskipped, on the very CI that ships the installer | HIGH | ❌ |
+| P-5 | `kern_bridge.exe` spawned with no `'error'` handler, unlike the macOS sibling it says it mirrors. Nothing is code-signed, so AV/SmartScreen blocking is the realistic trigger | MED-HI | ❌ |
+| P-6 | `tier1.ts:189-193` states kern_bridge does NOT look beside its own binary for the model; `electron-builder.yml:109-113` says it does. Agent extracted strings from the committed binary and found the bare-filename probe — **`tier1.ts` is stale**, and it is the premise for shipping the model at all | MED | ❌ |
+| P-7 | The declared `arm64` Windows NSIS target ships three dead native subsystems and x64 VC runtimes. CI is scoped `--x64` so the published channel is safe; `npm run build:win` locally is not | HIGH* | ❌ |
+| P-8 | The updater's "even in auto mode" test runs in **manual** mode (file-scoped mock pins it false), so the auto-download path — the one that installs software without a click, now ON by default — has **zero** coverage | MED | ❌ |
+| P-9 | A cloud settings pull can re-enable an explicit auto-update "off". `syncScope` is deliberately protected per-device on exactly this reasoning; the same argument is not applied to installing software. CROSS-BOUNDARY (`backup.ts`, M29) | MED | ❌ |
+
+**Manual steps with NO repo-side evidence they were ever done** (species 23): Windows code-signing, macOS notarization, **the Google OAuth consent screen still being in Testing** (which expires refresh tokens every 7 days → calendar sync dies weekly), four Supabase SQL files, four edge functions, Supabase secrets, the `pg_cron` job, and RLS verified against the live DB. Most are CROSS-BOUNDARY (M29) but the OAuth one is squarely in the calendar area and compounds CAL-1/CAL-14.
+
+### Detection
+
+| # | Finding | Sev | Verified? |
+|---|---|---|---|
+| D-1 | macOS **legacy** mic fallback cannot attribute mic use to a process, so it broadcasts a `mic-session` signal to EVERY running conferencing app. Dictation, Siri, or a personal call with Zoom+Teams+Slack open can cross the start threshold and silently record the rep's own mic into a saved call | CRIT | ❌ |
+| D-2 | Pausing/disabling detection **while capturing** freezes the FSM in `capturing` and clears the tick timer, so nothing ever notices the call ended → the renderer never gets `requestStopCapture` and the mic/Deepgram session stays open. The same fix was applied to the window-closed path and never to pause | CRIT | ❌ |
+| D-3 | The snooze timer is never cleared by `pauseDetection`/`resumeDetection`, so a stale timer can silently re-enable detection later — including after the master Settings toggle was turned off, with the tray already torn down so there is no visible way to stop it | CRIT/HIGH | ❌ |
+| D-4 | `isSupported()`/`loadError` is a real guard with **no production caller** — the promised `detection:unavailable` channel does not exist. A failed native load looks identical to "no call right now", forever. Linux gets `NullAdapter` whose `isSupported()` is hardcoded `true` for test convenience | HIGH | ❌ |
+| D-5 | Per-app "never" is unreachable for 11 of 29 known calling apps (Signal, Telegram, Viber, Cisco Jabber, …) because two app lists were never reconciled; the global policy has no "never" to fall back on | MED | ❌ |
+
+**Recorded clean by that agent:** BUG-026/027's fixes are real and genuinely covered; the
+fusion/policy/state-machine layer is well defended against the textbook misfires (a video tab
+tops out below threshold; a lone unknown-app mic session is capped); tray/overlay lifecycle
+has no leak; `loopback.ts` has no new bugs.
+
+### IPC / preload security
+Delivered the escape hatch (fixed, `732687a`). Also reported and **not verified**: the
+`detection:state-changed` payload is declared non-optional but main can send `{state:
+undefined}`, and the renderer dereferences it without the guard its sibling line uses — traced
+as not currently reachable; three declarations hide an `error` field main returns.
+**Recorded clean:** 203 invoke channels ↔ 203 handlers, zero orphans; **zero** leaked event
+subscriptions across 44 sites; no boolean-vs-object lies; no renderer-supplied path or URL
+reaches the filesystem or `shell.openExternal`; `will-navigate` and `setWindowOpenHandler` are
+both solid.
+
+---
+
+## 9. HANDOFF — what the next session should do, in order
+
 1. **Re-run the adversarial pass before fixing anything.** That is the step that was
    missed, and it is the step this project's own taxonomy says matters most. Order:
    LIVE-1, CAL-1, CAL-4, JOBS-1, LIVE-2.
