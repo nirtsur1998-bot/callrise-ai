@@ -65,17 +65,41 @@ function mergedButUnreleased() {
 // Verification status here is UNKNOWN. An unmerged branch may be finished and
 // tested, or abandoned halfway. The report says so rather than implying either.
 function unmergedBranches() {
-  const heads = git('for-each-ref', '--format=%(refname:short)', 'refs/heads')
+  // BOTH ref namespaces, deduped by branch name.
+  //
+  // The first version read only `refs/heads`. That is every branch on a
+  // developer's machine and EXACTLY ONE branch in a CI checkout -- the one
+  // being built. So report B printed "Nothing visible" in CI while 32 branches
+  // sat on the remote, and the run was green.
+  //
+  // It passed locally for a reason that does not generalise, which is the same
+  // shape as a scrub test that passed only because the machine's username
+  // happened to match the fixture. Caught by running it in CI and reading the
+  // output rather than trusting a green tick -- the report's own limitation
+  // notice would have said "PUSHED refs only", which is true, while the real
+  // problem was that it was reading LOCAL refs and finding none.
+  const localHeads = git('for-each-ref', '--format=%(refname:short)', 'refs/heads')
     .split('\n')
     .filter(Boolean)
-    .filter((b) => b !== 'main')
+  const remoteHeads = git('for-each-ref', '--format=%(refname:short)', 'refs/remotes/origin')
+    .split('\n')
+    .filter(Boolean)
+    .filter((b) => !b.endsWith('/HEAD'))
+    .map((b) => b.replace(/^origin\//, ''))
+  const heads = [...new Set([...localHeads, ...remoteHeads])].filter((b) => b !== 'main')
   const out = []
   for (const branch of heads) {
+    // A name may exist only as a remote ref (CI) or only locally (unpushed
+    // work). Prefer whichever resolves; never let one missing ref end the loop.
     let ahead
     try {
       ahead = commitsBetween('origin/main', branch)
     } catch {
-      continue
+      try {
+        ahead = commitsBetween('origin/main', `origin/${branch}`)
+      } catch {
+        continue
+      }
     }
     if (ahead.length === 0) continue // fully merged; nothing outstanding
     const oldest = ahead[ahead.length - 1]
