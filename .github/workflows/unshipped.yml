@@ -1,0 +1,58 @@
+name: Built vs shipped
+
+# A report you have to REMEMBER to look at is the same class of thing as a
+# comment you have to remember to honour. So this runs on a schedule and FAILS
+# when verified work has been sitting unshipped past the threshold — a failing
+# scheduled workflow emails the repo owner, which is the surfacing. It is not
+# an inventory you visit; it is an alarm that finds you.
+#
+# WHY IT EXISTS: BUG-095 was fixed, verified, and reported as fixed. It then
+# sat unmerged while the founder hit the bug daily, believing it handled.
+# Nothing reported the gap — it was found because he complained.
+#
+# THE LIMITATION, AND IT IS LOAD-BEARING: this job can only see refs that were
+# PUSHED. The branch behind BUG-095 was never pushed, so this workflow would
+# NOT have caught the case it was built for. Report A (merged but unreleased)
+# is fully covered here; report B (unmerged branches) is only as complete as
+# what has been pushed. The script says so in its own output rather than
+# letting an empty section read as "all clear". Run it locally too:
+#
+#     node scripts/unshipped-report.mjs
+#
+on:
+  schedule:
+    # 08:00 UTC daily. Early enough that a red run is waiting at the start of
+    # the day rather than arriving during it.
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      alarm_days:
+        description: 'Days before merged-but-unreleased work raises the alarm (default 3)'
+        required: false
+        default: '3'
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history AND tags: the report measures from the newest release
+          # tag, and a shallow clone has neither the tag nor the commit dates.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Report what is built but not shipped
+        env:
+          UNSHIPPED_ALARM_DAYS: ${{ github.event.inputs.alarm_days || '3' }}
+        run: node scripts/unshipped-report.mjs
+
+      # The step above writes the full table into the run summary as well as
+      # stdout, so the alarm mail leads somewhere readable rather than to a log
+      # that has to be unfolded.
