@@ -2,8 +2,34 @@
 
 **Written 2026-08-25 at the end of the session. Everything not written here is gone.**
 
-Worktree `C:\Users\User\Desktop\callrise-audit`. All branches off `main` @ `f5d357e`.
-**`main` is byte-identical to `origin/main` — nothing was pushed, nothing was merged.**
+Worktree `C:\Users\User\Desktop\callrise-audit`. All branches were cut from `main` @ `f5d357e`.
+
+> ## ⚠️ `main` MOVED WHILE THIS WAS BEING WRITTEN — and BUG-115 has SHIPPED
+>
+> `main` is now **`3686502`**, three commits ahead of where these branches were cut:
+>
+> ```
+> 3686502  1.3.6 — CRM comments and AI-drafted notes were silently discarded   (not mine)
+> 63e55bd  1.3.5 — privacy hotfix: the Radar Report kept the buyer's words
+> 59937f5  BUG-115: the Radar Report kept the buyer's words after consent was revoked
+> f5d357e  1.3.4                                                    <- branches cut here
+> ```
+>
+> **BUG-115 is merged and released as v1.3.5.** M29 took it from the handoff and shipped it.
+> Verified in `main`'s own tree, not from the commit title: the read-path strip is present
+> (2 lines), the write guard in `setCallDealIntelligence` is present, and — the one I
+> specifically checked, because the near-miss recorded as species 38 nearly deleted it —
+> **`addBookmark`'s BUG-028 guard is intact in the shipped code.** Tag `v1.3.5` exists.
+>
+> **BUG-116 has NOT shipped yet.** It is not in `main`'s log.
+>
+> **All six remaining branches still merge onto the new `main` cleanly** (verified with
+> `git merge-tree`). None needs a rebase to be mergeable — but none has been re-tested
+> *against* the new main, and 1.3.6 touched `contacts-fs.ts` and `calls-fs.ts`. Re-run the
+> suite after merging rather than trusting these branches' own green runs.
+>
+> Nothing in this session pushed or merged anything. The movement is M29's.
+
 No file under M28's paths (`src/main/assistant/`, `src/main/ai/`, `src/main/memory/`,
 `coaching-chat*`) or M29's (`telemetry/`, `entitlements/`, `backup.ts`, `supabase/`) was
 modified by any branch below.
@@ -83,9 +109,10 @@ release**. Swapping the two steps would make them run.
 **This order is the founder's, set 2026-08-25 after reading the first draft of this handoff.
 It is not a suggestion — #2 was promoted from a footnote by them, deliberately.**
 
-1. **Confirm BUG-115 and BUG-116 actually SHIPPED.** Both were handed to M29. Species 23
-   ("shipped as code but never as deployment") says the handoff is not the shipping — check
-   the live release, not the merge, not the message.
+1. **Confirm the hotfixes shipped.** ~~BUG-115~~ — **DONE, verified: merged as `59937f5`,
+   released as v1.3.5, and the guard is genuinely present in `main`'s tree** (species 23
+   satisfied by reading the code, not the commit title). **BUG-116 is still owed** — it is not
+   in `main` yet. Chase M29, and verify it the same way: read the artifact, not the merge.
 
 2. **Run the packaged app and actually use it.** ⬅ *promoted by the founder from an honest
    note at the bottom of this document to priority #2.*
