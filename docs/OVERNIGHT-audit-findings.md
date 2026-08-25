@@ -515,6 +515,82 @@ Ranked by weekly pain for a working salesperson. None implemented.
 
 ---
 
+## 9b. THE THREE VERIFICATIONS THE FOUNDER ASKED FOR — results
+
+Founder's instruction: verify or refute exactly three of the ~55 unverified findings — the
+ones where being wrong means a leak, data loss, or a live-call failure — then stop. Done.
+
+### ✅ P-3 CONFIRMED — ~2.1 MB of internal git history ships inside the app, to every user
+**Verified EMPIRICALLY, against a real build.** Not a config reading.
+```
+npm run build:unpack                      -> exit 0
+npx asar list dist/win-unpacked/resources/app.asar | grep M18final
+  \M18final.bundle
+  \M18final.patch
+npx asar extract-file ... M18final.patch  -> 962,734 bytes
+grep -c "^From [0-9a-f]\{40\}"            -> 39 commits
+```
+The built `app.asar` (18,669 entries, 213 MB) contains a git bundle of a full branch plus a
+963 KB patch file holding **39 complete commits** — author names, dates, messages, and full
+source diffs. Anyone who installs the app can read them with one `npx asar extract-file`.
+
+`files:` in `electron-builder.yml` is a denylist of negations, so electron-builder prepends
+`**/*`; no pattern matches `.bundle` or `.patch`. **Fix is one line** — add the exclusions, or
+delete the two files from the repo (they are build-time hand-off artifacts, not product).
+
+### ✅ P-1 CONFIRMED — a missing denoiser WARNS and ships anyway; the config says it fails
+**Verified EMPIRICALLY, twice over — source and behaviour.**
+
+Source: `app-builder-lib/out/fileMatcher.js` `copyFiles()` —
+`log.warn({from: matcher.from}, 'file source doesn't exist'); return;`. Warn, then return.
+
+Behaviour: renamed `build/virtualmic-win/` aside and rebuilt.
+```
+• file source doesn't exist  from=...uildirtualmic-win\kern_bridge.exe
+• file source doesn't exist  from=...uildirtualmic-win\DeepFilterNet3_onnx.tar.gz
+EXIT CODE: 0
+dist/win-unpacked/resources/  ->  app.asar, app.asar.unpacked      (NO virtualmic-win/)
+```
+A complete, shippable app with **no denoiser at all**, exit 0, two lines of warning in a log
+that CI redirects to a file (`release.yml:139` `> electron-builder.log 2>&1`) and never greps
+on success.
+
+Against `electron-builder.yml:124` — *"If the staging directory is missing at build time this
+FAILS the build rather than quietly producing an installer without a denoiser"* — and `:190`
+for macOS — *"this step fails loudly (a missing denoiser shouldn't ship silently)"*.
+
+**Both comments are false, and they are the stated defence against a failure that already
+shipped to everyone once.** Latent on Windows (the binaries are committed); **live on macOS**,
+where the source is a sibling checkout `../salesos-virtualmic` and there is no macOS CI —
+any Mac without that checkout produces a silent no-denoiser `.dmg` today.
+Source folder restored; tree verified clean afterwards.
+
+### ⚠️ D-2 PARTIALLY CONFIRMED — severity REDUCED from CRITICAL to MEDIUM
+The mechanism is real: `pauseDetection()` calls `detector.stop()`, which clears the tick timer
+and never touches `fsmContext`, so the FSM freezes in `capturing` and nothing ever emits
+`capture-ended` → `detection:requestStopCapture` never fires. The sibling path
+`handleMainWindowClosed()` checks `wasCapturing` and calls `stopCapture()`; pause does not.
+
+**But "the recording stays open indefinitely" is REFUTED.** `IdleStopWatcher`
+(`auto-stop.ts`, `IDLE_STOP_MS = 5 * 60_000`) is armed on live status, ticks every 15 s in
+`LiveView.tsx:525`, and is **entirely independent of detection**. It stops and saves the call
+after five minutes without speech.
+
+Residual exposure, stated precisely: up to ~5 extra minutes of recording after a real call
+ends — and unbounded only while *some* speech keeps reaching the mic, because `noteSpeech`
+fires on `segments.length > 0 || interimText` (`LiveView.tsx:490-494`), i.e. any transcribed
+words at all. So a rep who pauses detection mid-call and then keeps talking near the mic can
+keep a call recording. It is visible in the UI throughout (the live pill persists across
+navigation), which is what separates this from silent data capture.
+
+**Verdict: real bug, MEDIUM not CRITICAL.** The auto-end is genuinely broken; the "forever"
+framing was wrong.
+
+**Stopping here per instruction.** The remaining ~52 findings stay unverified and are marked
+as such throughout this document.
+
+---
+
 ## 10. SECOND WAVE — the relaunched auditors (ALL UNVERIFIED unless marked)
 
 Four of the dead auditors were relaunched when the usage window reset. One produced BUG-115
