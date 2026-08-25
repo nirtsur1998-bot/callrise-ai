@@ -1,4 +1,31 @@
-# Decision needed — how should CallRise tell you a meeting didn't reach your calendar?
+# DECIDED — Option B: one connection-level banner
+
+> ## ✅ ANSWERED by the founder, 2026-08-25
+>
+> **Option B — a single banner naming the actual state**, e.g. "Google Calendar sync is
+> failing", shown once where it is actionable. Plus fixing the Settings screen so it stops
+> claiming "Connected · Two-way sync on" over a dead token.
+>
+> Their reasoning, verbatim: *"A per-event marker puts a failure indicator on something that
+> looks otherwise fine and makes the user hunt; a banner names the actual state once, where
+> it's actionable."*
+>
+> **Explicitly NOT Option C.** *"Don't do both — two surfaces for one condition drift."*
+> That instruction is the important half: do not add a per-event marker later "for
+> completeness". One condition, one surface.
+>
+> **NOT YET BUILT.** Decided and unblocked; scheduled behind the next session's priorities.
+> The false comment that justified having no surface at all is already corrected on
+> `fix/BUG-112-sync-failure-comment` (`6f845da`) — only the banner remains.
+>
+> The sub-question I raised (should CallRise refuse new synced events while the connection is
+> down, or accept them and sync on reconnect?) was not separately answered. My recommendation
+> stands: accept them and sync on reconnect, with the banner visible — refusing input is a
+> harsher failure than a delayed sync, and the banner already carries the honesty.
+
+---
+
+# The question as it was asked — how should CallRise tell you a meeting didn't reach your calendar?
 
 **One question, three options, ~5 minutes.** Nothing gets built until you answer.
 Context: BUG-112.

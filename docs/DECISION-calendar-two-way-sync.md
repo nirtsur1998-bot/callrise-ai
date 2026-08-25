@@ -1,4 +1,34 @@
-# Decision needed — when your calendar and CallRise disagree, who wins?
+# DECIDED — Option A: remote wins
+
+> ## ✅ ANSWERED by the founder, 2026-08-25
+>
+> **Option A — the provider's copy is the truth.** If Google says 4 pm, CallRise updates to
+> 4 pm and drops its own conflicting edit.
+>
+> Their reasoning, kept verbatim because it is the thing to reason from when the edge cases
+> come up: *"If a customer reschedules in their own calendar, that's the authoritative act —
+> CallRise silently overwriting it is the app telling a customer their change didn't count."*
+>
+> **On the rider — an event deleted in Google must NOT be re-created.** Same reasoning:
+> deletion is an explicit act. So the current `404 → pushInsertEvent` recovery
+> (`google.ts:628-630`, `outlook.ts:667`) has to stop putting deleted meetings back on the
+> customer's calendar. Once the app can tell "the remote is genuinely gone" from "the remote
+> is merely absent" — which is what fixing this memo's main question provides — that branch
+> becomes wrong and must go.
+>
+> **NOT YET BUILT.** Decided, unblocked, and scheduled behind the next session's priorities
+> (confirm the two hotfixes shipped → click-test the packaged app → the two auditors that
+> never ran). The question below is preserved as written, so the next session can see what was
+> asked before answering.
+>
+> One thing the implementer should carry: the "updated from Google" notice was offered as an
+> option alongside A and was not separately ruled on. Treat it as open, and lean toward
+> showing it — a silent overwrite in the *other* direction is the failure this decision exists
+> to prevent, and it would be ironic to introduce a silent one.
+
+---
+
+# The question as it was asked — when your calendar and CallRise disagree, who wins?
 
 **One question, three options, ~5 minutes.** Nothing gets built until you answer.
 Context: BUG-113 (`remoteUpdatedAt` is written six ways and never compared).

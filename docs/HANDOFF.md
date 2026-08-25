@@ -37,17 +37,21 @@ mechanism, and every commit message says so.
 
 ## 2. BLOCKED ON THE FOUNDER
 
-### Two decision memos, written and delivered — answer with a letter each
-- `docs/DECISION-calendar-two-way-sync.md` — **BUG-113.** Remote calendar edits are never
-  pulled in, and the next local edit silently overwrites the customer's reschedule. The
-  question is who wins a conflict. Options A (remote wins, **recommended**), B (last edit
-  wins), C (flag and ask). Also settles a rider: an event deleted in Google is currently
-  **re-created** by the next local edit.
-- `docs/DECISION-sync-failure-surface.md` — **BUG-112.** A meeting that never reached
-  Google/Outlook looks perfectly fine in CallRise. The question is where the failure appears.
-  Options A (per-event marker), B (one connection-level banner, **recommended**), C (both).
-  The false comment that justified having no surface is already corrected on
-  `fix/BUG-112-sync-failure-comment`; only the UI is blocked.
+### Two decision memos — BOTH ANSWERED, neither built yet
+Answers are recorded at the top of each memo alongside the founder's own reasoning, so the
+decision travels with the question.
+
+- `docs/DECISION-calendar-two-way-sync.md` — **BUG-113: Option A, remote wins.** The
+  provider's copy is the truth. *"If a customer reschedules in their own calendar, that's the
+  authoritative act."* **And the rider is decided too: an event deleted in Google must NOT be
+  re-created** — deletion is an explicit act, so the current `404 → pushInsertEvent` recovery
+  has to go once the app can tell "genuinely gone" from "merely absent". Open sub-question:
+  whether to show an "updated from Google" notice (lean yes).
+- `docs/DECISION-sync-failure-surface.md` — **BUG-112: Option B, one connection-level banner**,
+  plus fixing Settings so it stops claiming "Connected" over a dead token. **Explicitly NOT
+  Option C** — *"don't do both, two surfaces for one condition drift."* Do not add a per-event
+  marker later for completeness. Open sub-question: refuse new synced events while down, or
+  accept and sync on reconnect (recommend the latter).
 
 ### Other decision-gated items (not yet written up)
 - **Inverting `applyConsentRetention` from an allowlist to a closed literal.** It is still a
@@ -76,17 +80,39 @@ release**. Swapping the two steps would make them run.
 
 ## 3. WHAT THE NEXT SESSION PICKS UP FIRST
 
-1. **Confirm BUG-115 and BUG-116 actually shipped.** Both are handed to M29, and species 23
-   ("shipped as code but never as deployment") says the handoff is not the shipping. Check the
-   live release, not the merge.
-2. **Answer-driven work:** if the founder has replied to either decision memo, build that.
-3. **Species 36 — budget verification FIRST.** This session's whole failure mode was gathering
-   ~60 findings and verifying 8. Gather less; verify as findings land, not in a batch at the end.
-4. **The two auditors that never ran:** coaching / knowledge / analytics, and dead-code /
-   type-safety. Neither has been attempted.
-5. **The ~52 unverified findings stay unverified, on purpose.** Founder's call: *"I'd rather
-   have 52 flagged unknowns than 52 confident guesses."* They are marked as such throughout
-   `docs/OVERNIGHT-audit-findings.md`. Do not promote any of them without doing the work.
+**This order is the founder's, set 2026-08-25 after reading the first draft of this handoff.
+It is not a suggestion — #2 was promoted from a footnote by them, deliberately.**
+
+1. **Confirm BUG-115 and BUG-116 actually SHIPPED.** Both were handed to M29. Species 23
+   ("shipped as code but never as deployment") says the handoff is not the shipping — check
+   the live release, not the merge, not the message.
+
+2. **Run the packaged app and actually use it.** ⬅ *promoted by the founder from an honest
+   note at the bottom of this document to priority #2.*
+
+   **Everything in this audit is static analysis and unit-test proof of mechanism. Nothing
+   has been click-tested.** Five fixes were verified by reading code and running vitest; not
+   one was verified by launching CallRise and using it. That is the single largest gap in the
+   whole body of work, and it is the one thing this session structurally could not do.
+
+   Start with the five fixed behaviours, because a fix that is wrong in the app is worse than
+   the bug it replaced: pause a live call for more than ten seconds and confirm it survives;
+   revoke consent mid-call, save, and confirm the Radar Report shows no buyer quotes; click
+   Regenerate and confirm the *new* draft is what reopens; confirm the app still launches and
+   the platform-dependent UI still renders with the `window.electron` bridge removed.
+
+3. **The two auditors that never ran:** coaching / knowledge / analytics, and dead-code /
+   type-safety. Neither has been attempted at all.
+
+4. **Apply species 36 from the very start: budget verification FIRST, gather less.** This
+   session's whole failure mode was gathering ~60 findings and verifying 8. Verify as findings
+   land, not in a batch at the end — a truncated run should degrade to *fewer verified
+   findings*, never to *many unverified ones*.
+
+**The ~52 unverified findings stay unverified.** Founder's standing decision, reaffirmed:
+*"I'd rather have 52 flagged unknowns than 52 confident guesses."* They are marked as such
+throughout `docs/OVERNIGHT-audit-findings.md`. Do not promote any of them without doing the
+work.
 
 ---
 
@@ -150,5 +176,5 @@ and visible. But the practical effect on the release pipeline is the same: it ne
 - **BUG-118's severity was walked back by me, from CRITICAL to MEDIUM**, after finding the
   independent 5-minute idle watcher that caps the exposure. The mechanism is real; the
   "records indefinitely" framing was mine and was wrong.
-- **Nothing here is click-tested.** The single highest-value thing a next session could do that
-  this one could not is run the packaged app and use it.
+- **Nothing here is click-tested.** This was a note at the bottom of the first draft; the
+  founder promoted it to priority #2 in §3, which is where it belongs.
