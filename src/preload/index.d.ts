@@ -1,4 +1,3 @@
-import { ElectronAPI } from '@electron-toolkit/preload'
 import type { DetectedCall, DetectorEvent, DetectorState } from '../main/detection/types'
 import type { UpdateStatus } from '../main/updater'
 // M26 4.3 — the live-transcript wire format, defined once in main and re-exported
@@ -2911,7 +2910,6 @@ declare global {
     | { state: 'ready'; count: number }
 
   interface Window {
-    electron: ElectronAPI
     api: {
       /** process.platform, exposed only for platform-specific CSS/rendering
        *  decisions (see DetectionOverlay.tsx). */

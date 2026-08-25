@@ -1,6 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
-import { electronAPI } from '@electron-toolkit/preload'
 import type { DetectedCall, DetectorEvent, DetectorState } from '../main/detection/types'
 
 type Unsubscribe = () => void
@@ -739,16 +738,29 @@ ipcRenderer.on('audio-port:granted', (event: IpcRendererEvent) => {
   window.postMessage({ type: AUDIO_PORT_MESSAGE }, window.location.origin, [port])
 })
 
+// `electron` (@electron-toolkit/preload's `electronAPI`) is DELIBERATELY NOT
+// exposed. It is electron-vite scaffold boilerplate, and it hands the renderer
+// a raw `ipcRenderer` whose every method takes the channel name as a FREE
+// PARAMETER — `invoke`, `send`, `sendSync`, `postMessage`, `on`, `once`,
+// `removeAllListeners`. That reaches every `ipcMain.handle` and `ipcMain.on`
+// channel in the app (`aiKeys:save`, `settings:update`, `auth:signOut`,
+// `salesBrain:memories:forgetEverything`, `consent:persist`, …) completely
+// bypassing the curated `api` object below, plus `process.env`, which holds
+// the user's AI API keys — defeating this file's own masking policy, where
+// `aiKeys:getStatus` deliberately returns only a masked hint.
+//
+// Its single consumer was `renderer/lib/platform.ts` reading
+// `window.electron.process.platform`, for which `api.platform` above is the
+// same value. So the whole wide surface existed to serve one string the
+// narrow API already provided. Do not re-add it: if something needs a new
+// capability, give it a named channel here.
 if (process.contextIsolated) {
   try {
-    contextBridge.exposeInMainWorld('electron', electronAPI)
     contextBridge.exposeInMainWorld('api', api)
   } catch (error) {
     console.error(error)
   }
 } else {
-  // @ts-ignore (define in dts)
-  window.electron = electronAPI
   // @ts-ignore (define in dts)
   window.api = api
 }
