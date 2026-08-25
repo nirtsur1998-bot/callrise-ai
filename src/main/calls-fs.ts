@@ -798,6 +798,31 @@ function applyConsentRetention(call: Call): void {
   // consent was revoked is not.
   if (call.bookmarks && call.bookmarks.length > 0) call.bookmarks = []
 
+  // BUG-115 — the Deal Intelligence Radar Report. Each nudge carries an
+  // `evidenceQuote` of up to 400 characters that deal-tier1's prompt asks the
+  // model to reproduce "word for word ... Never paraphrase or invent it", with
+  // `evidenceRole` marking whose words they are. A nudge tagged 'other' is the
+  // buyer's own speech, so it goes when consent does — the same rule as their
+  // transcript turns and their resolved name.
+  //
+  // The whole nudge is dropped rather than just the quote blanked, for two
+  // reasons: sanitizeDealNudgeRecord treats a falsy evidenceQuote as malformed
+  // and drops the record anyway (so a blanked quote would not survive the next
+  // round-trip), and callBackupPayload already answers this exact question the
+  // same way for coaching — "keep the score/comment, DROP the verbatim
+  // evidence". healthScoreHistory is numbers, not words, and stays.
+  //
+  // POSITION IS LOAD-BEARING: this must sit ABOVE the two segment early-returns
+  // below. The second of them fires whenever no buyer segments needed removing,
+  // which is precisely the state a revoked call is in on its SECOND read — the
+  // transcript was already stripped the first time. Placed after, this strip
+  // would silently no-op on exactly the calls that need it most.
+  const di = call.dealIntelligence
+  if (di && Array.isArray(di.nudges)) {
+    const keptNudges = di.nudges.filter((n) => n.evidenceRole !== 'other')
+    if (keptNudges.length !== di.nudges.length) di.nudges = keptNudges
+  }
+
   if (!Array.isArray(call.segments)) return
   // A gap marker is not the buyer's speech — it belongs to nobody, so it
   // survives the strip regardless of the speaker id it happens to carry.
@@ -2193,6 +2218,14 @@ export async function setCallDealIntelligence(
     if (!call) return null
     call.dealIntelligence = sanitizeDealIntelligenceRecord(record)
     call.updatedAt = new Date().toISOString()
+    // BUG-115, same shape as BUG-028's fix in addBookmark: re-apply retention on
+    // THIS write, not just on the next read. getCall() above stripped the call
+    // as of its own read, but `record` is a renderer-supplied blob assembled
+    // live — during buyer capture, before a mid-call revoke — so it can carry
+    // the other party's verbatim words into a call whose transcript is already
+    // clean. Without this the raw file on disk keeps them even though every
+    // app-level read filters them back out.
+    applyConsentRetention(call)
     await writeCall(dir, call)
     return call
   })
