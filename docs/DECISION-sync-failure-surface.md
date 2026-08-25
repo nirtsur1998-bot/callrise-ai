@@ -18,10 +18,10 @@
 > The false comment that justified having no surface at all is already corrected on
 > `fix/BUG-112-sync-failure-comment` (`6f845da`) — only the banner remains.
 >
-> The sub-question I raised (should CallRise refuse new synced events while the connection is
-> down, or accept them and sync on reconnect?) was not separately answered. My recommendation
-> stands: accept them and sync on reconnect, with the banner visible — refusing input is a
-> harsher failure than a delayed sync, and the banner already carries the honesty.
+> **Sub-question also answered: ACCEPT new events while sync is down, and sync on reconnect.**
+> Founder's reasoning: *"refusing them makes a provider outage into a CallRise outage."* So
+> the app keeps working, queues the pushes, and the banner carries the honesty about what has
+> not reached the provider yet.
 
 ---
 

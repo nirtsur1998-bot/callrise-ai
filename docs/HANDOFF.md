@@ -1,5 +1,31 @@
 # M30 overnight audit — HANDOFF
 
+> # 🔴 READ THIS LINE FIRST
+>
+> ## BUG-116 IS STILL UNSHIPPED, AND UNTIL IT SHIPS EVERY INSTALL CARRIES 39 COMMITS OF OUR SOURCE HISTORY
+>
+> `M18final.bundle` and `M18final.patch` are packaged **inside `app.asar`** in every released
+> build. The patch alone holds **39 complete commits** — author names, dates, commit messages
+> and full source diffs — readable by anyone who installs CallRise with one command:
+>
+> ```
+> npx asar extract-file app.asar M18final.patch
+> ```
+>
+> That is not a packaging inefficiency. It is our development history distributed to every
+> user, and it is shipping right now, in v1.3.6.
+>
+> **The fix is done and waiting:** branch `fix/BUG-116-ship-no-git-history`, commit `4388ab7`,
+> verified against a real build three independent ways. It deletes two files and nothing else.
+> **It is owed by the M29 session, who own the release flow.** They shipped BUG-115 as v1.3.5;
+> this one has not gone out.
+>
+> **Chase it before anything else, and verify it the way BUG-115 was verified — by reading the
+> built artifact, not the merge commit** (species 23: the handoff is not the shipping).
+
+---
+
+
 **Written 2026-08-25 at the end of the session. Everything not written here is gone.**
 
 Worktree `C:\Users\User\Desktop\callrise-audit`. All branches were cut from `main` @ `f5d357e`.
@@ -109,10 +135,11 @@ release**. Swapping the two steps would make them run.
 **This order is the founder's, set 2026-08-25 after reading the first draft of this handoff.
 It is not a suggestion — #2 was promoted from a footnote by them, deliberately.**
 
-1. **Confirm the hotfixes shipped.** ~~BUG-115~~ — **DONE, verified: merged as `59937f5`,
-   released as v1.3.5, and the guard is genuinely present in `main`'s tree** (species 23
-   satisfied by reading the code, not the commit title). **BUG-116 is still owed** — it is not
-   in `main` yet. Chase M29, and verify it the same way: read the artifact, not the merge.
+1. **Chase BUG-116 — see the red block at the top of this document.** It is the only
+   outstanding item that is actively harming every user today, and it is waiting on M29, not
+   on work. ~~BUG-115~~ is **done and verified**: merged as `59937f5`, released as v1.3.5, and
+   the guard is genuinely present in `main`'s tree (species 23 satisfied by reading the code,
+   not the commit title). Verify BUG-116 the same way when it lands.
 
 2. **Run the packaged app and actually use it.** ⬅ *promoted by the founder from an honest
    note at the bottom of this document to priority #2.*
@@ -140,6 +167,32 @@ It is not a suggestion — #2 was promoted from a footnote by them, deliberately
 *"I'd rather have 52 flagged unknowns than 52 confident guesses."* They are marked as such
 throughout `docs/OVERNIGHT-audit-findings.md`. Do not promote any of them without doing the
 work.
+
+---
+
+## 3b. A PROCESS PROBLEM TO HAND ON — the tracker has no owner
+
+**Two ID collisions happened in one night**, in two different shared documents, because two
+sessions were writing to both concurrently:
+
+- **Species 35** was claimed by another session (stale closure) while I was minting mine — I
+  used 36/37/38, then 39 appeared, so this session's last one is **40**.
+- **BUG-119** was claimed by another session (the consent allowlist) after my BUG-115 handoff —
+  mine became **BUG-120**.
+
+Both were caught by grepping the canonical list before claiming a number, which is rule 1
+applied to bookkeeping and is now habit. **But grep-before-assign is a patch, not a fix.** It
+depends on every writer remembering, it has a race window between grep and write, and it fails
+silently — the collision only surfaces if someone happens to look.
+
+**The real fix is one of two things, and it is a decision for the founder:**
+1. **One owner per tracker section** — sessions propose entries, one session assigns IDs; or
+2. **IDs claimed by a mechanism rather than by convention** — a monotonic counter, a
+   date-prefixed id (`BUG-2026-08-25-a`), or per-session ranges handed out at session start.
+
+Until then: **grep the canonical list immediately before writing, and re-grep if any time has
+passed.** Flagged here rather than fixed because it is a workflow decision across sessions,
+not a code change.
 
 ---
 

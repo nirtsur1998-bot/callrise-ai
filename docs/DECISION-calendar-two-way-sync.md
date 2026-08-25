@@ -21,10 +21,10 @@
 > never ran). The question below is preserved as written, so the next session can see what was
 > asked before answering.
 >
-> One thing the implementer should carry: the "updated from Google" notice was offered as an
-> option alongside A and was not separately ruled on. Treat it as open, and lean toward
-> showing it — a silent overwrite in the *other* direction is the failure this decision exists
-> to prevent, and it would be ironic to introduce a silent one.
+> **Sub-question also answered: YES, show the "updated from Google" notice.** Founder's
+> reasoning: *"a silent overwrite is the thing we're fixing, so a silent correction would be
+> the same mistake inverted."* So when CallRise pulls a remote change in and drops a local
+> edit, say so on the event. Nothing about this decision may be silent in either direction.
 
 ---
 
