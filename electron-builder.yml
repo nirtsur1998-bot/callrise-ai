@@ -26,6 +26,17 @@ files:
   - '!out/**/*.map'
 # Lock the Electron fuses on every packaged binary (see scripts/apply-fuses.js).
 # Runs before signing, because flipping a fuse invalidates a signature.
+# BUG-117 — the guarantee two comments in this file already claimed.
+#
+# Both extraResources blocks below say a missing denoiser FAILS the build.
+# Neither did: electron-builder only WARNS on a missing extraResources source
+# and packages anyway (app-builder-lib/out/fileMatcher.js, copyFiles). Verified
+# by renaming build/virtualmic-win/ aside and rebuilding — two warning lines,
+# exit code 0, and a complete installable app with no denoiser in it.
+#
+# This hook throws before any packaging work starts, which is what makes those
+# comments true. See scripts/verify-build-inputs.js for the full history.
+beforePack: scripts/verify-build-inputs.js
 afterPack: scripts/apply-fuses.js
 
 asarUnpack:
@@ -124,6 +135,12 @@ win:
   # If the staging directory is missing at build time this FAILS the build
   # rather than quietly producing an installer without a denoiser — same
   # posture as the mac block, and for the same reason.
+  #
+  # BUG-117: that sentence was FALSE until the beforePack hook at the top of
+  # this file existed. electron-builder warns and ships without these. The
+  # guarantee lives in scripts/verify-build-inputs.js — if you add an entry
+  # to the extraResources list below, add it there too or the check quietly
+  # narrows to whatever it still knows about.
   # SOURCED FROM INSIDE THE REPO, ON PURPOSE. The obvious spelling of this is
   # a sibling-checkout path (`../CALLRISE AI/_virtualmic_win_stage/...`), the
   # way the mac block below reads. That spelling resolves on exactly one
@@ -188,7 +205,10 @@ mac:
   # sibling checkout next to this one. This copies its ALREADY-BUILT output
   # in — it does not build that repo. If that sibling repo isn't present at
   # build time, this step fails loudly (a missing denoiser shouldn't ship
-  # silently). Only the Standard model ships, not the 36MB LL variant this
+  # silently) — BUG-117: enforced by scripts/verify-build-inputs.js, NOT by
+  # electron-builder, which only warns. This mattered most here: nothing in
+  # this repo can make the sibling checkout appear, and there is no macOS CI,
+  # so before that hook any Mac without it built a silent no-denoiser .dmg. Only the Standard model ships, not the 36MB LL variant this
   # app doesn't use. Layout mirrors what virtualmic.ts's resolveHelperPath /
   # resolveDriverBundleSource expect under resourcesPath/virtualmic/.
   extraResources:
