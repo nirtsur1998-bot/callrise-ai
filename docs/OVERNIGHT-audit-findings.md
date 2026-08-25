@@ -19,10 +19,13 @@ below carries the reporting agent's own confidence and its own "what I could not
 verify" note, preserved verbatim rather than smoothed over. Treat them as
 **high-quality leads with file:line evidence**, not as established defects.
 
-**One exception, added after the fact: LIVE-1 was independently verified and fixed.** It
-lives on its own branch `fix/BUG-111-pause-ends-call` off `main` (commit `47a44f3`,
-unpushed) — **not** on this branch, which still contains only this document. Everything
-else here remains untouched and unverified.
+**Two exceptions, added after the fact — LIVE-1 and JOBS-1/CAL-8 were independently
+verified and fixed.** Each lives on its own branch off `main`, both **unpushed**, and
+**neither is on this branch**, which still contains only this document:
+- `fix/BUG-111-pause-ends-call` — commit `47a44f3` (LIVE-1)
+- `fix/BUG-114-regenerate-stale-draft` — commit `98fb4be` (JOBS-1 / CAL-8, stale-draft half)
+
+Everything else here remains untouched and unverified.
 
 Two consequences worth stating plainly:
 
@@ -156,7 +159,7 @@ different number. **"Verified" column is honest: nothing got a second pass.**
 | LIVE-1 | Pause >10 s ends the call ("mic disconnected") | CRIT | yes | live | ✅ **CONFIRMED + FIXED** (`47a44f3`) |
 | CAL-1 | All calendar sync failures invisible; justification cites a UI that doesn't exist | CRIT | yes | calendar | ❌ single pass |
 | CAL-4 | `remoteUpdatedAt` never compared → remote edits never pulled, local edits overwrite them | CRIT | yes | calendar | ❌ single pass |
-| JOBS-1 | "Regenerate" orphans the prior draft; the **stale** one wins on every reopen, permanently unprunable | CRIT | yes | jobs | ❌ refuter died |
+| JOBS-1 | "Regenerate" orphans the prior draft; the **stale** one wins on every reopen, permanently unprunable | CRIT | yes | jobs | ✅ **CONFIRMED + FIXED** (`98fb4be`) — stale-draft half only |
 | LIVE-2 | `endCall({saved:true})` ends whatever call is *current*, not the one saved → next call lost in full | HIGH | yes | live | ❌ single pass |
 | CAL-2 | Reminders silently dropped when set on a Google/Outlook event, while UI promises a push notification | HIGH | yes | calendar | ❌ single pass |
 | CAL-5 | Event deleted in Google is silently **re-created** by the next local edit | HIGH | yes | calendar | ❌ single pass |
@@ -172,7 +175,7 @@ different number. **"Verified" column is honest: nothing got a second pass.**
 | SET-1 | `app-settings` load/merge are closed literals with **no spread** → any newer field is erased on next save | HIGH | yes | settings | ❌ partial agent |
 | SET-2 | A failed settings write is silently swallowed by nearly every renderer call site (incl. `syncScope`, a privacy toggle) | HIGH | yes | settings | ❌ partial agent |
 | CAL-9 | Non-retryable remote delete silently **resurrects** an event, and bumps `updatedAt` so it propagates to every device | MED | yes | calendar | ❌ single pass |
-| CAL-8 | Same "Regenerate" defect as JOBS-1, independently found from the tasks side | HIGH | yes | tasks | ❌ single pass |
+| CAL-8 | Same "Regenerate" defect as JOBS-1, independently found from the tasks side | HIGH | yes | tasks | ✅ same fix (`98fb4be`) |
 | LIVE-4 | Mic test can kill, or silently hijack, a live call's Tier 1 engine (wrong-mic audio into the transcript) | MED | yes | tier1 | ❌ single pass |
 | JOBS-7 | Partial task save + reopen re-proposes already-saved tasks → duplicates | MED | yes | jobs | ❌ refuter died |
 | LIVE-3 | Mic test during a call detaches the PCM buffer out from under the recorder, then tells the user to file a support ticket | MED | no | tier1 | ⚠️ agent flagged a 5-min runtime check that would collapse it |
@@ -202,6 +205,36 @@ different number. **"Verified" column is honest: nothing got a second pass.**
 \* JOBS-3: the agent conceded only `dev:fakeCpu` uses `kind:'worker'` and it is `is.dev`-gated.
 **If that holds, this is a latent + documentation defect, not a shipping bug.** The refuter
 was specifically tasked with settling that and died first. Treat HIGH as unconfirmed.
+
+---
+
+### JOBS-1 / CAL-8 — "Regenerate" showed the draft the rep had just rejected
+**Severity: CRITICAL · Field-critical: yes · ✅ CONFIRMED and FIXED (`98fb4be`)**
+
+Found independently by two auditors, then verified by me. `JobManager.list()` walks
+`this.order`, which is **push-only** (`:157`, `:253`, with only filter-removals at `:343`
+and `:686`) — so it is oldest-first, and `.find()` over it returns the OLDEST match.
+Neither the main-side dedupe (`tasks.ts:182`, `crm-note-generator-ipc.ts:148` — verified by
+grep to be the only two that can match a `succeeded` job, i.e. the two `retainUntilConsumed`
+types) nor the screen's adopt-on-mount (`useJobByTarget.ts:74`) sorts or prefers newest.
+
+`tasks.ts:176-181`'s comment reasons carefully about *whether* a succeeded job should count
+as "already there" — and never about *which one*. That is the whole bug.
+
+**Fix:** `JobManager.findLatest(predicate)` scans backwards, and the three call sites use it.
+The ordering knowledge now lives where `this.order` lives, so no caller has to know that
+`.find()` means "oldest" — which was the actual defect, since `.find()` reads as "the one".
+
+**Red-checked at two levels**, each reversion verified as applied first: the helper (forward
+scan → its unit test fails), and **separately** the renderer call site (reverted to the
+original `.find()` → `expected 'before-regenerate' to be 'after-regenerate'`, the bug
+reproduced through the hook the dialog really mounts). The second check exists because a
+helper test cannot see whether a call site scans the right way — species 21.
+
+**Deliberately left unfixed:** the orphaned job still accumulates in "Needs your review", is
+exempt from pruning (`retention.ts` `isProtected`), and cannot be dismissed without a
+`consumed` flag the UI never sends. Separate MEDIUM — clearing it would DELETE a draft, which
+is a different call from "show the newest one".
 
 ---
 
