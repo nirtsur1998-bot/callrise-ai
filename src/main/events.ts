@@ -189,14 +189,32 @@ const RECONCILE_JOB_TYPE = 'calendar:reconcile'
 /** Queue a push for one event and refresh the calendar if the outcome changed.
  *
  *  M26 Batch 5 — DELIBERATELY NOT a job, unlike the reconcile drain below.
- *  Three reasons, all specific to this one: it takes ~0.1–2s (there is no
- *  progress to report), it already survives navigation (it has always run in
- *  main), and a failure already surfaces ON THE EVENT ITSELF in the Calendar
- *  UI via sync.state — which is a far better place for it than a generic
- *  Activity Center row. Migrating it would add one job entry per calendar
- *  edit in exchange for nothing, and would replace this per-EVENT
- *  serialization chain with a single global one, needlessly serializing
- *  unrelated events during a bulk edit. */
+ *  Two reasons still hold: it takes ~0.1–2s (there is no progress to report)
+ *  and it already survives navigation (it has always run in main). Migrating
+ *  it would add one job entry per calendar edit in exchange for nothing, and
+ *  would replace this per-EVENT serialization chain with a single global one,
+ *  needlessly serializing unrelated events during a bulk edit.
+ *
+ *  ⚠️ BUG-112 — THE THIRD REASON WAS FALSE, AND IT WAS THE LOAD-BEARING ONE.
+ *  This comment used to read: "a failure already surfaces ON THE EVENT ITSELF
+ *  in the Calendar UI via sync.state — which is a far better place for it than
+ *  a generic Activity Center row." That surface was never built. Across the
+ *  ENTIRE renderer, `sync` and `lastError` appear exactly once — the type
+ *  declaration at renderer/features/calendar/types.ts:25. MonthGrid.tsx and
+ *  WeekGrid.tsx do not mention `sync` at all. Nothing reads it. Ever.
+ *
+ *  So today a push that 403s, or hits a dead token, or gets a Graph 500, is
+ *  COMPLETELY SILENT: the event sits in the CallRise calendar looking normal,
+ *  is not on the rep's real calendar, is not on their phone, and no reminder
+ *  will fire. `events:delete` has the same shape — it returns {ok:true} before
+ *  the remote delete is even attempted.
+ *
+ *  Deliberately NOT fixed here. Choosing where a sync failure appears, what it
+ *  says, and whether it offers a retry is a product decision, not a bug fix,
+ *  and it is written up as a fix shape in docs/OVERNIGHT-audit-findings.md
+ *  rather than guessed at. What IS fixed is the comment: an argument that
+ *  rests on a guarantee nobody built should not keep reading like a settled
+ *  decision to the next person who opens this file. */
 function schedulePush(id: string): void {
   void enqueuePush(id, () => syncPush(id)).then((changed) => {
     if (changed) notifyEventsChanged()
