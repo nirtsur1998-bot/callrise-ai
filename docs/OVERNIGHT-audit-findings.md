@@ -19,13 +19,21 @@ below carries the reporting agent's own confidence and its own "what I could not
 verify" note, preserved verbatim rather than smoothed over. Treat them as
 **high-quality leads with file:line evidence**, not as established defects.
 
-**Two exceptions, added after the fact — LIVE-1 and JOBS-1/CAL-8 were independently
-verified and fixed.** Each lives on its own branch off `main`, both **unpushed**, and
-**neither is on this branch**, which still contains only this document:
-- `fix/BUG-111-pause-ends-call` — commit `47a44f3` (LIVE-1)
-- `fix/BUG-114-regenerate-stale-draft` — commit `98fb4be` (JOBS-1 / CAL-8, stale-draft half)
+**Five branches now exist, all off `main`, all UNPUSHED, and none of them is this branch**
+(this one still contains only this document):
 
-Everything else here remains untouched and unverified.
+| Branch | Commit | What |
+|---|---|---|
+| `fix/BUG-115-deal-intelligence-consent` | `59937f5` | **CONSENT LEAK** — the Radar Report kept the buyer's verbatim words after revocation |
+| `fix/BUG-111-pause-ends-call` | `47a44f3` | pause >10s ended the call |
+| `fix/BUG-114-regenerate-stale-draft` | `98fb4be` | "Regenerate" served the rejected draft |
+| `fix/preload-escape-hatch` | `732687a` | removed the arbitrary-channel IPC bridge |
+| `fix/BUG-112-sync-failure-comment` | `6f845da` | corrected a false load-bearing comment (comment only) |
+
+Each of those five was independently verified before being fixed. **Everything else in this
+document remains untouched and unverified**, and a second wave of auditors (consent,
+IPC/security, packaging, detection) has since added findings that are also unverified —
+see §10.
 
 Two consequences worth stating plainly:
 
@@ -146,6 +154,38 @@ speaker identity disagree about the same meeting.
 
 **Agent's own caveat:** found no doc saying "M14 step D was deferred", so it is unclear
 whether this is a known accepted gap or a real regression.
+
+---
+
+### CONSENT-1 / BUG-115 — the Radar Report kept the buyer's verbatim words after consent was revoked
+**Severity: CRITICAL · Field-critical: yes · ✅ CONFIRMED and FIXED (`59937f5`)**
+
+The single most important finding of the night, and the one the missing consent pass was for.
+
+`LiveView.tsx:133-136` — the gated and ungated calls are adjacent:
+```
+clips.flush(callId)                              // -> addBookmark -> applyConsentRetention
+void window.api.calls.saveDealIntelligence(...)  // no gate at all
+```
+`setCallDealIntelligence` (`calls-fs.ts`) never re-applied retention, unlike `addBookmark`
+since BUG-028. And `applyConsentRetention` is an ALLOWLIST — `speakerIdentities`, `bookmarks`,
+`segments`/`preview`/`speakerCount` — that `dealIntelligence` (M24, later) never joined.
+
+The payload is the buyer's own speech: `evidenceQuote` up to 400 chars, `evidenceRole:'other'`,
+and deal-tier1's prompt demands *"the exact quote, word for word ... Never paraphrase or
+invent it"*. Up to 200 per call, rendered back at `RadarReport.tsx:156`.
+
+**This is BUG-014 -> BUG-028's shape a THIRD time**, two statements from the second fix.
+
+The red-check printed the leak in full — `"evidenceQuote": "<buyer words>"` with
+`"evidenceRole": "other"` next to `"recordOtherParty": false` in the raw file.
+
+**Left open deliberately:** applyConsentRetention is still an allowlist over a Call shape that
+has outgrown it (`summary`, `coaching.evidence`, `commitments`, `coachChat`, `notes`
+unexamined). Only `dealIntelligence` is reachable with unconsented content today, and that is
+a property of the current call graph, not of the guard. `deleteCall`'s tombstone solves the
+same problem the safe way — a closed literal of what survives. Inverting it is a design
+change, not a bug fix.
 
 ---
 
