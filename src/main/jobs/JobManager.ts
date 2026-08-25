@@ -211,6 +211,31 @@ export class JobManager {
     return this.jobs.get(id) ?? null
   }
 
+  /** BUG-114 — the NEWEST job matching a predicate.
+   *
+   *  `list()` walks `this.order`, which is push-only, so it is oldest-first —
+   *  and `list().find(...)` therefore returns the OLDEST match. Every caller
+   *  that wants "the job for this target" wants the newest one, and reading
+   *  `.find()` at a call site gives no hint that it does the opposite.
+   *
+   *  That cost a real bug: "Regenerate" enqueues a second job (and bills a
+   *  second AI call) without dismissing the first, so both the main-side
+   *  dedupe and the screen's adopt-on-mount kept resolving to the PRE-
+   *  regenerate draft. The rep saw the proposals they had just rejected, and
+   *  saving them again duplicated tasks they had already saved.
+   *
+   *  Lives here rather than at the call sites because `this.order` is here:
+   *  the ordering is this class's business, and no caller should have to know
+   *  it. Scans backwards rather than reversing a copy — `list()` already
+   *  allocates, and this runs on every dialog open. */
+  findLatest(predicate: (job: Job) => boolean): Job | null {
+    for (let i = this.order.length - 1; i >= 0; i--) {
+      const job = this.jobs.get(this.order[i])
+      if (job && predicate(job)) return job
+    }
+    return null
+  }
+
   onChange(cb: (jobs: Job[]) => void): () => void {
     this.listeners.add(cb)
     return () => this.listeners.delete(cb)

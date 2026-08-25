@@ -180,14 +180,14 @@ export function registerTasks(): void {
       // the AI call. "Regenerate"/"Try again" pass force:true to bypass
       // this and always start a fresh attempt.
       if (!force) {
-        const already = manager
-          .list()
-          .find(
-            (j: Job) =>
-              j.type === GENERATE_TASKS_JOB_TYPE &&
-              j.targetRef === callId &&
-              (j.state === 'running' || j.state === 'queued' || j.state === 'succeeded')
-          )
+        // BUG-114 — findLatest, not list().find(): list() is oldest-first, so
+        // after a Regenerate the old draft would win here forever.
+        const already = manager.findLatest(
+          (j: Job) =>
+            j.type === GENERATE_TASKS_JOB_TYPE &&
+            j.targetRef === callId &&
+            (j.state === 'running' || j.state === 'queued' || j.state === 'succeeded')
+        )
         if (already) return { ok: true, jobId: already.id }
       }
       const job = manager.enqueue(GENERATE_TASKS_JOB_TYPE, { callId })
