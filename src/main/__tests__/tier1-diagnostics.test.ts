@@ -26,17 +26,42 @@ let saveDialogResult: { canceled: boolean; filePath?: string } = {
 const copied: Array<{ from: string; to: string }> = []
 let existingFiles = new Set<string>()
 let writtenJson: string | null = null
-vi.mock('fs', () => ({
+/** Set by the readFileSync stub so writeFileSync can report the (from,to) pair. */
+let lastRead = ''
+
+// BUG-094 changed HOW the engine files are collected: a raw `copyFileSync`
+// shipped kern_bridge.log byte-for-byte, so the copy now goes through the
+// shared `scrubbedCopy` (read -> scrub every line -> write). This test's
+// property is unchanged — only existing files are collected, a missing one is
+// skipped rather than fatal — it just observes that through the mechanism
+// actually in use.
+//
+// ONE factory for both specifiers: vitest resolves `fs` and `node:fs` to the
+// same module, so two separate vi.mock calls do not compose — the second wins
+// and the first one's exports vanish ("No \"mkdirSync\" export is defined").
+// tier1-diagnostics imports from 'fs'; scrubbed-copy imports from 'node:fs'.
+// A function DECLARATION, not a const arrow: vi.mock calls are hoisted above
+// the module body, so a const factory hits the temporal dead zone
+// ("Cannot access fsMock before initialization"). Declarations hoist with them.
+function fsMock(): Record<string, unknown> {
+  return {
   existsSync: (p: string) => existingFiles.has(p),
-  copyFileSync: (from: string, to: string) => {
-    copied.push({ from, to })
+  readFileSync: (p: string) => {
+    lastRead = p
+    return `line from ${p}\n`
   },
-  mkdirSync: vi.fn(),
-  rmSync: vi.fn(),
-  writeFileSync: (_p: string, content: string) => {
-    writtenJson = content
+  writeFileSync: (to: string, content: string) => {
+    // app-diagnostics.json is built in-module and written directly; the engine
+    // files arrive via scrubbedCopy, which reads first.
+    if (to.endsWith('app-diagnostics.json')) writtenJson = content
+    else copied.push({ from: lastRead, to })
+  },
+    mkdirSync: vi.fn(),
+    rmSync: vi.fn()
   }
-}))
+}
+vi.mock('fs', fsMock)
+vi.mock('node:fs', fsMock)
 
 let execFileArgs: { cmd: string; args: string[]; env: Record<string, string | undefined> } | null =
   null
@@ -87,7 +112,7 @@ describe('the collected set is enumerated, pinned, and nothing more', () => {
     const files = engineDiagnosticFiles('C:\\Users\\x\\AppData\\Local')
     expect(files).toEqual([
       'C:\\Users\\x\\AppData\\Local\\CallRiseAI\\logs\\kern_bridge.log',
-      'C:\\Users\\x\\AppData\\Local\\CallRiseAI\\logs\\kern_bridge.prev.log',
+      'C:\\Users\\x\\AppData\\Local\\CallRiseAI\\logs\\kern_bridge.log.1',
       'C:\\Users\\x\\AppData\\Local\\CallRiseAI\\kern_bridge_status.json'
     ])
   })

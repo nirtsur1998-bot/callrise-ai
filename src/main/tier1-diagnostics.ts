@@ -16,10 +16,17 @@
 // recordings, no transcripts are anywhere in the collected set.
 import { app, dialog, ipcMain, BrowserWindow } from 'electron'
 import { execFile } from 'child_process'
-import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { getStatus } from './tier1'
+import { scrubbedCopy } from './scrubbed-copy'
+import { createLocalScrubber } from './scrub'
+
+/** Whole-document scrubber. The app-wide `scrub()` caps a single string at
+ *  4096 chars, which is right for a log LINE and wrong for a JSON document
+ *  — it would truncate the file into unparseable output. */
+const scrubDocument = createLocalScrubber({ maxLength: Number.MAX_SAFE_INTEGER })
 
 /** The complete list of engine files eligible for collection. A pure
  *  function of the LOCALAPPDATA root so tests can point it at a fixture
@@ -28,7 +35,27 @@ export function engineDiagnosticFiles(localAppData: string): string[] {
   const root = join(localAppData, 'CallRiseAI')
   return [
     join(root, 'logs', 'kern_bridge.log'),
-    join(root, 'logs', 'kern_bridge.prev.log'),
+    // The engine's ROTATED log. SOURCE OF TRUTH IS THE C++ WRITER, NOT THIS
+    // LIST — kern_bridge.cpp, verified 2026-08-25 at these exact lines:
+    //
+    //   :614   g_logPathPrev = g_logPath + L".1";      <- builds the name
+    //   :288   #define LOG_MAX_BYTES (2 * 1024 * 1024) <- rotates at 2 MB
+    //   :1423  startup banner: "rotates at %d MB, one previous kept as .1"
+    //
+    // This list said `kern_bridge.prev.log` until BUG-094 — a name that appears
+    // NOWHERE in the engine source. `existsSync` was therefore always false and
+    // the rotated log has never been collected by this export. The live log was
+    // at 2,064,534 bytes against that 2 MB threshold when this was found, so
+    // the next engine start moves the entire history of whatever the user is
+    // reporting into a file the export ignores: a support bundle can arrive
+    // missing the exact evidence it was sent for, and nobody can tell.
+    //
+    // WHY THE TESTS WERE GREEN: the fixtures were written from THIS list's
+    // expectation rather than cross-checked against the writer. A fixture that
+    // agrees with the thing it is testing proves only that they agree. If you
+    // change this name, change it against kern_bridge.cpp — not against the
+    // tests, which will happily follow you.
+    join(root, 'logs', 'kern_bridge.log.1'),
     join(root, 'kern_bridge_status.json')
   ]
 }
@@ -113,16 +140,32 @@ export async function exportTier1Diagnostics(
 
     let collected = 0
     for (const src of engineDiagnosticFiles(process.env['LOCALAPPDATA'] ?? '')) {
-      if (!existsSync(src)) continue
-      try {
-        copyFileSync(src, join(staging, src.split(/[\\/]/).pop()!))
-        collected++
-      } catch {
-        /* a locked/unreadable log is skipped, never fatal — partial
-           diagnostics still beat none */
-      }
+      // BUG-094 — this was a raw copyFileSync and this module never imported a
+      // scrubber at all, so the zip shipped kern_bridge.log BYTE FOR BYTE,
+      // including the `C:\Users\<name>\…` paths every line carries. The whole
+      // purpose of this file is to be sent to someone else, which makes it an
+      // egress path, not a local artifact.
+      //
+      // scrubbedCopy returns false rather than throwing, which preserves the
+      // skip-never-fatal behaviour this loop always had: a locked or unreadable
+      // log is skipped, and partial diagnostics still beat none.
+      if (scrubbedCopy(src, join(staging, src.split(/[\\/]/).pop()!))) collected++
     }
-    writeFileSync(join(staging, 'app-diagnostics.json'), buildAppDiagnostics(renderer), 'utf8')
+    // The renderer supplies deviceLabels — EVERY audio input's raw label from
+    // enumerateDevices(), not just the selected one — and those routinely carry
+    // a person's name ("<name>'s AirPods"). tier1Status carries enginePath, an
+    // absolute path. Both are scrubbed here.
+    //
+    // KNOWN LIMIT, tracked separately: a bare personal name inside a device
+    // label has no path separator, no delimiter and no structure, so a
+    // line-based scrubber CANNOT catch it without redacting every capitalised
+    // word. Scrubbing this document does not solve device labels and must not
+    // be read as having solved them.
+    writeFileSync(
+      join(staging, 'app-diagnostics.json'),
+      scrubDocument(buildAppDiagnostics(renderer)),
+      'utf8'
+    )
     collected++
 
     await compressToZip(staging, filePath)
