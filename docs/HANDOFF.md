@@ -132,6 +132,29 @@ release**. Swapping the two steps would make them run.
 
 ## 3. WHAT THE NEXT SESSION PICKS UP FIRST
 
+> ### Method, before the priorities — read this as instruction, not encouragement
+>
+> **The durable value of the last session came from noticing a failure rather than smoothing
+> it over.** Not from the six fixes. From the moments the work went wrong and that was written
+> down instead of tidied away:
+>
+> - Species **36** exists because the session was run backwards — ~60 findings gathered, 8
+>   verified — and said so, rather than presenting a confident-looking report.
+> - Species **38** exists because a scripted revert deleted a shipped consent guard, and the
+>   green suite that followed was chased instead of accepted.
+> - Species **40** exists because a true statement was carrying a false inference, and a file
+>   count that moved by five got questioned instead of ignored.
+> - BUG-**120** exists because a skip count changed by four with no code change.
+> - BUG-**118** was walked back from CRITICAL to MEDIUM by the person who wrote CRITICAL.
+>
+> **A tidied-away failure produces nothing.** Every one of those came from an anomaly that
+> would have been cheaper to explain away, and the explaining-away is the only step that had to
+> be skipped. The self-catches were the output, not a byproduct of it.
+>
+> So: when a number moves and you cannot say why, that is the work — not an interruption to it.
+> And when your own severity or conclusion turns out to be wrong, report the correction as
+> loudly as you reported the finding.
+
 **This order is the founder's, set 2026-08-25 after reading the first draft of this handoff.
 It is not a suggestion — #2 was promoted from a footnote by them, deliberately.**
 
