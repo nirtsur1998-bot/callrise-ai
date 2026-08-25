@@ -144,6 +144,11 @@ It is not a suggestion — #2 was promoted from a footnote by them, deliberately
 2. **Run the packaged app and actually use it.** ⬅ *promoted by the founder from an honest
    note at the bottom of this document to priority #2.*
 
+   **THIS ONE HAS AN OWNER AND A DATE: the founder is doing it personally, the week of
+   2026-08-25, immediately after running M28's work-PC script.** So the next session should
+   NOT duplicate it — check with them first, and pick up whatever the pass surfaces. Their
+   stated plan is the list below, which is the right list.
+
    **Everything in this audit is static analysis and unit-test proof of mechanism. Nothing
    has been click-tested.** Five fixes were verified by reading code and running vitest; not
    one was verified by launching CallRise and using it. That is the single largest gap in the
@@ -190,9 +195,15 @@ silently — the collision only surfaces if someone happens to look.
 2. **IDs claimed by a mechanism rather than by convention** — a monotonic counter, a
    date-prefixed id (`BUG-2026-08-25-a`), or per-session ranges handed out at session start.
 
-Until then: **grep the canonical list immediately before writing, and re-grep if any time has
-passed.** Flagged here rather than fixed because it is a workflow decision across sessions,
-not a code change.
+**The founder's lean, stated 2026-08-25 — option 2, IDs claimed by a mechanism.** Their
+reasoning, which is the part to keep: *"ownership boundaries drift the same way everything
+else here does."* One-owner-per-section is itself a convention that decays, and this document
+is a catalogue of conventions that decayed. Not a final decision — nobody has designed the
+mechanism yet — but start from there rather than re-opening the choice.
+
+Until it exists: **grep the canonical list immediately before writing, and re-grep if any time
+has passed.** Flagged rather than fixed because it is a cross-session workflow decision, not a
+code change.
 
 ---
 
