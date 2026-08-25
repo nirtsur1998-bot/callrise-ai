@@ -19,8 +19,10 @@ below carries the reporting agent's own confidence and its own "what I could not
 verify" note, preserved verbatim rather than smoothed over. Treat them as
 **high-quality leads with file:line evidence**, not as established defects.
 
-**Nothing here has been fixed. No source file has been modified. The only change on
-this branch is this document.**
+**One exception, added after the fact: LIVE-1 was independently verified and fixed.** It
+lives on its own branch `fix/BUG-111-pause-ends-call` off `main` (commit `47a44f3`,
+unpushed) — **not** on this branch, which still contains only this document. Everything
+else here remains untouched and unverified.
 
 Two consequences worth stating plainly:
 
@@ -39,7 +41,16 @@ Ranked by (severity × how easily a normal user reaches it). All three are
 **UNVERIFIED BY A SECOND PASS.**
 
 ### LIVE-1 — Pausing a live call for 10 seconds ends the call
-**Severity: CRITICAL · Field-critical: yes · Reporting agent confidence: high on the code path**
+**Severity: CRITICAL · Field-critical: yes · ✅ CONFIRMED and FIXED**
+
+> **This is the one exception to the "unverified" banner above.** I ran the adversarial
+> pass on it by hand and closed every refutation route (see the checklist at the end of this
+> entry). Fixed on branch `fix/BUG-111-pause-ends-call` off `main`, commit `47a44f3`,
+> **unpushed**. Typecheck exit 0; full suite exit 0, 217 files, 2148 passed / 9 skipped
+> — **+5 on the 2143 baseline, matching the five tests added**, which is how I know they ran.
+> Both halves of the fix red-checked independently, each reversion verified as actually
+> applied to the file before the run was interpreted (species 20).
+> **Not** verified in a running Electron app — static + unit-test proof of the mechanism only.
 
 Pressing **Pause** during a call and coming back 15 seconds later **ends and saves
 the call**, and the screen says the microphone was disconnected. No race, no unusual
@@ -67,6 +78,31 @@ through to main.
 
 **Agent's own caveat:** did not verify the on-screen copy of the `no-device` state, nor
 whether real users pause for >10 s often enough to have reported it.
+
+**Refutation routes I checked and closed, in order:**
+1. *Does `togglePause` send any IPC after all?* No — its entire body is `recorder.setPaused(next)` plus React state.
+2. *Would `setSending(false)` have suppressed it?* No — `capture-dead` is evaluated **before** the `sending` guard, deliberately.
+3. *Does silence-fill refresh the audio clock?* No — `lastAudioMs` has exactly two writers (`start`, `onAudio`), and the fill is tracked separately as `lastSilenceFillMs`.
+4. *Is the health timer cleared on pause?* No — cleared only on stop paths (`:264`, `:1328`); it ticks straight through.
+5. *Is there a second audio route that bypasses `sendAudio`?* No — `pump.ts:61` `fastPathEnabled()` returns `false`, hard-off.
+6. *Does the renderer's `captureLost` handler check `paused`?* No — it arms the save, stops the recorder and drops to `'no-device'` unconditionally.
+7. *Is `noAudioMs` actually 10 s?* Yes — `types.ts:89`, `noAudioMs: 10_000`.
+
+**The sharpest corroboration** is four lines *below* the bug. `transcription.ts:636-638`
+reads: *"Deepgram closes with 1011/NET-0001 if no audio arrives within ~10s... A muted or
+paused call must therefore keep sending real silence."* The author was thinking about pause,
+wrote the silence-fill for it — and the unguarded `capture-dead` emit sits immediately above.
+
+**A hole in my own fix, found while writing it and closed:** `transcription.ts:575`'s
+sleep-recovery path calls `liveness.start()` on a session that is **still live**, which cleared
+the flag and would have re-armed capture-dead against a still-paused renderer — the same bug,
+one lid-close removed. Carried across explicitly, with its own test.
+
+**What the fix un-shields (species 24, applied to my own change):** the old behaviour also
+happened to end calls orphaned *while paused* by a renderer reload. That was a side effect of a
+bug, not a safety net, and a renderer **crash** is still caught independently by
+`render-process-gone` (`transcription.ts:1079`). The orphaned-live-call case is §4's open
+question, which I deliberately left without a severity.
 
 ### CAL-1 — Every calendar sync failure is invisible, and the code's justification for that is false
 **Severity: CRITICAL · Field-critical: yes · Confidence: high**
@@ -117,7 +153,7 @@ different number. **"Verified" column is honest: nothing got a second pass.**
 
 | # | Finding | Sev | Field-crit | Area | Verified? |
 |---|---|---|---|---|---|
-| LIVE-1 | Pause >10 s ends the call ("mic disconnected") | CRIT | yes | live | ❌ single pass |
+| LIVE-1 | Pause >10 s ends the call ("mic disconnected") | CRIT | yes | live | ✅ **CONFIRMED + FIXED** (`47a44f3`) |
 | CAL-1 | All calendar sync failures invisible; justification cites a UI that doesn't exist | CRIT | yes | calendar | ❌ single pass |
 | CAL-4 | `remoteUpdatedAt` never compared → remote edits never pulled, local edits overwrite them | CRIT | yes | calendar | ❌ single pass |
 | JOBS-1 | "Regenerate" orphans the prior draft; the **stale** one wins on every reopen, permanently unprunable | CRIT | yes | jobs | ❌ refuter died |
