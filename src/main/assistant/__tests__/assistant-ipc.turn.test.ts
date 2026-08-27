@@ -1041,6 +1041,54 @@ describe('stop and attach — the two M28 design claims', () => {
 // ONLY when the conversation is unbound, and does its text reach the prompt?
 // The module's own behaviour is covered in unbound-client.test.ts; a correct
 // module nothing calls is the hollow shape this milestone spent a day on.
+// Field-diagnosis (2026-08-25) — when every model fails, the error shown to
+// the user must carry the PER-MODEL reasons. The work-PC file-upload failure
+// produced only "Every configured model failed to respond", and that
+// machine's logs cannot leave it — so the screen is the evidence channel,
+// and this test pins that the evidence actually reaches it.
+describe('exhaustion errors carry the per-model breakdown', () => {
+  it('a failed walk shows WHAT EACH MODEL SAID, not just the summary', async () => {
+    const { convId, invoke } = await setup()
+    const { AllModelsExhaustedError } = await import('../../ai/complete-with-fallback')
+
+    const err = new (AllModelsExhaustedError as unknown as new (m: string) => Error)(
+      'Every configured model failed to respond just now.'
+    )
+    ;(err as unknown as { attempts: unknown }).attempts = [
+      { catalogId: 'groq-llama-3.3-70b-versatile', reason: 'rate-limit: 413 request too large' },
+      { catalogId: 'legacy:openai', reason: 'timeout' }
+    ]
+
+    const pending = invoke('assistant:send', convId, 'summarise the attached file')
+    streamControl.fail(err)
+    const result = (await pending) as Record<string, unknown>
+
+    expect(result.ok).toBe(false)
+    const msg = String(result.message)
+    expect(msg).toContain('Every configured model failed to respond')
+    expect(
+      msg,
+      'the per-model reasons were flattened out of the error — on a machine ' +
+        'whose logs cannot leave it, that discards the only evidence'
+    ).toContain('What each model reported:')
+    expect(msg).toContain('groq-llama-3.3-70b-versatile — rate-limit: 413 request too large')
+    expect(msg).toContain("openai (your key's default model) — timeout")
+  })
+
+  it('an exhaustion error WITHOUT attempts still shows the summary (no crash, no blank)', async () => {
+    const { convId, invoke } = await setup()
+    const { AllModelsExhaustedError } = await import('../../ai/complete-with-fallback')
+    const err = new (AllModelsExhaustedError as unknown as new (m: string) => Error)(
+      'Every configured model failed to respond just now.'
+    )
+    const pending = invoke('assistant:send', convId, 'hello')
+    streamControl.fail(err)
+    const result = (await pending) as Record<string, unknown>
+    expect(result.ok).toBe(false)
+    expect(String(result.message)).toBe('Every configured model failed to respond just now.')
+  })
+})
+
 describe('BUG-096 fix C — naming clients an unbound chat cannot reach', () => {
   it('an UNBOUND chat gets the notice, and it reaches the system prompt', async () => {
     const { convId, invoke } = await setup()

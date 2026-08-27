@@ -1352,7 +1352,7 @@ export function AssistantView({
         <div aria-live="polite" className="shrink-0">
           {chat.error && (
             <div className="mx-auto mb-2 flex w-full max-w-[1140px] items-center justify-between rounded-xl border border-danger/30 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">
-              <span>{chat.error}</span>
+              <span className="whitespace-pre-wrap">{chat.error}</span>
               <IconButton icon={X} label="Dismiss error" onClick={chat.clearError} />
             </div>
           )}

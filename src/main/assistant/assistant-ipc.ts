@@ -20,6 +20,7 @@ import {
   resolveChain
 } from '../ai/complete-with-fallback'
 import { noCapableModelMessage } from '../ai/capability-copy'
+import { exhaustionReport } from '../ai/exhaustion-report'
 import {
   fitPromptToBudget,
   budgetCharsFor,
@@ -108,7 +109,11 @@ function broadcast(channel: string, payload: unknown): void {
 }
 
 function friendlyError(err: unknown): string {
-  if (err instanceof AllModelsExhaustedError) return err.message
+  // The per-model breakdown IS the evidence channel: on a machine whose logs
+  // cannot leave it, what this string carries is everything a diagnosis
+  // gets. See exhaustion-report.ts.
+  if (err instanceof AllModelsExhaustedError)
+    return exhaustionReport(err.message, (err as AllModelsExhaustedError).attempts)
   if (err instanceof AIProviderError) return err.message
   return 'Something went wrong. Please try again.'
 }
