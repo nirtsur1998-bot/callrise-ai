@@ -17,6 +17,7 @@ import {
   BellRing,
   Layers,
   Activity,
+  HeartPulse,
   GraduationCap,
   Brain,
   ListTodo,
@@ -45,6 +46,7 @@ export type SettingsPageId =
   | 'app'
   | 'appearance'
   | 'privacy-data'
+  | 'telemetry'
   | 'jobs-inspector'
 
 export interface SettingsPageItem {
@@ -261,6 +263,13 @@ const ALL_GROUPS: SettingsGroup[] = [
         label: 'Privacy & data',
         icon: ShieldCheck,
         description: 'What stays on this device, and what backs up to your account.'
+      },
+      {
+        id: 'telemetry',
+        label: 'Diagnostics & telemetry',
+        icon: HeartPulse,
+        description:
+          'Off unless you turn it on. Anonymous crash and health reports — never your calls, notes, or keys. See exactly what would be sent.'
       }
     ]
   },

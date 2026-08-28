@@ -26,6 +26,7 @@ import { spawn, type ChildProcess } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import * as net from 'net'
+import { signalTier1State } from './telemetry/signals'
 
 const TIER1_PIPE = '\\\\.\\pipe\\CallRiseAI_Denoised_v1'
 
@@ -239,6 +240,14 @@ export function getStatus(): Tier1Status {
 
 function broadcast(): void {
   const status = getStatus()
+  // M29 A2 — change-only (the signal dedupes): engineAvailable:false is the
+  // 1.3.0 missing-resources class; running-but-not-denoising is the
+  // df_create silent-passthrough class.
+  signalTier1State({
+    engineAvailable: status.engineAvailable,
+    engineRunning: status.engineRunning,
+    denoisingActive: status.denoisingActive
+  })
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('tier1:status', status)
   }

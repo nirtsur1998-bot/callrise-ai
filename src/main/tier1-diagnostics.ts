@@ -16,10 +16,16 @@
 // recordings, no transcripts are anywhere in the collected set.
 import { app, dialog, ipcMain, BrowserWindow } from 'electron'
 import { execFile } from 'child_process'
-import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { getStatus } from './tier1'
+import { scrubbedCopy } from './scrubbed-copy'
+import { createLocalScrubber } from './telemetry/scrub'
+
+/** Whole-document scrubber (no 4096-char cap) — see support-bundle.ts for
+ *  why a document needs a different instance from a log line. */
+const scrubDocument = createLocalScrubber({ maxLength: Number.MAX_SAFE_INTEGER })
 
 /** The complete list of engine files eligible for collection. A pure
  *  function of the LOCALAPPDATA root so tests can point it at a fixture
@@ -28,7 +34,18 @@ export function engineDiagnosticFiles(localAppData: string): string[] {
   const root = join(localAppData, 'CallRiseAI')
   return [
     join(root, 'logs', 'kern_bridge.log'),
-    join(root, 'logs', 'kern_bridge.prev.log'),
+    // The engine's ROTATED log. It is `kern_bridge.log.1` — see kern_bridge.cpp
+    // (`g_logPathPrev = g_logPath + L".1"`, and its own startup banner says
+    // "one previous kept as .1"). This list said `kern_bridge.prev.log` until
+    // the M29 sweep, a name that appears NOWHERE in the engine source, so
+    // `existsSync` was always false and the rotated log was silently collected
+    // by neither this export nor M29's support bundle. Rotation fires at 2 MB
+    // and the live log was already at 2,064,534 bytes — i.e. the very next
+    // engine start moves the whole history of whatever the user is reporting
+    // into a file both exports ignored. The fixtures were written from this
+    // list's expectation rather than cross-checked against the C++ writer,
+    // which is why the tests were green.
+    join(root, 'logs', 'kern_bridge.log.1'),
     join(root, 'kern_bridge_status.json')
   ]
 }
@@ -113,16 +130,26 @@ export async function exportTier1Diagnostics(
 
     let collected = 0
     for (const src of engineDiagnosticFiles(process.env['LOCALAPPDATA'] ?? '')) {
-      if (!existsSync(src)) continue
-      try {
-        copyFileSync(src, join(staging, src.split(/[\\/]/).pop()!))
-        collected++
-      } catch {
-        /* a locked/unreadable log is skipped, never fatal — partial
-           diagnostics still beat none */
-      }
+      // BUG-094 — this was a raw copyFileSync and this module never imported
+      // the scrubber at all, so the zip shipped kern_bridge.log BYTE FOR BYTE.
+      // This milestone's own Phase 0 audit §1.4 records those logs carrying
+      // `C:\Users\<name>\…`. Concealed by a phantom citation: the A1 plan
+      // claimed all three egress paths shared one `buildOutbound()`, which
+      // never existed. Same helper as the support bundle now — one mechanism,
+      // both callers. scrubbedCopy returns false rather than throwing, which
+      // preserves the skip-never-fatal behaviour this loop always had.
+      if (scrubbedCopy(src, join(staging, src.split(/[\\/]/).pop()!))) collected++
     }
-    writeFileSync(join(staging, 'app-diagnostics.json'), buildAppDiagnostics(renderer), 'utf8')
+    // The renderer supplies deviceLabels (microphone names, which routinely
+    // contain a person's name — "Nir's AirPods") and tier1Status carries
+    // enginePath, an absolute path. Scrubbed as a DOCUMENT: the app-wide
+    // scrubber caps a single string at 4096 chars, which would truncate this
+    // JSON into unparseable output.
+    writeFileSync(
+      join(staging, 'app-diagnostics.json'),
+      scrubDocument(buildAppDiagnostics(renderer)),
+      'utf8'
+    )
     collected++
 
     await compressToZip(staging, filePath)

@@ -698,6 +698,16 @@ export interface AppSettings {
    *  Set by the migration (and for brand-new installs, whose users weren't
    *  asked either); cleared when the user dismisses the card. */
   autoUpdateNoticePending: boolean
+  /** Cutover 2026-08-28 marker. The Supabase project changed, which signs
+   *  every existing install out — a change made FOR the user, so it must be
+   *  shown TO them once. While this marker is absent the load path knows the
+   *  install predates the cutover and queues the notice; afterwards it never
+   *  fires again. A brand-new install never had an account on the old
+   *  project, so it gets the marker and NO notice. */
+  accountMigratedToNewProject: boolean
+  /** Show the one-time "sign in again" Home card. Set by the cutover
+   *  migration only; cleared when the user dismisses it. */
+  accountMigrationNoticePending: boolean
   /** M23 Workstream A — Coach 2.0 master switch + methodology picker. Off by
    *  default; see Coach2Settings for the exact behavior change. */
   coach2: Coach2Settings
@@ -763,6 +773,10 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoUpdateMigratedToDefaultOn: true,
   // A fresh install wasn't asked either — it gets the same one-time notice.
   autoUpdateNoticePending: true,
+  accountMigratedToNewProject: true,
+  // A fresh install never had an account on the old project, so telling it
+  // to "sign in again" would be a lie. Only the migration sets this true.
+  accountMigrationNoticePending: false,
   coach2: EMPTY_COACH2,
   contactIntelligence: EMPTY_CONTACT_INTELLIGENCE,
   salesBrain: EMPTY_SALES_BRAIN,
@@ -850,6 +864,14 @@ export function loadAppSettings(): AppSettings {
         parsed.autoUpdateMigratedToDefaultOn === true
           ? parsed.autoUpdateNoticePending === true
           : true,
+      // Cutover: reaching this branch at all means a settings file already
+      // existed, i.e. this install predates the cutover and its session is
+      // about to be invalid. Queue the notice once, then never again.
+      accountMigratedToNewProject: true,
+      accountMigrationNoticePending:
+        parsed.accountMigratedToNewProject === true
+          ? parsed.accountMigrationNoticePending === true
+          : true,
       coach2: sanitizeCoach2(parsed.coach2),
       contactIntelligence: sanitizeContactIntelligence(parsed.contactIntelligence),
       salesBrain: sanitizeSalesBrain(parsed.salesBrain),
@@ -918,6 +940,14 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
       'autoUpdateNoticePending' in p
         ? p.autoUpdateNoticePending === true
         : current.autoUpdateNoticePending,
+    accountMigratedToNewProject:
+      'accountMigratedToNewProject' in p
+        ? p.accountMigratedToNewProject === true
+        : current.accountMigratedToNewProject,
+    accountMigrationNoticePending:
+      'accountMigrationNoticePending' in p
+        ? p.accountMigrationNoticePending === true
+        : current.accountMigrationNoticePending,
     coach2: mergeCoach2(current.coach2, p.coach2),
     contactIntelligence: mergeContactIntelligence(
       current.contactIntelligence,
@@ -1041,11 +1071,36 @@ export function saveAppSettings(patch: unknown): AppSettings {
  *     (transcripts, contacts, attachments, …) is a per-device privacy
  *     decision — another device turning a toggle on must never make this one
  *     silently start uploading local-only data.
+ *   - THIS device's autoUpdateEnabled is preserved, for the same reason
+ *     (M29 sweep item 5). Whether this machine downloads and executes new
+ *     software is a per-device decision in exactly the sense syncScope is:
+ *     a laptop on metered tethering may say no while the desktop says yes.
+ *     Before this, the pref fell through the generic merge, and because the
+ *     pushed payload is the WHOLE settings object it always carried a value —
+ *     so one unrelated edit on device B silently re-enabled auto-update on
+ *     device A and started its background check on the spot. That is the
+ *     "overridden exactly once, ever" promise broken by a side door: the
+ *     forward-only migration marker guards the pre-migration case, and
+ *     nobody guarded the simpler post-migration one.
  */
 export function applyPulledSettings(payload: unknown, cloudUpdatedAt: string): AppSettings {
   const current = loadAppSettings()
   const next = mergeSettings(current, payload)
   next.syncScope = current.syncScope
+  next.autoUpdateEnabled = current.autoUpdateEnabled
+  next.autoUpdateMigratedToDefaultOn = current.autoUpdateMigratedToDefaultOn
+  // The cutover pair are facts about THIS INSTALL's history, not preferences,
+  // so a pulled payload must never set them — same reasoning as the marker
+  // above. Without this pin: machine A migrates, persists
+  // accountMigrationNoticePending: true and pushes it; a FRESH install
+  // elsewhere signs in with the same email, pulls `true`, and is told "your
+  // data is safe on this computer, sign in again with the same email" when it
+  // has no old account and no data — plus "don't press Sign out", which is
+  // advice about a risk it does not have. The reverse is worse: a second
+  // pre-cutover machine pulls a dismissed `false` and is signed out with no
+  // explanation at all.
+  next.accountMigratedToNewProject = current.accountMigratedToNewProject
+  next.accountMigrationNoticePending = current.accountMigrationNoticePending
   next.settingsUpdatedAt =
     typeof cloudUpdatedAt === 'string' && !Number.isNaN(Date.parse(cloudUpdatedAt))
       ? cloudUpdatedAt

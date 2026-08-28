@@ -153,7 +153,11 @@ const MODE_OPTIONS: { id: CoachChatMode; label: string }[] = [
 /** M23 Workstream B — chat with full call context (advisor Q&A) and a
  *  practice/roleplay toggle. Renders inside CallDetail's "Ask your coach"
  *  card. */
-export function CoachChatPanel({ callId, initialMessages, hasContact }: CoachChatPanelProps): React.JSX.Element {
+export function CoachChatPanel({
+  callId,
+  initialMessages,
+  hasContact
+}: CoachChatPanelProps): React.JSX.Element {
   const chat = useCoachChat(callId, initialMessages)
   const [input, setInput] = useState('')
   const [taskProposal, setTaskProposal] = useState<CoachChatTaskProposal | null>(null)
@@ -197,7 +201,13 @@ export function CoachChatPanel({ callId, initialMessages, hasContact }: CoachCha
           onChange={(next) => chat.setMode(next)}
         />
         {chat.mode === 'practice' && (
-          <Button variant="secondary" size="sm" icon={LogOut} onClick={() => void chat.endPractice()} disabled={chat.sending}>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={LogOut}
+            onClick={() => void chat.endPractice()}
+            disabled={chat.sending}
+          >
             End practice
           </Button>
         )}
@@ -205,8 +215,8 @@ export function CoachChatPanel({ callId, initialMessages, hasContact }: CoachCha
 
       {chat.mode === 'practice' && chat.messages.every((m) => m.mode !== 'practice') && (
         <p className="rounded-xl border border-warning/30 bg-warning-soft px-3.5 py-2.5 text-[12px] text-ink">
-          Practice mode: the coach will play the BUYER from this call, using their tone and objections.
-          Rehearse your opening, pricing conversation, or objection handling, then click{' '}
+          Practice mode: the coach will play the BUYER from this call, using their tone and
+          objections. Rehearse your opening, pricing conversation, or objection handling, then click{' '}
           <strong>End practice</strong> (or type it) for feedback.
         </p>
       )}
@@ -218,11 +228,17 @@ export function CoachChatPanel({ callId, initialMessages, hasContact }: CoachCha
         {chat.messages.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 py-6 text-center text-muted">
             <MessageSquare className="h-5 w-5 text-faint" />
-            <p className="text-[13px]">Ask anything about this call — or switch to Practice to rehearse.</p>
+            <p className="text-[13px]">
+              Ask anything about this call — or switch to Practice to rehearse.
+            </p>
           </div>
         ) : (
           chat.messages.map((m) => (
-            <Bubble key={m.id} message={m} onApplySuggestion={(s) => void chat.applySuggestion(m.id, s)} />
+            <Bubble
+              key={m.id}
+              message={m}
+              onApplySuggestion={(s) => void chat.applySuggestion(m.id, s)}
+            />
           ))
         )}
         {taskProposal && (
@@ -259,7 +275,13 @@ export function CoachChatPanel({ callId, initialMessages, hasContact }: CoachCha
 
       {chat.mode === 'advisor' && (
         <div className="flex flex-wrap gap-1.5">
-          <Button variant="secondary" size="sm" icon={Mail} onClick={() => void chat.draftFollowUpEmail()} disabled={chat.sending}>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={Mail}
+            onClick={() => void chat.draftFollowUpEmail()}
+            disabled={chat.sending}
+          >
             Draft follow-up email
           </Button>
           <Button
@@ -319,7 +341,11 @@ export function CoachChatPanel({ callId, initialMessages, hasContact }: CoachCha
 
 /** Wraps CoachChatPanel in the Card shell CallDetail.tsx expects, matching
  *  the existing "Sales coaching" card's header pattern. */
-export function CoachChatCard({ callId, initialMessages, hasContact }: CoachChatPanelProps): React.JSX.Element {
+export function CoachChatCard({
+  callId,
+  initialMessages,
+  hasContact
+}: CoachChatPanelProps): React.JSX.Element {
   return (
     <Card>
       <div className="mb-4 flex items-center gap-2">

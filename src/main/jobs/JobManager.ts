@@ -26,6 +26,7 @@ import {
   selectJobsToPrune
 } from './retention'
 import { throttle } from './throttle'
+import { signalJobFinished } from '../telemetry/signals'
 
 /**
  * The single place a failed job-state write is reported, shared by both
@@ -662,6 +663,17 @@ export class JobManager {
   }
 
   private transition(job: Job, patch: Partial<Job>): void {
+    // M29 A2 — the one funnel every state change passes through. Keyed on the
+    // PATCH setting a terminal state (a progress tick on an already-terminal
+    // job must not double-count). jobType is a code identifier and error.code
+    // a short token; the error MESSAGE never travels (it can carry content).
+    if (patch.state !== undefined && isTerminal(patch.state)) {
+      signalJobFinished({
+        jobType: job.type,
+        outcome: patch.state as 'succeeded' | 'failed' | 'cancelled' | 'interrupted',
+        code: patch.error?.code
+      })
+    }
     Object.assign(job, patch)
     if (isTerminal(job.state)) this.pruneHistory()
     this.notify()

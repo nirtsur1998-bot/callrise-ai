@@ -223,3 +223,47 @@ describe('M29 — the update check carries nothing stable about the install', ()
     ).toEqual({ 'x-user-staging-id': '' })
   })
 })
+
+describe('M29 A2 — update outcomes become aggregate signals, prose never travels', () => {
+  it('available / refused(classified) / downloaded / install-requested / error(class)', async () => {
+    const { mkdtemp } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = await mkdtemp(join(tmpdir(), 'updater-telemetry-'))
+    const telemetry = await import('../../telemetry/index')
+    const setup = await import('../../telemetry/setup')
+    const consent = await import('../../telemetry/consent')
+    setup.setupTelemetry({ userDataDir: dir, appVersion: '1.0.0', crashDumpsDir: join(dir, 'd') })
+    consent.setConsent(dir, 'on')
+    try {
+      process.env.UPDATE_FEED_URL = 'https://github.com/nirtsur1998-bot/callrise-ai'
+      const { registerUpdater } = await import('../index')
+      registerUpdater()
+      const VALID = `${'A'.repeat(86)}==`
+      fire('update-available', { version: '2.0.0', path: 'app.exe', sha512: VALID })
+      fire('update-available', { version: '0.0.1', path: 'app.exe', sha512: VALID }) // downgrade → refused
+      fire('update-downloaded', { version: '2.0.0' })
+      fire(
+        'error',
+        Object.assign(new Error('getaddrinfo ENOTFOUND github.com https://secret?q=x'), {
+          name: 'TypeError'
+        })
+      )
+      const events = telemetry.listQueued().filter((e) => e.name === 'update.outcome')
+      expect(events.map((e) => e.props)).toEqual([
+        { outcome: 'available' },
+        { outcome: 'refused', code: 'not-newer' },
+        { outcome: 'downloaded' },
+        { outcome: 'error', code: 'TypeError' }
+      ])
+      const all = JSON.stringify(telemetry.listQueued())
+      expect(all).not.toContain('is not newer than') // the prose reason stayed local
+      expect(all).not.toContain('getaddrinfo') // the error message stayed local
+      expect(all).not.toContain('secret')
+    } finally {
+      telemetry.resetTelemetry()
+      const { rm } = await import('node:fs/promises')
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})

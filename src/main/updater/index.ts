@@ -21,6 +21,7 @@ import { app, ipcMain } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { githubRepoFromFeed, isTrustedFeed, validateUpdate } from './policy'
 import { isAutoUpdateEnabled, setAutoUpdateEnabledChangedListener } from '../app-settings'
+import { signalUpdateOutcome } from '../telemetry/signals'
 import { getJobManager } from '../jobs/instance'
 import type { Job } from '../jobs/types'
 import { NO_AI_PURPOSE } from '../jobs/types'
@@ -33,6 +34,19 @@ const AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000 // 6 hours
 // check — nothing about update-checking should compete with call-detection
 // or transcription for the first few seconds after launch.
 const FIRST_CHECK_DELAY_MS = 30 * 1000
+
+/** M29 A2 — policy.ts's refusal reasons are prose for humans; telemetry
+ *  carries a short class instead. Unrecognised prose maps to 'other',
+ *  never to itself. */
+function classifyRefusal(reason: string): string {
+  if (reason.includes('not newer')) return 'not-newer'
+  if (reason.includes('unsafe character')) return 'unsafe-filename'
+  if (reason.includes('sha512')) return 'bad-sha512'
+  if (reason.includes('unparseable')) return 'bad-version'
+  if (reason.includes('no filename')) return 'no-filename'
+  if (reason.includes('no information')) return 'no-info'
+  return 'other'
+}
 
 export type UpdateStatus =
   | { state: 'disabled'; reason: string }
@@ -151,9 +165,14 @@ export function registerUpdater(): void {
     if (!verdict.ok) {
       status = { state: 'refused', reason: verdict.reason }
       console.warn(`[updater] refused update: ${verdict.reason}`)
+      // M29 A2 — a refusal in the field is always worth seeing. The verdict
+      // reason is prose (policy.ts writes it for humans), so it is
+      // CLASSIFIED into a short code here; the prose never travels.
+      signalUpdateOutcome({ outcome: 'refused', code: classifyRefusal(verdict.reason) })
       return
     }
     status = { state: 'available', version: String(info.version) }
+    signalUpdateOutcome({ outcome: 'available' })
     // Auto mode downloads without a further click — now through the same
     // job as the manual button, so a background download is visible in the
     // Activity Center and on the taskbar instead of happening invisibly.
@@ -231,12 +250,16 @@ export function registerUpdater(): void {
     // safe to let it install itself on the next natural quit rather than
     // waiting for a manual "Restart & install" click.
     autoUpdater.autoInstallOnAppQuit = isAutoUpdateEnabled()
+    signalUpdateOutcome({ outcome: 'downloaded' }) // M29 A2
   })
 
   autoUpdater.on('error', (err) => {
     // An error is a refusal. It is never "carry on and hope".
     status = { state: 'error', message: err?.message ?? 'update check failed' }
     console.warn(`[updater] error: ${status.state === 'error' ? status.message : ''}`)
+    // M29 A2 — error CLASS only (TypeError/AbortError/…); the message can
+    // carry URLs and provider text and stays local.
+    signalUpdateOutcome({ outcome: 'error', code: err?.name ?? 'unknown' })
   })
 
   ipcMain.handle('updater:status', () => status)
@@ -271,6 +294,7 @@ export function registerUpdater(): void {
   // No status transition on success: the app is about to quit.
   ipcMain.handle('updater:install', () => {
     if (!enabled || status.state !== 'downloaded') return { ok: false as const }
+    signalUpdateOutcome({ outcome: 'install-requested' }) // M29 A2
     autoUpdater.quitAndInstall()
     return { ok: true as const }
   })
@@ -295,9 +319,19 @@ export function registerUpdater(): void {
 
   const applyAutoUpdatePreference = (): void => {
     const on = isAutoUpdateEnabled()
-    // Only affects an update not yet found — a download or install already
-    // in flight from before the toggle changed is left to finish/settle on
-    // its own rather than being torn out from under the user mid-action.
+    // THE PENDING INSTALL IS PART OF THE PREFERENCE (M29 sweep item 5).
+    // `autoInstallOnAppQuit` used to be set only inside the update-downloaded
+    // handler, so it latched `true` at download time and nothing ever cleared
+    // it. Turning auto-update OFF after an update had already downloaded left
+    // the flag true and the app installed anyway on the next quit — the app
+    // doing exactly what the user had just declined, in the one window where
+    // the toggle is most likely to be used. electron-updater re-reads this
+    // flag inside its own quit handler, so setting it here is honoured even
+    // late. Unconditional and both directions: an assignment, not a transition.
+    autoUpdater.autoInstallOnAppQuit = on
+    // Beyond that, only affects an update not yet found — a download already
+    // in flight is left to finish rather than being torn out from under the
+    // user mid-action. It simply will not be installed while this is false.
     if (on && !checkInterval) {
       firstCheckTimer = setTimeout(runBackgroundCheck, FIRST_CHECK_DELAY_MS)
       checkInterval = setInterval(runBackgroundCheck, AUTO_CHECK_INTERVAL_MS)

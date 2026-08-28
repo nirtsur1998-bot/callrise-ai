@@ -19,7 +19,9 @@ import { Badge } from '@renderer/components/Badge'
 import { StatCard } from '@renderer/components/StatCard'
 import { AudioSourcesCard } from '@renderer/features/audio/AudioSourcesCard'
 import { NoiseCancellationCard } from '@renderer/features/audio/NoiseCancellationCard'
+import { TelemetryAskCard } from './TelemetryAskCard'
 import { AutoUpdateNoticeCard } from './AutoUpdateNoticeCard'
+import { AccountMigrationNoticeCard } from './AccountMigrationNoticeCard'
 import type { NavId } from '@renderer/features/navigation/nav-items'
 import { useCalls } from '@renderer/features/calls/useCalls'
 import { useTasks } from '@renderer/features/tasks/useTasks'
@@ -138,6 +140,8 @@ export function HomeView({
   return (
     <div className="mx-auto max-w-3xl">
       <MissingKeyBanner onNavigate={onNavigate} />
+      <TelemetryAskCard onNavigate={onNavigate} />
+      <AccountMigrationNoticeCard />
       <AutoUpdateNoticeCard onNavigate={onNavigate} />
       {/* Personal greeting */}
       <header className="mb-7">

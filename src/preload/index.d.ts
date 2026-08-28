@@ -2047,6 +2047,8 @@ export interface AppSettings {
   autoUpdateEnabled: boolean
   autoUpdateMigratedToDefaultOn: boolean
   autoUpdateNoticePending: boolean
+  accountMigratedToNewProject: boolean
+  accountMigrationNoticePending: boolean
   /** M23 Workstream A — Coach 2.0 master switch + methodology picker. */
   coach2: Coach2Settings
   /** M23 Workstream D — Contact Intelligence mode. Off by default. */
@@ -2161,6 +2163,8 @@ export interface AppSettingsPatch {
   aiModelAssignments?: Partial<Record<AiPurpose, ModelAssignment>>
   autoUpdateEnabled?: boolean
   autoUpdateNoticePending?: boolean
+  accountMigratedToNewProject?: boolean
+  accountMigrationNoticePending?: boolean
   /** Partial — only the keys present are changed; others are left as-is. */
   coach2?: Partial<Coach2Settings>
   /** Partial — only the keys present are changed; others are left as-is. */
@@ -2225,6 +2229,21 @@ export interface AppControlApi {
   logRendererError: (scope: string, message: string) => Promise<void>
 }
 
+export interface SupportBundleResult {
+  ok: boolean
+  path?: string
+  files?: string[]
+  error?: string
+}
+
+/** M29 A5.4 — one click collects the fallback log, purpose health, job
+ *  history, versions, and device basics into a folder ready to email
+ *  support. Separate from Tier1Api's own diagnostics export (engine logs
+ *  only); this covers the whole app. NEVER transcripts, keys, or memories. */
+export interface SupportApi {
+  createBundle: () => Promise<SupportBundleResult>
+}
+
 /**
  * Ambient call detection (M15). Feature-flagged off by default
  * (app-settings.ts's `detection.enabled`) - with it off, every event here
@@ -2270,6 +2289,69 @@ export interface DetectionApi {
 }
 
 // --- Auto-update (§5.3) -----------------------------------------------------
+
+// --- M29 telemetry (opt-in diagnostics) --------------------------------
+// Mirrors src/main/telemetry/{events,consent,ipc}.ts — re-declared, same
+// convention as every other main-process shape in this file.
+export type TelemetryConsent = 'on' | 'off' | 'unasked'
+export interface TelemetryConsentRecord {
+  consent: TelemetryConsent
+  decidedAt?: string
+  askedWithVersion?: string
+}
+export interface TelemetryEvent {
+  id: string
+  ts: string
+  kind: 'crash' | 'error' | 'health' | 'usage'
+  name: string
+  props: Record<string, string | number | boolean>
+}
+/** One row as it was POSTed — mirrors src/main/telemetry/transport.ts IngestRow. */
+export interface TelemetrySentRow {
+  event_id: string
+  anon_id: string
+  session_id: string
+  app_version: string
+  platform: string
+  os_version: string
+  arch: string
+  kind: string
+  name: string
+  props: Record<string, string | number | boolean>
+  client_ts: string
+}
+export interface TelemetryFlushResult {
+  attempted: boolean
+  sent: number
+  remaining: number
+  reason?: string
+}
+export interface TelemetryState {
+  consent: TelemetryConsentRecord
+  /** null until the user opts in; deleted when they opt out. */
+  anonId: string | null
+  /** The real payloads waiting to be sent, oldest first. */
+  queued: TelemetryEvent[]
+  /** The exact rows already sent, newest batch first. */
+  sent: TelemetrySentRow[]
+}
+export interface SalesBrainExportResult {
+  ok: boolean
+  path?: string
+  bytes?: number
+  canceled?: boolean
+  reason?: string
+}
+
+export interface TelemetryApi {
+  getState: () => Promise<TelemetryState>
+  setConsent: (value: 'on' | 'off') => Promise<TelemetryState>
+  clearQueue: () => Promise<TelemetryState>
+  clearSent: () => Promise<TelemetryState>
+  /** A3 — coarse usage counter; main validates against its allowlist. */
+  featureOpened: (feature: string) => Promise<boolean>
+  flushNow: () => Promise<{ result: TelemetryFlushResult; state: TelemetryState }>
+}
 
 export interface UpdaterApi {
   status: () => Promise<UpdateStatus>
@@ -2647,6 +2729,8 @@ export interface SalesBrainCallsApi {
 
 export interface SalesBrainApi {
   status: () => Promise<SalesBrainStatus>
+  /** M29 A5.3 — consistent snapshot via the shared snapshot mechanism. */
+  exportSnapshot: () => Promise<SalesBrainExportResult>
   onboarding: SalesBrainOnboardingApi
   backfill: SalesBrainBackfillApi
   memories: SalesBrainMemoriesApi
@@ -2731,6 +2815,7 @@ declare global {
       objectionQueue: ObjectionQueueApi
       settings: AppSettingsApi
       app: AppControlApi
+      support: SupportApi
       aiKeys: AiKeysApi
       aiCatalog: AiCatalogApi
       aiFallback: AiFallbackApi
@@ -2739,6 +2824,7 @@ declare global {
       alerts: AlertsApi
       prepBrief: PrepBriefApi
       salesBrain: SalesBrainApi
+      telemetry: TelemetryApi
       updater: UpdaterApi
       jobs: JobsApi
       live: LiveApi
