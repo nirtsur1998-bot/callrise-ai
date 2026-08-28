@@ -21,6 +21,13 @@ const streamed = vi.hoisted(() => ({ providers: [] as string[], failProviders: [
 
 vi.mock('../../app-settings', () => ({ loadAppSettings: vi.fn() }))
 vi.mock('../fallback-log', () => ({ logFallbackEvent: vi.fn() }))
+const health = vi.hoisted(() => ({ failures: [] as string[] }))
+vi.mock('../purpose-health-store', () => ({
+  recordAiFailure: vi.fn(async (purpose: string) => {
+    health.failures.push(purpose)
+  }),
+  recordAiSuccess: vi.fn(async () => {})
+}))
 vi.mock('../index', () => ({
   getActiveAIProvider: () => (activeProviderId.current ? { id: activeProviderId.current } : null)
 }))
@@ -62,6 +69,7 @@ vi.mock('../registry', () => {
 const { loadAppSettings } = await import('../../app-settings')
 const { streamWithFallback } = await import('../complete-with-fallback')
 const { markRateLimited, resetCooldownsForTests } = await import('../model-cooldown')
+const { markUsed } = await import('../model-pacing')
 const { resetPacingForTests } = await import('../model-pacing')
 
 function assignments(chain: string[]): ReturnType<typeof loadAppSettings> {
@@ -84,6 +92,7 @@ beforeEach(() => {
   resetPacingForTests()
   streamed.providers = []
   streamed.failProviders = []
+  health.failures = []
   activeProviderId.current = null
   process.env.GROQ_API_KEY = 'g'
   delete process.env.ANTHROPIC_API_KEY
@@ -196,5 +205,120 @@ describe('BUG-125b — a freshly-added key rescues a fully-cooling chain', () =>
       'the rescue changed normal routing — it must only run when the answer ' +
         'would otherwise be a refusal'
     ).toEqual(['groq'])
+  })
+})
+
+// BUG-125e — THE PACED TAIL, the fix the agent workflow designed and its
+// adversarial pass amended. Verified root cause: one Rise turn makes
+// sequential assistant-chat calls; the plan call's SUCCESS paces the provider
+// for up to 6s, and for a single-key user the answer call's chain collapses to
+// exactly that one step — so the turn starved itself and the walk refused with
+// "rate-limited... about an hour" for a condition that clears in seconds.
+describe('BUG-125e — a paced-only last resort is WAITED OUT, not refused', () => {
+  it('THE FIELD CASE: sole provider paced by the same turn 100ms ago → the walk waits and succeeds', async () => {
+    // groq's PER-PROVIDER gap is 2,000ms (not the 6s default — my first
+    // version of this test used the default and the mark was not paced at
+    // all, which is itself the lesson of modelPacing.perProvider.test.ts).
+    // markUsed 1.9s in the past: ~100ms remain, so the test proves a real
+    // sleep happened without costing real seconds.
+    markUsed('legacy:groq', Date.now() - 1_900, 'durable')
+    delete process.env.ANTHROPIC_API_KEY
+    vi.mocked(loadAppSettings).mockReturnValue(assignments([]))
+    activeProviderId.current = 'groq'
+
+    const t0 = Date.now()
+    const text = await drain(
+      streamWithFallback({
+        purpose: 'assistant-chat',
+        messages: [{ role: 'user', content: 'hello' }],
+        maxTokens: 64
+      })
+    )
+
+    expect(text).toBe('rescued')
+    expect(streamed.providers).toEqual(['groq'])
+    expect(
+      Date.now() - t0,
+      'no wait happened — the pacing gap was bypassed rather than honoured'
+    ).toBeGreaterThanOrEqual(80)
+  })
+
+  it('ORDERING (adversarial amendment): a fresh never-tried key is attempted BEFORE the paced tail, zero sleep', async () => {
+    // groq (the configured entry, via legacy) is paced with a LONG remainder;
+    // anthropic is a freshly-added key. The rescue must fire first — waiting
+    // multiple seconds behind a paced provider to reach a fresh key would
+    // re-create the exact "added a key, still refused" failure of BUG-125b.
+    markUsed('legacy:groq', Date.now() - 100, 'durable') // ~1.9s of groq's 2s gap remaining
+    process.env.ANTHROPIC_API_KEY = 'paid-claude-key'
+    vi.mocked(loadAppSettings).mockReturnValue(assignments([]))
+    activeProviderId.current = 'groq'
+
+    const t0 = Date.now()
+    const text = await drain(
+      streamWithFallback({
+        purpose: 'assistant-chat',
+        messages: [{ role: 'user', content: 'hello' }],
+        maxTokens: 64
+      })
+    )
+
+    expect(text).toBe('rescued')
+    expect(streamed.providers[0]).toBe('anthropic')
+    expect(Date.now() - t0, 'the fresh key waited behind a paced provider').toBeLessThan(3_000)
+  })
+
+  it('Stop DURING the paced wait: aborts promptly, and records NO purpose-health failure', async () => {
+    // The adversarial pass caught the design doc claiming aborts "route to
+    // existing paths" — false. A user cancel must not be written into
+    // purpose-health as an AI failure, and must not wait out the full gap.
+    markUsed('legacy:groq', Date.now() - 200, 'durable') // ~1.8s of groq's 2s gap remaining
+    delete process.env.ANTHROPIC_API_KEY
+    vi.mocked(loadAppSettings).mockReturnValue(assignments([]))
+    activeProviderId.current = 'groq'
+
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 60)
+    const t0 = Date.now()
+
+    await expect(
+      drain(
+        streamWithFallback({
+          purpose: 'assistant-chat',
+          messages: [{ role: 'user', content: 'hello' }],
+          maxTokens: 64,
+          signal: controller.signal
+        })
+      )
+    ).rejects.toThrow(/aborted by caller during paced wait/)
+
+    expect(Date.now() - t0, 'Stop did not wake the sleep').toBeLessThan(1_500)
+    expect(streamed.providers, 'the attempt ran despite the cancel').toEqual([])
+    expect(
+      health.failures,
+      'a user cancel was recorded as an AI failure in purpose-health'
+    ).toEqual([])
+  })
+
+  it('a walk with an UN-paced candidate never sleeps — the divert behaviour is untouched', async () => {
+    // modelPacing.test.ts pins this at the pacing layer; this pins it at the
+    // walk layer: paced tail entries are LAST, so a healthy candidate wins
+    // immediately.
+    markUsed('legacy:anthropic', Date.now() - 100, 'durable')
+    process.env.ANTHROPIC_API_KEY = 'paid-claude-key'
+    vi.mocked(loadAppSettings).mockReturnValue(assignments(['fx-groq']))
+    activeProviderId.current = null
+
+    const t0 = Date.now()
+    const text = await drain(
+      streamWithFallback({
+        purpose: 'assistant-chat',
+        messages: [{ role: 'user', content: 'hello' }],
+        maxTokens: 64
+      })
+    )
+
+    expect(text).toBe('rescued')
+    expect(streamed.providers).toEqual(['groq'])
+    expect(Date.now() - t0).toBeLessThan(1_500)
   })
 })

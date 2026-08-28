@@ -21,7 +21,13 @@ export function noCapableModelMessage(needs: ChainCapabilityNeeds): string {
     return 'None of your configured AI models can read PDFs. Add a Claude, ChatGPT, or Gemini key in Settings, or paste the relevant text into the message instead.'
   }
   if (needs.needsVision) {
-    return 'None of your configured AI models can read images. Add a Claude, ChatGPT, or Gemini key (or assign Llama 4 Scout on Groq) in Settings, or paste the relevant text into the message instead.'
+    // BUG-125 audit (2026-08-28) — the Scout suggestion is REMOVED because it is
+    // currently impossible: groq-llama-4-scout is knownStale in the catalog and
+    // both chain builders skip knownStale entries, so assigning it in Settings
+    // cannot work. Advice that cannot work is worse than no advice — it is the
+    // same shape as "add another provider's key" was before BUG-125b. Restore
+    // it only when the entry's staleness is resolved against Groq's live list.
+    return 'None of your configured AI models can read images. Add a Claude, ChatGPT, or Gemini key in Settings, or paste the relevant text into the message instead.'
   }
   return "Every model configured for this can't run this request (tool-calling not supported by any of them) — reassign a model in Settings."
 }

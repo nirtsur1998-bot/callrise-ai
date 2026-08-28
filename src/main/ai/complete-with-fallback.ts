@@ -26,7 +26,7 @@ import {
   markStructurallyBroken,
   soonestExpiry
 } from './model-cooldown'
-import { isPacedFor } from './model-pacing'
+import { isPacedFor, pacedUntilFor, PACING_GAP_MS } from './model-pacing'
 import { markUsed } from './model-pacing'
 import {
   AIProviderError,
@@ -835,10 +835,44 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   // difference between "you have no keys" and "your keys need a minute".
   const startedNow = Date.now()
   let chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier, { purpose }))
+
+  // BUG-125e — THE PACED TAIL. Verified by the agent audit and its adversarial
+  // pass: EVERY single-key user self-paced to death on capability turns. One
+  // Rise turn makes sequential assistant-chat calls (plan, then answer); the
+  // plan's SUCCESS paces the provider for up to 6s, and for a single-key user
+  // the answer's chain collapses to exactly that one step — so the turn's own
+  // politeness mark starved its only candidate, and the walk refused.
+  //
+  // Pacing is self-imposed spacing (model-pacing.ts: "a model that is merely
+  // paced genuinely has capacity"), so a paced-ONLY step — usable in every
+  // other respect — stays in the chain, sorted LAST. The walk waits the
+  // remaining gap out only if it actually REACHES one, i.e. only after every
+  // un-paced candidate has been tried and failed. That preserves the
+  // skip-not-wait divert behaviour pinned by modelPacing.test.ts (a walk with
+  // somewhere to divert TO never sleeps) and converts only the formerly
+  // refused dead-end into a bounded wait. Durable tier only: live callers are
+  // never paced at all, and their budgets must never absorb a sleep.
+  //
+  // Known, accepted deviation from BUG-058 (recorded by the adversarial pass):
+  // concurrent durable walks that all dead-end on the same paced step wake at
+  // the same gap expiry and fire together. Bounded (one sleep, ≤6s), rare
+  // (requires simultaneous fully-paced dead-ends), and strictly better than
+  // all of them refusing.
+  const pacedUntil = new Map<string, number>()
+  if (tier === 'durable') {
+    for (const s of capable) {
+      if (chain.includes(s)) continue
+      if (!isUsableFor(s.catalogId, startedNow, tier, { purpose, ignorePacing: true })) continue
+      pacedUntil.set(s.catalogId, pacedUntilFor(s.catalogId, startedNow, tier) ?? startedNow)
+    }
+  }
+  const pacedTail = capable.filter((s) => pacedUntil.has(s.catalogId))
+
   // BUG-125c — record WHY each excluded entry was excluded, for the error's
-  // "not tried" section. Computed only over steps that failed the gate.
+  // "not tried" section. Computed AFTER the paced tail on purpose: a paced
+  // step WILL be tried now, so listing it under "not tried" would be a lie.
   const notTried = capable
-    .filter((s) => !chain.includes(s))
+    .filter((s) => !chain.includes(s) && !pacedUntil.has(s.catalogId))
     .map((s) => {
       // BUG-125d — name the EXACT gate. The first version lumped structural
       // breaks and pacing into one sentence, and the founder's report landed
@@ -870,7 +904,17 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     })
   // BUG-125b — everything cooling is exactly when a freshly-added key should
   // rescue the turn, and exactly when it previously could not. See rescueSteps.
-  if (chain.length === 0) chain = rescueSteps(capable, startedNow, tier, purpose)
+  //
+  // ORDERING (adversarial amendment): rescue steps go BEFORE the paced tail.
+  // A freshly-added, never-tried key must be attempted immediately — with
+  // zero sleep — rather than queueing behind a paced provider that just
+  // failed. Without this, the paced tail would make the chain non-empty and
+  // silently disable the rescue.
+  if (chain.length === 0) {
+    chain = [...rescueSteps(capable, startedNow, tier, purpose), ...pacedTail]
+  } else {
+    chain = [...chain, ...pacedTail]
+  }
 
   if (chain.length === 0) {
     // Every model is in cooldown. Refusing here is the POINT: walking the
@@ -883,12 +927,22 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
       tier,
       purpose
     )
-    const secs = until ? Math.max(1, Math.ceil((until - startedNow) / 1000)) : 60
+    // BUG-125 audit — the 60 was FABRICATED: soonestExpiry reads only the
+    // cooldown map, and a merely-paced model has no entry there, so a refusal
+    // caused purely by pacing told the user to wait "about 60 seconds" for a
+    // condition that clears in <=6. Use the real pacing remainder when no
+    // cooldown expiry exists.
+    const pacedSoonest = capable
+      .map((s) => pacedUntilFor(s.catalogId, startedNow, tier))
+      .filter((t): t is number => t !== null)
+      .sort((a, b) => a - b)[0]
+    const effectiveUntil = until ?? pacedSoonest ?? null
+    const secs = effectiveUntil ? Math.max(1, Math.ceil((effectiveUntil - startedNow) / 1000)) : 60
     void recordAiFailure(purpose, { reason: 'rate-limit', providerId: null })
     throw new AIProviderError(
       'rate-limit',
       `Every model set up for this is rate-limited right now. Try again in ${humanWait(secs * 1000)}.`,
-      until ? until - startedNow : undefined
+      effectiveUntil ? effectiveUntil - startedNow : undefined
     )
   }
 
@@ -944,6 +998,29 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   const ceiling = new AbortController()
   const ceilingTimer = setTimeout(() => ceiling.abort(), HARD_CEILING_MS[purpose])
 
+  // BUG-125e — waits out a paced step's remaining gap, bounded and abortable.
+  // Only ever reached for a paced-tail step (see pacedUntil above). The sleep
+  // is capped at one full gap, runs under the SAME combined signal as the
+  // attempts themselves (ceiling + caller Stop), and is logged so the wait is
+  // visible in Settings' recent-activity list rather than reading as dead air.
+  const waitOutPacingIfNeeded = async (step: ResolvedStep): Promise<void> => {
+    const until = pacedUntil.get(step.catalogId)
+    if (until === undefined) return
+    const waitMs = Math.min(Math.max(0, until - Date.now()), PACING_GAP_MS)
+    if (waitMs <= 0) return
+    void logFallbackEvent({
+      ts: new Date().toISOString(),
+      purpose,
+      fromCatalogId: step.catalogId,
+      toCatalogId: step.catalogId,
+      reason: 'paced-wait',
+      detail: `Last-resort step is pacing-blocked; waiting ${waitMs}ms out instead of refusing (BUG-125).`
+    })
+    const parts: AbortSignal[] = [ceiling.signal]
+    if (req.signal) parts.push(req.signal)
+    await abortableSleep(waitMs, parts.length === 1 ? parts[0] : AbortSignal.any(parts))
+  }
+
   try {
   for (let i = 0; i < chain.length; i++) {
     const step = chain[i]
@@ -954,6 +1031,18 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
 
     const key = process.env[PROVIDER_REGISTRY[step.providerId].keyEnvName]?.trim()
     if (!key) continue // resolved eagerly above, but env could change mid-loop in theory
+    await waitOutPacingIfNeeded(step)
+    if (req.signal?.aborted) throw new Error('aborted by caller during paced wait')
+    if (ceiling.signal.aborted) break
+    if (
+      pacedUntil.has(step.catalogId) &&
+      !isUsableFor(step.catalogId, Date.now(), tier, { purpose, ignorePacing: true })
+    ) {
+      // A cooldown or structural break that arrived DURING the sleep is real
+      // evidence — skip. A fresh pacing re-mark is deliberately ignored after
+      // the one bounded wait, so a stranger's use cannot starve this walk.
+      continue
+    }
     const provider = PROVIDER_REGISTRY[step.providerId].build(key)
 
     // Only 'coaching-cue' has a CHAIN_BUDGET entry - M9 already fixed one
@@ -1153,10 +1242,44 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
   // we already know is limited is the most visible possible version of this.
   const startedNow = Date.now()
   let chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier, { purpose }))
+
+  // BUG-125e — THE PACED TAIL. Verified by the agent audit and its adversarial
+  // pass: EVERY single-key user self-paced to death on capability turns. One
+  // Rise turn makes sequential assistant-chat calls (plan, then answer); the
+  // plan's SUCCESS paces the provider for up to 6s, and for a single-key user
+  // the answer's chain collapses to exactly that one step — so the turn's own
+  // politeness mark starved its only candidate, and the walk refused.
+  //
+  // Pacing is self-imposed spacing (model-pacing.ts: "a model that is merely
+  // paced genuinely has capacity"), so a paced-ONLY step — usable in every
+  // other respect — stays in the chain, sorted LAST. The walk waits the
+  // remaining gap out only if it actually REACHES one, i.e. only after every
+  // un-paced candidate has been tried and failed. That preserves the
+  // skip-not-wait divert behaviour pinned by modelPacing.test.ts (a walk with
+  // somewhere to divert TO never sleeps) and converts only the formerly
+  // refused dead-end into a bounded wait. Durable tier only: live callers are
+  // never paced at all, and their budgets must never absorb a sleep.
+  //
+  // Known, accepted deviation from BUG-058 (recorded by the adversarial pass):
+  // concurrent durable walks that all dead-end on the same paced step wake at
+  // the same gap expiry and fire together. Bounded (one sleep, ≤6s), rare
+  // (requires simultaneous fully-paced dead-ends), and strictly better than
+  // all of them refusing.
+  const pacedUntil = new Map<string, number>()
+  if (tier === 'durable') {
+    for (const s of capable) {
+      if (chain.includes(s)) continue
+      if (!isUsableFor(s.catalogId, startedNow, tier, { purpose, ignorePacing: true })) continue
+      pacedUntil.set(s.catalogId, pacedUntilFor(s.catalogId, startedNow, tier) ?? startedNow)
+    }
+  }
+  const pacedTail = capable.filter((s) => pacedUntil.has(s.catalogId))
+
   // BUG-125c — record WHY each excluded entry was excluded, for the error's
-  // "not tried" section. Computed only over steps that failed the gate.
+  // "not tried" section. Computed AFTER the paced tail on purpose: a paced
+  // step WILL be tried now, so listing it under "not tried" would be a lie.
   const notTried = capable
-    .filter((s) => !chain.includes(s))
+    .filter((s) => !chain.includes(s) && !pacedUntil.has(s.catalogId))
     .map((s) => {
       // BUG-125d — name the EXACT gate. The first version lumped structural
       // breaks and pacing into one sentence, and the founder's report landed
@@ -1188,7 +1311,17 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     })
   // BUG-125b — everything cooling is exactly when a freshly-added key should
   // rescue the turn, and exactly when it previously could not. See rescueSteps.
-  if (chain.length === 0) chain = rescueSteps(capable, startedNow, tier, purpose)
+  //
+  // ORDERING (adversarial amendment): rescue steps go BEFORE the paced tail.
+  // A freshly-added, never-tried key must be attempted immediately — with
+  // zero sleep — rather than queueing behind a paced provider that just
+  // failed. Without this, the paced tail would make the chain non-empty and
+  // silently disable the rescue.
+  if (chain.length === 0) {
+    chain = [...rescueSteps(capable, startedNow, tier, purpose), ...pacedTail]
+  } else {
+    chain = [...chain, ...pacedTail]
+  }
 
   let resolveFinal!: (v: { text: string; model: string; usage: AICompletionResult['usage'] }) => void
   let rejectFinal!: (e: unknown) => void
@@ -1241,12 +1374,22 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         tier,
         purpose
       )
-      const secs = until ? Math.max(1, Math.ceil((until - startedNow) / 1000)) : 60
+      // BUG-125 audit — the 60 was FABRICATED: soonestExpiry reads only the
+    // cooldown map, and a merely-paced model has no entry there, so a refusal
+    // caused purely by pacing told the user to wait "about 60 seconds" for a
+    // condition that clears in <=6. Use the real pacing remainder when no
+    // cooldown expiry exists.
+    const pacedSoonest = capable
+      .map((s) => pacedUntilFor(s.catalogId, startedNow, tier))
+      .filter((t): t is number => t !== null)
+      .sort((a, b) => a - b)[0]
+    const effectiveUntil = until ?? pacedSoonest ?? null
+    const secs = effectiveUntil ? Math.max(1, Math.ceil((effectiveUntil - startedNow) / 1000)) : 60
       void recordAiFailure(purpose, { reason: 'rate-limit', providerId: null })
       const err = new AIProviderError(
         'rate-limit',
         `Every model set up for this is rate-limited right now. Try again in ${humanWait(secs * 1000)}.`,
-        until ? until - startedNow : undefined
+        effectiveUntil ? effectiveUntil - startedNow : undefined
       )
       rejectFinal(err)
       throw err
@@ -1291,6 +1434,29 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     const ceiling = new AbortController()
     const ceilingTimer = setTimeout(() => ceiling.abort(), HARD_CEILING_MS[purpose])
 
+    // BUG-125e — waits out a paced step's remaining gap, bounded and abortable.
+    // Only ever reached for a paced-tail step (see pacedUntil above). The sleep
+    // is capped at one full gap, runs under the SAME combined signal as the
+    // attempts themselves (ceiling + caller Stop), and is logged so the wait is
+    // visible in Settings' recent-activity list rather than reading as dead air.
+    const waitOutPacingIfNeeded = async (step: ResolvedStep): Promise<void> => {
+      const until = pacedUntil.get(step.catalogId)
+      if (until === undefined) return
+      const waitMs = Math.min(Math.max(0, until - Date.now()), PACING_GAP_MS)
+      if (waitMs <= 0) return
+      void logFallbackEvent({
+        ts: new Date().toISOString(),
+        purpose,
+        fromCatalogId: step.catalogId,
+        toCatalogId: step.catalogId,
+        reason: 'paced-wait',
+        detail: `Last-resort step is pacing-blocked; waiting ${waitMs}ms out instead of refusing (BUG-125).`
+      })
+      const parts: AbortSignal[] = [ceiling.signal]
+      if (req.signal) parts.push(req.signal)
+      await abortableSleep(waitMs, parts.length === 1 ? parts[0] : AbortSignal.any(parts))
+    }
+
     try {
     for (let i = 0; i < chain.length; i++) {
       if (ceiling.signal.aborted) break
@@ -1298,6 +1464,15 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       if (deadProviders.has(step.providerId)) continue
       const key = process.env[PROVIDER_REGISTRY[step.providerId].keyEnvName]?.trim()
       if (!key) continue
+      await waitOutPacingIfNeeded(step)
+      if (req.signal?.aborted) throw new Error('aborted by caller during paced wait')
+      if (ceiling.signal.aborted) break
+      if (
+        pacedUntil.has(step.catalogId) &&
+        !isUsableFor(step.catalogId, Date.now(), tier, { purpose, ignorePacing: true })
+      ) {
+        continue
+      }
       const provider = PROVIDER_REGISTRY[step.providerId].build(key)
 
       const parts: AbortSignal[] = [ceiling.signal]

@@ -580,13 +580,22 @@ async function handleSend(
       if (!isSalesBrainEnabled() || !getMemoryDb()) return []
       const freshConv = await getConversation(dir(), conversationId)
       if (!freshConv || freshConv.salesBrainExcluded) return []
-      return (
-        await withTimeout(
-          extractContextSuggestions(message, null).catch(() => []),
-          SUGGESTION_TIMEOUT_MS,
-          []
-        )
-      ).filter((s) => s.type === 'memory')
+      // BUG-125e amendment — abort the underlying walk when the 5s race is
+      // lost, so a paced wait inside it cannot outlive the deadline and spend
+      // a discarded request that re-paces the model against the next turn.
+      const deadline = new AbortController()
+      const deadlineTimer = setTimeout(() => deadline.abort(), SUGGESTION_TIMEOUT_MS)
+      try {
+        return (
+          await withTimeout(
+            extractContextSuggestions(message, null, deadline.signal).catch(() => []),
+            SUGGESTION_TIMEOUT_MS,
+            []
+          )
+        ).filter((s) => s.type === 'memory')
+      } finally {
+        clearTimeout(deadlineTimer)
+      }
     })()
 
     const taskProposals: PersistedTaskProposal[] = lookups.taskProposals.map((p: TaskProposal) => ({

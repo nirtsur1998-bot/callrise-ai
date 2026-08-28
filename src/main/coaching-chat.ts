@@ -297,13 +297,21 @@ const SUGGESTION_PROMPT =
  *  are dropped (nowhere to save them). */
 export async function extractContextSuggestions(
   userMessage: string,
-  contactId: string | null
+  contactId: string | null,
+  /** BUG-125e amendment (2026-08-28) — Rise's caller races this against a 5s
+   *  withTimeout and DISCARDS the loser. Without a signal, the walk's new
+   *  last-resort paced wait could sleep past that deadline and then spend a
+   *  real (possibly paid) request whose result nobody reads — and whose
+   *  success re-paces the model against the NEXT turn. Optional and additive:
+   *  every existing caller is untouched. */
+  signal?: AbortSignal
 ): Promise<CoachChatContextSuggestion[]> {
   const text = userMessage.trim()
   if (!text) return []
   try {
     const result = await completeWithFallback({
       purpose: 'coaching-chat',
+      signal,
       maxTokens: 512,
       tool: SUGGESTION_TOOL,
       messages: [{ role: 'user', content: `${SUGGESTION_PROMPT}\n\n--- REP'S MESSAGE ---\n${text}` }]
