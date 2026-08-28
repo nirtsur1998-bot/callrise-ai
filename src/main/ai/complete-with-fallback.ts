@@ -27,6 +27,7 @@ import {
   soonestExpiry
 } from './model-cooldown'
 import { isPacedFor, pacedUntilFor, PACING_GAP_MS } from './model-pacing'
+import { exhaustionReport } from './exhaustion-report'
 import { markUsed } from './model-pacing'
 import {
   AIProviderError,
@@ -113,7 +114,16 @@ export class AllModelsExhaustedError extends Error {
      */
     readonly notTried: { catalogId: string; why: string }[] = []
   ) {
-    super(summarizeExhaustion(attempts).message)
+    // BUG-125 closing move (2026-08-28, founder's directive): the per-model
+    // breakdown is composed HERE, at the source, not per-surface. Thirteen
+    // files check `instanceof AllModelsExhaustedError` and show err.message —
+    // coaching chat, summaries, prep briefs, deal tiers, task generation and
+    // more — and only Rise had been given the breakdown. The self-explaining
+    // error is the actual deliverable of BUG-125's diagnosis loop (machines
+    // whose logs cannot leave them get errors that ARE the log), so every
+    // surface gets it by construction rather than by thirteen hand edits that
+    // would drift.
+    super(exhaustionReport(summarizeExhaustion(attempts).message, attempts, notTried))
     this.name = 'AllModelsExhaustedError'
   }
 }

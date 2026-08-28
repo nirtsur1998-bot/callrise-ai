@@ -1060,51 +1060,33 @@ describe('stop and attach — the two M28 design claims', () => {
 // ONLY when the conversation is unbound, and does its text reach the prompt?
 // The module's own behaviour is covered in unbound-client.test.ts; a correct
 // module nothing calls is the hollow shape this milestone spent a day on.
-// Field-diagnosis (2026-08-25) — when every model fails, the error shown to
-// the user must carry the PER-MODEL reasons. The work-PC file-upload failure
-// produced only "Every configured model failed to respond", and that
-// machine's logs cannot leave it — so the screen is the evidence channel,
-// and this test pins that the evidence actually reaches it.
-describe('exhaustion errors carry the per-model breakdown', () => {
-  it('a failed walk shows WHAT EACH MODEL SAID, not just the summary', async () => {
+// BUG-125 (closed 2026-08-28) — the per-model breakdown is now composed
+// INSIDE AllModelsExhaustedError itself, so all thirteen surfaces that show
+// err.message get it. Rise's only job is to pass the message through intact:
+// these tests pin that it does not flatten, truncate, or re-wrap it.
+describe('exhaustion errors reach the user with their breakdown intact', () => {
+  it("the error's own multi-line message survives to the user verbatim", async () => {
     const { convId, invoke } = await setup()
     const { AllModelsExhaustedError } = await import('../../ai/complete-with-fallback')
 
-    const err = new (AllModelsExhaustedError as unknown as new (m: string) => Error)(
-      'Every configured model failed to respond just now.'
-    )
-    ;(err as unknown as { attempts: unknown }).attempts = [
-      { catalogId: 'groq-llama-3.3-70b-versatile', reason: 'rate-limit: 413 request too large' },
-      { catalogId: 'legacy:openai', reason: 'timeout' }
-    ]
+    const composed =
+      'Every configured model failed to respond just now.\n\n' +
+      'What each model reported:\n' +
+      '• groq-llama-3.3-70b-versatile — rate-limit: 413 request too large\n\n' +
+      'Not tried at all:\n' +
+      "• openai (your key's default model) — cooling down for another 42m"
+    const err = new (AllModelsExhaustedError as unknown as new (m: string) => Error)(composed)
 
     const pending = invoke('assistant:send', convId, 'summarise the attached file')
     streamControl.fail(err)
     const result = (await pending) as Record<string, unknown>
 
     expect(result.ok).toBe(false)
-    const msg = String(result.message)
-    expect(msg).toContain('Every configured model failed to respond')
     expect(
-      msg,
-      'the per-model reasons were flattened out of the error — on a machine ' +
-        'whose logs cannot leave it, that discards the only evidence'
-    ).toContain('What each model reported:')
-    expect(msg).toContain('groq-llama-3.3-70b-versatile — rate-limit: 413 request too large')
-    expect(msg).toContain("openai (your key's default model) — timeout")
-  })
-
-  it('an exhaustion error WITHOUT attempts still shows the summary (no crash, no blank)', async () => {
-    const { convId, invoke } = await setup()
-    const { AllModelsExhaustedError } = await import('../../ai/complete-with-fallback')
-    const err = new (AllModelsExhaustedError as unknown as new (m: string) => Error)(
-      'Every configured model failed to respond just now.'
-    )
-    const pending = invoke('assistant:send', convId, 'hello')
-    streamControl.fail(err)
-    const result = (await pending) as Record<string, unknown>
-    expect(result.ok).toBe(false)
-    expect(String(result.message)).toBe('Every configured model failed to respond just now.')
+      String(result.message),
+      'Rise flattened or re-wrapped the self-explaining error — the breakdown ' +
+        'is composed at the source and must arrive verbatim'
+    ).toBe(composed)
   })
 })
 

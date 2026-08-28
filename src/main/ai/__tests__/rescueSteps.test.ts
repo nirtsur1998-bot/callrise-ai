@@ -214,6 +214,27 @@ describe('BUG-125b — a freshly-added key rescues a fully-cooling chain', () =>
 // for up to 6s, and for a single-key user the answer call's chain collapses to
 // exactly that one step — so the turn starved itself and the walk refused with
 // "rate-limited... about an hour" for a condition that clears in seconds.
+// BUG-125 closing move — the breakdown is composed INSIDE the error, so every
+// surface that shows err.message gets it (13 files check this error type; only
+// Rise had the breakdown before). Driven through the REAL walk, not a mock.
+describe('AllModelsExhaustedError composes its own breakdown', () => {
+  it('a real exhausted walk throws a message carrying "What each model reported"', async () => {
+    streamed.failProviders = ['groq']
+    delete process.env.ANTHROPIC_API_KEY
+    vi.mocked(loadAppSettings).mockReturnValue(assignments(['fx-groq']))
+
+    await expect(
+      drain(
+        streamWithFallback({
+          purpose: 'assistant-chat',
+          messages: [{ role: 'user', content: 'hello' }],
+          maxTokens: 64
+        })
+      )
+    ).rejects.toThrow(/What each model reported/)
+  })
+})
+
 describe('BUG-125e — a paced-only last resort is WAITED OUT, not refused', () => {
   it('THE FIELD CASE: sole provider paced by the same turn 100ms ago → the walk waits and succeeds', async () => {
     // groq's PER-PROVIDER gap is 2,000ms (not the 6s default — my first

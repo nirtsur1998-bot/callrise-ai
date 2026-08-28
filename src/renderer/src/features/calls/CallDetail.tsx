@@ -1074,7 +1074,7 @@ export function CallDetail({
                 with quotes from the transcript, your talk-time metrics, your top two things to
                 improve, and one concrete thing to try on your next call.
               </p>
-              {coachError && <p className="text-[13px] text-danger">{coachError}</p>}
+              {coachError && <p className="whitespace-pre-wrap text-[13px] text-danger">{coachError}</p>}
               <Button icon={GraduationCap} onClick={coachCall}>
                 Coach this call
               </Button>
