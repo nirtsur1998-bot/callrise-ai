@@ -530,6 +530,65 @@ function capabilityFallbackSteps(
   return out
 }
 
+/**
+ * BUG-125b (2026-08-28) — the LAST-RESORT rescue that makes "add another
+ * provider key" true.
+ *
+ * THE FIELD FAILURE. After the capability fix, the founder hit a different
+ * wall on a second machine: "Every model set up for this is rate-limited right
+ * now. Try again in about an hour." — with a brand-new PAID Claude key just
+ * added. That message is the PRE-WALK refusal: every entry in the resolved
+ * chain was cooling down, so nothing was attempted at all (which is also why
+ * there was no per-model breakdown to read).
+ *
+ * Why the new key did not help: Anthropic and OpenAI have NO catalog entries
+ * (see model-catalog.ts), so they enter a chain only as the legacy step —
+ * which is built from getActiveAIProvider() ALONE. A freshly-added key for a
+ * provider that is not the active one is therefore invisible to the chain, no
+ * matter how much credit is on it. The error told the user to do the one
+ * thing that could not work, which is worse than saying nothing.
+ *
+ * So: when the chain is entirely unusable, before refusing, offer any KEYED
+ * provider that is not already represented and is not itself cooling down. A
+ * provider that has never been tried cannot be rate-limited, so this is
+ * precisely the case the refusal was wrong about.
+ *
+ * Deliberately LAST-RESORT, not part of the normal chain: it runs only when
+ * the answer would otherwise be "no", so it cannot change ordinary routing,
+ * ordering, or this file's free-tier-first cost posture. It also cannot
+ * bypass a cooldown — every candidate is passed through the same isUsableFor
+ * gate as everything else.
+ */
+function rescueSteps(
+  already: ResolvedStep[],
+  now: number,
+  tier: CooldownTier,
+  purpose: AIPurpose
+): ResolvedStep[] {
+  // DURABLE CALLERS ONLY, and this is a correctness boundary rather than a
+  // preference. The live tier (coaching-cue, deal-tier1) has a single-digit-
+  // second budget and a deliberately thin chain, and BUG-058's entire point is
+  // that when those models are cooling mid-call the right move is to STOP —
+  // not to spend another round trip on a cold provider. Rescuing a live caller
+  // would defeat that, and modelCooldown.test.ts asserts it must not ("a live
+  // caller does NOT bypass its own cooldown"). The founder's case is a human
+  // typing in Rise, which is durable.
+  if (tier !== 'durable') return []
+  const out: ResolvedStep[] = []
+  for (const [providerId, entry] of Object.entries(PROVIDER_REGISTRY)) {
+    if (!process.env[entry.keyEnvName]?.trim()) continue
+    if (already.some((s) => s.providerId === providerId)) continue
+    const step: ResolvedStep = {
+      catalogId: `legacy:${providerId}`,
+      providerId: providerId as ResolvedStep['providerId'],
+      modelId: ''
+    }
+    if (!isUsableFor(step.catalogId, now, tier, { purpose })) continue
+    out.push(step)
+  }
+  return out
+}
+
 export function resolveChain(purpose: AIPurpose, opts?: ChainCapabilityNeeds): ResolvedChain {
   const configured = resolveConfiguredChain(purpose)
   let capable = configured
@@ -759,7 +818,10 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   // + keys, and so the "everything is cooling down" case below can tell the
   // difference between "you have no keys" and "your keys need a minute".
   const startedNow = Date.now()
-  const chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier, { purpose }))
+  let chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier, { purpose }))
+  // BUG-125b — everything cooling is exactly when a freshly-added key should
+  // rescue the turn, and exactly when it previously could not. See rescueSteps.
+  if (chain.length === 0) chain = rescueSteps(capable, startedNow, tier, purpose)
 
   if (chain.length === 0) {
     // Every model is in cooldown. Refusing here is the POINT: walking the
@@ -1041,7 +1103,10 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
   // consumer, and it is interactive, so spending its first attempt on a model
   // we already know is limited is the most visible possible version of this.
   const startedNow = Date.now()
-  const chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier, { purpose }))
+  let chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier, { purpose }))
+  // BUG-125b — everything cooling is exactly when a freshly-added key should
+  // rescue the turn, and exactly when it previously could not. See rescueSteps.
+  if (chain.length === 0) chain = rescueSteps(capable, startedNow, tier, purpose)
 
   let resolveFinal!: (v: { text: string; model: string; usage: AICompletionResult['usage'] }) => void
   let rejectFinal!: (e: unknown) => void
