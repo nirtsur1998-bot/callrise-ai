@@ -15,6 +15,7 @@
 // Drives the REAL model-cooldown module (a real Map, not a mock) so the
 // cooling state here is genuine rather than asserted.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { StreamWithFallbackResult } from '../complete-with-fallback'
 
 const activeProviderId = { current: null as string | null }
 const streamed = vi.hoisted(() => ({ providers: [] as string[], failProviders: [] as string[] }))
@@ -81,7 +82,32 @@ function assignments(chain: string[]): ReturnType<typeof loadAppSettings> {
 const ORIGINAL_ENV = { ...process.env }
 const NOW = Date.now()
 
-async function drain(stream: AsyncIterable<{ delta: string }>): Promise<string> {
+// The unhandled-rejection leak this test file used to have, and its fix.
+//
+// streamWithFallback() returns the async-iterable stream PLUS a separate
+// `.final` promise (complete-with-fallback.ts:1663) that settles in
+// parallel with the generator — resolving on success, rejecting on the
+// SAME error the generator itself throws on exhaustion. Every real caller
+// already knows this and guards it (assistant-ipc.ts:543's own comment:
+// "Always settle .final -- even on the error path -- to avoid an
+// unhandled [rejection]"). This helper only ever consumed the generator,
+// never `.final`, so whenever a test in this file exercised the
+// exhaustion path, `.final` rejected with nothing attached to it.
+//
+// That produced exactly the failure shape that made this hard to find:
+// every assertion in the file still passed (the generator's own throw was
+// caught fine by `.rejects.toThrow()`), while Node reported an unhandled
+// rejection on a LATER, unrelated test -- because `.final` rejects on a
+// microtask tick after the generator's throw is already being handled
+// elsewhere, so Node's unhandled-rejection warning fires whenever that
+// tick happens to land, not synchronously with the test that caused it.
+// A failure that accuses the wrong file, non-deterministically.
+//
+// The fix mirrors production exactly: settle `.final` unconditionally,
+// swallowing it, the moment the stream is handed to this helper -- so it
+// can never survive past the test that created it.
+async function drain(stream: StreamWithFallbackResult): Promise<string> {
+  void stream.final.catch(() => {})
   let out = ''
   for await (const c of stream) out += c.delta
   return out
