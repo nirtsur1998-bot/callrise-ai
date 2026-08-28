@@ -66,3 +66,36 @@ describe('exhaustionReport', () => {
     expect(line.endsWith('…')).toBe(true)
   })
 })
+
+// BUG-125c — the "not tried" half. `attempts` records what RAN; when a chain
+// that should hold several models produces ONE attempt, the entire story is in
+// what did not run. Two field reports were lost to that gap.
+describe('exhaustionReport — models that were never attempted', () => {
+  it('names what was skipped and the gate that skipped it', () => {
+    const out = exhaustionReport(
+      SUMMARY,
+      [{ catalogId: 'google-gemini-flash', reason: 'rate-limit: quota' }],
+      [
+        { catalogId: 'legacy:openai', why: 'cooling down for another 42m' },
+        { catalogId: 'legacy:anthropic', why: 'skipped by the usability gate' }
+      ]
+    )
+    expect(out).toContain('What each model reported:')
+    expect(out).toContain('Not tried at all:')
+    expect(out).toContain("openai (your key's default model) — cooling down for another 42m")
+    expect(out).toContain('anthropic')
+  })
+
+  it('appears even when NOTHING was attempted — the pre-walk refusal case', () => {
+    const out = exhaustionReport(SUMMARY, [], [
+      { catalogId: 'google-gemini-flash', why: 'cooling down for another 1h' }
+    ])
+    expect(out).toContain('Not tried at all:')
+    expect(out).toContain('google-gemini-flash — cooling down for another 1h')
+  })
+
+  it('is absent when everything was tried — no empty section', () => {
+    const out = exhaustionReport(SUMMARY, [{ catalogId: 'm', reason: 'timeout' }], [])
+    expect(out).not.toContain('Not tried')
+  })
+})

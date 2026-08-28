@@ -46,17 +46,42 @@ function clip(reason: string): string {
   return reason.length > MAX_REASON_CHARS ? `${reason.slice(0, MAX_REASON_CHARS - 1)}…` : reason
 }
 
+/** A model that was never attempted, and the gate that excluded it. */
+export interface ExhaustionSkip {
+  catalogId: string
+  why: string
+}
+
+/**
+ * BUG-125c — the "not tried" half.
+ *
+ * `attempts` records what RAN. When a chain that should hold several models
+ * produces ONE attempt, the whole story is in what did not run, and nothing
+ * in the original report could express it. Two field reports were lost to
+ * exactly that gap, and both times I guessed the reason from here and was
+ * wrong.
+ */
+function skippedSection(skipped: ExhaustionSkip[] | undefined): string {
+  if (!skipped || skipped.length === 0) return ''
+  const lines = skipped
+    .slice(0, MAX_SHOWN)
+    .map((s) => `• ${displayModel(s.catalogId)} — ${clip(s.why)}`)
+  if (skipped.length > MAX_SHOWN) lines.push(`• …and ${skipped.length - MAX_SHOWN} more`)
+  return `\n\nNot tried at all:\n${lines.join('\n')}`
+}
+
 export function exhaustionReport(
   summary: string,
-  attempts: ExhaustionAttempt[] | undefined
+  attempts: ExhaustionAttempt[] | undefined,
+  skipped?: ExhaustionSkip[]
 ): string {
-  if (!attempts || attempts.length === 0) return summary
+  if (!attempts || attempts.length === 0) return summary + skippedSection(skipped)
 
   // Every model failing with the IDENTICAL reason is one fact, not N — and
   // it is the single most diagnostic shape (the request itself is bad).
   const reasons = new Set(attempts.map((a) => a.reason))
   if (reasons.size === 1 && attempts.length > 1) {
-    return `${summary}\n\nAll ${attempts.length} models reported the same thing:\n• ${clip(attempts[0].reason)}`
+    return `${summary}\n\nAll ${attempts.length} models reported the same thing:\n• ${clip(attempts[0].reason)}${skippedSection(skipped)}`
   }
 
   const lines = attempts
@@ -65,5 +90,5 @@ export function exhaustionReport(
   if (attempts.length > MAX_SHOWN) {
     lines.push(`• …and ${attempts.length - MAX_SHOWN} more`)
   }
-  return `${summary}\n\nWhat each model reported:\n${lines.join('\n')}`
+  return `${summary}\n\nWhat each model reported:\n${lines.join('\n')}${skippedSection(skipped)}`
 }

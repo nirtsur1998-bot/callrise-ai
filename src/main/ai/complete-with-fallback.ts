@@ -17,6 +17,7 @@ import { logFallbackEvent } from './fallback-log'
 import { recordAiFailure, recordAiSuccess } from './purpose-health-store'
 import {
   clearCooldown,
+  cooldownUntil,
   isUsableFor,
   markPeriodExhausted,
   markRateLimited,
@@ -95,7 +96,19 @@ export function summarizeExhaustion(
 export class AllModelsExhaustedError extends Error {
   constructor(
     readonly purpose: AIPurpose,
-    readonly attempts: { catalogId: string; reason: string; failureClass?: AIFailureClass }[]
+    readonly attempts: { catalogId: string; reason: string; failureClass?: AIFailureClass }[],
+    /**
+     * BUG-125c (2026-08-28) — models that were NEVER ATTEMPTED, and why.
+     *
+     * Two field reports running showed a SINGLE attempt on a chain that should
+     * have had several, and `attempts` alone can never explain that: it records
+     * what ran, never what was excluded before the walk. I guessed at the
+     * reason from here twice and was wrong both times, because the machine's
+     * logs cannot leave it. So the error now carries the other half of the
+     * picture — what was filtered out and by which gate — to be read straight
+     * off the screen.
+     */
+    readonly notTried: { catalogId: string; why: string }[] = []
   ) {
     super(summarizeExhaustion(attempts).message)
     this.name = 'AllModelsExhaustedError'
@@ -819,6 +832,19 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   // difference between "you have no keys" and "your keys need a minute".
   const startedNow = Date.now()
   let chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier, { purpose }))
+  // BUG-125c — record WHY each excluded entry was excluded, for the error's
+  // "not tried" section. Computed only over steps that failed the gate.
+  const notTried = capable
+    .filter((s) => !chain.includes(s))
+    .map((s) => {
+      const until = cooldownUntil(s.catalogId, startedNow)
+      return {
+        catalogId: s.catalogId,
+        why: until
+          ? `cooling down for another ${humanWait(until - startedNow)}`
+          : 'skipped by the usability gate (structural break, or paced too recently)'
+      }
+    })
   // BUG-125b — everything cooling is exactly when a freshly-added key should
   // rescue the turn, and exactly when it previously could not. See rescueSteps.
   if (chain.length === 0) chain = rescueSteps(capable, startedNow, tier, purpose)
@@ -1060,7 +1086,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     failureClass: lastAttempt?.failureClass,
     resetsAt: lastAttempt?.resetsAt
   })
-  throw new AllModelsExhaustedError(purpose, attempts)
+  throw new AllModelsExhaustedError(purpose, attempts, notTried)
 }
 
 export interface StreamWithFallbackResult extends AsyncIterable<{ delta: string }> {
@@ -1104,6 +1130,19 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
   // we already know is limited is the most visible possible version of this.
   const startedNow = Date.now()
   let chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier, { purpose }))
+  // BUG-125c — record WHY each excluded entry was excluded, for the error's
+  // "not tried" section. Computed only over steps that failed the gate.
+  const notTried = capable
+    .filter((s) => !chain.includes(s))
+    .map((s) => {
+      const until = cooldownUntil(s.catalogId, startedNow)
+      return {
+        catalogId: s.catalogId,
+        why: until
+          ? `cooling down for another ${humanWait(until - startedNow)}`
+          : 'skipped by the usability gate (structural break, or paced too recently)'
+      }
+    })
   // BUG-125b — everything cooling is exactly when a freshly-added key should
   // rescue the turn, and exactly when it previously could not. See rescueSteps.
   if (chain.length === 0) chain = rescueSteps(capable, startedNow, tier, purpose)
@@ -1388,7 +1427,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       failureClass: lastAttempt?.failureClass,
       resetsAt: lastAttempt?.resetsAt
     })
-    const finalErr = new AllModelsExhaustedError(purpose, attempts)
+    const finalErr = new AllModelsExhaustedError(purpose, attempts, notTried)
     rejectFinal(finalErr)
     throw finalErr
   }

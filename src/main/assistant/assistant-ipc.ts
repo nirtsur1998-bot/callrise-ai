@@ -113,7 +113,11 @@ function friendlyError(err: unknown): string {
   // cannot leave it, what this string carries is everything a diagnosis
   // gets. See exhaustion-report.ts.
   if (err instanceof AllModelsExhaustedError)
-    return exhaustionReport(err.message, (err as AllModelsExhaustedError).attempts)
+    return exhaustionReport(
+      err.message,
+      (err as AllModelsExhaustedError).attempts,
+      (err as AllModelsExhaustedError).notTried
+    )
   if (err instanceof AIProviderError) return err.message
   return 'Something went wrong. Please try again.'
 }

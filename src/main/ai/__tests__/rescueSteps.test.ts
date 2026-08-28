@@ -17,7 +17,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const activeProviderId = { current: null as string | null }
-const streamed = vi.hoisted(() => ({ providers: [] as string[] }))
+const streamed = vi.hoisted(() => ({ providers: [] as string[], failProviders: [] as string[] }))
 
 vi.mock('../../app-settings', () => ({ loadAppSettings: vi.fn() }))
 vi.mock('../fallback-log', () => ({ logFallbackEvent: vi.fn() }))
@@ -37,7 +37,9 @@ vi.mock('../registry', () => {
       displayName: id,
       stream: () => {
         streamed.providers.push(id)
+        const fail = streamed.failProviders.includes(id)
         async function* gen(): AsyncGenerator<{ delta: string }> {
+          if (fail) throw new Error('quota exhausted: credit or quota')
           yield { delta: 'rescued' }
         }
         return Object.assign(gen(), {
@@ -81,6 +83,7 @@ beforeEach(() => {
   resetCooldownsForTests()
   resetPacingForTests()
   streamed.providers = []
+  streamed.failProviders = []
   activeProviderId.current = null
   process.env.GROQ_API_KEY = 'g'
   delete process.env.ANTHROPIC_API_KEY
