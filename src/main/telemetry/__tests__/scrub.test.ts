@@ -91,23 +91,67 @@ describe('user-profile paths — the Windows username must never survive', () =>
 describe('on THIS machine — the founder-demanded proof, against the real identity', () => {
   const realHome = homedir()
   const realUser = userInfo().username
+  const norm = (x: string): string => x.toLowerCase().replace(/\\/g, '/')
+  // Escaped: a username is arbitrary text, and an unescaped one builds a regex
+  // that either throws or quietly matches something other than the username.
+  const userSegment = new RegExp(
+    `[\\\\/]${realUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\\\/]`,
+    'i'
+  )
 
-  it('a real Error().stack from this test run arrives without the home dir or the username path segment', () => {
-    const raw = new Error('planted').stack ?? ''
-    // Control: vitest stacks carry the absolute path of this file, which lives
-    // under the home directory (vitest spells it with forward slashes, so
-    // compare slash-normalised). If this ever stops being true the test must
-    // say so rather than pass silently.
-    const norm = (x: string): string => x.toLowerCase().replace(/\\/g, '/')
-    expect(norm(raw)).toContain(norm(realHome))
-    const out = scrub(raw)
+  // Can a real stack from THIS run carry the home directory at all? True on a
+  // dev machine, where the checkout lives under the profile. FALSE on a CI
+  // runner: the workspace is D:\a\<repo>\<repo> while the profile is
+  // C:\Users\runneradmin, so a real stack holds no identity to strip and the
+  // proof is simply unavailable there.
+  //
+  // The original control said "if this ever stops being true the test must say
+  // so rather than pass silently" — right, and it did say so, by failing the
+  // first CI run it ever had (this file arrived with the M29 merge and had
+  // never been through the release workflow). But an unsatisfiable premise is
+  // not a defect to block a release on, and the answer is not to relax it into
+  // a vacuous pass either. So the real-stack proof is skipped WITH ITS REASON
+  // where the premise cannot hold, and the planted-identity test below — true
+  // by construction, so it runs everywhere including CI — carries the
+  // invariant in its place.
+  const realStackCarriesHome = norm(new Error('probe').stack ?? '').includes(norm(realHome))
+
+  it.skipIf(!realStackCarriesHome)(
+    'a real Error().stack from this test run arrives without the home dir or the username path segment',
+    () => {
+      const raw = new Error('planted').stack ?? ''
+      expect(norm(raw)).toContain(norm(realHome)) // control, guarded by skipIf
+      const out = scrub(raw)
+      expect(norm(out)).not.toContain(norm(realHome))
+      expect(out).not.toMatch(userSegment)
+      expect(out).toContain('Error: planted')
+    }
+  )
+
+  it('the REAL home and username are stripped from a stack-shaped string (runs everywhere, CI included)', () => {
+    // The same real identity values, in a stack shape built by hand so the
+    // control holds on any machine. This is what stops CI proving nothing on
+    // the runs where the test above skips.
+    const planted = [
+      'Error: planted',
+      `    at doThing (${realHome}\\CallRise\\src\\main\\telemetry\\scrub.ts:12:5)`,
+      `    at file:///${norm(realHome)}/CallRise/node_modules/x/index.js:3:1`
+    ].join('\n')
+    expect(norm(planted)).toContain(norm(realHome)) // control: true by construction
+    const out = scrub(planted)
     expect(norm(out)).not.toContain(norm(realHome))
-    expect(out).not.toMatch(new RegExp(`[\\\\/]${realUser}[\\\\/]`, 'i'))
+    expect(out).not.toMatch(userSegment)
     expect(out).toContain('Error: planted')
   })
 
   it('scrub(Error) and scrub.deep({ error }) behave the same as scrub(stack)', () => {
     const err = new Error('deep planted')
+    // Plant the real home INTO the stack. Without this these assertions pass
+    // vacuously anywhere the checkout is not under the profile: the stack never
+    // contained the home dir, so "does not contain it" is true for the wrong
+    // reason. That was a hollow green sitting beside the honest failure above.
+    err.stack = `Error: deep planted\n    at x (${realHome}\\CallRise\\a\\b.ts:1:1)`
+    expect(norm(err.stack)).toContain(norm(realHome)) // control
     expect(scrub(err).toLowerCase()).not.toContain(realHome.toLowerCase())
     const walked = scrub.deep({ err, nested: [{ stack: err.stack }] })
     expect(JSON.stringify(walked).toLowerCase()).not.toContain(realHome.toLowerCase())
