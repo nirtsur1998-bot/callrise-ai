@@ -6,10 +6,25 @@
 // brief forbids. So this is plain fetch with the PUBLIC anon key and nothing
 // else: no cookies, no session, no user token, no .updaterId.
 //
-// Target: PostgREST insert into public.telemetry_events (see
-// supabase/2026-08-telemetry.sql — anon may INSERT and nothing else). A
-// retried batch is idempotent via `on_conflict=event_id` +
-// `resolution=ignore-duplicates`.
+// Target: the `telemetry_ingest_batch` RPC (see supabase/2026-08-telemetry.sql),
+// NOT a direct table insert. CONFIRMED 2026-08-28 against the live cutover
+// project: a raw `POST .../telemetry_events?on_conflict=event_id` with
+// `Prefer: resolution=ignore-duplicates` cannot work against an insert-only
+// grant — Postgres's ON CONFLICT needs to visibility-check the existing row,
+// which an anon role with no SELECT (by design, so telemetry is truly
+// write-only) can never do. The RPC is SECURITY DEFINER: it does the
+// per-row `ON CONFLICT DO NOTHING` with elevated privileges, so anon still
+// never gets real read access (there is no SELECT grant on the table itself),
+// while every event_id in a batch is individually idempotent.
+//
+// Per-row, not a single bulk statement, matters here: a bulk INSERT (even
+// via the old on_conflict path) is one atomic statement, so ONE
+// already-delivered event_id anywhere in a batch of up to 100 would abort
+// the WHOLE batch — including genuinely new events sent alongside it. That
+// is a realistic case, not a hypothetical: the local queue only drops an
+// event on a confirmed ack, so a batch built while some earlier send is
+// stuck WILL mix already-delivered and brand-new events. The RPC's per-row
+// loop is what makes a mixed batch resolve correctly instead of losing data.
 //
 // Pure: fetch is injected, so the privacy tests intercept the exact request.
 
@@ -68,17 +83,23 @@ export function toRows(envelope: TelemetryEnvelope): IngestRow[] {
 
 export function ingestUrl(cfg: IngestConfig): string {
   const base = cfg.url.replace(/\/+$/, '')
-  return `${base}/rest/v1/telemetry_events?on_conflict=event_id`
+  return `${base}/rest/v1/rpc/telemetry_ingest_batch`
 }
 
-/** Headers: the anon key twice (PostgREST wants both), JSON, idempotent insert, no body back. */
+/** Headers: the anon key twice (PostgREST wants both), JSON, no body back. */
 export function ingestHeaders(cfg: IngestConfig): Record<string, string> {
   return {
     apikey: cfg.anonKey,
     Authorization: `Bearer ${cfg.anonKey}`,
     'Content-Type': 'application/json',
-    Prefer: 'return=minimal,resolution=ignore-duplicates'
+    Prefer: 'return=minimal'
   }
+}
+
+/** The RPC takes one named parameter, `rows`, holding the whole batch as a
+ *  JSON array — not the bare array a direct table insert would take. */
+export function ingestBody(rows: IngestRow[]): string {
+  return JSON.stringify({ rows })
 }
 
 export interface SendDeps {
@@ -96,7 +117,7 @@ export async function sendBatch(
   deps: SendDeps = {}
 ): Promise<SendResult> {
   const rows = toRows(envelope).slice(0, MAX_BATCH)
-  const body = JSON.stringify(rows)
+  const body = ingestBody(rows)
   if (rows.length === 0) return { ok: true, status: null, sent: 0, body }
   if (!cfg.url || !cfg.anonKey) {
     return { ok: false, status: null, sent: 0, body, reason: 'ingest not configured' }

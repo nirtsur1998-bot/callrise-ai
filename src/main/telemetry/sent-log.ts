@@ -75,8 +75,17 @@ export function listSentRows(userDataDir: string, limit = 200): IngestRow[] {
   for (const batch of listSent(userDataDir).reverse()) {
     try {
       const parsed: unknown = JSON.parse(batch.body)
-      if (Array.isArray(parsed)) {
-        for (const r of parsed as IngestRow[]) {
+      // The RPC body is `{ rows: [...] }`, not a bare array (transport.ts
+      // targets telemetry_ingest_batch, not a direct table insert) — a
+      // batch that predates that change would still be a bare array, so
+      // both shapes are read rather than assuming only the current one.
+      const list = Array.isArray(parsed)
+        ? parsed
+        : parsed && typeof parsed === 'object' && Array.isArray((parsed as { rows?: unknown }).rows)
+          ? (parsed as { rows: unknown[] }).rows
+          : null
+      if (list) {
+        for (const r of list as IngestRow[]) {
           rows.push(r)
           if (rows.length >= limit) return rows
         }
