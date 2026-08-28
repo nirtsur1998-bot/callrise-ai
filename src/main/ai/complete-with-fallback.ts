@@ -18,12 +18,15 @@ import { recordAiFailure, recordAiSuccess } from './purpose-health-store'
 import {
   clearCooldown,
   cooldownUntil,
+  isStructurallyBroken,
+  structuralBreakReason,
   isUsableFor,
   markPeriodExhausted,
   markRateLimited,
   markStructurallyBroken,
   soonestExpiry
 } from './model-cooldown'
+import { isPacedFor } from './model-pacing'
 import { markUsed } from './model-pacing'
 import {
   AIProviderError,
@@ -837,13 +840,33 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   const notTried = capable
     .filter((s) => !chain.includes(s))
     .map((s) => {
+      // BUG-125d — name the EXACT gate. The first version lumped structural
+      // breaks and pacing into one sentence, and the founder's report landed
+      // on precisely that line: "structural break, OR paced too recently" is
+      // two completely different bugs with two different fixes, and the
+      // message could not say which. A diagnostic that stops one question
+      // short of the answer is only most of a diagnostic.
       const until = cooldownUntil(s.catalogId, startedNow)
-      return {
-        catalogId: s.catalogId,
-        why: until
-          ? `cooling down for another ${humanWait(until - startedNow)}`
-          : 'skipped by the usability gate (structural break, or paced too recently)'
+      if (until) {
+        return {
+          catalogId: s.catalogId,
+          why: `cooling down for another ${humanWait(until - startedNow)}`
+        }
       }
+      if (isStructurallyBroken(s.catalogId, startedNow, purpose)) {
+        const cause = structuralBreakReason(s.catalogId, purpose)
+        return {
+          catalogId: s.catalogId,
+          why:
+            'benched up to 4h by a STRUCTURAL BREAK' +
+            (cause ? ` after rejecting an earlier request with: ${cause}` : '') +
+            ' (restarting the app clears it)'
+        }
+      }
+      if (isPacedFor(s.catalogId, startedNow, tier)) {
+        return { catalogId: s.catalogId, why: 'PACED — used too recently, a few seconds apart' }
+      }
+      return { catalogId: s.catalogId, why: 'skipped by the usability gate for an unknown reason' }
     })
   // BUG-125b — everything cooling is exactly when a freshly-added key should
   // rescue the turn, and exactly when it previously could not. See rescueSteps.
@@ -1029,7 +1052,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
         // above) — checking the raw reason string here, not re-deriving from
         // failureClass (which would also say 'structural' for auth), avoids
         // two independent encodings of the same exclusion drifting apart.
-        markStructurallyBroken(step.catalogId, Date.now(), purpose)
+        markStructurallyBroken(step.catalogId, Date.now(), purpose, detail ? `${reason}: ${detail}` : reason)
       }
       attempts.push({
         catalogId: step.catalogId,
@@ -1135,13 +1158,33 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
   const notTried = capable
     .filter((s) => !chain.includes(s))
     .map((s) => {
+      // BUG-125d — name the EXACT gate. The first version lumped structural
+      // breaks and pacing into one sentence, and the founder's report landed
+      // on precisely that line: "structural break, OR paced too recently" is
+      // two completely different bugs with two different fixes, and the
+      // message could not say which. A diagnostic that stops one question
+      // short of the answer is only most of a diagnostic.
       const until = cooldownUntil(s.catalogId, startedNow)
-      return {
-        catalogId: s.catalogId,
-        why: until
-          ? `cooling down for another ${humanWait(until - startedNow)}`
-          : 'skipped by the usability gate (structural break, or paced too recently)'
+      if (until) {
+        return {
+          catalogId: s.catalogId,
+          why: `cooling down for another ${humanWait(until - startedNow)}`
+        }
       }
+      if (isStructurallyBroken(s.catalogId, startedNow, purpose)) {
+        const cause = structuralBreakReason(s.catalogId, purpose)
+        return {
+          catalogId: s.catalogId,
+          why:
+            'benched up to 4h by a STRUCTURAL BREAK' +
+            (cause ? ` after rejecting an earlier request with: ${cause}` : '') +
+            ' (restarting the app clears it)'
+        }
+      }
+      if (isPacedFor(s.catalogId, startedNow, tier)) {
+        return { catalogId: s.catalogId, why: 'PACED — used too recently, a few seconds apart' }
+      }
+      return { catalogId: s.catalogId, why: 'skipped by the usability gate for an unknown reason' }
     })
   // BUG-125b — everything cooling is exactly when a freshly-added key should
   // rescue the turn, and exactly when it previously could not. See rescueSteps.
@@ -1352,7 +1395,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           markUsed(step.catalogId, Date.now(), tier)
           noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
         } else if (failureClass === 'structural' && reason !== 'auth') {
-          markStructurallyBroken(step.catalogId, Date.now(), purpose)
+          markStructurallyBroken(step.catalogId, Date.now(), purpose, detail ? `${reason}: ${detail}` : reason)
         }
         attempts.push({
           catalogId: step.catalogId,

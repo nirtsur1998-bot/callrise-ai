@@ -225,12 +225,38 @@ function breakKey(purpose: AIPurpose, catalogId: string): string {
   return `${purpose}${NUL}${catalogId}`
 }
 
-export function markStructurallyBroken(catalogId: string, now: number, purpose: AIPurpose): void {
+/**
+ * BUG-125d (2026-08-28) — the break also records WHY it was set.
+ *
+ * A structural break benches a model for up to 4h, and until now nothing
+ * anywhere remembered what it hard-rejected. The founder hit exactly that
+ * wall: their keyed Claude was benched for an image turn and the only thing
+ * the product could say was "blocked by the usability gate" — true, useless,
+ * and one question short of the answer. The cause is knowable at the moment
+ * the break is set and was simply being thrown away.
+ *
+ * `reason` is the provider's own text as the walk recorded it, so an
+ * oversize/format rejection names itself instead of being inferred.
+ */
+const structuralBreakReasons = new Map<string, string>()
+
+export function markStructurallyBroken(
+  catalogId: string,
+  now: number,
+  purpose: AIPurpose,
+  reason?: string
+): void {
   const until = now + STRUCTURAL_BREAK_MS
   const key = breakKey(purpose, catalogId)
   const existing = structuralBreaks.get(key)
   if (existing !== undefined && existing >= until) return
   structuralBreaks.set(key, until)
+  if (reason) structuralBreakReasons.set(key, reason)
+}
+
+/** What this model hard-rejected, if a break is recorded for this purpose. */
+export function structuralBreakReason(catalogId: string, purpose: AIPurpose): string | null {
+  return structuralBreakReasons.get(breakKey(purpose, catalogId)) ?? null
 }
 
 /**
@@ -343,6 +369,7 @@ export function clearCooldown(catalogId: string, purpose: AIPurpose): void {
   // after it, that key never exists, so leaving it unchanged would have made
   // every structural break un-clearable until its 4h TTL expired.
   structuralBreaks.delete(breakKey(purpose, catalogId))
+  structuralBreakReasons.delete(breakKey(purpose, catalogId))
   transientStreak.delete(catalogId)
 }
 
@@ -372,6 +399,7 @@ export function soonestExpiry(
 
 /** Test-only. */
 export function resetCooldownsForTests(): void {
+  structuralBreakReasons.clear()
   cooldowns.clear()
   structuralBreaks.clear()
   transientStreak.clear()
