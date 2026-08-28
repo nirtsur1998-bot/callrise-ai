@@ -1475,7 +1475,18 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       const key = process.env[PROVIDER_REGISTRY[step.providerId].keyEnvName]?.trim()
       if (!key) continue
       await waitOutPacingIfNeeded(step)
-      if (req.signal?.aborted) throw new Error('aborted by caller during paced wait')
+      if (req.signal?.aborted) {
+        // BUG-125e follow-up (2026-08-28): every OTHER error path in this
+        // generator settles `final` before throwing (that's the whole point
+        // of the rejectFinal/final split — a caller that only awaits `.final`
+        // after the loop, per assistant-ipc.ts's documented pattern, must
+        // still observe the failure). This one didn't, so a real Stop during
+        // a paced wait left `.final` pending forever — found only once a
+        // test started actually awaiting `.final` and hung on it.
+        const abortErr = new Error('aborted by caller during paced wait')
+        rejectFinal(abortErr)
+        throw abortErr
+      }
       if (ceiling.signal.aborted) break
       if (
         pacedUntil.has(step.catalogId) &&
