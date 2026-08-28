@@ -15,6 +15,7 @@
 // Drives the REAL model-cooldown module (a real Map, not a mock) so the
 // cooling state here is genuine rather than asserted.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { StreamWithFallbackResult } from '../complete-with-fallback'
 
 const activeProviderId = { current: null as string | null }
 const streamed = vi.hoisted(() => ({ providers: [] as string[], failProviders: [] as string[] }))
@@ -81,9 +82,21 @@ function assignments(chain: string[]): ReturnType<typeof loadAppSettings> {
 const ORIGINAL_ENV = { ...process.env }
 const NOW = Date.now()
 
-async function drain(stream: AsyncIterable<{ delta: string }>): Promise<string> {
+// Test-hygiene fix (2026-08-28): streamWithFallback()'s returned `.final` is
+// a SEPARATE promise from the async generator itself (complete-with-fallback.ts
+// rejects both on every error path). A caller that only iterates the
+// generator — as every test here does via `for await` — leaves `.final`
+// rejected and unobserved, which Node reports as an unhandled rejection even
+// though every assertion in the file passes; production callers already
+// guard against exactly this (assistant-ipc.ts: "Always settle .final —
+// even on the error path — to avoid an unhandled..."). Same guard here.
+async function drain(stream: StreamWithFallbackResult): Promise<string> {
   let out = ''
-  for await (const c of stream) out += c.delta
+  try {
+    for await (const c of stream) out += c.delta
+  } finally {
+    await stream.final.catch(() => {})
+  }
   return out
 }
 
