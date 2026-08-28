@@ -160,7 +160,9 @@ describe('3. the telemetry id cannot be joined to the account', () => {
     expect(req.body).not.toContain(UPDATER_ID)
     expect(req.body).not.toContain('user_id')
     expect(req.body).not.toContain('Nir Tsur')
-    const rows = JSON.parse(req.body) as Array<Record<string, unknown>>
+    // RPC parameter shape: { rows: [...] }, not a bare array (transport.ts
+    // targets telemetry_ingest_batch, not a direct table insert).
+    const rows = (JSON.parse(req.body) as { rows: Array<Record<string, unknown>> }).rows
     expect(rows[0].anon_id).toMatch(/^[0-9a-f-]{36}$/)
     expect(rows[0].anon_id).not.toBe(UPDATER_ID)
     expect(rows[0].anon_id).not.toBe(ACCOUNT_ID)

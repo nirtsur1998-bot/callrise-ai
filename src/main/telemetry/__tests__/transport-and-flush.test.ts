@@ -18,7 +18,7 @@ import {
 } from '../flush'
 import { appendSent, clearSent, listSent, listSentRows, sentLogPath } from '../sent-log'
 import { applyConsentDecision, setupTelemetry } from '../setup'
-import { ingestHeaders, ingestUrl, sendBatch, toRows } from '../transport'
+import { ingestBody, ingestHeaders, ingestUrl, sendBatch, toRows } from '../transport'
 
 const CFG = { url: 'https://example-project.supabase.co/', anonKey: 'anon-key-for-tests' }
 
@@ -62,16 +62,37 @@ function optInAndQueue(n: number): void {
 }
 
 describe('transport', () => {
-  it('targets the PostgREST insert with the anon key only and an idempotent-insert Prefer', () => {
+  // CONFIRMED 2026-08-28 against the live cutover project: a raw table
+  // insert with `?on_conflict=event_id` cannot work against anon's
+  // insert-only grant (Postgres's ON CONFLICT needs to visibility-check the
+  // existing row, which requires SELECT). The RPC is SECURITY DEFINER so it
+  // can do that check with elevated privileges while anon still never gets
+  // real read access. See supabase/2026-08-telemetry.sql for the function
+  // and the full incident note.
+  it('targets the anon-safe RPC with the anon key only, not a direct table insert', () => {
     expect(ingestUrl(CFG)).toBe(
-      'https://example-project.supabase.co/rest/v1/telemetry_events?on_conflict=event_id'
+      'https://example-project.supabase.co/rest/v1/rpc/telemetry_ingest_batch'
     )
+    expect(ingestUrl(CFG)).not.toContain('on_conflict')
     expect(ingestHeaders(CFG)).toEqual({
       apikey: 'anon-key-for-tests',
       Authorization: 'Bearer anon-key-for-tests',
       'Content-Type': 'application/json',
-      Prefer: 'return=minimal,resolution=ignore-duplicates'
+      Prefer: 'return=minimal'
     })
+  })
+
+  it('wraps the batch as the RPC\'s named `rows` parameter, not a bare array', () => {
+    const rows = toRows({
+      anonId: 'a',
+      sessionId: 's',
+      appVersion: '1.4.0',
+      platform: 'win32',
+      osVersion: 'x',
+      arch: 'x64',
+      events: [{ id: 'e1', ts: 't1', kind: 'usage', name: 'a.b', props: {} }]
+    })
+    expect(ingestBody(rows)).toBe(JSON.stringify({ rows }))
   })
 
   it('flattens the envelope into one row per event, repeating the envelope fields', () => {

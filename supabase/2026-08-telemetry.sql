@@ -116,6 +116,85 @@ create policy "anon insert only" on public.telemetry_events
   for insert to anon
   with check (true);
 -- No select / update / delete policy for any client role. Deliberate.
+--
+-- CONFIRMED 2026-08-28, against the live cutover project: the client's
+-- `?on_conflict=event_id` + `Prefer: resolution=ignore-duplicates` upsert
+-- (transport.ts's idempotent-retry shape) does NOT work against a bare
+-- insert-only grant. Postgres's `ON CONFLICT` needs to visibility-check the
+-- existing row, which fails as `42501 permission denied` with no SELECT
+-- grant, or as `42501 new row violates row-level security policy` if SELECT
+-- is granted but (correctly) has zero permissive policies -- both tried and
+-- reverted live, confirmed with curl before and after. This was telemetry's
+-- first-ever live traffic (see the hollow-green taxonomy, "a subsystem can
+-- be complete, tested, shipped, and have never once executed") and it had
+-- never been exercised through this exact code path before.
+--
+-- DO NOT "fix" this by granting SELECT to anon -- it does not solve the
+-- ON CONFLICT problem and it is an unnecessary privilege widening for an
+-- insert-only table.
+--
+-- The tempting client-only fix -- drop `on_conflict`, treat a `409`/`23505`
+-- unique-violation as "already delivered" -- is UNSAFE and was rejected
+-- before shipping: a batch is one atomic multi-row INSERT, so ONE
+-- already-delivered event_id anywhere in a batch of up to 100 aborts the
+-- WHOLE batch, including genuinely new events. Because the local queue only
+-- drops an event on a CONFIRMED ack, and new events keep accumulating
+-- alongside any stuck ones, a batch that mixes already-delivered and
+-- brand-new events is a realistic case here, not a hypothetical -- treating
+-- the whole batch's 409 as "all delivered" would silently and permanently
+-- drop the new ones. Real per-row idempotency needs the RPC below.
+
+-- ---------------------------------------------------------------------------
+-- The anon-safe upsert path. SECURITY DEFINER runs as the function owner
+-- (full table access), so the per-row `ON CONFLICT DO NOTHING` inside it can
+-- visibility-check existing rows without anon ever being granted SELECT --
+-- the caller gets back nothing but a row count, never row contents. Each
+-- insert still fires trg_telemetry_validate exactly as a direct table
+-- insert would; nothing about validation is duplicated or bypassed here.
+--
+-- Per-row, not one bulk statement, so one already-delivered event_id cannot
+-- abort the rest of the batch the way a single multi-row INSERT would.
+create or replace function public.telemetry_ingest_batch(rows jsonb)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  r jsonb;
+  inserted int := 0;
+begin
+  if jsonb_typeof(rows) <> 'array' then
+    raise exception 'telemetry_ingest_batch: rows must be a JSON array';
+  end if;
+  for r in select * from jsonb_array_elements(rows) loop
+    insert into public.telemetry_events (
+      event_id, anon_id, session_id, app_version, platform, os_version, arch,
+      kind, name, props, client_ts
+    ) values (
+      (r->>'event_id')::uuid,
+      (r->>'anon_id')::uuid,
+      (r->>'session_id')::uuid,
+      r->>'app_version',
+      r->>'platform',
+      r->>'os_version',
+      r->>'arch',
+      r->>'kind',
+      r->>'name',
+      coalesce(r->'props', '{}'::jsonb),
+      (r->>'client_ts')::timestamptz
+    )
+    on conflict (event_id) do nothing;
+    if found then
+      inserted := inserted + 1;
+    end if;
+  end loop;
+  return inserted;
+end;
+$$;
+
+revoke all on function public.telemetry_ingest_batch(jsonb) from public;
+grant execute on function public.telemetry_ingest_batch(jsonb) to anon;
 
 -- ---------------------------------------------------------------------------
 -- A4.1 — version health. Queryable from the SQL editor:
