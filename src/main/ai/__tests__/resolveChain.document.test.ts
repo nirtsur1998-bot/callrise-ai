@@ -101,17 +101,32 @@ describe('resolveChain({ needsDocument })', () => {
     vi.mocked(loadAppSettings).mockReturnValue(assignments(['fx-text-only']))
     const { configured, capable } = resolveChain('assistant-chat', { needsDocument: true })
     expect(configured).toHaveLength(1)
+    // Asserts what this test is about: the unflagged ENTRY is filtered out.
+    // It used to assert capable.length === 0, which bundled in a second claim
+    // — "and no fallback exists either" — that BUG-125 deliberately changes:
+    // a keyed document-capable provider IS now offered behind the chain.
     expect(
-      capable,
+      capable.some((s) => s.catalogId === 'fx-text-only'),
       'a model with no supportsDocuments flag was sent a PDF — every rejection ' +
         'blacklists that model for four hours across every purpose'
-    ).toHaveLength(0)
+    ).toBe(false)
   })
 
   it('vision and document capability are independent — seeing an image is not reading a PDF', () => {
     vi.mocked(loadAppSettings).mockReturnValue(assignments(['fx-sees-only']))
-    expect(resolveChain('assistant-chat', { needsVision: true }).capable).toHaveLength(1)
-    expect(resolveChain('assistant-chat', { needsDocument: true }).capable).toHaveLength(0)
+    // Independence is about the ENTRY, so assert on the entry rather than on
+    // chain length — length now also reflects BUG-125's keyed fallbacks.
+    expect(
+      resolveChain('assistant-chat', { needsVision: true }).capable.some(
+        (s) => s.catalogId === 'fx-sees-only'
+      )
+    ).toBe(true)
+    expect(
+      resolveChain('assistant-chat', { needsDocument: true }).capable.some(
+        (s) => s.catalogId === 'fx-sees-only'
+      ),
+      'an image-capable model was offered a PDF — vision is not document support'
+    ).toBe(false)
   })
 
   it('legacy steps: Claude counts as document-capable, Cerebras does not', () => {

@@ -259,13 +259,32 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'assistant-ipc-test-'))
   broadcasts.length = 0
   streamControl.reset()
-  toolsMock.plan.mockClear()
-  toolsMock.execute.mockClear()
+  // AUDIT FIX (2026-08-27) — mockRESET, not mockClear, for every mock that
+  // any test queues a `...Once` implementation on.
+  //
+  // mockClear() clears recorded CALLS and leaves the once-QUEUE untouched. One
+  // test here deliberately queues a plan implementation that never resolves
+  // (the pre-stream Stop test, to hold the turn open). If that test does not
+  // consume it — it times out, throws early, or is filtered out by `-t` — the
+  // hanging implementation survives into the NEXT test, whose handleSend then
+  // awaits a promise nobody will ever resolve. The symptom is a 5s timeout in
+  // a completely unrelated test, only under full-file runs, never in
+  // isolation: exactly the shape that gets written off as a flake.
+  //
+  // mockReset() drains the once-queue AND the base implementation, so every
+  // default is re-established immediately below rather than assumed.
+  toolsMock.plan.mockReset()
+  toolsMock.plan.mockResolvedValue([])
+  toolsMock.execute.mockReset()
   toolsMock.execute.mockResolvedValue({ sections: [], taskProposals: [] })
-  toolsMock.clientBrief.mockClear()
+  toolsMock.clientBrief.mockReset()
   toolsMock.clientBrief.mockResolvedValue([])
-  taskMock.create.mockClear()
+  taskMock.create.mockReset()
   taskMock.create.mockResolvedValue({ id: 'task-1' })
+  // Mine, same hazard: the BUG-096 tests queue once-values on this.
+  unboundMock.detect.mockReset()
+  unboundMock.detect.mockResolvedValue([{ contactId: 'acme', label: 'Acme', memoryCount: 2 }])
+  unboundMock.calls = []
   memStore.byCall = []
   memStore.deleted = []
   memStore.extraction.mockClear()

@@ -469,6 +469,67 @@ import { noCapableModelMessage } from './capability-copy'
 export type { ChainCapabilityNeeds }
 export { noCapableModelMessage }
 
+/**
+ * BUG-125 (2026-08-27) — capability fallbacks: every KEYED provider that can
+ * do the thing, not just the one that happens to be "active".
+ *
+ * THE FIELD FAILURE THIS FIXES. The founder attached an image in Rise on a
+ * machine with ChatGPT, Groq, OpenRouter and Gemini all configured — and got
+ * "Every configured model failed to respond". The per-model breakdown showed
+ * exactly ONE attempt: `google-gemini-flash — TimeoutError`. A paid OpenAI
+ * key sat unused.
+ *
+ * Why one attempt, on a nine-entry chain: assistant-chat uses QUALITY_CHAIN,
+ * and of its nine catalog entries exactly ONE is vision-capable
+ * (google-gemini-flash — groq-llama-4-scout is vision-capable but is not in
+ * this chain). So the vision filter collapses a nine-model chain to one. The
+ * legacy step would normally backstop that, but it is built from
+ * getActiveAIProvider() ALONE, and the active provider was not one of the
+ * three vision-capable legacy providers — so it was filtered out too.
+ *
+ * The result is a single point of failure that LOOKS like a deep fallback
+ * chain: OpenAI and Anthropic have no catalog entries at all (see
+ * model-catalog.ts's supportsVision comment), so they are reachable ONLY as
+ * the legacy step — which means a user's paid vision-capable key is
+ * unreachable for vision unless that provider also happens to be their
+ * active one. Nothing in the UI suggests that coupling exists.
+ *
+ * So: when a capability was REQUIRED and therefore filtered the chain, offer
+ * a legacy step for every other keyed provider that supports it. Appended
+ * LAST, deliberately — the bundled free-tier chain still goes first, which
+ * preserves this file's cost posture; these only run when it has failed.
+ *
+ * Scoped to capability-gated requests on purpose: this must not silently
+ * widen ordinary text turns, which already have a deep chain and an explicit
+ * legacy-tail policy (LEGACY_TAIL_MAX).
+ */
+function capabilityFallbackSteps(
+  needs: ChainCapabilityNeeds,
+  already: ResolvedStep[]
+): ResolvedStep[] {
+  if (!needs.needsVision && !needs.needsDocument) return []
+  const out: ResolvedStep[] = []
+  for (const [providerId, entry] of Object.entries(PROVIDER_REGISTRY)) {
+    if (!process.env[entry.keyEnvName]?.trim()) continue
+    const step: ResolvedStep = {
+      catalogId: `legacy:${providerId}`,
+      providerId: providerId as ResolvedStep['providerId'],
+      modelId: ''
+    }
+    // Skip a provider ALREADY represented in the chain — by providerId, not
+    // just catalogId. A legacy step behind that provider's own catalog entry
+    // is the same key and (usually) the same model: the identical request
+    // re-issued as a "fallback", which this file already refuses to do for
+    // the legacy tail. It is also what the existing vision tests assert, and
+    // they caught this when the first version of the fix over-reached.
+    if (already.some((s) => s.providerId === step.providerId)) continue
+    if (needs.needsVision && !stepSupportsVision(step)) continue
+    if (needs.needsDocument && !stepSupportsDocuments(step)) continue
+    out.push(step)
+  }
+  return out
+}
+
 export function resolveChain(purpose: AIPurpose, opts?: ChainCapabilityNeeds): ResolvedChain {
   const configured = resolveConfiguredChain(purpose)
   let capable = configured
@@ -477,6 +538,7 @@ export function resolveChain(purpose: AIPurpose, opts?: ChainCapabilityNeeds): R
   }
   if (opts?.needsVision) capable = capable.filter(stepSupportsVision)
   if (opts?.needsDocument) capable = capable.filter(stepSupportsDocuments)
+  if (opts) capable = [...capable, ...capabilityFallbackSteps(opts, capable)]
   return { configured, capable }
 }
 
