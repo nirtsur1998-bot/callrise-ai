@@ -406,6 +406,72 @@ export function listMemoriesByCallId(db: Database.Database, callId: string): Mem
     .filter((m) => m.evidence.some((e) => e.type === 'transcript' && e.callId === callId))
 }
 
+/**
+ * AUDIT FIX (2026-08-24) — forget what ONE call/conversation taught, instead
+ * of deleting every memory it ever touched.
+ *
+ * The bug this replaces: consolidateNewCandidate reinforces an EXISTING
+ * memory by appending the new candidate's evidence entry, which carries THIS
+ * conversation's callId (`assistant:<conversationId>` for chat), onto a row
+ * that may have been learned months earlier from an unrelated call — the
+ * exact-match lookup is scope-wide, and 'rep'/'business' are global singleton
+ * scopes shared by every call and every Rise chat. listMemoriesByCallId then
+ * matches on ANY evidence entry, and all four exclusion sites called
+ * deleteMemory on the whole row.
+ *
+ * So: a January call teaches "Acme's budget cycle ends in March". In February
+ * the rep restates it in a Rise chat, which reinforces that same row. The rep
+ * flips "Not learning" on the CHAT — and January's memory is hard-deleted,
+ * both tables, no soft state, no changelog row surviving. They were told only
+ * that this chat would be forgotten.
+ *
+ * The fix is evidence-level, matching what the UI actually promises:
+ * "anything it already taught the Sales Brain will be forgotten" — IT, this
+ * source, not everything that agrees with it. A memory loses this call's
+ * evidence; it is deleted only when that was its LAST evidence, i.e. when
+ * this source really was the only thing holding it up.
+ *
+ * distinctEpisodeCount is derived from evidence (consolidation.ts:250), so
+ * promotion and decay maths self-correct once the entry is gone — nothing to
+ * decrement by hand.
+ *
+ * lastConfirmedAt is deliberately left alone: MemoryEvidence carries no
+ * timestamp, so there is no honest earlier value to roll back to. The only
+ * effect is that decay restarts from a slightly later date than it strictly
+ * should — conservative in the harmless direction, and a fabricated timestamp
+ * would be worse than a slightly generous one.
+ */
+export interface ForgetCallResult {
+  /** Memories removed entirely — this call was their only evidence. */
+  deleted: number
+  /** Memories that survived with this call's evidence pruned. */
+  pruned: number
+}
+
+export function forgetCallContribution(
+  db: Database.Database,
+  callId: string
+): ForgetCallResult {
+  const affected = listMemoriesByCallId(db, callId)
+  let deleted = 0
+  let pruned = 0
+  for (const memory of affected) {
+    const remaining = memory.evidence.filter(
+      (e) => !(e.type === 'transcript' && e.callId === callId)
+    )
+    if (remaining.length === 0) {
+      if (deleteMemory(db, memory.id)) deleted++
+    } else {
+      db.prepare('UPDATE memories SET evidence = ? WHERE id = ?').run(
+        JSON.stringify(remaining),
+        memory.id
+      )
+      pruned++
+    }
+  }
+  return { deleted, pruned }
+}
+
 export interface ChangelogEntry {
   memoryId: string
   statement: string

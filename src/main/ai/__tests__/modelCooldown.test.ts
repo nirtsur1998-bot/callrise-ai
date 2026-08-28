@@ -63,6 +63,7 @@ const {
   markRateLimited,
   markPeriodExhausted,
   markStructurallyBroken,
+  structuralBreakReason,
   isStructurallyBroken,
   isUsableFor,
   isCoolingDown,
@@ -374,31 +375,55 @@ describe('structural breaks — self-healing, not permanent (first-pass fatal #1
   // naming the cause and no way to clear it.
   it('a break proven by one purpose does NOT disable the model for another', () => {
     const now = 1_000_000
-    markStructurallyBroken('m', now, 'coaching-chat')
+    markStructurallyBroken('m', now, 'assistant-chat')
 
-    expect(isStructurallyBroken('m', now, 'coaching-chat')).toBe(true)
+    expect(isStructurallyBroken('m', now, 'assistant-chat')).toBe(true)
     expect(
       isStructurallyBroken('m', now, 'coaching-cue'),
       'a 400 on a Rise chat request disabled live coaching cues — the exact ' +
         'cross-purpose damage this scoping exists to prevent'
     ).toBe(false)
     expect(isUsableFor('m', now, DURABLE, { purpose: 'coaching-cue' })).toBe(true)
-    expect(isUsableFor('m', now, DURABLE, { purpose: 'coaching-chat' })).toBe(false)
+    expect(isUsableFor('m', now, DURABLE, { purpose: 'assistant-chat' })).toBe(false)
   })
 
   // A success is proof about the purpose that produced it, and nothing more.
   it("a success on one purpose does not clear another purpose's break", () => {
     const now = 1_000_000
-    markStructurallyBroken('m', now, 'coaching-chat')
+    markStructurallyBroken('m', now, 'assistant-chat')
     clearCooldown('m', 'coaching-cue')
-    expect(isStructurallyBroken('m', now, 'coaching-chat')).toBe(true)
-    clearCooldown('m', 'coaching-chat')
-    expect(isStructurallyBroken('m', now, 'coaching-chat')).toBe(false)
+    expect(isStructurallyBroken('m', now, 'assistant-chat')).toBe(true)
+    clearCooldown('m', 'assistant-chat')
+    expect(isStructurallyBroken('m', now, 'assistant-chat')).toBe(false)
+  })
+
+  // BUG-125d — a break benches a model for up to 4h and nothing recorded WHY.
+  // The founder's keyed Claude was benched on an image turn and the product
+  // could only say "blocked by the usability gate": true, useless, and one
+  // question short of the answer. The cause is known at the moment the break
+  // is set and was simply discarded.
+  it('records WHY the break was set, so a benched model can explain itself', () => {
+    const now = 1_000_000
+    markStructurallyBroken('m', now, 'assistant-chat', 'failed: 400 image exceeds 5 MB')
+    expect(structuralBreakReason('m', 'assistant-chat')).toBe('failed: 400 image exceeds 5 MB')
+  })
+
+  it('the reason is scoped to the purpose, like the break itself', () => {
+    const now = 1_000_000
+    markStructurallyBroken('m', now, 'assistant-chat', 'failed: 400 bad image')
+    expect(structuralBreakReason('m', 'coaching-cue')).toBeNull()
+  })
+
+  it('clearing the break clears its reason — no stale cause outliving the block', () => {
+    const now = 1_000_000
+    markStructurallyBroken('m', now, 'assistant-chat', 'failed: 400 bad image')
+    clearCooldown('m', 'assistant-chat')
+    expect(structuralBreakReason('m', 'assistant-chat')).toBeNull()
   })
 
   it('with no purpose in question a structural break does not apply', () => {
     const now = 1_000_000
-    markStructurallyBroken('m', now, 'coaching-chat')
+    markStructurallyBroken('m', now, 'assistant-chat')
     expect(isStructurallyBroken('m', now, null)).toBe(false)
     expect(isUsableFor('m', now, DURABLE)).toBe(true)
   })

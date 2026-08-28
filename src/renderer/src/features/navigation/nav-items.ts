@@ -10,11 +10,14 @@ import {
   UsersRound,
   BookOpen,
   Settings,
+  Sparkles,
   type LucideIcon
 } from 'lucide-react'
+import { ASSISTANT_SECTION_NAME } from '../assistant/config'
 
 export type NavId =
   | 'home'
+  | 'assistant'
   | 'live-calls'
   | 'past-calls'
   | 'tasks'
@@ -38,6 +41,9 @@ export interface NavItem {
 /** The left-sidebar navigation. Order here is the order shown. */
 export const NAV_ITEMS: NavItem[] = [
   { id: 'home', label: 'Home', icon: Home, section: 'Workspace' },
+  // M28 — the display name comes from the ONE naming constant; the id stays
+  // 'assistant' so a rename never touches code identity.
+  { id: 'assistant', label: ASSISTANT_SECTION_NAME, icon: Sparkles, section: 'Workspace' },
   { id: 'live-calls', label: 'Live Calls', icon: PhoneCall, section: 'Workspace' },
   { id: 'past-calls', label: 'Past Calls', icon: History, section: 'Workspace' },
   { id: 'tasks', label: 'Tasks', icon: ListChecks, section: 'Workspace' },

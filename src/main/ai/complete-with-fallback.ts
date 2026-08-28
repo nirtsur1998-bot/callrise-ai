@@ -17,12 +17,17 @@ import { logFallbackEvent } from './fallback-log'
 import { recordAiFailure, recordAiSuccess } from './purpose-health-store'
 import {
   clearCooldown,
+  cooldownUntil,
+  isStructurallyBroken,
+  structuralBreakReason,
   isUsableFor,
   markPeriodExhausted,
   markRateLimited,
   markStructurallyBroken,
   soonestExpiry
 } from './model-cooldown'
+import { isPacedFor, pacedUntilFor, PACING_GAP_MS } from './model-pacing'
+import { exhaustionReport } from './exhaustion-report'
 import { markUsed } from './model-pacing'
 import {
   AIProviderError,
@@ -95,9 +100,30 @@ export function summarizeExhaustion(
 export class AllModelsExhaustedError extends Error {
   constructor(
     readonly purpose: AIPurpose,
-    readonly attempts: { catalogId: string; reason: string; failureClass?: AIFailureClass }[]
+    readonly attempts: { catalogId: string; reason: string; failureClass?: AIFailureClass }[],
+    /**
+     * BUG-125c (2026-08-28) — models that were NEVER ATTEMPTED, and why.
+     *
+     * Two field reports running showed a SINGLE attempt on a chain that should
+     * have had several, and `attempts` alone can never explain that: it records
+     * what ran, never what was excluded before the walk. I guessed at the
+     * reason from here twice and was wrong both times, because the machine's
+     * logs cannot leave it. So the error now carries the other half of the
+     * picture — what was filtered out and by which gate — to be read straight
+     * off the screen.
+     */
+    readonly notTried: { catalogId: string; why: string }[] = []
   ) {
-    super(summarizeExhaustion(attempts).message)
+    // BUG-125 closing move (2026-08-28, founder's directive): the per-model
+    // breakdown is composed HERE, at the source, not per-surface. Thirteen
+    // files check `instanceof AllModelsExhaustedError` and show err.message —
+    // coaching chat, summaries, prep briefs, deal tiers, task generation and
+    // more — and only Rise had been given the breakdown. The self-explaining
+    // error is the actual deliverable of BUG-125's diagnosis loop (machines
+    // whose logs cannot leave them get errors that ARE the log), so every
+    // surface gets it by construction rather than by thirteen hand edits that
+    // would drift.
+    super(exhaustionReport(summarizeExhaustion(attempts).message, attempts, notTried))
     this.name = 'AllModelsExhaustedError'
   }
 }
@@ -178,7 +204,10 @@ export const DEFAULT_CATALOG_CHAIN: Record<AIPurpose, string[]> = {
   'memory-extract': [...new Set([...SPEED_CHAIN, ...QUALITY_CHAIN])],
   // Judgment work, quality-lane precedent same as summary/scorecard.
   'memory-consolidate': QUALITY_CHAIN,
-  'memory-reflect': QUALITY_CHAIN
+  'memory-reflect': QUALITY_CHAIN,
+  // M28 - the Rise assistant chat. Quality-lane precedent, same as
+  // coaching-chat: a real conversation the rep reads, never latency-critical.
+  'assistant-chat': QUALITY_CHAIN
 }
 
 interface ResolvedStep {
@@ -238,6 +267,20 @@ const LEGACY_TAIL_MAX: Record<AIPurpose, number> = {
   'deal-tier1': 0,
   other: 1,
   'coaching-chat': 1,
+  // M28 - REVERSED from the original 1 (which copied coaching-chat's "human
+  // watching a spinner" reasoning uncritically). Real field evidence
+  // (ai-fallback-events.jsonl, 2026-08-21) showed why that was wrong for
+  // Rise specifically: a single "send" walks this SAME purpose 2-3 times
+  // (plan_research, the answer stream, the suggestion pass), all sharing
+  // one thin tail — and unlike coaching-chat, Rise already shows a real
+  // activity-phase indicator during this window, so the "spinner" cost the
+  // original comment worried about doesn't apply the same way. With tail=1
+  // and the founder's actual config (legacy:groq's default model dead on
+  // Groq's live API + Gemini genuinely daily-quota-exhausted), the whole
+  // chain collapsed to zero live links on the very first two entries. 3
+  // matches the other quality-lane durable purposes and gives Rise the same
+  // resilience summary/scorecard/coaching-chat already have.
+  'assistant-chat': 3,
   summary: 3,
   scorecard: 3,
   tasks: 3,
@@ -412,13 +455,179 @@ export function purposeTier(purpose: AIPurpose): CooldownTier {
   return purpose in CHAIN_BUDGET ? 'live' : 'durable'
 }
 
-export function resolveChain(purpose: AIPurpose, opts?: { needsTool?: boolean }): ResolvedChain {
+/** M28 Part 3 — which LEGACY steps (providers with no catalog entries, so no
+ *  per-entry flag) can read images. Hand-verified 2026-08-21: every current
+ *  Claude and GPT chat model accepts image input; Gemini is catalog-flagged. */
+const VISION_CAPABLE_LEGACY_PROVIDERS: ReadonlySet<CatalogEntry['providerId']> = new Set([
+  'anthropic',
+  'openai',
+  'google'
+])
+
+export function stepSupportsVision(step: ResolvedStep): boolean {
+  const entry = catalogEntry(step.catalogId)
+  if (entry) return entry.supportsVision === true
+  return step.catalogId.startsWith('legacy:') && VISION_CAPABLE_LEGACY_PROVIDERS.has(step.providerId)
+}
+
+/** AUDIT FIX (2026-08-24) — the document equivalent of the vision set.
+ *  Anthropic, OpenAI and Google each have an adapter that builds a real
+ *  document part for their own API (anthropic.ts:146, openai.ts:112,
+ *  gemini.ts:108). Every other provider is served by openai-compatible.ts,
+ *  which sends OpenAI's file format to APIs that do not implement it. */
+const DOCUMENT_CAPABLE_LEGACY_PROVIDERS: ReadonlySet<CatalogEntry['providerId']> = new Set([
+  'anthropic',
+  'openai',
+  'google'
+])
+
+export function stepSupportsDocuments(step: ResolvedStep): boolean {
+  const entry = catalogEntry(step.catalogId)
+  if (entry) return entry.supportsDocuments === true
+  return (
+    step.catalogId.startsWith('legacy:') &&
+    DOCUMENT_CAPABLE_LEGACY_PROVIDERS.has(step.providerId)
+  )
+}
+
+import type { ChainCapabilityNeeds } from './capability-needs'
+import { noCapableModelMessage } from './capability-copy'
+export type { ChainCapabilityNeeds }
+export { noCapableModelMessage }
+
+/**
+ * BUG-125 (2026-08-27) — capability fallbacks: every KEYED provider that can
+ * do the thing, not just the one that happens to be "active".
+ *
+ * THE FIELD FAILURE THIS FIXES. The founder attached an image in Rise on a
+ * machine with ChatGPT, Groq, OpenRouter and Gemini all configured — and got
+ * "Every configured model failed to respond". The per-model breakdown showed
+ * exactly ONE attempt: `google-gemini-flash — TimeoutError`. A paid OpenAI
+ * key sat unused.
+ *
+ * Why one attempt, on a nine-entry chain: assistant-chat uses QUALITY_CHAIN,
+ * and of its nine catalog entries exactly ONE is vision-capable
+ * (google-gemini-flash — groq-llama-4-scout is vision-capable but is not in
+ * this chain). So the vision filter collapses a nine-model chain to one. The
+ * legacy step would normally backstop that, but it is built from
+ * getActiveAIProvider() ALONE, and the active provider was not one of the
+ * three vision-capable legacy providers — so it was filtered out too.
+ *
+ * The result is a single point of failure that LOOKS like a deep fallback
+ * chain: OpenAI and Anthropic have no catalog entries at all (see
+ * model-catalog.ts's supportsVision comment), so they are reachable ONLY as
+ * the legacy step — which means a user's paid vision-capable key is
+ * unreachable for vision unless that provider also happens to be their
+ * active one. Nothing in the UI suggests that coupling exists.
+ *
+ * So: when a capability was REQUIRED and therefore filtered the chain, offer
+ * a legacy step for every other keyed provider that supports it. Appended
+ * LAST, deliberately — the bundled free-tier chain still goes first, which
+ * preserves this file's cost posture; these only run when it has failed.
+ *
+ * Scoped to capability-gated requests on purpose: this must not silently
+ * widen ordinary text turns, which already have a deep chain and an explicit
+ * legacy-tail policy (LEGACY_TAIL_MAX).
+ */
+function capabilityFallbackSteps(
+  needs: ChainCapabilityNeeds,
+  already: ResolvedStep[]
+): ResolvedStep[] {
+  if (!needs.needsVision && !needs.needsDocument) return []
+  const out: ResolvedStep[] = []
+  for (const [providerId, entry] of Object.entries(PROVIDER_REGISTRY)) {
+    if (!process.env[entry.keyEnvName]?.trim()) continue
+    const step: ResolvedStep = {
+      catalogId: `legacy:${providerId}`,
+      providerId: providerId as ResolvedStep['providerId'],
+      modelId: ''
+    }
+    // Skip a provider ALREADY represented in the chain — by providerId, not
+    // just catalogId. A legacy step behind that provider's own catalog entry
+    // is the same key and (usually) the same model: the identical request
+    // re-issued as a "fallback", which this file already refuses to do for
+    // the legacy tail. It is also what the existing vision tests assert, and
+    // they caught this when the first version of the fix over-reached.
+    if (already.some((s) => s.providerId === step.providerId)) continue
+    if (needs.needsVision && !stepSupportsVision(step)) continue
+    if (needs.needsDocument && !stepSupportsDocuments(step)) continue
+    out.push(step)
+  }
+  return out
+}
+
+/**
+ * BUG-125b (2026-08-28) — the LAST-RESORT rescue that makes "add another
+ * provider key" true.
+ *
+ * THE FIELD FAILURE. After the capability fix, the founder hit a different
+ * wall on a second machine: "Every model set up for this is rate-limited right
+ * now. Try again in about an hour." — with a brand-new PAID Claude key just
+ * added. That message is the PRE-WALK refusal: every entry in the resolved
+ * chain was cooling down, so nothing was attempted at all (which is also why
+ * there was no per-model breakdown to read).
+ *
+ * Why the new key did not help: Anthropic and OpenAI have NO catalog entries
+ * (see model-catalog.ts), so they enter a chain only as the legacy step —
+ * which is built from getActiveAIProvider() ALONE. A freshly-added key for a
+ * provider that is not the active one is therefore invisible to the chain, no
+ * matter how much credit is on it. The error told the user to do the one
+ * thing that could not work, which is worse than saying nothing.
+ *
+ * So: when the chain is entirely unusable, before refusing, offer any KEYED
+ * provider that is not already represented and is not itself cooling down. A
+ * provider that has never been tried cannot be rate-limited, so this is
+ * precisely the case the refusal was wrong about.
+ *
+ * Deliberately LAST-RESORT, not part of the normal chain: it runs only when
+ * the answer would otherwise be "no", so it cannot change ordinary routing,
+ * ordering, or this file's free-tier-first cost posture. It also cannot
+ * bypass a cooldown — every candidate is passed through the same isUsableFor
+ * gate as everything else.
+ */
+function rescueSteps(
+  already: ResolvedStep[],
+  now: number,
+  tier: CooldownTier,
+  purpose: AIPurpose
+): ResolvedStep[] {
+  // DURABLE CALLERS ONLY, and this is a correctness boundary rather than a
+  // preference. The live tier (coaching-cue, deal-tier1) has a single-digit-
+  // second budget and a deliberately thin chain, and BUG-058's entire point is
+  // that when those models are cooling mid-call the right move is to STOP —
+  // not to spend another round trip on a cold provider. Rescuing a live caller
+  // would defeat that, and modelCooldown.test.ts asserts it must not ("a live
+  // caller does NOT bypass its own cooldown"). The founder's case is a human
+  // typing in Rise, which is durable.
+  if (tier !== 'durable') return []
+  const out: ResolvedStep[] = []
+  for (const [providerId, entry] of Object.entries(PROVIDER_REGISTRY)) {
+    if (!process.env[entry.keyEnvName]?.trim()) continue
+    if (already.some((s) => s.providerId === providerId)) continue
+    const step: ResolvedStep = {
+      catalogId: `legacy:${providerId}`,
+      providerId: providerId as ResolvedStep['providerId'],
+      modelId: ''
+    }
+    if (!isUsableFor(step.catalogId, now, tier, { purpose })) continue
+    out.push(step)
+  }
+  return out
+}
+
+export function resolveChain(purpose: AIPurpose, opts?: ChainCapabilityNeeds): ResolvedChain {
   const configured = resolveConfiguredChain(purpose)
-  const capable = opts?.needsTool
-    ? configured.filter((s) => catalogEntry(s.catalogId)?.supportsToolCalling !== false)
-    : configured
+  let capable = configured
+  if (opts?.needsTool) {
+    capable = capable.filter((s) => catalogEntry(s.catalogId)?.supportsToolCalling !== false)
+  }
+  if (opts?.needsVision) capable = capable.filter(stepSupportsVision)
+  if (opts?.needsDocument) capable = capable.filter(stepSupportsDocuments)
+  if (opts) capable = [...capable, ...capabilityFallbackSteps(opts, capable)]
   return { configured, capable }
 }
+
+
 
 // BUG-057 Phase 6 follow-up — the one deferred piece of that phase, closed.
 // `supportsToolCalling: false` (model-catalog.ts) is a static, hand-verified
@@ -595,7 +804,12 @@ async function completeWithSameModelRetry(
  *  callers pass their existing AICompletionRequest unchanged. */
 export async function completeWithFallback(req: AICompletionRequest): Promise<AICompletionResult> {
   const purpose = req.purpose
-  const { configured, capable } = resolveChain(purpose, { needsTool: Boolean(req.tool) })
+  const needs: ChainCapabilityNeeds = {
+    needsTool: Boolean(req.tool),
+    needsVision: Boolean(req.images?.length),
+    needsDocument: Boolean(req.document)
+  }
+  const { configured, capable } = resolveChain(purpose, needs)
   logToolCapabilityExclusions(purpose, configured, capable)
   const tier: CooldownTier = purposeTier(purpose)
 
@@ -605,18 +819,21 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   }
   if (capable.length === 0) {
     // BUG-057 Phase 6 — configured.length > 0 here by construction: real
-    // keys ARE configured, none of them are verified to support forced tool
-    // calls. Distinct from the no-key case above (and from the cooldown
+    // keys ARE configured, none of them are verified to support the
+    // capability this request needs (forced tool calls, or image input —
+    // M28). Distinct from the no-key case above (and from the cooldown
     // case below) — a different problem with a different fix (reassign a
     // model in Settings, not add/wait for a key).
     void recordAiFailure(purpose, {
       reason: 'failed',
       providerId: null,
-      detail: 'no configured model verified to support tool calling'
+      detail: needs.needsVision
+        ? 'no configured model verified to support image input'
+        : 'no configured model verified to support tool calling'
     })
     throw new AIProviderError(
       'failed',
-      "Every model configured for this can't run this request (tool-calling not supported by any of them) — reassign a model in Settings.",
+      noCapableModelMessage(needs),
       undefined,
       'structural'
     )
@@ -627,7 +844,87 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   // + keys, and so the "everything is cooling down" case below can tell the
   // difference between "you have no keys" and "your keys need a minute".
   const startedNow = Date.now()
-  const chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier, { purpose }))
+  let chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier, { purpose }))
+
+  // BUG-125e — THE PACED TAIL. Verified by the agent audit and its adversarial
+  // pass: EVERY single-key user self-paced to death on capability turns. One
+  // Rise turn makes sequential assistant-chat calls (plan, then answer); the
+  // plan's SUCCESS paces the provider for up to 6s, and for a single-key user
+  // the answer's chain collapses to exactly that one step — so the turn's own
+  // politeness mark starved its only candidate, and the walk refused.
+  //
+  // Pacing is self-imposed spacing (model-pacing.ts: "a model that is merely
+  // paced genuinely has capacity"), so a paced-ONLY step — usable in every
+  // other respect — stays in the chain, sorted LAST. The walk waits the
+  // remaining gap out only if it actually REACHES one, i.e. only after every
+  // un-paced candidate has been tried and failed. That preserves the
+  // skip-not-wait divert behaviour pinned by modelPacing.test.ts (a walk with
+  // somewhere to divert TO never sleeps) and converts only the formerly
+  // refused dead-end into a bounded wait. Durable tier only: live callers are
+  // never paced at all, and their budgets must never absorb a sleep.
+  //
+  // Known, accepted deviation from BUG-058 (recorded by the adversarial pass):
+  // concurrent durable walks that all dead-end on the same paced step wake at
+  // the same gap expiry and fire together. Bounded (one sleep, ≤6s), rare
+  // (requires simultaneous fully-paced dead-ends), and strictly better than
+  // all of them refusing.
+  const pacedUntil = new Map<string, number>()
+  if (tier === 'durable') {
+    for (const s of capable) {
+      if (chain.includes(s)) continue
+      if (!isUsableFor(s.catalogId, startedNow, tier, { purpose, ignorePacing: true })) continue
+      pacedUntil.set(s.catalogId, pacedUntilFor(s.catalogId, startedNow, tier) ?? startedNow)
+    }
+  }
+  const pacedTail = capable.filter((s) => pacedUntil.has(s.catalogId))
+
+  // BUG-125c — record WHY each excluded entry was excluded, for the error's
+  // "not tried" section. Computed AFTER the paced tail on purpose: a paced
+  // step WILL be tried now, so listing it under "not tried" would be a lie.
+  const notTried = capable
+    .filter((s) => !chain.includes(s) && !pacedUntil.has(s.catalogId))
+    .map((s) => {
+      // BUG-125d — name the EXACT gate. The first version lumped structural
+      // breaks and pacing into one sentence, and the founder's report landed
+      // on precisely that line: "structural break, OR paced too recently" is
+      // two completely different bugs with two different fixes, and the
+      // message could not say which. A diagnostic that stops one question
+      // short of the answer is only most of a diagnostic.
+      const until = cooldownUntil(s.catalogId, startedNow)
+      if (until) {
+        return {
+          catalogId: s.catalogId,
+          why: `cooling down for another ${humanWait(until - startedNow)}`
+        }
+      }
+      if (isStructurallyBroken(s.catalogId, startedNow, purpose)) {
+        const cause = structuralBreakReason(s.catalogId, purpose)
+        return {
+          catalogId: s.catalogId,
+          why:
+            'benched up to 4h by a STRUCTURAL BREAK' +
+            (cause ? ` after rejecting an earlier request with: ${cause}` : '') +
+            ' (restarting the app clears it)'
+        }
+      }
+      if (isPacedFor(s.catalogId, startedNow, tier)) {
+        return { catalogId: s.catalogId, why: 'PACED — used too recently, a few seconds apart' }
+      }
+      return { catalogId: s.catalogId, why: 'skipped by the usability gate for an unknown reason' }
+    })
+  // BUG-125b — everything cooling is exactly when a freshly-added key should
+  // rescue the turn, and exactly when it previously could not. See rescueSteps.
+  //
+  // ORDERING (adversarial amendment): rescue steps go BEFORE the paced tail.
+  // A freshly-added, never-tried key must be attempted immediately — with
+  // zero sleep — rather than queueing behind a paced provider that just
+  // failed. Without this, the paced tail would make the chain non-empty and
+  // silently disable the rescue.
+  if (chain.length === 0) {
+    chain = [...rescueSteps(capable, startedNow, tier, purpose), ...pacedTail]
+  } else {
+    chain = [...chain, ...pacedTail]
+  }
 
   if (chain.length === 0) {
     // Every model is in cooldown. Refusing here is the POINT: walking the
@@ -640,12 +937,22 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
       tier,
       purpose
     )
-    const secs = until ? Math.max(1, Math.ceil((until - startedNow) / 1000)) : 60
+    // BUG-125 audit — the 60 was FABRICATED: soonestExpiry reads only the
+    // cooldown map, and a merely-paced model has no entry there, so a refusal
+    // caused purely by pacing told the user to wait "about 60 seconds" for a
+    // condition that clears in <=6. Use the real pacing remainder when no
+    // cooldown expiry exists.
+    const pacedSoonest = capable
+      .map((s) => pacedUntilFor(s.catalogId, startedNow, tier))
+      .filter((t): t is number => t !== null)
+      .sort((a, b) => a - b)[0]
+    const effectiveUntil = until ?? pacedSoonest ?? null
+    const secs = effectiveUntil ? Math.max(1, Math.ceil((effectiveUntil - startedNow) / 1000)) : 60
     void recordAiFailure(purpose, { reason: 'rate-limit', providerId: null })
     throw new AIProviderError(
       'rate-limit',
       `Every model set up for this is rate-limited right now. Try again in ${humanWait(secs * 1000)}.`,
-      until ? until - startedNow : undefined
+      effectiveUntil ? effectiveUntil - startedNow : undefined
     )
   }
 
@@ -701,6 +1008,29 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   const ceiling = new AbortController()
   const ceilingTimer = setTimeout(() => ceiling.abort(), HARD_CEILING_MS[purpose])
 
+  // BUG-125e — waits out a paced step's remaining gap, bounded and abortable.
+  // Only ever reached for a paced-tail step (see pacedUntil above). The sleep
+  // is capped at one full gap, runs under the SAME combined signal as the
+  // attempts themselves (ceiling + caller Stop), and is logged so the wait is
+  // visible in Settings' recent-activity list rather than reading as dead air.
+  const waitOutPacingIfNeeded = async (step: ResolvedStep): Promise<void> => {
+    const until = pacedUntil.get(step.catalogId)
+    if (until === undefined) return
+    const waitMs = Math.min(Math.max(0, until - Date.now()), PACING_GAP_MS)
+    if (waitMs <= 0) return
+    void logFallbackEvent({
+      ts: new Date().toISOString(),
+      purpose,
+      fromCatalogId: step.catalogId,
+      toCatalogId: step.catalogId,
+      reason: 'paced-wait',
+      detail: `Last-resort step is pacing-blocked; waiting ${waitMs}ms out instead of refusing (BUG-125).`
+    })
+    const parts: AbortSignal[] = [ceiling.signal]
+    if (req.signal) parts.push(req.signal)
+    await abortableSleep(waitMs, parts.length === 1 ? parts[0] : AbortSignal.any(parts))
+  }
+
   try {
   for (let i = 0; i < chain.length; i++) {
     const step = chain[i]
@@ -711,6 +1041,18 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
 
     const key = process.env[PROVIDER_REGISTRY[step.providerId].keyEnvName]?.trim()
     if (!key) continue // resolved eagerly above, but env could change mid-loop in theory
+    await waitOutPacingIfNeeded(step)
+    if (req.signal?.aborted) throw new Error('aborted by caller during paced wait')
+    if (ceiling.signal.aborted) break
+    if (
+      pacedUntil.has(step.catalogId) &&
+      !isUsableFor(step.catalogId, Date.now(), tier, { purpose, ignorePacing: true })
+    ) {
+      // A cooldown or structural break that arrived DURING the sleep is real
+      // evidence — skip. A fresh pacing re-mark is deliberately ignored after
+      // the one bounded wait, so a stranger's use cannot starve this walk.
+      continue
+    }
     const provider = PROVIDER_REGISTRY[step.providerId].build(key)
 
     // Only 'coaching-cue' has a CHAIN_BUDGET entry - M9 already fixed one
@@ -809,7 +1151,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
         // above) — checking the raw reason string here, not re-deriving from
         // failureClass (which would also say 'structural' for auth), avoids
         // two independent encodings of the same exclusion drifting apart.
-        markStructurallyBroken(step.catalogId, Date.now(), purpose)
+        markStructurallyBroken(step.catalogId, Date.now(), purpose, detail ? `${reason}: ${detail}` : reason)
       }
       attempts.push({
         catalogId: step.catalogId,
@@ -866,7 +1208,7 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     failureClass: lastAttempt?.failureClass,
     resetsAt: lastAttempt?.resetsAt
   })
-  throw new AllModelsExhaustedError(purpose, attempts)
+  throw new AllModelsExhaustedError(purpose, attempts, notTried)
 }
 
 export interface StreamWithFallbackResult extends AsyncIterable<{ delta: string }> {
@@ -893,7 +1235,12 @@ export interface StreamWithFallbackResult extends AsyncIterable<{ delta: string 
  */
 export function streamWithFallback(req: AICompletionRequest): StreamWithFallbackResult {
   const purpose = req.purpose
-  const { configured, capable } = resolveChain(purpose, { needsTool: Boolean(req.tool) })
+  const needs: ChainCapabilityNeeds = {
+    needsTool: Boolean(req.tool),
+    needsVision: Boolean(req.images?.length),
+    needsDocument: Boolean(req.document)
+  }
+  const { configured, capable } = resolveChain(purpose, needs)
   logToolCapabilityExclusions(purpose, configured, capable)
   // coaching-chat (the only consumer today) isn't in CHAIN_BUDGET, so this is
   // always 'durable' currently; asked rather than hardcoded, so a future live
@@ -904,7 +1251,87 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
   // consumer, and it is interactive, so spending its first attempt on a model
   // we already know is limited is the most visible possible version of this.
   const startedNow = Date.now()
-  const chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier, { purpose }))
+  let chain = capable.filter((s) => isUsableFor(s.catalogId, startedNow, tier, { purpose }))
+
+  // BUG-125e — THE PACED TAIL. Verified by the agent audit and its adversarial
+  // pass: EVERY single-key user self-paced to death on capability turns. One
+  // Rise turn makes sequential assistant-chat calls (plan, then answer); the
+  // plan's SUCCESS paces the provider for up to 6s, and for a single-key user
+  // the answer's chain collapses to exactly that one step — so the turn's own
+  // politeness mark starved its only candidate, and the walk refused.
+  //
+  // Pacing is self-imposed spacing (model-pacing.ts: "a model that is merely
+  // paced genuinely has capacity"), so a paced-ONLY step — usable in every
+  // other respect — stays in the chain, sorted LAST. The walk waits the
+  // remaining gap out only if it actually REACHES one, i.e. only after every
+  // un-paced candidate has been tried and failed. That preserves the
+  // skip-not-wait divert behaviour pinned by modelPacing.test.ts (a walk with
+  // somewhere to divert TO never sleeps) and converts only the formerly
+  // refused dead-end into a bounded wait. Durable tier only: live callers are
+  // never paced at all, and their budgets must never absorb a sleep.
+  //
+  // Known, accepted deviation from BUG-058 (recorded by the adversarial pass):
+  // concurrent durable walks that all dead-end on the same paced step wake at
+  // the same gap expiry and fire together. Bounded (one sleep, ≤6s), rare
+  // (requires simultaneous fully-paced dead-ends), and strictly better than
+  // all of them refusing.
+  const pacedUntil = new Map<string, number>()
+  if (tier === 'durable') {
+    for (const s of capable) {
+      if (chain.includes(s)) continue
+      if (!isUsableFor(s.catalogId, startedNow, tier, { purpose, ignorePacing: true })) continue
+      pacedUntil.set(s.catalogId, pacedUntilFor(s.catalogId, startedNow, tier) ?? startedNow)
+    }
+  }
+  const pacedTail = capable.filter((s) => pacedUntil.has(s.catalogId))
+
+  // BUG-125c — record WHY each excluded entry was excluded, for the error's
+  // "not tried" section. Computed AFTER the paced tail on purpose: a paced
+  // step WILL be tried now, so listing it under "not tried" would be a lie.
+  const notTried = capable
+    .filter((s) => !chain.includes(s) && !pacedUntil.has(s.catalogId))
+    .map((s) => {
+      // BUG-125d — name the EXACT gate. The first version lumped structural
+      // breaks and pacing into one sentence, and the founder's report landed
+      // on precisely that line: "structural break, OR paced too recently" is
+      // two completely different bugs with two different fixes, and the
+      // message could not say which. A diagnostic that stops one question
+      // short of the answer is only most of a diagnostic.
+      const until = cooldownUntil(s.catalogId, startedNow)
+      if (until) {
+        return {
+          catalogId: s.catalogId,
+          why: `cooling down for another ${humanWait(until - startedNow)}`
+        }
+      }
+      if (isStructurallyBroken(s.catalogId, startedNow, purpose)) {
+        const cause = structuralBreakReason(s.catalogId, purpose)
+        return {
+          catalogId: s.catalogId,
+          why:
+            'benched up to 4h by a STRUCTURAL BREAK' +
+            (cause ? ` after rejecting an earlier request with: ${cause}` : '') +
+            ' (restarting the app clears it)'
+        }
+      }
+      if (isPacedFor(s.catalogId, startedNow, tier)) {
+        return { catalogId: s.catalogId, why: 'PACED — used too recently, a few seconds apart' }
+      }
+      return { catalogId: s.catalogId, why: 'skipped by the usability gate for an unknown reason' }
+    })
+  // BUG-125b — everything cooling is exactly when a freshly-added key should
+  // rescue the turn, and exactly when it previously could not. See rescueSteps.
+  //
+  // ORDERING (adversarial amendment): rescue steps go BEFORE the paced tail.
+  // A freshly-added, never-tried key must be attempted immediately — with
+  // zero sleep — rather than queueing behind a paced provider that just
+  // failed. Without this, the paced tail would make the chain non-empty and
+  // silently disable the rescue.
+  if (chain.length === 0) {
+    chain = [...rescueSteps(capable, startedNow, tier, purpose), ...pacedTail]
+  } else {
+    chain = [...chain, ...pacedTail]
+  }
 
   let resolveFinal!: (v: { text: string; model: string; usage: AICompletionResult['usage'] }) => void
   let rejectFinal!: (e: unknown) => void
@@ -924,17 +1351,20 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     }
     if (capable.length === 0) {
       // BUG-057 Phase 6 — configured.length > 0 here by construction: real
-      // keys ARE configured, none of them are verified to support forced
-      // tool calls. Distinct from the no-key case above and the cooldown
-      // case below — same three-way split as completeWithFallback.
+      // keys ARE configured, none of them are verified to support the needed
+      // capability (tool calls, or image input — M28). Distinct from the
+      // no-key case above and the cooldown case below — same three-way
+      // split as completeWithFallback.
       void recordAiFailure(purpose, {
         reason: 'failed',
         providerId: null,
-        detail: 'no configured model verified to support tool calling'
+        detail: needs.needsVision
+          ? 'no configured model verified to support image input'
+          : 'no configured model verified to support tool calling'
       })
       const err = new AIProviderError(
         'failed',
-        "Every model configured for this can't run this request (tool-calling not supported by any of them) — reassign a model in Settings.",
+        noCapableModelMessage(needs),
         undefined,
         'structural'
       )
@@ -954,12 +1384,22 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         tier,
         purpose
       )
-      const secs = until ? Math.max(1, Math.ceil((until - startedNow) / 1000)) : 60
+      // BUG-125 audit — the 60 was FABRICATED: soonestExpiry reads only the
+    // cooldown map, and a merely-paced model has no entry there, so a refusal
+    // caused purely by pacing told the user to wait "about 60 seconds" for a
+    // condition that clears in <=6. Use the real pacing remainder when no
+    // cooldown expiry exists.
+    const pacedSoonest = capable
+      .map((s) => pacedUntilFor(s.catalogId, startedNow, tier))
+      .filter((t): t is number => t !== null)
+      .sort((a, b) => a - b)[0]
+    const effectiveUntil = until ?? pacedSoonest ?? null
+    const secs = effectiveUntil ? Math.max(1, Math.ceil((effectiveUntil - startedNow) / 1000)) : 60
       void recordAiFailure(purpose, { reason: 'rate-limit', providerId: null })
       const err = new AIProviderError(
         'rate-limit',
         `Every model set up for this is rate-limited right now. Try again in ${humanWait(secs * 1000)}.`,
-        until ? until - startedNow : undefined
+        effectiveUntil ? effectiveUntil - startedNow : undefined
       )
       rejectFinal(err)
       throw err
@@ -1004,6 +1444,29 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     const ceiling = new AbortController()
     const ceilingTimer = setTimeout(() => ceiling.abort(), HARD_CEILING_MS[purpose])
 
+    // BUG-125e — waits out a paced step's remaining gap, bounded and abortable.
+    // Only ever reached for a paced-tail step (see pacedUntil above). The sleep
+    // is capped at one full gap, runs under the SAME combined signal as the
+    // attempts themselves (ceiling + caller Stop), and is logged so the wait is
+    // visible in Settings' recent-activity list rather than reading as dead air.
+    const waitOutPacingIfNeeded = async (step: ResolvedStep): Promise<void> => {
+      const until = pacedUntil.get(step.catalogId)
+      if (until === undefined) return
+      const waitMs = Math.min(Math.max(0, until - Date.now()), PACING_GAP_MS)
+      if (waitMs <= 0) return
+      void logFallbackEvent({
+        ts: new Date().toISOString(),
+        purpose,
+        fromCatalogId: step.catalogId,
+        toCatalogId: step.catalogId,
+        reason: 'paced-wait',
+        detail: `Last-resort step is pacing-blocked; waiting ${waitMs}ms out instead of refusing (BUG-125).`
+      })
+      const parts: AbortSignal[] = [ceiling.signal]
+      if (req.signal) parts.push(req.signal)
+      await abortableSleep(waitMs, parts.length === 1 ? parts[0] : AbortSignal.any(parts))
+    }
+
     try {
     for (let i = 0; i < chain.length; i++) {
       if (ceiling.signal.aborted) break
@@ -1011,6 +1474,15 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       if (deadProviders.has(step.providerId)) continue
       const key = process.env[PROVIDER_REGISTRY[step.providerId].keyEnvName]?.trim()
       if (!key) continue
+      await waitOutPacingIfNeeded(step)
+      if (req.signal?.aborted) throw new Error('aborted by caller during paced wait')
+      if (ceiling.signal.aborted) break
+      if (
+        pacedUntil.has(step.catalogId) &&
+        !isUsableFor(step.catalogId, Date.now(), tier, { purpose, ignorePacing: true })
+      ) {
+        continue
+      }
       const provider = PROVIDER_REGISTRY[step.providerId].build(key)
 
       const parts: AbortSignal[] = [ceiling.signal]
@@ -1108,7 +1580,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           markUsed(step.catalogId, Date.now(), tier)
           noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
         } else if (failureClass === 'structural' && reason !== 'auth') {
-          markStructurallyBroken(step.catalogId, Date.now(), purpose)
+          markStructurallyBroken(step.catalogId, Date.now(), purpose, detail ? `${reason}: ${detail}` : reason)
         }
         attempts.push({
           catalogId: step.catalogId,
@@ -1183,7 +1655,7 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       failureClass: lastAttempt?.failureClass,
       resetsAt: lastAttempt?.resetsAt
     })
-    const finalErr = new AllModelsExhaustedError(purpose, attempts)
+    const finalErr = new AllModelsExhaustedError(purpose, attempts, notTried)
     rejectFinal(finalErr)
     throw finalErr
   }

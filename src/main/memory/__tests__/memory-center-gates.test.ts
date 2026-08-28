@@ -44,7 +44,13 @@ vi.mock('../../calls-fs', () => ({
 vi.mock('../embeddings', () => ({ embedText: async () => new Float32Array(384) }))
 
 let db: Database.Database | null = null
-vi.mock('../memory-runtime', () => ({ getMemoryDb: () => db }))
+const initDetail = { value: 'migration failed: {"ok":false}' }
+vi.mock('../memory-runtime', () => ({
+  getMemoryDb: () => db,
+  // AUDIT FIX (2026-08-24) — salesBrain:status reports WHY the brain is
+  // unreachable, so the handler needs the last init result.
+  getLastInitResult: () => ({ ok: false, detail: initDetail.value })
+}))
 
 const { registerMemoryCenter } = await import('../memory-center-ipc')
 const { openMemoryDb, memoryDbPath, migrate } = await import('../db')
@@ -198,5 +204,67 @@ describe('with no database open, every door fails safe', () => {
     } finally {
       db = realDb
     }
+  })
+})
+
+// AUDIT FIX (2026-08-24) — OFF vs UNAVAILABLE vs EMPTY vs READY.
+//
+// 'salesBrain:memories:list' returns [] and never rejects for THREE unrelated
+// reasons — Sales Brain off (the shipping default, EMPTY_SALES_BRAIN is
+// { enabled: false }), the DB unavailable because migration failed and left
+// db null while the flag stayed on, and a genuinely empty brain. Rise read
+// `rows.length === 0` as proof of the third and told new users "your Sales
+// Brain is empty — import your call history". Importing cannot help in the
+// other two: initSalesBrain() returns before creating the DB file when the
+// flag is off, and every extraction hook is master-gated. So the copy named a
+// wrong cause and prescribed futile work, in the state most new installs are
+// actually in.
+//
+// Each case below is a state the OLD boolean could not tell apart. If the
+// handler ever collapses them again, the three assertions that matter here
+// all fail together.
+describe('salesBrain:status — the three ways an empty list can happen', () => {
+  it('OFF: reports off, not empty — the shipping default', async () => {
+    salesBrainOn.value = false
+    expect(await call('salesBrain:status')).toEqual({ state: 'off' })
+  })
+
+  it('UNAVAILABLE: on, but the DB never opened — and it says why', async () => {
+    salesBrainOn.value = true
+    const realDb = db
+    db = null
+    const status = (await call('salesBrain:status')) as { state: string; detail?: string }
+    db = realDb
+    expect(status.state).toBe('unavailable')
+    expect(status.detail).toContain('migration failed')
+  })
+
+  it('EMPTY: on, DB open, nothing learned yet', async () => {
+    salesBrainOn.value = true
+    expect(await call('salesBrain:status')).toEqual({ state: 'empty' })
+  })
+
+  it('READY: on, DB open, memories present — with the count', async () => {
+    salesBrainOn.value = true
+    seed('m-status-1', 'the rep opens with a recap')
+    expect(await call('salesBrain:status')).toEqual({ state: 'ready', count: 1 })
+  })
+
+  it('the four states are mutually distinguishable', async () => {
+    // The actual defect was three states collapsing to one value. Asserting
+    // the SET is distinct is what a boolean could never satisfy.
+    salesBrainOn.value = false
+    const off = (await call('salesBrain:status')) as { state: string }
+    salesBrainOn.value = true
+    const realDb = db
+    db = null
+    const unavailable = (await call('salesBrain:status')) as { state: string }
+    db = realDb
+    const empty = (await call('salesBrain:status')) as { state: string }
+    seed('m-status-2', 'discovery runs long on enterprise calls')
+    const ready = (await call('salesBrain:status')) as { state: string }
+
+    const states = [off.state, unavailable.state, empty.state, ready.state]
+    expect(new Set(states).size, `states collapsed: ${states.join(', ')}`).toBe(4)
   })
 })

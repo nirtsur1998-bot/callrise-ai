@@ -86,20 +86,27 @@ function toMessages(req: AICompletionRequest): OpenAI.Chat.ChatCompletionMessage
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = []
   if (req.system) messages.push({ role: 'system', content: req.system })
   req.messages.forEach((m, i) => {
-    if (req.document && i === 0 && m.role === 'user') {
-      messages.push({
-        role: 'user',
-        content: [
-          {
-            type: 'file',
-            file: {
-              file_data: `data:application/pdf;base64,${req.document.base64}`,
-              filename: req.document.filename ?? 'document.pdf'
-            }
-          },
-          { type: 'text', text: m.content }
-        ]
-      })
+    if ((req.document || req.images?.length) && i === 0 && m.role === 'user') {
+      const parts: OpenAI.Chat.ChatCompletionContentPart[] = []
+      // M28 Part 3 — images as data-URL image parts (the OpenAI-compatible
+      // vision shape Groq's Llama 4 Scout accepts), then any document, then text.
+      for (const img of req.images ?? []) {
+        parts.push({
+          type: 'image_url',
+          image_url: { url: `data:${img.mimeType};base64,${img.base64}` }
+        })
+      }
+      if (req.document) {
+        parts.push({
+          type: 'file',
+          file: {
+            file_data: `data:application/pdf;base64,${req.document.base64}`,
+            filename: req.document.filename ?? 'document.pdf'
+          }
+        })
+      }
+      parts.push({ type: 'text', text: m.content })
+      messages.push({ role: 'user', content: parts })
       return
     }
     messages.push({ role: m.role, content: m.content })

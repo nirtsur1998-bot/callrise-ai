@@ -100,10 +100,16 @@ export function toGeminiSchema(schema: Record<string, unknown>): Record<string, 
 function toContents(req: AICompletionRequest): GeminiContent[] {
   return req.messages.map((m, i) => {
     const parts: GeminiPart[] = []
-    if (req.document && i === 0 && m.role === 'user') {
-      parts.push({
-        inlineData: { mimeType: 'application/pdf', data: req.document.base64 }
-      })
+    if (i === 0 && m.role === 'user') {
+      // M28 Part 3 — images first, then any document, then the text.
+      for (const img of req.images ?? []) {
+        parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } })
+      }
+      if (req.document) {
+        parts.push({
+          inlineData: { mimeType: 'application/pdf', data: req.document.base64 }
+        })
+      }
     }
     parts.push({ text: m.content })
     return { role: m.role === 'assistant' ? 'model' : 'user', parts }

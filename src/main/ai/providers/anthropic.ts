@@ -33,7 +33,10 @@ const MODEL_BY_PURPOSE: Record<AIPurpose, string> = {
   'memory-extract': 'claude-haiku-4-5',
   // M25 Phase 2 - judgment work, quality tier same as summary/scorecard.
   'memory-consolidate': 'claude-sonnet-4-6',
-  'memory-reflect': 'claude-sonnet-4-6'
+  'memory-reflect': 'claude-sonnet-4-6',
+  // M28 - the Rise assistant; quality tier, a real conversation same as
+  // coaching-chat.
+  'assistant-chat': 'claude-sonnet-4-6'
 }
 
 // Rough per-million-token pricing for usage/cost display (Settings -> AI).
@@ -152,6 +155,28 @@ export class AnthropicProvider implements AIProvider {
         ]
       }
     }
+    // M28 Part 3 — images ride on the first user message as native image
+    // blocks, ahead of any document block and the text.
+    if (req.images?.length && messages.length > 0 && messages[0].role === 'user') {
+      const existing = messages[0].content
+      const tail = Array.isArray(existing)
+        ? existing
+        : [{ type: 'text' as const, text: req.messages[0].content }]
+      messages[0] = {
+        role: 'user',
+        content: [
+          ...req.images.map((img) => ({
+            type: 'image' as const,
+            source: {
+              type: 'base64' as const,
+              media_type: img.mimeType as 'image/png',
+              data: img.base64
+            }
+          })),
+          ...tail
+        ]
+      } as Anthropic.MessageParam
+    }
     return messages
   }
 
@@ -216,6 +241,24 @@ export class AnthropicProvider implements AIProvider {
     const client = this.client
     const tools = this.tools(req)
     const toolChoice = this.toolChoice(req)
+    // AUDIT FIX (2026-08-24) — hoisted so the generator below can use it.
+    //
+    // stream() built its messages inline as
+    // `req.messages.map((m) => ({ role: m.role, content: m.content }))`,
+    // bypassing this.messages(req) — the method that attaches image and
+    // document blocks. complete() called it; stream() did not. Rise streams,
+    // so EVERY image and PDF a user sent to Claude in Rise was silently
+    // dropped and the model answered about a file it had never seen. No
+    // error, no warning: the most confident possible wrong answer.
+    //
+    // The cause is mechanical rather than careless: this.messages is a
+    // private METHOD and the inner `async function* generator()` has its own
+    // `this`, so the builder was simply not reachable from where the request
+    // is assembled. Every sibling adapter builds its parts with a module-level
+    // function (toMessages / toContents) and calls it correctly inside the
+    // generator — Anthropic was the only one where the shape of the code made
+    // the right call impossible. Hoisting to a const closes that.
+    const messages = this.messages(req)
 
     let resolveUsage: (u: AIUsage) => void
     const usage = new Promise<AIUsage>((resolve) => {
@@ -230,7 +273,7 @@ export class AnthropicProvider implements AIProvider {
             max_tokens: req.maxTokens,
             temperature: req.temperature,
             system: req.system,
-            messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
+            messages,
             tools,
             tool_choice: toolChoice
           },

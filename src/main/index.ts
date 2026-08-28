@@ -260,6 +260,7 @@ import { registerUpdater } from './updater'
 import { buildDiagnoseReport, wantsDiagnose } from './diagnose'
 import { registerPrepBrief } from './prep-brief-ipc'
 import { registerCoachingChat } from './coaching-chat-ipc'
+import { registerAssistant } from './assistant/assistant-ipc'
 import { registerCrmNoteGenerator } from './crm-note-generator-ipc'
 import { registerContactIntelligence } from './contact-intelligence-ipc'
 
@@ -635,6 +636,7 @@ app.whenReady().then(async () => {
   registerAlerts()
   registerPrepBrief()
   registerCoachingChat()
+  registerAssistant()
   registerCrmNoteGenerator()
   registerContactIntelligence()
   registerDetectionService()

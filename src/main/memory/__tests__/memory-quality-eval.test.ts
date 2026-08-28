@@ -57,6 +57,31 @@ function anyProviderKeyConfigured(): boolean {
   return Object.values(PROVIDER_REGISTRY).some((entry) => !!process.env[entry.keyEnvName]?.trim())
 }
 
+/**
+ * AUDIT FIX (2026-08-24) — an EXPLICIT opt-in, not just "is a key lying
+ * around in process.env".
+ *
+ * Found while checking whether this file's new loud failure actually fires:
+ * two consecutive full-suite runs disagreed (2216 passed, then 1 failed |
+ * 2215 passed) with no change to this file in between. The cause is that a
+ * provider key in process.env is not a stable fact during a test run — more
+ * than ten sibling files under src/main/ai/__tests__ assign
+ * process.env.GROQ_API_KEY (and friends), vitest reuses a worker process
+ * across files, and `hasKey` here is evaluated at COLLECTION time. Whether
+ * this harness saw a key therefore depended on worker scheduling.
+ *
+ * That is worse than a flaky result. The key those siblings set is fake, but
+ * the branch it unlocks is the REAL one: an ordinary `npm test` could start
+ * firing live extraction requests at a provider, spending real quota, because
+ * an unrelated test set an env var and vitest happened to schedule the two
+ * files together.
+ *
+ * So measurement now requires a deliberate CALLRISE_EVAL=1, which nothing
+ * else in the suite sets. A stray key can no longer trigger a network run,
+ * and the outcome no longer depends on scheduling.
+ */
+const OPTED_IN = process.env.CALLRISE_EVAL === '1'
+
 const TOPIC_KEYWORDS: Record<EvalTopic, string[][]> = {
   budget: [['budget'], ['price'], ['cost'], ['$'], ['invest']],
   timeline: [['timeline'], ['deadline'], ['quarter'], ['q1'], ['q2'], ['q3'], ['q4'], ['go live'], ['go-live']],
@@ -104,19 +129,56 @@ interface ScenarioReport {
 describe('Memory Quality Eval Harness (M27 audit — Sales Brain extraction baseline)', () => {
   const hasKey = anyProviderKeyConfigured()
 
-  it(
-    hasKey ? 'runs extraction against scripted transcripts and reports precision/recall' : 'SKIPPED — no AI provider key in process.env',
+  // NOT opted in: skip, with the truth in the test NAME so it reads as
+  // "unmeasured" in the summary rather than as a pass.
+  //
+  // This is the deliberate difference from the sibling retrieval harness,
+  // which was changed to a HARD failure on the same day. That one could run
+  // offline all along, so its green-skip was actively false — it claimed
+  // memory quality was verified when the model simply had not been cached.
+  // This harness genuinely cannot run without a provider key and a network,
+  // so "unmeasured" is the honest status, and a permanently-red default suite
+  // for a known and accepted gap would just train everyone to ignore red —
+  // the same end state as a hollow green, reached from the other side.
+  //
+  // What must never happen is a SILENT pass, and it no longer can: the name
+  // says NEVER BASELINED, and vitest counts it under "skipped", not "passed".
+  const testName = !OPTED_IN
+    ? 'NEVER BASELINED — extraction quality is UNMEASURED (set CALLRISE_EVAL=1 plus a provider key)'
+    : hasKey
+      ? 'runs extraction against scripted transcripts and reports precision/recall'
+      : 'FAILS LOUDLY — CALLRISE_EVAL=1 was set but no provider key is present'
+
+  it.skipIf(!OPTED_IN)(
+    testName,
     async () => {
       if (!hasKey) {
-        console.log(
-          '\n[memory-quality-eval] No AI provider key found in process.env ' +
-            `(checked: ${Object.values(PROVIDER_REGISTRY)
-              .map((e) => e.keyEnvName)
-              .join(', ')}). ` +
-            "Set one and re-run to get a real baseline: see this file's header comment for the exact command.\n"
+        // FAIL LOUDLY (2026-08-24, founder's instruction, applied BEFORE the
+        // key lands rather than after).
+        //
+        // This used to `expect(hasKey).toBe(false)` and PASS: a green result
+        // in ~4ms that measured nothing. That is the same hollow-skip the
+        // sibling retrieval harness was fixed for on this branch — there, the
+        // green-skip was actively false (that harness could run offline all
+        // along). Here it is "only" a trap: extraction genuinely IS blocked on
+        // a key, so the honest status is UNMEASURED. But a suite that reports
+        // success for a run that measured nothing is a trap regardless of
+        // whether anyone is relying on it today, and the next person to run
+        // this without a key should be told so in one line rather than reading
+        // a green tick and moving on.
+        //
+        // The status stays "never measured" — this change does not create a
+        // baseline, it stops the absence of one from looking like a pass.
+        const checked = Object.values(PROVIDER_REGISTRY)
+          .map((e) => e.keyEnvName)
+          .join(', ')
+        throw new Error(
+          'Memory-extraction quality harness could not run: no AI provider key in process.env ' +
+            `(checked: ${checked}). This is a HARD FAILURE, not a skip — a green result here ` +
+            'would claim extraction quality was verified when nothing was measured. Extraction ' +
+            'quality has NEVER been baselined (owed since M27). Set a throwaway free-tier key and ' +
+            "re-run to get the first real numbers: see this file's header comment for the command."
         )
-        expect(hasKey).toBe(false) // documents the skip explicitly rather than a bare no-op test
-        return
       }
 
       const reports: ScenarioReport[] = []

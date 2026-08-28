@@ -32,6 +32,7 @@ const ALL_PURPOSES: AIPurpose[] = [
   'deal-tier1',
   'deal-tier2',
   'coaching-chat',
+  'assistant-chat',
   'memory-extract',
   'memory-consolidate',
   'memory-reflect'
@@ -132,7 +133,13 @@ describe('resolveChain — a default provider no longer means "no fallback"', ()
 
 describe('resolveChain — the caps', () => {
   it('background purposes get at most 3 extra attempts (4 total)', () => {
-    for (const p of ['summary', 'scorecard', 'memory-extract', 'deal-tier2'] as AIPurpose[]) {
+    for (const p of [
+      'summary',
+      'scorecard',
+      'memory-extract',
+      'deal-tier2',
+      'assistant-chat'
+    ] as AIPurpose[]) {
       expect(resolveConfiguredChain(p).length).toBeLessThanOrEqual(4)
     }
   })
@@ -141,6 +148,24 @@ describe('resolveChain — the caps', () => {
     for (const p of ['other', 'coaching-chat'] as AIPurpose[]) {
       expect(resolveConfiguredChain(p).length).toBeLessThanOrEqual(2)
     }
+  })
+
+  // M28, 2026-08-21 — regression for a real field failure, not a guess: the
+  // founder's own ai-fallback-events.jsonl showed assistant-chat's ENTIRE
+  // chain die on exactly two links (legacy:groq's dead default model, then
+  // a genuinely daily-quota-exhausted Gemini) while summary/scorecard kept
+  // working on the same account, because THEY had 3 bundled fallbacks
+  // behind the same broken legacy step and assistant-chat — copying
+  // coaching-chat's tail=1 "human is watching" reasoning without checking
+  // whether it fit a purpose that fires 2-3x per single user message on the
+  // same thin chain — had only 1. Regression test for that reversal:
+  // assistant-chat must have room for the same depth the other quality-lane
+  // purposes already rely on, not the tight interactive cap.
+  it('assistant-chat gets the resilient quality-lane tail, not the tight interactive one', () => {
+    const chain = resolveConfiguredChain('assistant-chat')
+    expect(chain[0].catalogId).toBe('legacy:groq') // unchanged: first attempt is still today's default
+    expect(chain.length).toBeGreaterThan(2) // the actual regression: used to cap at 2
+    expect(chain.length).toBeLessThanOrEqual(4)
   })
 
   it('LIVE purposes are untouched — still exactly one attempt, no tail', () => {

@@ -537,6 +537,206 @@ export interface CoachChatApi {
   onError: (cb: (payload: CoachChatStreamError) => void) => () => void
 }
 
+// --- M28: the Rise assistant (top-level AI chat section) --------------------
+
+export interface AssistantCitation {
+  kind: 'memory' | 'call'
+  id: string
+  label: string
+  /** The [n] marker this citation owns — chips bind by this, never by position. */
+  marker?: number
+}
+
+/** M28 Part 3 — a file sent with a user message (metadata only). */
+export interface AssistantAttachment {
+  id: string
+  name: string
+  kind: 'image' | 'pdf' | 'text'
+  mimeType: string
+  sizeBytes: number
+  extractedChars?: number
+}
+
+/** M28 Part 4 — the client a conversation is about, fixed at creation. */
+export interface AssistantScope {
+  contactId: string
+  contactName: string
+  company?: string
+  dealId?: string
+  dealTitle?: string
+}
+
+export interface AssistantTaskProposal {
+  id: string
+  title: string
+  type: 'follow-up' | 'email' | 'meeting' | 'research' | 'general'
+  priority: 'low' | 'medium' | 'high'
+  status: 'pending' | 'accepted'
+}
+
+export interface AssistantMessage {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+  createdAt: string
+  citations?: AssistantCitation[]
+  suggestions?: CoachChatContextSuggestion[]
+  appliedSuggestionIds?: string[]
+  taskProposals?: AssistantTaskProposal[]
+  /** The voice note this user message was dictated from — playback only;
+   *  the message TEXT is the reviewed transcript and is all the AI sees. */
+  voiceNote?: { mediaId: string; durationMs: number }
+  attachments?: AssistantAttachment[]
+}
+
+export interface AssistantConversation {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messages: AssistantMessage[]
+  /** "Don't learn from this conversation" — see AssistantApi.setSalesBrainExcluded. */
+  salesBrainExcluded?: boolean
+  scope?: AssistantScope
+}
+
+export interface AssistantConversationMeta {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messageCount: number
+  preview: string
+  scope?: AssistantScope
+}
+
+export interface AssistantSendResult {
+  ok: boolean
+  /** 'attachment-mismatch' (2026-08-24): a staged file belonged to a
+   *  different conversation and was refused rather than sent. */
+  error?:
+    | 'not-found'
+    | 'busy'
+    | 'empty'
+    | 'ai-failed'
+    | 'cancelled'
+    | 'attachment-mismatch'
+    | 'too-many-documents'
+  message?: string
+  reply?: string
+  citations?: AssistantCitation[]
+  suggestions?: CoachChatContextSuggestion[]
+  stopped?: boolean
+  userMessageId?: string
+}
+
+export interface AssistantAttachSnapshot {
+  streaming: boolean
+  accumulated: string
+  pendingUserText: string
+}
+
+export interface AssistantDelta {
+  conversationId: string
+  delta: string
+}
+
+export interface AssistantStreamError {
+  conversationId: string
+  message: string
+}
+
+export interface AssistantMemoryEvidence {
+  id: string
+  statement: string
+  status: 'active' | 'hypothesis' | 'invalidated' | 'archived'
+  confidence: number
+  category: string
+  scope: string
+  evidence: Array<
+    | { type: 'transcript'; callId: string; chatMessageId?: string; quote: string }
+    | { type: 'reflection'; memoryIds: string[] }
+  >
+}
+
+/** Same streaming shape as CoachChatApi (delta pushes during the in-flight
+ *  invoke), plus two M28 additions: `attach` recovers an in-flight turn's
+ *  accumulated text after a remount, and `cancel` genuinely aborts the
+ *  provider walk (a real Stop, not a UI dismissal). */
+export interface AssistantApi {
+  listConversations: () => Promise<AssistantConversationMeta[]>
+  getConversation: (id: string) => Promise<AssistantConversation | null>
+  /** M28 Part 4 — pass a scope to open the conversation about ONE client. */
+  createConversation: (scope?: AssistantScope) => Promise<AssistantConversation>
+  renameConversation: (id: string, title: string) => Promise<AssistantConversation | null>
+  deleteConversation: (id: string) => Promise<boolean>
+  send: (
+    conversationId: string,
+    message: string,
+    voiceNote?: { mediaId: string; durationMs: number },
+    attachmentIds?: string[]
+  ) => Promise<AssistantSendResult>
+  /** M28 Part 3 — validate/cap/extract/store a file locally. Nothing reaches
+   *  a provider until it rides a send(). `preview` is exactly what will be
+   *  sent (extracted text head, or how the binary travels). */
+  addAttachment: (
+    name: string,
+    bytes: ArrayBuffer,
+    /** AUDIT FIX (2026-08-24) — the conversation this file is staged for.
+     *  Required: an unowned attachment could be sent into any conversation,
+     *  including a different client's scoped one. */
+    conversationId: string
+  ) => Promise<
+    | { ok: true; attachment: AssistantAttachment; preview: string }
+    | { ok: false; message: string }
+  >
+  discardAttachment: (id: string) => Promise<boolean>
+  /** M28 Phase 3 — one-shot voice-note transcription (Deepgram prerecorded
+   *  REST; NOT the live-call pipeline). On ok the audio is stored and the
+   *  text goes to the composer FOR REVIEW — nothing is sent automatically. */
+  transcribeVoiceNote: (
+    audio: ArrayBuffer,
+    mimeType: string,
+    durationMs: number
+  ) => Promise<
+    | { ok: true; text: string; mediaId: string; durationMs: number }
+    | { ok: false; error: string; message: string }
+  >
+  discardVoiceNote: (mediaId: string) => Promise<boolean>
+  getVoiceNote: (mediaId: string) => Promise<ArrayBuffer | null>
+  cancel: (conversationId: string) => Promise<boolean>
+  attach: (conversationId: string) => Promise<AssistantAttachSnapshot>
+  applySuggestion: (
+    conversationId: string,
+    messageId: string,
+    suggestion: CoachChatContextSuggestion
+  ) => Promise<{ ok: boolean }>
+  /** Confirm a pending task proposal — the task is created only here, never
+   *  during the turn (writes are confirmed, reads are free). */
+  confirmTask: (
+    conversationId: string,
+    messageId: string,
+    proposalId: string
+  ) => Promise<{ ok: boolean }>
+  /** "Don't learn from this conversation." Excluding ALSO retroactively
+   *  deletes every memory the conversation taught (zero trace, same rule as
+   *  the per-call toggle); re-enabling does not re-extract. */
+  setSalesBrainExcluded: (conversationId: string, excluded: boolean) => Promise<{ ok: boolean }>
+  getMemoryEvidence: (memoryId: string) => Promise<AssistantMemoryEvidence | null>
+  onDelta: (cb: (payload: AssistantDelta) => void) => () => void
+  onError: (cb: (payload: AssistantStreamError) => void) => () => void
+  /** Fires on EVERY terminal outcome of a turn (success/stop/cancel/failure),
+   *  after persistence — the recovery signal for a renderer that mounted
+   *  mid-stream and does not own the original invoke() promise. */
+  onTurnComplete: (cb: (payload: { conversationId: string }) => void) => () => void
+  /** Coarse pre-first-token progress, driven by what the turn is actually
+   *  doing: reading (profiles+retrieval) → searching (tool lookups, only
+   *  when any were planned) → thinking (the answer request is out). */
+  onPhase: (
+    cb: (payload: { conversationId: string; phase: 'reading' | 'searching' | 'thinking' }) => void
+  ) => () => void
+}
+
 export interface SkillHistoryPoint {
   callId: string
   createdAt: string
@@ -1792,6 +1992,7 @@ export type AiPurpose =
   | 'deal-tier2'
   | 'coaching-chat'
   | 'memory-extract'
+  | 'assistant-chat'
 
 export interface ModelAssignment {
   /** Ordered model-catalog entry IDs — see main/ai/model-catalog.ts. Empty
@@ -2527,6 +2728,7 @@ export interface SalesBrainCallsApi {
 }
 
 export interface SalesBrainApi {
+  status: () => Promise<SalesBrainStatus>
   /** M29 A5.3 — consistent snapshot via the shared snapshot mechanism. */
   exportSnapshot: () => Promise<SalesBrainExportResult>
   onboarding: SalesBrainOnboardingApi
@@ -2566,6 +2768,21 @@ export interface LiveApi {
 }
 
 declare global {
+  /** AUDIT FIX (2026-08-24) — the four states an empty memories.list() can
+   *  mean. Each of the first three has a DIFFERENT correct user action, and
+   *  the boolean this replaces collapsed them into "your Sales Brain is
+   *  empty" — wrong for two of them, and wrong for the SHIPPING DEFAULT.
+   *
+   *  Ambient rather than exported: no renderer file imports preload types,
+   *  and `../../../../preload` resolves to the implementation module (which
+   *  would drag electron into the web project), so an import here would be
+   *  swimming against the repo's own convention. */
+  type SalesBrainStatus =
+    | { state: 'off' }
+    | { state: 'unavailable'; detail: string }
+    | { state: 'empty' }
+    | { state: 'ready'; count: number }
+
   interface Window {
     electron: ElectronAPI
     api: {
@@ -2578,6 +2795,7 @@ declare global {
       calls: CallsApi
       coach2: Coach2Api
       coachChat: CoachChatApi
+      assistant: AssistantApi
       crmNoteGenerator: CrmNoteGeneratorApi
       contactIntelligence: ContactIntelligenceApi
       tasks: TasksApi

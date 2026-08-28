@@ -80,7 +80,7 @@ describe('hasUsableAiCapacity — the signal', () => {
   // could ever clear — a blacklisted model is filtered out of every chain,
   // so it can never earn the success that clears it early.
   it("does NOT count another purpose's structural break — breaks are purpose-scoped", () => {
-    for (const id of idsForProvider('groq')) markStructurallyBroken(id, NOW, 'coaching-chat')
+    for (const id of idsForProvider('groq')) markStructurallyBroken(id, NOW, 'assistant-chat')
     expect(hasUsableAiCapacity(NOW)).toBe(true)
   })
 

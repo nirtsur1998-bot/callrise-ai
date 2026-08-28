@@ -93,6 +93,38 @@ function seedMemory(id: string, callId: string, statement: string): void {
   )
 }
 
+/**
+ * AUDIT FIX (2026-08-24) — a memory reinforced by MORE THAN ONE source.
+ *
+ * seedMemory gives every fixture exactly one callId, and the "leaves memories
+ * from other calls alone" control seeds two independent single-source rows —
+ * so the multi-source class was entirely untested, and it is the only class
+ * where the bug shows. consolidateNewCandidate reinforces an existing memory
+ * by APPENDING the new candidate's evidence, carrying the new source's
+ * callId, onto a row an unrelated call created.
+ */
+function seedMultiSourceMemory(id: string, callIds: string[], statement: string): void {
+  db.prepare(
+    `INSERT INTO memories (id, scope, category, statement, evidence, confidence, importance,
+        status, source, created_at, last_confirmed_at)
+     VALUES (?, 'self', 'style', ?, ?, 0.9, 3, 'active', 'call', 't', 't')`
+  ).run(
+    id,
+    statement,
+    JSON.stringify(
+      callIds.map((callId) => ({ type: 'transcript', callId, quote: statement, at: 't' }))
+    )
+  )
+}
+
+function evidenceCallIds(id: string): string[] {
+  const row = db.prepare('SELECT evidence FROM memories WHERE id = ?').get(id) as
+    | { evidence: string }
+    | undefined
+  if (!row) return []
+  return (JSON.parse(row.evidence) as { callId?: string }[]).map((e) => e.callId ?? '')
+}
+
 async function rendererSetsExcluded(callId: unknown, excluded: unknown): Promise<unknown> {
   return await handlers.get('salesBrain:calls:setExcluded')!({}, callId, excluded)
 }
@@ -180,5 +212,61 @@ describe('excluding a call forgets what was learned from it', () => {
 
     expect(await rendererSetsExcluded(CALL, true)).toEqual({ ok: true })
     expect(listMemoriesByCallId(db, CALL)).toHaveLength(1)
+  })
+})
+
+// AUDIT FIX (2026-08-24) — excluding one source must not destroy what OTHER
+// sources taught.
+//
+// The chain that made it possible: extraction stamps every candidate's
+// evidence with the current callId (`assistant:<conversationId>` for chat);
+// consolidateNewCandidate reinforces an exact match by appending that entry to
+// a DIFFERENT, pre-existing row, and its lookup is scope-wide — 'rep' and
+// 'business' are global singleton scopes shared by every call and every Rise
+// chat; listMemoriesByCallId then matches on ANY single evidence entry; and
+// all four exclusion sites called deleteMemory on the whole row, both tables,
+// no soft state, no changelog row surviving.
+//
+// The UI promises the narrow thing and admits it is irreversible: "Anything it
+// already taught the Sales Brain will be forgotten. This cannot be undone."
+// IT — this source — not everything that ever agreed with it.
+describe('exclusion is evidence-level: other calls keep what they taught', () => {
+  it('a memory reinforced by two calls SURVIVES excluding one of them', async () => {
+    seedMultiSourceMemory('m-shared', [OTHER_CALL, CALL], "Acme's budget cycle ends in March")
+
+    expect(await rendererSetsExcluded(CALL, true)).toEqual({ ok: true })
+
+    const survivors = listMemoriesByCallId(db, OTHER_CALL)
+    expect(
+      survivors,
+      'excluding one conversation hard-deleted a memory an unrelated call ' +
+        'taught — the user was told only that THIS source would be forgotten'
+    ).toHaveLength(1)
+    expect(survivors[0].statement).toBe("Acme's budget cycle ends in March")
+  })
+
+  it("the excluded source's evidence is actually removed, not just left in place", async () => {
+    seedMultiSourceMemory('m-shared', [OTHER_CALL, CALL], 'shared fact')
+    await rendererSetsExcluded(CALL, true)
+
+    expect(evidenceCallIds('m-shared')).toEqual([OTHER_CALL])
+    // And the memory is no longer reachable BY the excluded source, which is
+    // the promise "forgotten" actually makes.
+    expect(listMemoriesByCallId(db, CALL)).toHaveLength(0)
+  })
+
+  it('a single-source memory is still deleted outright — the original behaviour, preserved', async () => {
+    // The narrowing must not become "nothing is ever deleted": when the
+    // excluded source was the ONLY thing holding a memory up, it goes.
+    seedMemory('m-only', CALL, 'learned solely from the excluded call')
+    await rendererSetsExcluded(CALL, true)
+    expect(listMemoriesByCallId(db, CALL)).toHaveLength(0)
+    expect(db.prepare('SELECT id FROM memories WHERE id = ?').get('m-only')).toBeUndefined()
+  })
+
+  it('a memory reinforced by three sources loses exactly one', async () => {
+    seedMultiSourceMemory('m-three', ['call-a', CALL, 'call-b'], 'thrice-confirmed')
+    await rendererSetsExcluded(CALL, true)
+    expect(evidenceCallIds('m-three')).toEqual(['call-a', 'call-b'])
   })
 })

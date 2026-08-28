@@ -150,6 +150,27 @@ export function isPacedFor(catalogId: string, now: number, callerTier: CooldownT
   return now - entry.at < gapMsFor(catalogId)
 }
 
+/**
+ * BUG-125e (2026-08-28) — read-only companion for the ONE caller that decided
+ * to WAIT a pacing gap out rather than skip: the fallback walk's last-resort
+ * paced tail. Everything else keeps using isUsableFor; the gate does not move.
+ *
+ * Same guards as isPacedFor: live callers are never paced and live-caused
+ * marks never pace anyone, so both return null here. Returns the absolute
+ * time the gap clears, only when it is still in the future.
+ */
+export function pacedUntilFor(
+  catalogId: string,
+  now: number,
+  callerTier: CooldownTier
+): number | null {
+  if (callerTier === 'live') return null
+  const entry = lastUsed.get(catalogId)
+  if (!entry || entry.causedBy === 'live') return null
+  const until = entry.at + gapMsFor(catalogId)
+  return until > now ? until : null
+}
+
 /** Test-only reset — production code never calls this. */
 export function resetPacingForTests(): void {
   lastUsed.clear()

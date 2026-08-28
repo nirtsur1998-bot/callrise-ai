@@ -93,7 +93,7 @@ describe('hasUsableCapacityForPurpose, against real cooldown state', () => {
   // provider capacity" label they could never clear.
   it("another purpose's structural break does not consume this purpose's capacity", () => {
     const ids = chainIds()
-    for (const id of ids) markStructurallyBroken(id, NOW, 'coaching-chat')
+    for (const id of ids) markStructurallyBroken(id, NOW, 'assistant-chat')
     expect(hasUsableCapacityForPurpose(PURPOSE, NOW)).toBe(true)
   })
 

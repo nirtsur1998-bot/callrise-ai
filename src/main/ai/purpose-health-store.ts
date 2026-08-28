@@ -44,7 +44,8 @@ const ALL_PURPOSES: AIPurpose[] = [
   'coaching-chat',
   'memory-extract',
   'memory-consolidate',
-  'memory-reflect'
+  'memory-reflect',
+  'assistant-chat'
 ]
 
 type HealthMap = Record<AIPurpose, PurposeHealth>

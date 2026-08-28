@@ -198,6 +198,44 @@ const api = {
     onDelta: (cb: (payload: unknown) => void) => subscribe('coachChat:delta', cb),
     onError: (cb: (payload: unknown) => void) => subscribe('coachChat:error', cb)
   },
+  // M28 — the Rise assistant (top-level AI chat section).
+  assistant: {
+    listConversations: () => ipcRenderer.invoke('assistant:listConversations'),
+    getConversation: (id: string) => ipcRenderer.invoke('assistant:getConversation', id),
+    createConversation: (scope?: unknown) =>
+      ipcRenderer.invoke('assistant:createConversation', scope),
+    renameConversation: (id: string, title: string) =>
+      ipcRenderer.invoke('assistant:renameConversation', id, title),
+    deleteConversation: (id: string) => ipcRenderer.invoke('assistant:deleteConversation', id),
+    send: (
+      conversationId: string,
+      message: string,
+      voiceNote?: { mediaId: string; durationMs: number },
+      attachmentIds?: string[]
+    ) => ipcRenderer.invoke('assistant:send', conversationId, message, voiceNote, attachmentIds),
+    addAttachment: (name: string, bytes: ArrayBuffer, conversationId: string) =>
+      ipcRenderer.invoke('assistant:addAttachment', name, bytes, conversationId),
+    discardAttachment: (id: string) => ipcRenderer.invoke('assistant:discardAttachment', id),
+    transcribeVoiceNote: (audio: ArrayBuffer, mimeType: string, durationMs: number) =>
+      ipcRenderer.invoke('assistant:transcribeVoiceNote', audio, mimeType, durationMs),
+    discardVoiceNote: (mediaId: string) =>
+      ipcRenderer.invoke('assistant:discardVoiceNote', mediaId),
+    getVoiceNote: (mediaId: string) => ipcRenderer.invoke('assistant:getVoiceNote', mediaId),
+    cancel: (conversationId: string) => ipcRenderer.invoke('assistant:cancel', conversationId),
+    attach: (conversationId: string) => ipcRenderer.invoke('assistant:attach', conversationId),
+    applySuggestion: (conversationId: string, messageId: string, suggestion: unknown) =>
+      ipcRenderer.invoke('assistant:applySuggestion', conversationId, messageId, suggestion),
+    confirmTask: (conversationId: string, messageId: string, proposalId: string) =>
+      ipcRenderer.invoke('assistant:confirmTask', conversationId, messageId, proposalId),
+    setSalesBrainExcluded: (conversationId: string, excluded: boolean) =>
+      ipcRenderer.invoke('assistant:setSalesBrainExcluded', conversationId, excluded),
+    getMemoryEvidence: (memoryId: string) =>
+      ipcRenderer.invoke('assistant:getMemoryEvidence', memoryId),
+    onDelta: (cb: (payload: unknown) => void) => subscribe('assistant:delta', cb),
+    onError: (cb: (payload: unknown) => void) => subscribe('assistant:error', cb),
+    onTurnComplete: (cb: (payload: unknown) => void) => subscribe('assistant:turnComplete', cb),
+    onPhase: (cb: (payload: unknown) => void) => subscribe('assistant:phase', cb)
+  },
   crmNoteGenerator: {
     generate: (contactId: string, length: string, opts?: { force?: boolean }) =>
       ipcRenderer.invoke('crmNoteGenerator:generate', contactId, length, opts),
@@ -266,6 +304,11 @@ const api = {
       subscribe<string>('prepBrief:openRequested', cb)
   },
   salesBrain: {
+    /** AUDIT FIX (2026-08-24) — distinguishes OFF / UNAVAILABLE / EMPTY /
+     *  READY. memories.list() returns [] for the first three, so callers
+     *  could not tell them apart and Rise told users to import call history
+     *  when the real fix was to switch Sales Brain on. */
+    status: () => ipcRenderer.invoke('salesBrain:status'),
     // M29 A5.3 — one-click consistent snapshot of memory.db while the app runs.
     exportSnapshot: () => ipcRenderer.invoke('salesBrain:exportSnapshot'),
     onboarding: {

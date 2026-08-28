@@ -59,7 +59,8 @@ const DEFAULT_SETTINGS: AppSettings = {
     'deal-tier1': { chain: [] },
     'deal-tier2': { chain: [] },
     'coaching-chat': { chain: [] },
-    'memory-extract': { chain: [] }
+    'memory-extract': { chain: [] },
+    'assistant-chat': { chain: [] }
   },
   autoUpdateEnabled: true,
   autoUpdateMigratedToDefaultOn: true,
