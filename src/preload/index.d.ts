@@ -1846,6 +1846,8 @@ export interface AppSettings {
   autoUpdateEnabled: boolean
   autoUpdateMigratedToDefaultOn: boolean
   autoUpdateNoticePending: boolean
+  accountMigratedToNewProject: boolean
+  accountMigrationNoticePending: boolean
   /** M23 Workstream A — Coach 2.0 master switch + methodology picker. */
   coach2: Coach2Settings
   /** M23 Workstream D — Contact Intelligence mode. Off by default. */
@@ -1960,6 +1962,8 @@ export interface AppSettingsPatch {
   aiModelAssignments?: Partial<Record<AiPurpose, ModelAssignment>>
   autoUpdateEnabled?: boolean
   autoUpdateNoticePending?: boolean
+  accountMigratedToNewProject?: boolean
+  accountMigrationNoticePending?: boolean
   /** Partial — only the keys present are changed; others are left as-is. */
   coach2?: Partial<Coach2Settings>
   /** Partial — only the keys present are changed; others are left as-is. */

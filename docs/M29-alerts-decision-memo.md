@@ -35,7 +35,7 @@ Not a single command. Eight steps, three of them outside the repo:
 | # | Step | Who | Effort | Notes |
 |---|---|---|---|---|
 | 1 | Paste `supabase/alerts-schema.sql` (511 lines) into the dashboard SQL editor | founder | 5 min | needs `pg_cron` + `pg_net` extensions — both available on the free plan |
-| 2 | Install the Supabase CLI, `supabase login`, `supabase link --project-ref fphvsuvpskqwkcpiocfz` | founder | 20 min first time | the project has never had a CLI deploy |
+| 2 | Install the Supabase CLI, `supabase login`, `supabase link --project-ref emsbcxwzbjttxpimvlnj` | founder | 20 min first time | ref updated by the 2026-08-28 cutover. The old ref (`fphvsuvpskqwkcpiocfz`) is the RETIRED project — linking to it would deploy functions somewhere the app no longer talks to, and it would look like it worked. The project has never had a CLI deploy |
 | 3 | `supabase functions deploy` × 4 (two with `--no-verify-jwt`) | founder (or me, if the CLI is logged in on this machine) | 10 min | |
 | 4 | **Resend account** — a new vendor | founder | 30 min + DNS | free tier 3,000 emails/mo — but sending to anyone other than yourself requires a **verified sending domain** (SPF + DKIM records on a domain you own). Without that, email alerts only ever reach the founder. |
 | 5 | **Telegram bot** via BotFather + webhook registration with the secret token | founder | 15 min | free |

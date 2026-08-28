@@ -66,6 +66,13 @@ describe('no AppSettings field may be silently dropped by load or merge', () => 
       autoUpdateEnabled: false, // default true
       autoUpdateMigratedToDefaultOn: true,
       autoUpdateNoticePending: false, // default true
+      // Cutover 2026-08-28. accountMigratedToNewProject is a ONE-WAY marker,
+      // like autoUpdateMigratedToDefaultOn above: any settings file that
+      // exists at all has been through the load path, which sets it true. So
+      // it cannot be flipped here — false is unsatisfiable by design, not a
+      // dropped field. Its partner IS flipped, and covers the round trip.
+      accountMigratedToNewProject: true,
+      accountMigrationNoticePending: true, // default false
       coach2: { ...base.coach2, enabled: !base.coach2.enabled },
       contactIntelligence: { ...base.contactIntelligence, mode: 'full-auto' },
       salesBrain: { ...base.salesBrain, enabled: !base.salesBrain.enabled },

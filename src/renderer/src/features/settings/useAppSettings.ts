@@ -64,6 +64,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoUpdateEnabled: true,
   autoUpdateMigratedToDefaultOn: true,
   autoUpdateNoticePending: false,
+  accountMigratedToNewProject: true,
+  accountMigrationNoticePending: false,
   coach2: { enabled: false, methodology: 'blended' },
   contactIntelligence: { mode: 'off' },
   salesBrain: { enabled: false },
