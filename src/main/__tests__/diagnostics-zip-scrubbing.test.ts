@@ -19,8 +19,8 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { HOSTILE_IDENTITIES } from '../__tests__/fixtures/hostile-identities'
-import { createLocalScrubber, createScrubber } from '../scrub'
+import { HOSTILE_IDENTITIES } from '../telemetry/__tests__/fixtures/hostile-identities'
+import { createLocalScrubber, createScrubber } from '../telemetry/scrub'
 
 let localAppData: string
 let staging: string
@@ -120,29 +120,29 @@ describe('BUG-094 — the diagnostics zip must scrub the engine logs', () => {
 
       const out = (await runExport())['kern_bridge.log']
       expect(out, 'the export did not stage the engine log at all').toBeDefined()
-
-      // THE HOMEDIR IS THE REAL PROPERTY, and it holds for every identity: the
-      // profile path must never survive, because that path IS the leak.
-      expect(out, 'the homedir shipped').not.toContain(identity.homedir)
-
       // The bare-username assertion is applied only where it is SATISFIABLE.
       // `C:\Users\` literally contains the substring "User", so for the
-      // common-word fixture this assertion can only pass when the generic
-      // profile rule is bypassed by the exact-home rule — which happens only
-      // when the fixture's identity coincides with the MACHINE's identity.
-      // That is this machine's happy accident, and the fixture says so in its
-      // own `breaks` note: "it doubles as the over-redaction control: prose
-      // containing 'User' must survive." Asserting the username is absent
-      // would demand the opposite of what the fixture exists to prove.
+      // common-word fixture this can only pass when the generic profile rule
+      // is bypassed by the exact-home rule — which happens only when the
+      // fixture's identity coincides with the MACHINE's identity. That is the
+      // founder's machine's happy accident, and the fixture says so itself:
+      // "it doubles as the over-redaction control: prose containing 'User'
+      // must survive." Asserting the username is absent demands the OPPOSITE
+      // of what the fixture exists to prove.
       //
-      // CI CAUGHT THIS. It passed locally (this machine's username really is
-      // `User`) and failed on a runner whose username differs — exactly the
-      // environment-dependent green the hostile fixtures exist to stop.
-      // Redacting `C:\Users\<name>\` to `C:\Users\<user>\` is the correct
-      // outcome: the name is gone, and the scaffolding is not a leak.
+      // Found on main first, where CI failed on a runner whose username was
+      // not `User` while the same test passed locally. Fixed here before this
+      // branch merges, so it cannot arrive as a green that only holds on one
+      // machine. Reproduce with USERPROFILE overridden: os.homedir() honours
+      // it, os.userInfo().username does not, which is enough to defeat the
+      // exact-home rule.
+      //
+      // The homedir assertion above is the real privacy property and applies
+      // to EVERY identity, this one included.
       if (identity.id !== 'common-word') {
         expect(out, 'the engine log shipped the identity').not.toContain(identity.username)
       }
+      expect(out, 'the homedir shipped').not.toContain(identity.homedir)
     })
   }
 
@@ -222,15 +222,11 @@ describe('one mechanism, both egress paths — asserted structurally', () => {
     expect(src, 'a raw copyFileSync is what BUG-094 was').not.toContain('copyFileSync')
   })
 
-  // DROPPED IN THIS BACKPORT, DELIBERATELY, AND IT COMES BACK WITH M29.
-  // The M29 suite also asserts that support-bundle.ts imports scrubbedCopy
-  // rather than re-implementing it — the "one mechanism, both callers" guard.
-  // support-bundle.ts is an M29 feature and does not exist on main, so the
-  // assertion has nothing to read here and would fail for a reason that says
-  // nothing about this fix. It is NOT deleted upstream: when M29 merges, that
-  // file arrives and this case must come back with it, or the second caller
-  // ships unguarded. Recorded here rather than dropped silently, because a
-  // test that quietly disappears in a backport is how a guard gets lost.
+  it('the support bundle uses the same helper, not a second copy of it', () => {
+    const src = stripComments(readFileSync(join(__dirname, '..', 'support-bundle.ts'), 'utf8'))
+    expect(src).toContain("from './scrubbed-copy'")
+    expect(src, 'a private re-implementation would drift').not.toContain('function scrubbedCopy')
+  })
 
   it('the zip contains only the files the shared list names, plus app-diagnostics', async () => {
     writeFileSync(join(localAppData, 'CallRiseAI', 'logs', 'kern_bridge.log'), 'x\n')

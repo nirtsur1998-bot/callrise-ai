@@ -21,6 +21,7 @@ import { app, ipcMain } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { githubRepoFromFeed, isTrustedFeed, validateUpdate } from './policy'
 import { isAutoUpdateEnabled, setAutoUpdateEnabledChangedListener } from '../app-settings'
+import { signalUpdateOutcome } from '../telemetry/signals'
 import { getJobManager } from '../jobs/instance'
 import type { Job } from '../jobs/types'
 import { NO_AI_PURPOSE } from '../jobs/types'
@@ -33,6 +34,19 @@ const AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000 // 6 hours
 // check — nothing about update-checking should compete with call-detection
 // or transcription for the first few seconds after launch.
 const FIRST_CHECK_DELAY_MS = 30 * 1000
+
+/** M29 A2 — policy.ts's refusal reasons are prose for humans; telemetry
+ *  carries a short class instead. Unrecognised prose maps to 'other',
+ *  never to itself. */
+function classifyRefusal(reason: string): string {
+  if (reason.includes('not newer')) return 'not-newer'
+  if (reason.includes('unsafe character')) return 'unsafe-filename'
+  if (reason.includes('sha512')) return 'bad-sha512'
+  if (reason.includes('unparseable')) return 'bad-version'
+  if (reason.includes('no filename')) return 'no-filename'
+  if (reason.includes('no information')) return 'no-info'
+  return 'other'
+}
 
 export type UpdateStatus =
   | { state: 'disabled'; reason: string }
@@ -151,9 +165,14 @@ export function registerUpdater(): void {
     if (!verdict.ok) {
       status = { state: 'refused', reason: verdict.reason }
       console.warn(`[updater] refused update: ${verdict.reason}`)
+      // M29 A2 — a refusal in the field is always worth seeing. The verdict
+      // reason is prose (policy.ts writes it for humans), so it is
+      // CLASSIFIED into a short code here; the prose never travels.
+      signalUpdateOutcome({ outcome: 'refused', code: classifyRefusal(verdict.reason) })
       return
     }
     status = { state: 'available', version: String(info.version) }
+    signalUpdateOutcome({ outcome: 'available' })
     // Auto mode downloads without a further click — now through the same
     // job as the manual button, so a background download is visible in the
     // Activity Center and on the taskbar instead of happening invisibly.
@@ -231,12 +250,16 @@ export function registerUpdater(): void {
     // safe to let it install itself on the next natural quit rather than
     // waiting for a manual "Restart & install" click.
     autoUpdater.autoInstallOnAppQuit = isAutoUpdateEnabled()
+    signalUpdateOutcome({ outcome: 'downloaded' }) // M29 A2
   })
 
   autoUpdater.on('error', (err) => {
     // An error is a refusal. It is never "carry on and hope".
     status = { state: 'error', message: err?.message ?? 'update check failed' }
     console.warn(`[updater] error: ${status.state === 'error' ? status.message : ''}`)
+    // M29 A2 — error CLASS only (TypeError/AbortError/…); the message can
+    // carry URLs and provider text and stays local.
+    signalUpdateOutcome({ outcome: 'error', code: err?.name ?? 'unknown' })
   })
 
   ipcMain.handle('updater:status', () => status)
@@ -271,6 +294,7 @@ export function registerUpdater(): void {
   // No status transition on success: the app is about to quit.
   ipcMain.handle('updater:install', () => {
     if (!enabled || status.state !== 'downloaded') return { ok: false as const }
+    signalUpdateOutcome({ outcome: 'install-requested' }) // M29 A2
     autoUpdater.quitAndInstall()
     return { ok: true as const }
   })

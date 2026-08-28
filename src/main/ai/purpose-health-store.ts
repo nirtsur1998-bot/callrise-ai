@@ -28,6 +28,7 @@ import {
   type SuccessInfo
 } from './purpose-health'
 import type { AIPurpose, AIProviderId } from './types'
+import { signalAiPurposeFailure, signalAiPurposeRecovered } from '../telemetry/signals'
 import { writeJsonAtomic } from '../atomic-write'
 import { isSalesBrainEnabled } from '../app-settings'
 
@@ -143,13 +144,28 @@ export async function flushPendingWritesForTests(): Promise<void> {
 
 export async function recordAiSuccess(purpose: AIPurpose, info: SuccessInfo): Promise<void> {
   const map = await ensureLoaded()
+  // M29 A2 — recovery is the other half of a failure RATE: how long was the
+  // purpose down, in failures? Read BEFORE recordSuccess resets the streak.
+  const priorStreak = map[purpose]?.consecutiveFailures ?? 0
   map[purpose] = recordSuccess(map[purpose], new Date().toISOString(), info)
+  if (priorStreak > 0) {
+    signalAiPurposeRecovered({ purpose, afterConsecutiveFailures: priorStreak })
+  }
   persist()
 }
 
 export async function recordAiFailure(purpose: AIPurpose, info: FailureInfo): Promise<void> {
   const map = await ensureLoaded()
   map[purpose] = recordFailure(map[purpose], new Date().toISOString(), info)
+  // M29 A2 — the aggregate signal. Deliberately NOT info.detail: that is the
+  // provider's raw error prose (it can echo request fragments) and stays on
+  // this machine; the signal carries only the code, the class, the vendor.
+  signalAiPurposeFailure({
+    purpose,
+    failureClass: info.failureClass ?? 'unknown',
+    code: info.reason,
+    providerId: info.providerId ?? undefined
+  })
   persist()
 }
 
@@ -159,7 +175,9 @@ export async function recordAiFailure(purpose: AIPurpose, info: FailureInfo): Pr
  *  exists). Translated here, at the IPC boundary, rather than inside
  *  purpose-health.ts itself, so that already-reviewed pure-logic module
  *  never needs to know a renderer-side naming detail. */
-function toSettingsPageId(action: 'ai-setup' | 'model-assignment' | null): 'ai-setup' | 'ai-models' | null {
+function toSettingsPageId(
+  action: 'ai-setup' | 'model-assignment' | null
+): 'ai-setup' | 'ai-models' | null {
   if (action === 'model-assignment') return 'ai-models'
   return action
 }
