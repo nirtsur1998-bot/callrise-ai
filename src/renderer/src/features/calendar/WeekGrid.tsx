@@ -226,7 +226,20 @@ export function WeekGrid({
                     <button
                       key={item.key}
                       type="button"
-                      title={item.subtitle ? `${item.title} · ${item.subtitle}` : item.title}
+                      title={[
+                        item.title,
+                        item.context?.contactName && `with ${item.context.contactName}`,
+                        item.context?.dealStage && `${item.context.dealStage} stage`,
+                        item.context?.risk && `${item.context.risk} risk`,
+                        item.context?.brief === 'ready'
+                          ? 'prep brief ready'
+                          : item.context?.brief === 'outdated'
+                            ? 'prep brief needs refreshing'
+                            : undefined,
+                        item.subtitle
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
                       onClick={() => {
                         if (editable && item.event) onEditEvent(item.event)
                       }}
@@ -242,9 +255,43 @@ export function WeekGrid({
                         width: `calc(${laneWidth}% - 4px)`
                       }}
                     >
-                      <div className="truncate font-medium">{item.title}</div>
+                      <div className="flex items-center gap-1">
+                        {item.context?.risk && (
+                          <span
+                            aria-hidden
+                            className={cn(
+                              'h-1.5 w-1.5 shrink-0 rounded-full',
+                              item.context.risk === 'high' ? 'bg-danger' : 'bg-warning'
+                            )}
+                          />
+                        )}
+                        <span className="truncate font-medium">{item.title}</span>
+                        {item.context?.brief && (
+                          <span
+                            aria-hidden
+                            className={cn(
+                              'ml-auto h-1.5 w-1.5 shrink-0 rounded-full',
+                              item.context.brief === 'ready'
+                                ? 'bg-accent'
+                                : 'border border-current opacity-60'
+                            )}
+                          />
+                        )}
+                      </div>
+                      {/* The context line only appears when the block is tall
+                          enough to hold it honestly — squeezing it into an
+                          18px block would truncate it to noise. */}
                       {height > 28 && (
-                        <div className="truncate opacity-70">{formatTime(item.start)}</div>
+                        <div className="truncate opacity-70">
+                          {item.context?.contactName
+                            ? [item.context.contactName, item.context.dealStage]
+                                .filter(Boolean)
+                                .join(' · ')
+                            : formatTime(item.start)}
+                        </div>
+                      )}
+                      {height > 44 && item.context?.contactName && (
+                        <div className="truncate opacity-60">{formatTime(item.start)}</div>
                       )}
                     </button>
                   )

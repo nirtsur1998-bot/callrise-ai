@@ -170,10 +170,30 @@ function Chip({
 }): React.JSX.Element {
   const style = ITEM_STYLES[item.kind]
   const editable = Boolean(item.event) // 'event' + adopted-editable 'google' items
+  const ctx = item.context
+  // M31 Slice B — the month cell is only ~3 chips tall, so context here is
+  // deliberately two glyphs and the contact's name, never a second line: the
+  // richer treatment belongs in the week view, where a block has height.
+  // Everything is additive — a chip with no context renders exactly as before.
+  const title = [
+    item.title,
+    ctx?.contactName && `with ${ctx.contactName}`,
+    ctx?.dealStage && `${ctx.dealStage} stage`,
+    ctx?.risk && `${ctx.risk} risk`,
+    ctx?.brief === 'ready'
+      ? 'prep brief ready'
+      : ctx?.brief === 'outdated'
+        ? 'prep brief needs refreshing'
+        : undefined,
+    item.subtitle
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
   return (
     <button
       type="button"
-      title={item.subtitle ? `${item.title} · ${item.subtitle}` : item.title}
+      title={title}
       onClick={(e) => {
         e.stopPropagation()
         if (editable && item.event) onEditEvent(item.event)
@@ -186,7 +206,33 @@ function Chip({
       )}
     >
       {!item.allDay && <span className="shrink-0 opacity-70">{format(item.start, 'h:mm')}</span>}
+      {ctx?.risk && (
+        <span
+          aria-hidden
+          className={cn(
+            'h-1.5 w-1.5 shrink-0 rounded-full',
+            ctx.risk === 'high' ? 'bg-danger' : 'bg-warning'
+          )}
+        />
+      )}
+      {/* The title stays the title. An earlier pass swapped in the contact
+          name when one was linked, which reads well until two meetings with
+          the same person become indistinguishable — the chip would be
+          hiding what the meeting IS. Contact/stage live in the tooltip here
+          and on their own line in the week view, where there's room. */}
       <span className="truncate">{item.title}</span>
+      {ctx?.brief && (
+        <span
+          aria-hidden
+          className={cn(
+            'ml-auto h-1.5 w-1.5 shrink-0 rounded-full',
+            // 'outdated' is deliberately hollow, not a second solid colour:
+            // it means "there is one, but opening it will rebuild it", which
+            // is a weaker claim than 'ready' and should look like one.
+            ctx.brief === 'ready' ? 'bg-accent' : 'border border-current opacity-60'
+          )}
+        />
+      )}
     </button>
   )
 }

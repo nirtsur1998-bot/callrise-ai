@@ -19,6 +19,11 @@ import { GoogleConnect } from '@renderer/features/google/GoogleConnect'
 import { OutlookConnect } from '@renderer/features/outlook/OutlookConnect'
 import { CalendarConnectBar } from './CalendarConnectBar'
 import { QuickEventDialog } from './QuickEventDialog'
+import { buildChipContext } from './chipContext'
+import { usePrepBriefStatuses } from './usePrepBriefStatuses'
+import { useContacts } from '@renderer/features/contacts/useContacts'
+import { useDeals } from '@renderer/features/deals/useDeals'
+import { useDealStages } from '@renderer/features/deals/useDealStages'
 import { useCalendarPreview } from './useCalendarPreview'
 import { loadCalendarView, saveCalendarView } from './viewPreference'
 import { MonthGrid } from './MonthGrid'
@@ -126,10 +131,34 @@ export function CalendarView({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only the id should retrigger this, not every events-array identity change
   }, [deepLinkEventId])
 
-  const items = useMemo(
+  const baseItems = useMemo(
     () => buildItems(events, tasks, googleEvents, googleWritable, outlookEvents, outlookWritable),
     [events, tasks, googleEvents, googleWritable, outlookEvents, outlookWritable]
   )
+
+  // M31 Slice B — the sales context on each chip: who the meeting is with,
+  // the deal's stage, a risk marker, and whether a prep brief is actually
+  // ready. Preview-flagged like the rest of Slice A/B; with the flag off
+  // this costs nothing (no IPC, no context attached, chips render exactly
+  // as before).
+  const { contacts } = useContacts()
+  const { deals } = useDeals()
+  const { stages } = useDealStages()
+  const briefStatuses = usePrepBriefStatuses(baseItems, calendarPreview)
+
+  const items = useMemo(() => {
+    if (!calendarPreview) return baseItems
+    const sources = {
+      contactById: new Map(contacts.map((c) => [c.id, c])),
+      dealById: new Map(deals.map((d) => [d.id, d])),
+      stageById: new Map(stages.map((s) => [s.id, s])),
+      briefStatusByEventId: briefStatuses
+    }
+    return baseItems.map((item) => {
+      const context = buildChipContext(item, sources)
+      return context ? { ...item, context } : item
+    })
+  }, [baseItems, calendarPreview, contacts, deals, stages, briefStatuses])
 
   const goPrev = (): void => setCursor((c) => (view === 'month' ? subMonths(c, 1) : subWeeks(c, 1)))
   const goNext = (): void => setCursor((c) => (view === 'month' ? addMonths(c, 1) : addWeeks(c, 1)))

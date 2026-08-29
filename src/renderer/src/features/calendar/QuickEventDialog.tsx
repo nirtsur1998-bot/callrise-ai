@@ -17,8 +17,16 @@ interface QuickEventDialogProps {
   onClose: () => void
   onCreate: (draft: EventDraft) => Promise<void>
   /** Hand the parsed-so-far draft to the full event dialog (notes, contact,
-   *  deal, reminders) — nothing typed is lost when the user wants more. */
-  onMoreOptions: (draft: EventDraft) => void
+   *  deal, reminders) — nothing typed is lost when the user wants more.
+   *
+   *  OPTIONAL, and omitted on purpose by callers that have no full editor to
+   *  hand off to (the ⌘K palette lives outside CalendarView, which owns the
+   *  editor and its create/update plumbing). An earlier build offered the
+   *  button there anyway and simply navigated to the Calendar — which threw
+   *  away everything the user had typed. A button that says "more options"
+   *  must not be a button that means "start again", so where the handoff
+   *  can't carry the draft, the button isn't shown at all. */
+  onMoreOptions?: (draft: EventDraft) => void
 }
 
 function toDraft(title: string, start: Date, end: Date): EventDraft {
@@ -114,15 +122,19 @@ export function QuickEventDialog({
       </div>
 
       <div className="flex items-center justify-between gap-4 border-t border-line-soft px-6 py-4">
-        <Button
-          variant="secondary"
-          size="sm"
-          icon={Settings2}
-          disabled={busy}
-          onClick={() => onMoreOptions(toDraft(parsed.title || text.trim(), start, end))}
-        >
-          More options
-        </Button>
+        {onMoreOptions ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={Settings2}
+            disabled={busy}
+            onClick={() => onMoreOptions(toDraft(parsed.title || text.trim(), start, end))}
+          >
+            More options
+          </Button>
+        ) : (
+          <span />
+        )}
         <div className="flex items-center gap-2">
           <Button variant="secondary" onClick={onClose} disabled={busy}>
             Cancel

@@ -441,14 +441,13 @@ export function MainApp({
               notifyEventsChangedLocally()
               setQuickEventOpen(false)
             }}
-            // No full-dialog escalation from here: the rich editor lives
-            // inside CalendarView with its own create/update plumbing, so
-            // this sends the user there instead of duplicating it. The
-            // quick fields cover what ⌘K creation is for.
-            onMoreOptions={() => {
-              setQuickEventOpen(false)
-              navigateTo('calendar')
-            }}
+            // No "More options" here at all: the rich editor lives inside
+            // CalendarView with its own create/update plumbing, so this
+            // caller has nothing to hand the draft to. Offering the button
+            // and navigating to the Calendar (an earlier build did) silently
+            // discarded whatever had been typed. Omitting it is the honest
+            // option — the quick fields are what ⌘K creation is for, and the
+            // event can be opened and enriched from the calendar afterwards.
           />
         </Suspense>
       )}

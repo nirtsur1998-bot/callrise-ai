@@ -2,6 +2,8 @@
 // preload bridge exposes (see src/preload/index.d.ts); kept local so the
 // feature is self-contained, matching the calls/tasks convention.
 
+import type { ChipContext } from './chipContext'
+
 export type EventSyncState = 'local-only' | 'synced' | 'dirty' | 'deleted' | 'error'
 
 export interface CalendarEvent {
@@ -57,6 +59,12 @@ export interface CalendarItem {
   /** Extra context for tooltips / styling. */
   subtitle?: string
   done?: boolean // for tasks
+  /** M31 Slice B — the sales context this chip carries (who the meeting is
+   *  with, the deal's stage and risk, whether a prep brief is ready).
+   *  Attached by CalendarView after buildItems, since it needs contacts/
+   *  deals/stages that the pure item builder has no business loading.
+   *  Absent whenever there's nothing true to say — see buildChipContext. */
+  context?: ChipContext
 }
 
 /** The editable fields for the create/edit dialog. Supports all-day and

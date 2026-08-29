@@ -300,6 +300,8 @@ const api = {
   prepBrief: {
     getForEvent: (input: unknown) => ipcRenderer.invoke('prepBrief:getForEvent', input),
     regenerate: (input: unknown) => ipcRenderer.invoke('prepBrief:regenerate', input),
+    // Read-only batch status for the calendar's prep-brief dots.
+    statuses: (inputs: unknown) => ipcRenderer.invoke('prepBrief:statuses', inputs),
     onOpenRequested: (cb: (eventId: string) => void) =>
       subscribe<string>('prepBrief:openRequested', cb)
   },

@@ -7,9 +7,11 @@
 import { ipcMain } from 'electron'
 import {
   ensurePrepBriefForEvent,
+  getPrepBriefStatus,
   type PrepBriefEventInput,
   type PrepBriefAttendee,
-  type PrepBriefResult
+  type PrepBriefResult,
+  type PrepBriefStatus
 } from './prep-brief-fs'
 import { isCoach2Enabled } from './app-settings'
 import { loadFocusSkill } from './coaching/focus-skill-fs'
@@ -112,5 +114,23 @@ export function registerPrepBrief(): void {
     if (!input) return { ok: false as const, error: 'failed' as const, message: 'Invalid event.' }
     const withFocus = await withFocusSkillReminder(await ensurePrepBriefForEvent(input, { force: true }))
     return withSalesBrainEdge(withFocus, input.contactId)
+  })
+
+  // M31 Slice B — the calendar's prep-brief dots, one round trip for a whole
+  // visible range rather than one per chip. Read-only and never generates:
+  // this runs on every calendar render, so it must not be able to trigger an
+  // AI call or a write. Unparseable entries are simply omitted, so a caller
+  // sees "no status" (which renders no dot) rather than a wrong one.
+  ipcMain.handle('prepBrief:statuses', async (_event, raw: unknown) => {
+    if (!Array.isArray(raw)) return {}
+    const out: Record<string, PrepBriefStatus> = {}
+    // Bounded so a pathological range can't fan out unboundedly; the month
+    // grid asks for ~40 events at most.
+    for (const item of raw.slice(0, 200)) {
+      const input = sanitizeInput(item)
+      if (!input) continue
+      out[input.eventId] = await getPrepBriefStatus(input)
+    }
+    return out
   })
 }

@@ -2639,9 +2639,19 @@ export type PrepBriefResult =
     }
   | { ok: false; error: 'no-key' | 'failed' | 'no-context'; message?: string }
 
+/** What the calendar's prep-brief dot may claim. `ready` means opening the
+ *  brief right now genuinely serves the cached copy without spending an AI
+ *  call; `outdated` means the contact/deal/last-call it was written from has
+ *  changed since, so opening it regenerates. See getPrepBriefStatus. */
+export type PrepBriefStatus = 'none' | 'ready' | 'outdated'
+
 export interface PrepBriefApi {
   getForEvent: (input: PrepBriefEventInput) => Promise<PrepBriefResult>
   regenerate: (input: PrepBriefEventInput) => Promise<PrepBriefResult>
+  /** Read-only batch status for a whole visible calendar range — one round
+   *  trip for every chip. Never generates a brief and never writes. Events
+   *  omitted from the result (unparseable input) simply get no dot. */
+  statuses: (inputs: PrepBriefEventInput[]) => Promise<Record<string, PrepBriefStatus>>
   /** Fired when a callrise://meeting/<eventId> deep link is opened (from a
    *  meeting_starting alert) — the caller resolves eventId to a full
    *  PrepBriefEventInput itself (the renderer already holds the merged

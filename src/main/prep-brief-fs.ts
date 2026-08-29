@@ -313,3 +313,50 @@ export async function ensurePrepBriefForEvent(
 export async function getCachedPrepBrief(eventId: string): Promise<PrepBriefRecord | null> {
   return readRecord(eventId)
 }
+
+/** What the calendar's prep-brief dot is allowed to claim.
+ *  - `none`     — no brief has ever been generated for this meeting.
+ *  - `ready`    — a brief exists AND opening it right now would serve that
+ *                 exact cached brief without spending an AI call.
+ *  - `outdated` — a brief exists, but the contact/deal/last-call it was
+ *                 written from has changed since, so opening it regenerates. */
+export type PrepBriefStatus = 'none' | 'ready' | 'outdated'
+
+/**
+ * M31 Slice B — the truth behind the calendar's prep-brief dot.
+ *
+ * The correctness property that matters here, and the reason this is NOT
+ * simply `readRecord() !== null`: a saved brief file is not the same thing
+ * as a CURRENT brief. `ensurePrepBriefForEvent` serves the cache only when
+ * `existing.inputHash === computeInputHash(assembleContext(input))`, so a
+ * brief written before the rep edited that contact is already dead — opening
+ * it silently regenerates. A dot reading "ready" off mere file existence
+ * would therefore claim something untrue exactly when the rep most needs it
+ * to be true (they just updated the contact before the meeting).
+ *
+ * So this deliberately runs the SAME two functions, in the same order, that
+ * the real open path uses to make the same decision. The dot cannot disagree
+ * with what actually happens on open, because it is not a second opinion —
+ * it is the same computation. `prep-brief-status.test.ts` pins that
+ * agreement directly rather than testing the two paths separately.
+ *
+ * Cost is bounded by design: the expensive part (assembleContext, which
+ * lists deals and calls) runs ONLY for meetings that already have a saved
+ * brief. A month of meetings the rep never opened a brief for costs one
+ * failed file read each.
+ */
+export async function getPrepBriefStatus(input: PrepBriefEventInput): Promise<PrepBriefStatus> {
+  const existing = await readRecord(input.eventId)
+  if (!existing) return 'none'
+  try {
+    const assembled = await assembleContext(input)
+    return computeInputHash(assembled.hashInputs) === existing.inputHash ? 'ready' : 'outdated'
+  } catch {
+    // Context assembly failed (a contact file mid-write, a permissions
+    // blip). We know a brief EXISTS but not whether it is current, and
+    // "outdated" is the honest answer for an unknown: it under-promises,
+    // and its only consequence is that opening the brief may regenerate —
+    // which is exactly what the open path would do anyway.
+    return 'outdated'
+  }
+}
