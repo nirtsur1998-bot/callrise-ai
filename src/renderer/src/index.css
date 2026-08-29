@@ -9,6 +9,31 @@
 @theme {
   --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
 
+  /* Named mono token — nothing points at it yet; the 6 existing `font-mono`
+     call sites already fall through to Tailwind's own built-in default mono
+     stack, which this matches exactly, so naming it here changes nothing
+     today. It exists so M31 Stage 4 can swap this one line to the chosen
+     identity's mono face instead of hunting down every call site. */
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    monospace;
+
+  /* Type scale — two intentional steps for sizes the app already reaches for
+     by hand, everywhere: 271 sites hardcode `text-[13px]` (this product's
+     real dense-UI body size — Tailwind's built-in `text-sm` is 14px, sized
+     for marketing copy, not a data-dense sales tool) and 200+ hardcode
+     `text-[11px]` (secondary/tertiary metadata: timestamps, badges, counts).
+     These are NEW named steps, not redefinitions of Tailwind's own
+     xs/sm/base/lg/xl/2xl scale — none of the 277 sites already on those
+     names shift. Retrofitting the ~666 ad-hoc `text-[Npx]` sites onto these
+     (plus the existing xs/sm where those already fit) is Stage 2+ work, done
+     screen-by-screen as each one is touched — not a blind sweep here. See
+     M31-design-audit.md §3 for the full size-count breakdown. */
+  --text-2xs: 0.6875rem; /* 11px — secondary/tertiary metadata */
+  --text-2xs--line-height: 1rem; /* 16px */
+  --text-dense: 0.8125rem; /* 13px — the real dense-UI body size */
+  --text-dense--line-height: 1.125rem; /* 18px */
+
   --color-canvas: #0b0d11; /* app background */
   --color-surface: #14171d; /* sidebar / panels / cards */
   --color-elevated: #1a1e26; /* raised surfaces, hover */
