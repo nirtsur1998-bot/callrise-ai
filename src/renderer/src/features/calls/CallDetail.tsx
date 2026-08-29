@@ -748,13 +748,35 @@ export function CallDetail({
     !identityDismissed &&
     calendarMatches.length === 0 &&
     !!otherPartyIdentity
+  // Is there anything to identify at all? If the contact is already linked,
+  // already suggested, or the rep dismissed it, there is nothing to say and
+  // nothing to show — an off-state here would be noise about a question that
+  // is already answered.
+  const identityUnresolved =
+    !call.contactId && !identityDismissed && calendarMatches.length === 0 && !otherPartyIdentity
+
   const showDetectButton =
+    identityUnresolved &&
     contactIntelligenceMode !== 'off' &&
-    !call.contactId &&
-    !identityDismissed &&
-    calendarMatches.length === 0 &&
-    !otherPartyIdentity &&
     call.consent?.recordOtherParty === true
+
+  // M31 Stage 3 — why the button is absent, when it is absent for a reason
+  // the rep can act on (or should at least understand).
+  //
+  // The two cases are deliberately NOT the same state, which is the founder's
+  // rule about prerequisites: "where a feature is off because it needs
+  // something else first, say that rather than showing a toggle that won't
+  // work." Turning the feature on cannot help a call that has no buyer
+  // speech to scan, and consent for a call that already happened cannot be
+  // granted retroactively — so that case gets an explanation and NO button,
+  // because there is honestly nothing to press.
+  const detectUnavailable: 'off' | 'no-other-party' | null = !identityUnresolved
+    ? null
+    : contactIntelligenceMode === 'off'
+      ? 'off'
+      : call.consent?.recordOtherParty !== true
+        ? 'no-other-party'
+        : null
 
   const tier = call.coaching ? overallTier(call.coaching.overallScore) : null
 
@@ -879,6 +901,32 @@ export function CallDetail({
                 onLink={() => otherPartyContact && void linkContact(otherPartyContact.id)}
                 onCreate={() => void createAndLinkIdentity(otherPartyIdentity.name)}
                 onDismiss={dismissIdentity}
+              />
+            </div>
+          )}
+          {!autoLinkNotice && detectUnavailable === 'off' && (
+            <div className="mb-3">
+              <EmptyState
+                compact
+                icon={UserSearch}
+                title="Caller identification is switched off"
+                reason={{
+                  kind: 'off',
+                  settingsPage: 'crm',
+                  what: 'Reads the transcript for the moment the other person introduces themselves, then offers to link this call to that contact — or create them — instead of you typing the name in.',
+                  cost: 'Makes one AI call when you ask it to, on this call only.',
+                  actionLabel: 'Turn on caller identification'
+                }}
+              />
+            </div>
+          )}
+          {!autoLinkNotice && detectUnavailable === 'no-other-party' && (
+            <div className="mb-3">
+              <EmptyState
+                compact
+                icon={UserSearch}
+                title="Nobody to identify on this call"
+                description="Caller identification reads the other person’s own words for a self-introduction, and this call was recorded without their side. That choice was made when the call happened and can’t be changed now — future calls recorded with both sides will offer it."
               />
             </div>
           )}

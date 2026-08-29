@@ -19,6 +19,7 @@ import { Badge } from '@renderer/components/Badge'
 import { StatCard } from '@renderer/components/StatCard'
 import { AudioSourcesCard } from '@renderer/features/audio/AudioSourcesCard'
 import { NoiseCancellationCard } from '@renderer/features/audio/NoiseCancellationCard'
+import { Tier1SettingsCard } from '@renderer/features/audio/Tier1SettingsCard'
 import { TelemetryAskCard } from './TelemetryAskCard'
 import { AutoUpdateNoticeCard } from './AutoUpdateNoticeCard'
 import { AccountMigrationNoticeCard } from './AccountMigrationNoticeCard'
@@ -337,7 +338,17 @@ export function HomeView({
         Audio setup
       </h3>
       <AudioSourcesCard />
+      {/* M31 Stage 3 — the two noise-cancellation cards are platform
+          counterparts (macOS Core Audio driver / Windows kern_bridge), each
+          self-gating and returning null on the wrong OS, so exactly one ever
+          renders. Home had only the Mac half: the audit's finding was
+          "Windows Tier 1 — also absent from Home, unlike the Mac card", which
+          made a shipped Windows feature invisible on the one screen a rep
+          actually starts from. Settings -> Audio already renders both side by
+          side; this is the same pairing, and needed no platform logic here
+          for the same reason that file needed none. */}
       <NoiseCancellationCard />
+      <Tier1SettingsCard />
     </div>
   )
 }
