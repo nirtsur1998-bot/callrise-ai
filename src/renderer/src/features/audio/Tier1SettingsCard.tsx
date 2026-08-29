@@ -166,7 +166,7 @@ export function Tier1SettingsCard(): React.JSX.Element | null {
                 'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition',
                 enabled
                   ? 'border border-line bg-surface text-ink hover:bg-elevated'
-                  : 'bg-accent text-white hover:opacity-90'
+                  : 'bg-accent-fill text-on-accent hover:opacity-90'
               )}
             >
               {enabled ? 'Turn off' : 'Turn on'}

@@ -34,25 +34,52 @@
   --text-dense: 0.8125rem; /* 13px — the real dense-UI body size */
   --text-dense--line-height: 1.125rem; /* 18px */
 
-  --color-canvas: #0b0d11; /* app background */
-  --color-surface: #14171d; /* sidebar / panels / cards */
-  --color-elevated: #1a1e26; /* raised surfaces, hover */
-  --color-line: #242a33; /* borders */
-  --color-line-soft: #1c2128; /* subtle dividers */
-  --color-ink: #e7e9ec; /* primary text */
-  --color-muted: #98a0ab; /* secondary text */
-  --color-faint: #7c8492; /* tertiary text / icons — real 11px metadata, must clear AA */
-  --color-accent: #6e7bf2; /* single indigo accent */
-  --color-accent-soft: #6e7bf21f; /* 12% accent tint */
+  /* ── FIRST LIGHT (M31 Stage 4) ────────────────────────────────────────
+     Replaces the indigo-on-blue-black ramp the Stage 0 audit identified as
+     the generic-AI-product default ("Linear / Raycast / Arc … one restrained
+     indigo accent" — the comment this block used to open with). The name is
+     the colour story: molten amber-gold, the first light on a live call,
+     over warm graphite rather than the cool blue-black every other tool
+     ships. Every neutral below carries a warm bias on purpose — a pure grey
+     reads as unconsidered, and it is what makes the accent look chosen
+     rather than dropped in.
+     Every value here is contrast-checked; see contrast-ratios.test.ts, which
+     is the acceptance criteria for this ramp, not a description of it. */
+  --color-canvas: #0d0c0a; /* app background — warm near-black */
+  --color-surface: #1e1b17; /* sidebar / panels / cards */
+  --color-elevated: #2b2722; /* raised surfaces, hover */
+  --color-line: #544e43; /* card borders — carries a card's shape */
+  --color-line-soft: #413b32; /* subtle dividers */
+  /* Interactive control boundaries — inputs, buttons, focus rings. This is
+     the one border that WCAG SC 1.4.11 genuinely governs (3:1), so it is
+     its own token rather than being folded into --color-line, which is
+     decorative card edging held to a lower house bar. */
+  --color-line-strong: #726a5c;
+  --color-ink: #f2efe8; /* primary text — warm white */
+  --color-muted: #b0a99c; /* secondary text */
+  --color-faint: #96907f; /* tertiary text / icons — real 11px metadata, must clear AA */
+  --color-accent: #f0a63b; /* First Light amber-gold */
+  --color-accent-soft: #f0a63b1f; /* 12% accent tint */
+  /* Solid accent FILLS (primary buttons) and the ink that goes on them.
+     Kept separate because they solve opposite problems: --color-accent has
+     to be legible AS text against the page, while --color-accent-fill has
+     to be the brand amber with something legible ON it. The old ramp got
+     away with one token because indigo is dark enough for white text;
+     amber-gold is not — white on #f0a63b measures 2.05:1, so every
+     `bg-accent text-white` button would have shipped failing. */
+  --color-accent-fill: #f0a63b;
+  --color-on-accent: #231a0b;
 
   /* Semantic status colors — one token family instead of raw emerald/amber/
-     rose scattered across screens. `-soft` is the tinted background variant. */
-  --color-positive: #4ec78f;
-  --color-positive-soft: #4ec78f1f;
-  --color-warning: #e0a83a;
-  --color-warning-soft: #e0a83a1f;
-  --color-danger: #ef6a6a;
-  --color-danger-soft: #ef6a6a1f;
+     rose scattered across screens. `-soft` is the tinted background variant.
+     Warning moved off amber to straw-yellow, as the identity brief required:
+     with an amber-gold accent, an amber warning stops reading as a warning. */
+  --color-positive: #5cc98d;
+  --color-positive-soft: #5cc98d1f;
+  --color-warning: #e3c766;
+  --color-warning-soft: #e3c7661f;
+  --color-danger: #f0736b;
+  --color-danger-soft: #f0736b1f;
 
   /* Decorative speaker palette — distinct hues to tell transcript speakers
      apart at a glance (not semantic status, so no `-soft` pairing needed). */
@@ -63,10 +90,36 @@
   --color-speaker-5: #fb7185; /* rose-400 */
   --color-speaker-6: #a78bfa; /* violet-400 */
 
-  /* Calendar track color — distinguishes synced Outlook events from local/
-     Google ones on the calendar grid. */
-  --color-track-outlook: #4f8ff7;
-  --color-track-outlook-soft: #4f8ff71f;
+  /* M31 Stage 4 — calendar tracks, resolved.
+     A calendar chip's colour answers "where did this come from", which is a
+     CATEGORY, not a severity. Three of the four were borrowing status
+     colours for it: tasks were --color-warning (so every task looked like a
+     warning), Google events were --color-positive (so a meeting looked like
+     a success), and only Outlook had a colour of its own. Now all four are
+     named for what they are and are used for nothing else, so no chip can
+     accidentally assert a status it doesn't have.
+     Outlook stays blue and Google stays green on purpose — those are
+     PROVIDER identities the user already knows from the provider's own app,
+     and the values are pulled away from --color-positive/--color-warning far
+     enough to stay distinguishable if they ever sit side by side. */
+  --color-track-outlook: #6a9bef;
+  --color-track-outlook-soft: #6a9bef1f;
+  --color-track-google: #4aa878;
+  --color-track-google-soft: #4aa8781f;
+  --color-track-task: #d98cb8;
+  --color-track-task-soft: #d98cb81f;
+
+  /* M31 Stage 4 — the Speed/Quality lane pair, resolved. These were left
+     borrowing --color-warning and --color-accent's VALUES in Stage 1, with
+     a code comment flagging them for exactly this decision, because a lane
+     is a non-semantic CATEGORY (which of two pools a model belongs to) and
+     borrowing a status colour made it read as a severity it isn't.
+     Now their own tokens: speed is a cool teal — the one deliberately cool
+     note in a warm palette, so "fast" never reads as "caution" — and
+     quality is a deep violet that carries weight without competing with the
+     amber accent for attention. Neither is used for status anywhere else. */
+  --color-lane-speed: #4bb8a9;
+  --color-lane-quality: #a98ae0;
 
   /* Elevation — deliberately whisper-soft on dark surfaces, where depth reads
      mostly from the border + a faint drop. Cards/menus/popovers share these. */
@@ -77,8 +130,11 @@
 @layer base {
   :root {
     color-scheme: dark;
-    --scrollbar-thumb: #2a313b;
-    --scrollbar-thumb-hover: #353d49;
+    /* Warm greys, not slate. These were #2a313b/#353d49 — a blue-black that
+       was invisible while the whole app was indigo and reads as a foreign
+       cool streak now that everything around it is warm. */
+    --scrollbar-thumb: #3a352e;
+    --scrollbar-thumb-hover: #4a443a;
   }
 
   /* Light theme: same token names, light values — applied via a `.light`
@@ -87,23 +143,39 @@
    * reference these custom properties, not literal colors. */
   :root.light {
     color-scheme: light;
-    --color-canvas: #ffffff;
-    --color-surface: #f7f7f8;
-    --color-elevated: #eef0f2;
-    --color-line: #e3e5e9;
-    --color-line-soft: #edeef1;
-    --color-ink: #16181d;
-    --color-muted: #5b6270;
-    --color-faint: #6b7280;
-    --color-accent: #6e7bf2;
-    --color-accent-soft: #6e7bf21a;
+    /* FIRST LIGHT, light theme. This is the ramp BUG-133 was about: the old
+       values put --color-surface at 1.07:1 against canvas and the card
+       borders at 1.08–1.18:1, so cards, dividers and nested surfaces were
+       effectively invisible across the whole app. The borders are what
+       actually give a card its shape, and they now measure 2.6–3.1:1 — a
+       2.4× improvement on the thing that was broken. */
+    --color-canvas: #fffefc; /* warm white, not pure #fff */
+    --color-surface: #eee9df; /* warm parchment card */
+    --color-elevated: #ded7c8;
+    --color-line: #9a907d;
+    --color-line-soft: #bab1a0;
+    --color-line-strong: #877d6d;
+    --color-ink: #1b1815;
+    --color-muted: #5d564b;
+    --color-faint: #6b6355;
+    /* Deep amber: the SAME hue as the dark theme's accent, dropped in
+       lightness until it clears 4.5:1 as text on the light canvas (5.25:1).
+       The bright amber below is what fills a button; this is what writes on
+       the page. */
+    --color-accent: #9a5c00;
+    --color-accent-soft: #9a5c0014;
+    /* The fill stays the brand amber in BOTH themes — a primary button
+       should be the same colour whichever theme you are in — with the same
+       dark ink on it (8.35:1). */
+    --color-accent-fill: #f0a63b;
+    --color-on-accent: #231a0b;
     /* Slightly deeper status hues so they hold 4.5:1 on light surfaces. */
-    --color-positive: #12855a;
-    --color-positive-soft: #12855a14;
-    --color-warning: #a76b13;
-    --color-warning-soft: #a76b1314;
-    --color-danger: #cf3b3b;
-    --color-danger-soft: #cf3b3b14;
+    --color-positive: #0f7a4d;
+    --color-positive-soft: #0f7a4d14;
+    --color-warning: #8a6410;
+    --color-warning-soft: #8a641014;
+    --color-danger: #c0392f;
+    --color-danger-soft: #c0392f14;
     /* Deeper speaker hues so decorative labels hold contrast on light surfaces. */
     --color-speaker-1: #4f46e5; /* indigo-600 */
     --color-speaker-2: #059669; /* emerald-600 */
@@ -111,13 +183,28 @@
     --color-speaker-4: #0284c7; /* sky-600 */
     --color-speaker-5: #e11d48; /* rose-600 */
     --color-speaker-6: #7c3aed; /* violet-600 */
-    --color-track-outlook: #2b6fd6;
-    --color-track-outlook-soft: #2b6fd61f;
-    /* Real (not just-a-border) elevation reads better on light surfaces. */
-    --shadow-card: 0 1px 2px rgb(16 18 29 / 0.06), 0 1px 3px rgb(16 18 29 / 0.08);
-    --shadow-pop: 0 12px 32px -8px rgb(16 18 29 / 0.18), 0 2px 6px rgb(16 18 29 / 0.08);
-    --scrollbar-thumb: #d6d8dd;
-    --scrollbar-thumb-hover: #c3c6cc;
+    /* Was #2b6fd6, which measured 3.99:1 as chip text on the light surface —
+       under AA, and it had shipped that way. Found by extending the guard to
+       cover it, not by looking at it. #2461c2 measures 4.90:1. */
+    --color-track-outlook: #2461c2;
+    --color-track-outlook-soft: #2461c21f;
+    --color-track-google: #186b45;
+    --color-track-google-soft: #186b451f;
+    --color-track-task: #9c3f74;
+    --color-track-task-soft: #9c3f741f;
+    /* Lane pair, light values. Same two hues, taken down until each clears
+       4.5:1 as label text on --color-surface — the dark-theme teal and
+       violet are far too pale to read on parchment. Pinned by the contrast
+       guard in both themes, so neither can drift back. */
+    --color-lane-speed: #0d6f68;
+    --color-lane-quality: #67449f;
+    /* Real (not just-a-border) elevation reads better on light surfaces.
+       Warm shadow body: a blue-black shadow (rgb(16 18 29)) on parchment
+       reads grey-blue at the edges of every card. */
+    --shadow-card: 0 1px 2px rgb(43 37 28 / 0.07), 0 1px 3px rgb(43 37 28 / 0.09);
+    --shadow-pop: 0 12px 32px -8px rgb(43 37 28 / 0.2), 0 2px 6px rgb(43 37 28 / 0.09);
+    --scrollbar-thumb: #cec6b6;
+    --scrollbar-thumb-hover: #b8ae99;
   }
 
   html,
@@ -176,8 +263,16 @@
 
   /* The brand mark's gradient — one definition instead of the inline
      `from-accent to-[#9b6cf2]` repeated across the app. */
+  /* The brand mark. Was an indigo→violet gradient — the Stage 0 audit named
+     that as one third of the banned generic-AI trifecta, alongside the
+     indigo accent and the never-bundled Inter. First Light replaces it with
+     the sunrise the identity is named for: deep ember lifting into
+     amber-gold, always in that direction (135deg, dark to light) so it
+     reads as light arriving rather than as an arbitrary two-colour blend.
+     Fixed hexes, not tokens: this is a brand mark and must look identical
+     in both themes — it sits on its own fill, never on the page. */
   .bg-brand {
-    background-image: linear-gradient(135deg, var(--color-accent), #9b6cf2);
+    background-image: linear-gradient(135deg, #b8541b, #f0a63b);
   }
 
   /* Subtle hover lift for interactive cards/tiles — reads as "this responds"

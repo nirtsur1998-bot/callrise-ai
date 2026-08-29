@@ -119,7 +119,7 @@ export function AskCoach({
         <button
           type="submit"
           disabled={!input.trim() || loading}
-          className="no-drag flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:brightness-110 disabled:opacity-50"
+          className="no-drag flex items-center gap-1.5 rounded-lg bg-accent-fill px-3 py-1.5 text-xs font-medium text-on-accent transition hover:brightness-110 disabled:opacity-50"
         >
           <Send className="h-3.5 w-3.5" /> Ask
         </button>

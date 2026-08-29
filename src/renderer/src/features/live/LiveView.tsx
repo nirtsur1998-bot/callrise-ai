@@ -795,7 +795,7 @@ export function LiveView({
           <button
             type="button"
             onClick={start}
-            className="no-drag flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:scale-95"
+            className="no-drag flex items-center gap-2 rounded-xl bg-accent-fill px-4 py-2.5 text-sm font-semibold text-on-accent shadow-sm transition hover:brightness-110 active:scale-95"
           >
             <Mic className="h-4 w-4" /> Start
           </button>

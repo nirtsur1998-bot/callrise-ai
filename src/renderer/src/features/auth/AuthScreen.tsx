@@ -13,7 +13,7 @@ const OTP_MIN = 6
 const OTP_MAX = 10
 
 const primaryBtn =
-  'flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-3.5 py-2.5 text-sm font-medium text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60'
+  'flex w-full items-center justify-center gap-2 rounded-lg bg-accent-fill px-3.5 py-2.5 text-sm font-medium text-on-accent transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60'
 
 function Brand(): React.JSX.Element {
   return (

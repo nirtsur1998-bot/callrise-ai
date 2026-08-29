@@ -33,7 +33,7 @@ export function IdleHero({
           type="button"
           onClick={onStart}
           aria-label="Start live transcription"
-          className="press no-drag relative grid h-24 w-24 place-items-center rounded-full bg-accent text-white shadow-lg shadow-accent/20 transition hover:brightness-110"
+          className="press no-drag relative grid h-24 w-24 place-items-center rounded-full bg-accent-fill text-on-accent shadow-lg shadow-accent/20 transition hover:brightness-110"
         >
           <Mic className="h-9 w-9" strokeWidth={2} />
         </button>

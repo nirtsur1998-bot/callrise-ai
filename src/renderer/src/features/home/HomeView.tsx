@@ -175,7 +175,7 @@ export function HomeView({
             <p className="text-[13px] text-muted">Real-time transcription &amp; coaching</p>
           </div>
         </div>
-        <span className="flex items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-[13px] font-medium text-white transition group-hover:brightness-110">
+        <span className="flex items-center gap-1.5 rounded-lg bg-accent-fill px-3.5 py-2 text-[13px] font-medium text-on-accent transition group-hover:brightness-110">
           Go live <ArrowRight className="h-4 w-4" />
         </span>
       </button>

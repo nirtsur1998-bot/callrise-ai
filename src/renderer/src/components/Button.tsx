@@ -22,7 +22,7 @@ interface ButtonProps extends Omit<
 }
 
 const VARIANT: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-white font-medium hover:brightness-110',
+  primary: 'bg-accent-fill text-on-accent font-medium hover:brightness-110',
   secondary: 'border border-line text-muted font-medium hover:bg-elevated hover:text-ink',
   danger: 'bg-danger-soft text-danger font-semibold hover:bg-danger/20'
 }

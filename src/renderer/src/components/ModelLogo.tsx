@@ -95,7 +95,7 @@ export function ModelLogo({ brand, size = 24, className }: ModelLogoProps): Reac
       role="img"
       aria-label={label}
       className={cn(
-        'inline-flex shrink-0 items-center justify-center rounded-md bg-accent font-semibold text-white',
+        'inline-flex shrink-0 items-center justify-center rounded-md bg-accent-fill font-semibold text-on-accent',
         className
       )}
       style={{ width: size, height: size, fontSize: Math.max(9, Math.round(size * 0.42)) }}

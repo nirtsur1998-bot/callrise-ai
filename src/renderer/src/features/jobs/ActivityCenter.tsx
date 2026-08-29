@@ -297,7 +297,7 @@ export function ActivityCenter(): React.JSX.Element {
       >
         <Activity className={cn('h-4.5 w-4.5', active > 0 && 'animate-pulse')} strokeWidth={2.25} />
         {active > 0 && (
-          <span className="absolute -top-1 -right-1 grid h-4.5 min-w-4.5 place-items-center rounded-full bg-accent px-1 text-[10px] font-semibold text-white">
+          <span className="absolute -top-1 -right-1 grid h-4.5 min-w-4.5 place-items-center rounded-full bg-accent-fill px-1 text-[10px] font-semibold text-on-accent">
             {active}
           </span>
         )}

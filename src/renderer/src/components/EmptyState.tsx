@@ -56,7 +56,7 @@ export function EmptyState({
         <button
           type="button"
           onClick={action.onClick}
-          className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-[13px] font-medium text-white transition hover:brightness-110 active:scale-[0.98]"
+          className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-accent-fill px-3.5 py-2 text-[13px] font-medium text-on-accent transition hover:brightness-110 active:scale-[0.98]"
         >
           {ActionIcon && <ActionIcon className="h-4 w-4" />}
           {action.label}

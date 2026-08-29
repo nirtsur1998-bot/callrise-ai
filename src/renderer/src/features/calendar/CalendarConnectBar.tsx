@@ -186,7 +186,7 @@ export function CalendarConnectBar({
           type="button"
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
-          className="flex shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-[12px] font-medium text-white transition hover:brightness-110"
+          className="flex shrink-0 items-center gap-1.5 rounded-md bg-accent-fill px-2.5 py-1 text-[12px] font-medium text-on-accent transition hover:brightness-110"
         >
           <Plug className="h-3 w-3" /> Connect
         </button>
