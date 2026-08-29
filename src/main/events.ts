@@ -380,6 +380,30 @@ export function registerEvents(): void {
     }
   })
 
+  // Founder-reported, 2026-08-29: the Activity Center showed ten identical
+  // "Catching up calendar changes ✓" rows in a row.
+  //
+  // Not a sync problem — a trigger-counting one. useCalendar() fires this
+  // TWICE on mount (once after the Google pull, once after Outlook), and that
+  // hook mounts on both the Calendar screen and the Live screen. Every visit
+  // to either was two more reconciles, so a session that moves around the app
+  // accumulates them steadily.
+  //
+  // The existing guard only collapses triggers while one is ALREADY running,
+  // which catches the two simultaneous mount calls and nothing else: a
+  // reconcile takes milliseconds when there is nothing to drain, so
+  // sequential re-triggers all sailed through and each wrote its own history
+  // row.
+  //
+  // A cooldown is the right shape rather than a longer single-flight window:
+  // this is self-healing retry machinery whose whole job is draining pushes
+  // that failed while offline. Nothing is lost by not running it for a few
+  // seconds — the next trigger, or the next launch, drains the same queue.
+  // Deliberately NOT a debounce timer: a timer would still eventually fire
+  // once per burst, and the point is that the burst needs zero of them.
+  const RECONCILE_COOLDOWN_MS = 30_000
+  let lastReconcileAt = 0
+
   ipcMain.handle('events:reconcile', () => {
     try {
       const manager = getJobManager()
@@ -389,7 +413,15 @@ export function registerEvents(): void {
           (j: Job) =>
             j.type === RECONCILE_JOB_TYPE && (j.state === 'running' || j.state === 'queued')
         )
-      if (!already) manager.enqueue(RECONCILE_JOB_TYPE, {})
+      if (already) return
+      // Date.now() rather than a job timestamp: a run that was dismissed from
+      // history, or cleared by "Clear history", must still count as recent.
+      // Reading it off the job list would make clearing history re-open the
+      // floodgates, which is a surprising thing for a UI action to do.
+      const now = Date.now()
+      if (now - lastReconcileAt < RECONCILE_COOLDOWN_MS) return
+      lastReconcileAt = now
+      manager.enqueue(RECONCILE_JOB_TYPE, {})
     } catch (err) {
       // Never break a calendar sync because the job system refused.
       console.error('[events] could not enqueue reconcile:', err)
