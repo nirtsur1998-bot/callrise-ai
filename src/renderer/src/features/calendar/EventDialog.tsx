@@ -275,9 +275,16 @@ export function EventDialog({
               and 30m would remind you at 5m: outlook-sync.ts takes
               Math.max, so it fires 30 minutes before. Same behaviour,
               honest description. */}
+          {/* "Sent to" rather than "fires" / "reaches your phone", on
+              purpose. CallRise writes reminders to the provider and never
+              reads them back (see BUG-136) — nothing here can confirm one
+              landed, or notice if it was rejected. Claiming it WILL reach
+              your phone states an outcome we cannot observe; describing
+              what we actually do is the honest version, and the one that
+              won't be quietly wrong the day a push starts failing. */}
           <p className="mt-1.5 text-[11px] text-faint">
             {syncEnabled
-              ? 'Google and Outlook fire these, so they reach your phone.'
+              ? 'Sent to Google/Outlook, which then reminds you — check there if it matters.'
               : 'Notifies you on this computer, only while CallRise AI is open.'}
           </p>
           {syncEnabled && draft.reminderMinutes.length > 1 && (

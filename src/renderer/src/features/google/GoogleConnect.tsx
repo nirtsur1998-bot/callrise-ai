@@ -26,9 +26,17 @@ function friendlyError(code: string): string {
     case 'encryption-unavailable':
       return "This Mac's secure storage isn't available, so the login can't be saved safely."
     case 'access_denied':
-      return 'You declined the Google permission. Click Connect to try again.'
+      return "Google didn't grant access. If you declined, click Connect to try again — if your browser said “Access blocked”, see below."
     case 'timeout':
-      return 'Authorization timed out — click Connect to try again.'
+      // Google never redirected back. The most common reason by far is a
+      // TERMINAL block in the browser that we can't see from here: Google's
+      // "Access blocked — has not completed the Google verification process"
+      // page, shown when this app's OAuth client is still in Testing status
+      // and the chosen account isn't an approved tester. Retrying does
+      // nothing for that, so the old "timed out — click Connect to try
+      // again" was actively misleading: it framed a permanent
+      // configuration problem as a transient one.
+      return 'Google never finished authorizing. If your browser showed “Access blocked — CallRise AI has not completed the Google verification process”, retrying won’t help: this app’s Google connection is still in testing, and your account has to be added as an approved tester (or the app published) in its Google Cloud project first.'
     case 'read-failed':
       return "Couldn't read your calendars — try Refresh."
     case 'write-failed':
@@ -241,11 +249,18 @@ export function GoogleConnect({
         )}
       </div>
 
+      {/* The old wording told users to "click past the unverified app
+          warning" as though every Google warning is dismissible. The one
+          they actually hit most is not: "Access blocked — has not completed
+          the Google verification process" is a dead end, and telling someone
+          to click past it sends them looking for a button that isn't there.
+          Both cases are now named for what they are. */}
       {(connecting || enablingSync) && (
         <p className="mt-2.5 text-[11px] text-faint">
-          A Google sign-in opened in your browser. Approve it there (click past the “unverified app”
-          warning){enablingSync && ' and allow the “see and edit events” permission'}, then come
-          back — this updates automatically.
+          A Google sign-in opened in your browser. Approve it there
+          {enablingSync && ' and allow the “see and edit events” permission'} — an “unverified app”
+          warning can be clicked past. If it instead says “Access blocked”, stop: that one can’t be,
+          and this account needs adding as an approved tester first.
         </p>
       )}
 
