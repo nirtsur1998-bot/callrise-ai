@@ -6,6 +6,7 @@ import type { ThemeMode } from './theme'
 import { useNavigationPreview } from '@renderer/features/navigation/useNavigationPreview'
 import { useCalendarPreview } from '@renderer/features/calendar/useCalendarPreview'
 import { useIdentityPreview } from './useIdentityPreview'
+import { useSettingsPreview } from './useSettingsPreview'
 
 const OPTIONS: { id: ThemeMode; label: string }[] = [
   { id: 'dark', label: 'Dark' },
@@ -18,6 +19,7 @@ export function AppearanceSection(): React.JSX.Element {
   const { enabled: navPreview, setEnabled: setNavPreview } = useNavigationPreview()
   const { enabled: calPreview, setEnabled: setCalPreview } = useCalendarPreview()
   const { enabled: identityPreview, setEnabled: setIdentityPreview } = useIdentityPreview()
+  const { enabled: settingsPreview, setEnabled: setSettingsPreview } = useSettingsPreview()
 
   return (
     <>
@@ -45,6 +47,26 @@ export function AppearanceSection(): React.JSX.Element {
             checked={identityPreview}
             onChange={setIdentityPreview}
             label="Try the new look (preview)"
+          />
+        </div>
+      </Card>
+
+      <Card className="mb-5">
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium">Try the new Settings layout (preview)</p>
+            <p className="mt-1 text-[12px] text-muted">
+              This list, regrouped around what you&rsquo;re trying to do &mdash; Calls, Coaching, Your
+              AI, Connections, App &mdash; instead of which part of the app owns it. Six pages are
+              renamed to say what they do, and two pairs that were one thing in two rows are now
+              one page. Nothing is removed and no setting changes. Turn it off to go straight back
+              to today&rsquo;s list.
+            </p>
+          </div>
+          <ToggleSwitch
+            checked={settingsPreview}
+            onChange={setSettingsPreview}
+            label="Try the new Settings layout (preview)"
           />
         </div>
       </Card>
