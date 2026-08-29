@@ -259,8 +259,8 @@ export function EventDialog({
           </div>
           <p className="mt-1.5 text-[11px] text-faint">
             {syncEnabled
-              ? 'Fires as a real push notification in Google/Outlook once this event syncs. Outlook only supports one lead time — the soonest picked is used.'
-              : 'Only takes effect once two-way sync is on for Google or Outlook — connect one above to get real push reminders.'}
+              ? 'Fires as a real push notification in Google/Outlook once this event syncs — on your phone too. Outlook only supports one lead time, so the soonest picked is used.'
+              : 'Notifies you here, on this computer, while CallRise AI is running. Turn on two-way sync for Google or Outlook (Settings → Calendar) to get real push reminders that also reach your phone.'}
           </p>
         </Field>
         {isEdit && onOpenPrepBrief && (

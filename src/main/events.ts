@@ -19,6 +19,7 @@ import {
   dropCachedEvent
 } from './calendar-sync'
 import { scheduleBackup } from './backup'
+import { startEventReminders, refreshEventReminders } from './event-reminders'
 import { getJobManager } from './jobs/instance'
 import type { Job } from './jobs/types'
 import { NO_AI_PURPOSE } from './jobs/types'
@@ -33,6 +34,10 @@ function notifyEventsChanged(): void {
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('events:changed')
   }
+  // A sync-state change can flip whether the PROVIDER owns an event's
+  // reminder (see event-reminders.ts's providerWillRemind), so the local
+  // fallback re-evaluates on the same signal the UI does.
+  refreshEventReminders()
 }
 
 // --- Per-event serialization ------------------------------------------------
@@ -232,11 +237,24 @@ export function registerEvents(): void {
   if (registered) return
   registered = true
 
+  // M31 — arm the local reminder fallback for events the provider won't
+  // remind about (see event-reminders.ts). Started here rather than in
+  // index.ts so it's owned by the same module that owns the event store.
+  startEventReminders(eventsDir)
+
   ipcMain.handle('events:list', (): Promise<CalendarEvent[]> => listEvents(eventsDir()))
+  // Each of these announces the change (notifyEventsChanged) rather than
+  // relying on schedulePush to do it: that only fires when the SYNC outcome
+  // changed, so with sync off — or on a purely local event — a create/edit
+  // was never broadcast at all. Any other surface holding its own
+  // useCalendar() instance (e.g. an event created from the ⌘K palette while
+  // the Calendar screen is mounted) would keep showing stale data. It also
+  // re-arms the local reminder fallback, which is the same signal.
   ipcMain.handle('events:create', async (_e, input: EventCreateInput) => {
     const event = await createEvent(eventsDir(), input) // local truth first — always succeeds
     schedulePush(event.id) // fire-and-forget: offline/errors never block the local create
     scheduleBackup() // mirror to the cloud (debounced, best-effort)
+    notifyEventsChanged()
     return event
   })
   ipcMain.handle('events:update', async (_e, id: string, patch: EventUpdateInput) => {
@@ -244,6 +262,7 @@ export function registerEvents(): void {
     if (event) {
       schedulePush(id)
       scheduleBackup()
+      notifyEventsChanged()
     }
     return event
   })
@@ -255,6 +274,7 @@ export function registerEvents(): void {
     if (!(await isAnySyncEnabled())) {
       const res = await withState(id, () => markEventDeleted(eventsDir(), id))
       scheduleBackup()
+      notifyEventsChanged() // broadcast + re-arm reminders; a deleted event must not still notify
       return res
     }
     if (!event.externalId) {
@@ -284,6 +304,7 @@ export function registerEvents(): void {
       })
       if (res.ok) schedulePush(id) // no-op if backup-tombstoned; pushes the Google delete if linked
       scheduleBackup()
+      notifyEventsChanged() // broadcast + re-arm reminders; a deleted event must not still notify
       return res
     }
     // Linked: Google-tombstone locally (hidden from the UI immediately,
@@ -301,6 +322,7 @@ export function registerEvents(): void {
     )
     schedulePush(id)
     scheduleBackup() // the deletion is visible to the backup immediately
+    notifyEventsChanged() // broadcast + re-arm reminders; a deleted event must not still notify
     return { ok: true }
   })
   // Adopt a Google event: create a LOCAL event linked to it (carrying the edited

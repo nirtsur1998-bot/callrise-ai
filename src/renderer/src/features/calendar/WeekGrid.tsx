@@ -38,7 +38,6 @@ export function WeekGrid({
   const weekStart = startOfWeek(cursor, { weekStartsOn: 0 })
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
   const scrollRef = useRef<HTMLDivElement>(null)
-  const nowLineRef = useRef<HTMLDivElement>(null)
   const [now, setNow] = useState(new Date())
 
   useEffect(() => {
@@ -46,18 +45,47 @@ export function WeekGrid({
     return () => clearInterval(id)
   }, [])
 
-  // Open scrolled to center on the current time rather than a fixed hour.
-  // This grid's own overflow-y-auto container isn't reliably the element
-  // that actually scrolls (a parent in the flex chain isn't height-clamped,
-  // so the page itself grows and scrolls instead) — scrollIntoView on the
-  // now-line marker resolves whichever ancestor is truly scrollable, so it
-  // works regardless of that layout quirk. Deferred a frame so the mount's
-  // page-enter transition (MainApp's `.animate-view`) has already committed.
+  // Open scrolled to center on the current time — but scroll ONLY this
+  // grid's own container, never an ancestor.
+  //
+  // This used to call scrollIntoView on the now-line, which by definition
+  // scrolls EVERY scrollable ancestor. The real scroller here is the page
+  // (AppShell's content box), so opening the week view dragged the
+  // calendar's own header — date range, Month/Week switcher, connect bar —
+  // off the top of the screen. Survivable while Week was opt-in; not once
+  // Week is the default view (M31 Slice A), where every visit would open on
+  // a headerless grid.
+  //
+  // KNOWN LIMITATION, verified in the running app rather than assumed: this
+  // container is not itself scrollable today, so the assignment below is a
+  // no-op and the week opens at midnight instead of centred on now. The
+  // cause is one level up — MainApp wraps non-assistant screens in a plain
+  // `.animate-view` div with height:auto, so CalendarView's `h-full` has no
+  // definite height to resolve against and the whole column grows instead of
+  // clamping. (The assistant screen already special-cases exactly this.)
+  // Fixing it means changing that shared wrapper, which every screen renders
+  // through — deliberately out of scope here and flagged instead of quietly
+  // re-architected. Once the chain clamps, this code starts centring with no
+  // further change.
   useEffect(() => {
-    const raf = requestAnimationFrame(() => {
-      nowLineRef.current?.scrollIntoView({ block: 'center' })
+    // Two frames, not one: the first only guarantees the mount's own paint.
+    // The lazy-loaded chunk plus the `.animate-view` page transition mean
+    // the container can still measure 0-height on frame one, where
+    // assigning scrollTop is silently discarded.
+    let second = 0
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => {
+        const container = scrollRef.current
+        if (!container || container.clientHeight === 0) return
+        const minutesNow = minutesInto(new Date(), startOfDay(new Date()))
+        const target = (minutesNow / 60) * HOUR_HEIGHT - container.clientHeight / 2
+        container.scrollTop = Math.max(0, target)
+      })
     })
-    return () => cancelAnimationFrame(raf)
+    return () => {
+      cancelAnimationFrame(first)
+      cancelAnimationFrame(second)
+    }
   }, [])
 
   return (
@@ -176,7 +204,6 @@ export function WeekGrid({
                 {/* Live now-line */}
                 {today && (
                   <div
-                    ref={nowLineRef}
                     className="pointer-events-none absolute inset-x-0 z-10"
                     style={{ top: (minutesInto(now, day) / 60) * HOUR_HEIGHT }}
                   >

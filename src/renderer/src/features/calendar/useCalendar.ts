@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Task } from '@renderer/features/tasks/types'
 import type { CalendarEvent } from './types'
 import { useToast } from '@renderer/features/notifications/useToast'
+import { onEventsChanged } from './eventsChanged'
 
 export type EventCreateInput = Parameters<typeof window.api.events.create>[0]
 export type EventUpdateInput = Parameters<typeof window.api.events.update>[1]
@@ -150,6 +151,11 @@ export function useCalendar(): UseCalendar {
     const off = window.api.events.onChanged(() => void refresh())
     return off
   }, [refresh])
+
+  // Same signal, renderer-side: a write made elsewhere in THIS renderer (the
+  // ⌘K quick-create in MainApp) must reach this instance too. See
+  // eventsChanged.ts for why that isn't left to the IPC broadcast above.
+  useEffect(() => onEventsChanged(() => void refresh()), [refresh])
 
   const createEvent = useCallback(
     async (input: EventCreateInput) => {

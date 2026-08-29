@@ -5,7 +5,7 @@ import { CopilotPanel } from '@renderer/features/copilot/CopilotPanel'
 import { useVoiceAiCollapsed } from '@renderer/features/copilot/useVoiceAiCollapsed'
 import { CommandPalette, type PaletteAction } from '@renderer/features/navigation/CommandPalette'
 import { ShortcutsOverlay } from '@renderer/features/navigation/ShortcutsOverlay'
-import { PhoneCall, SunMoon } from 'lucide-react'
+import { PhoneCall, SunMoon, CalendarPlus } from 'lucide-react'
 import { useTheme } from '@renderer/features/settings/useTheme'
 import { isMac } from '@renderer/lib/platform'
 import { SkeletonRows } from '@renderer/components/Skeleton'
@@ -18,6 +18,8 @@ import {
   type NavId
 } from '@renderer/features/navigation/nav-items'
 import { useNavigationPreview } from '@renderer/features/navigation/useNavigationPreview'
+import { draftToInput } from '@renderer/features/calendar/items'
+import { notifyEventsChangedLocally } from '@renderer/features/calendar/eventsChanged'
 import type { AuthUser } from '@renderer/features/auth/types'
 import { getAutoOpenMeetingPage } from '@renderer/features/settings/prefs'
 import { useAutoTranscribeCalls } from '@renderer/features/settings/useAutoTranscribeCalls'
@@ -79,6 +81,14 @@ const CallsHub = lazy(() => import('./CallsHub').then((m) => ({ default: m.Calls
 const PipelineHub = lazy(() => import('./PipelineHub').then((m) => ({ default: m.PipelineHub })))
 const CoachingHub = lazy(() => import('./CoachingHub').then((m) => ({ default: m.CoachingHub })))
 const LibraryHub = lazy(() => import('./LibraryHub').then((m) => ({ default: m.LibraryHub })))
+// M31 Slice A — "New event" is reachable from every screen (⌘K / ⌘⇧E), so
+// this one dialog lives at the app level. Lazy like the screens above: it
+// pulls in chrono-node, which no other surface needs.
+const QuickEventDialog = lazy(() =>
+  import('@renderer/features/calendar/QuickEventDialog').then((m) => ({
+    default: m.QuickEventDialog
+  }))
+)
 
 /** The signed-in application shell. Only rendered once a user is logged in.
  *  `initialNav` lets onboarding drop the user straight onto a screen (e.g. Live
@@ -94,6 +104,11 @@ export function MainApp({
   const [copilotCollapsed, setCopilotCollapsed] = useVoiceAiCollapsed()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  // M31 Slice A — "New event" from the palette (or ⌘⇧E) works from ANY
+  // screen, so the quick-create dialog is owned here rather than by
+  // CalendarView. Creating writes straight through the events IPC; main
+  // broadcasts events:changed, so an open Calendar picks it up on its own.
+  const [quickEventOpen, setQuickEventOpen] = useState(false)
   const { mode: themeMode, setMode: setThemeMode } = useTheme()
 
   // M31 Stage 2 — behind a preview flag (Settings -> Appearance), default
@@ -223,6 +238,13 @@ export function MainApp({
       onRun: () => navigateTo('live-calls')
     },
     {
+      id: 'new-event',
+      label: 'New event',
+      icon: CalendarPlus,
+      shortcut: isMac ? '⌘⇧E' : 'Ctrl ⇧E',
+      onRun: () => setQuickEventOpen(true)
+    },
+    {
       id: 'toggle-theme',
       label: 'Toggle theme',
       icon: SunMoon,
@@ -262,6 +284,11 @@ export function MainApp({
       if (e.shiftKey && e.key.toLowerCase() === 't') {
         e.preventDefault()
         setThemeMode(themeMode === 'light' ? 'dark' : 'light')
+        return
+      }
+      if (e.shiftKey && e.key.toLowerCase() === 'e') {
+        e.preventDefault()
+        setQuickEventOpen(true)
         return
       }
       if (navPreviewEnabled && !e.shiftKey && /^[1-9]$/.test(e.key)) {
@@ -401,6 +428,30 @@ export function MainApp({
         onClose={() => setShortcutsOpen(false)}
         navPreviewEnabled={navPreviewEnabled}
       />
+      {quickEventOpen && (
+        <Suspense fallback={null}>
+          <QuickEventDialog
+            onClose={() => setQuickEventOpen(false)}
+            onCreate={async (draft) => {
+              await window.api.events.create(draftToInput(draft))
+              // Tell any mounted calendar in THIS renderer to re-read; see
+              // eventsChanged.ts. Without it, creating from the palette while
+              // the Calendar screen is open leaves the new event invisible
+              // until the screen is remounted.
+              notifyEventsChangedLocally()
+              setQuickEventOpen(false)
+            }}
+            // No full-dialog escalation from here: the rich editor lives
+            // inside CalendarView with its own create/update plumbing, so
+            // this sends the user there instead of duplicating it. The
+            // quick fields cover what ⌘K creation is for.
+            onMoreOptions={() => {
+              setQuickEventOpen(false)
+              navigateTo('calendar')
+            }}
+          />
+        </Suspense>
+      )}
       {detectedCallApp && (
         <CallDetectedBanner
           appName={detectedCallApp}

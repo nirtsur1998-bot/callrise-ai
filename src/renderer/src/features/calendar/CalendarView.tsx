@@ -17,6 +17,10 @@ import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { useCalendar } from './useCalendar'
 import { GoogleConnect } from '@renderer/features/google/GoogleConnect'
 import { OutlookConnect } from '@renderer/features/outlook/OutlookConnect'
+import { CalendarConnectBar } from './CalendarConnectBar'
+import { QuickEventDialog } from './QuickEventDialog'
+import { useCalendarPreview } from './useCalendarPreview'
+import { loadCalendarView, saveCalendarView } from './viewPreference'
 import { MonthGrid } from './MonthGrid'
 import { WeekGrid } from './WeekGrid'
 import { EventDialog } from './EventDialog'
@@ -94,7 +98,18 @@ export function CalendarView({
     refreshGoogle,
     refreshOutlook
   } = useCalendar()
-  const [view, setView] = useState<View>('month')
+  // M31 Slice A — with the preview flag ON, the view defaults to Week and
+  // remembers the last-used one (Google's own documented model: "after you
+  // choose a new view, it becomes your default view until you change it").
+  // With the flag OFF this is byte-for-byte today's behavior: hardcoded
+  // 'month', nothing read from or written to localStorage. See
+  // docs/M31-calendar-research.md §2.2 for why Week.
+  const { enabled: calendarPreview } = useCalendarPreview()
+  const [view, setViewState] = useState<View>(() => (calendarPreview ? loadCalendarView() : 'month'))
+  const setView = (next: View): void => {
+    setViewState(next)
+    if (calendarPreview) saveCalendarView(next)
+  }
   const [cursor, setCursor] = useState<Date>(() => new Date())
   const [dialog, setDialog] = useState<DialogState | null>(null)
   const [prepBriefMeeting, setPrepBriefMeeting] = useState<PrepBriefMeeting | null>(null)
@@ -119,8 +134,20 @@ export function CalendarView({
   const goPrev = (): void => setCursor((c) => (view === 'month' ? subMonths(c, 1) : subWeeks(c, 1)))
   const goNext = (): void => setCursor((c) => (view === 'month' ? addMonths(c, 1) : addWeeks(c, 1)))
 
-  const openNew = (day: Date, hour?: number): void =>
+  // Preview: an empty-slot click opens the compact quick-create card first
+  // (Google/Outlook's own convention), with "More options" escalating to the
+  // full dialog carrying whatever was already typed. Default: straight to
+  // the full dialog, exactly as today.
+  const [quickSlot, setQuickSlot] = useState<Date | null>(null)
+  const openNew = (day: Date, hour?: number): void => {
+    if (calendarPreview) {
+      const slot = new Date(day)
+      if (hour !== undefined) slot.setHours(hour, 0, 0, 0)
+      setQuickSlot(slot)
+      return
+    }
     setDialog({ mode: 'new', draft: newDraft(day, hour) })
+  }
   const openEdit = (event: CalendarEvent): void =>
     setDialog({ mode: 'edit', draft: draftFromEvent(event), eventId: event.id, event })
   const zoomDay = (day: Date): void => {
@@ -214,19 +241,32 @@ export function CalendarView({
         </div>
       </header>
 
-      {/* Google + Outlook Calendar connections, side-by-side */}
-      <div className="mb-3 flex flex-wrap gap-3 [&>*]:!mb-0 [&>*]:min-w-[300px] [&>*]:flex-1">
-        <GoogleConnect
-          onChange={() => void refreshGoogle()}
-          syncing={googleSyncing}
-          lastSynced={googleLastSynced}
+      {/* Google + Outlook connections. Preview: a compact status/prompt bar
+          with the full cards one click away (research §2.6). Default: the
+          original permanent side-by-side cards, unchanged. */}
+      {calendarPreview ? (
+        <CalendarConnectBar
+          googleSyncing={googleSyncing}
+          googleLastSynced={googleLastSynced}
+          outlookSyncing={outlookSyncing}
+          outlookLastSynced={outlookLastSynced}
+          onRefreshGoogle={() => void refreshGoogle()}
+          onRefreshOutlook={() => void refreshOutlook()}
         />
-        <OutlookConnect
-          onChange={() => void refreshOutlook()}
-          syncing={outlookSyncing}
-          lastSynced={outlookLastSynced}
-        />
-      </div>
+      ) : (
+        <div className="mb-3 flex flex-wrap gap-3 [&>*]:!mb-0 [&>*]:min-w-[300px] [&>*]:flex-1">
+          <GoogleConnect
+            onChange={() => void refreshGoogle()}
+            syncing={googleSyncing}
+            lastSynced={googleLastSynced}
+          />
+          <OutlookConnect
+            onChange={() => void refreshOutlook()}
+            syncing={outlookSyncing}
+            lastSynced={outlookLastSynced}
+          />
+        </div>
+      )}
 
       {items.length === 0 && !loading && (
         <p className="mb-3 flex items-center gap-2 text-[13px] text-faint">
@@ -261,6 +301,21 @@ export function CalendarView({
           />
         )}
       </div>
+
+      {quickSlot && (
+        <QuickEventDialog
+          slotStart={quickSlot}
+          onClose={() => setQuickSlot(null)}
+          onCreate={async (draft) => {
+            await createEvent(draftToInput(draft))
+            setQuickSlot(null)
+          }}
+          onMoreOptions={(draft) => {
+            setQuickSlot(null)
+            setDialog({ mode: 'new', draft })
+          }}
+        />
+      )}
 
       {dialog && (
         <EventDialog

@@ -42,6 +42,7 @@ function buildGroups(navPreviewEnabled: boolean): ShortcutGroup[] {
       title: 'Actions',
       shortcuts: [
         { label: 'Start a live call', keys: `${mod}⇧L` },
+        { label: 'New calendar event', keys: `${mod}⇧E` },
         { label: 'Toggle theme', keys: `${mod}⇧T` }
       ]
     },

@@ -4,6 +4,7 @@ import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
 import { useTheme } from './useTheme'
 import type { ThemeMode } from './theme'
 import { useNavigationPreview } from '@renderer/features/navigation/useNavigationPreview'
+import { useCalendarPreview } from '@renderer/features/calendar/useCalendarPreview'
 
 const OPTIONS: { id: ThemeMode; label: string }[] = [
   { id: 'dark', label: 'Dark' },
@@ -14,6 +15,7 @@ const OPTIONS: { id: ThemeMode; label: string }[] = [
 export function AppearanceSection(): React.JSX.Element {
   const { mode, setMode } = useTheme()
   const { enabled: navPreview, setEnabled: setNavPreview } = useNavigationPreview()
+  const { enabled: calPreview, setEnabled: setCalPreview } = useCalendarPreview()
 
   return (
     <>
@@ -41,6 +43,26 @@ export function AppearanceSection(): React.JSX.Element {
             checked={navPreview}
             onChange={setNavPreview}
             label="Try the new navigation (preview)"
+          />
+        </div>
+      </Card>
+
+      <Card className="mt-5">
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium">Try the new calendar (preview)</p>
+            <p className="mt-1 text-[12px] text-muted">
+              Opens on the week instead of the month (and remembers whichever view you last used),
+              and replaces the two large Google/Outlook connection cards with a single compact line
+              — the full connection controls are still one click away, and also in Settings →
+              Calendar. Nothing about your events or sync changes. Turn this off any time to go
+              straight back to today&rsquo;s calendar.
+            </p>
+          </div>
+          <ToggleSwitch
+            checked={calPreview}
+            onChange={setCalPreview}
+            label="Try the new calendar (preview)"
           />
         </div>
       </Card>
