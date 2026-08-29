@@ -220,7 +220,8 @@ import { registerEvents } from './events'
 import { registerLiveCue } from './live-cue'
 import { registerLoopbackCapture } from './loopback'
 import { registerLiveTranscriptIpc } from './live/live-transcript-ipc'
-import { redactPendingClosedJournals } from './live/call-journal'
+import { redactPendingClosedJournals, sweepJournalsForMissingCalls } from './live/call-journal'
+import { sweepOrphanedCompanions, recordIsGone } from './companion-files'
 import { registerGoogle } from './google'
 import { registerOutlook } from './outlook'
 import { registerBackup } from './backup'
@@ -560,6 +561,32 @@ app.whenReady().then(async () => {
   void redactPendingClosedJournals().catch((err) =>
     console.error('[index] pending journal redaction sweep failed:', err)
   )
+
+  // BUG-139 (privacy) — the backlog half of the companion-file fix. Purging on
+  // delete only protects calls deleted from NOW ON: anything deleted before
+  // this shipped is already a tombstone, so deleteCall returns early and never
+  // reaches the purge, and its journal and `.conflict` copy would sit there
+  // forever. Found on a real machine: 4 journals whose call record was gone
+  // entirely, still holding transcript content, plus 4 `.conflict` copies of
+  // deleted records holding their full pre-deletion contents.
+  //
+  // Same fire-and-forget shape and the same reasoning as the sweep above: it
+  // must never sit on the startup path to createWindow(). Ordered after the
+  // redaction sweep so a journal being redacted is not deleted out from under
+  // it — both are best-effort per file, so the overlap is harmless either way,
+  // but the ordering makes the intent explicit rather than incidental.
+  void (async () => {
+    const callsPath = join(app.getPath('userData'), 'calls')
+    const journals = await sweepJournalsForMissingCalls(
+      async (id) => !(await recordIsGone(callsPath, id))
+    )
+    const companions = await sweepOrphanedCompanions(app.getPath('userData'))
+    if (journals || companions) {
+      console.log(
+        `[index] BUG-139 sweep removed ${journals} orphaned journal file(s) and ${companions} companion file(s)`
+      )
+    }
+  })().catch((err) => console.error('[index] companion-file sweep failed:', err))
   registerCoachPdf()
   registerTasks()
   registerContacts()

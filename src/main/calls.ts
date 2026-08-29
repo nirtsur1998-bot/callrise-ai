@@ -35,6 +35,8 @@ import { extractCommitments } from './commitments'
 import { generateCallTitle, type GenerateTitleResult } from './call-title'
 import { mineObjections, makeVerifier, type ObjectionMiningResult } from './objection-mining'
 import { addToQueue, purgeQueueForCall } from './objection-queue-fs'
+import { purgeJournalForCall } from './live/call-journal'
+import { purgeCompanionFiles } from './companion-files'
 import {
   isObjectionMiningEnabled,
   loadAppSettings,
@@ -518,6 +520,20 @@ export function registerCalls(): void {
     // deleting the call must take them with it, or "a deleted call keeps no
     // buyer words" (deleteCall's guarantee) would be false one folder over.
     await purgeQueueForCall(objectionQueueDir(), id).catch(() => 0)
+    // BUG-139 — the same guarantee, the same reasoning, two more folders that
+    // were missed. The backup reconcile keeps a `<id>.conflict` copy of the
+    // FULL pre-deletion record beside the tombstone, and the call journal
+    // holds the raw transcript stream in its own directory entirely. Neither
+    // was reached by any deletion, so both outlived the record indefinitely —
+    // found for real on the founder's machine, including verbatim dialogue
+    // from calls deleted 16 days earlier.
+    //
+    // Ordered AFTER the tombstone is written, not before: if the process dies
+    // between the two, the record is already gone from the UI and the startup
+    // sweep collects the companions on the next launch. The reverse order
+    // could delete the evidence and then fail to delete the call.
+    await purgeCompanionFiles(callsDir(), id).catch(() => 0)
+    await purgeJournalForCall(id).catch(() => 0)
     scheduleBackup() // propagate the deletion tombstone
     return res
   })
