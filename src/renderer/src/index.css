@@ -7,16 +7,25 @@
   e.g. --color-surface -> `bg-surface`, --color-muted -> `text-muted`.
 */
 @theme {
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
+  /* ── THE TYPE HALF OF FIRST LIGHT (M31 Stage 4) ───────────────────────
+     This stack used to name 'Inter' without ever bundling it, so on Windows
+     it resolved to 'Segoe UI' — the literal default typeface of the OS. The
+     app was shipping the most generic possible typography while claiming a
+     distinctive identity, which is what Stage 0 flagged.
+     Now a real bundled face (see main.tsx for why it is self-hosted, and
+     docs/M31-typeface-license.md for why it is not Satoshi). The fallbacks
+     stay so text still renders if the woff2 ever fails to load — but they
+     are now genuinely a fallback rather than what everyone actually sees. */
+  --font-sans:
+    'Manrope Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
 
-  /* Named mono token — nothing points at it yet; the 6 existing `font-mono`
-     call sites already fall through to Tailwind's own built-in default mono
-     stack, which this matches exactly, so naming it here changes nothing
-     today. It exists so M31 Stage 4 can swap this one line to the chosen
-     identity's mono face instead of hunting down every call site. */
+  /* Mono is for DATA — transcripts, metrics, scorecards, timestamps. Only 6
+     call sites use it today, but Slice B's chip context and the agenda rail
+     are the kind of thing that reaches for it, so it exists properly now
+     rather than being retrofitted later. Geist Mono, SIL OFL 1.1. */
   --font-mono:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
-    monospace;
+    'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    'Liberation Mono', 'Courier New', monospace;
 
   /* Type scale — two intentional steps for sizes the app already reaches for
      by hand, everywhere: 271 sites hardcode `text-[13px]` (this product's
