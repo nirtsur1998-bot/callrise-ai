@@ -65,7 +65,7 @@ Requirements, all of which Google checks:
 
 | # | Requirement | Status today |
 |---|---|---|
-| 1 | App homepage on a domain you own | ❌ **missing** — `callrise.ai` does not resolve (NXDOMAIN) |
+| 1 | App homepage on a domain you own | ✅ **domain confirmed: `callrise-ai.com`** — page still to publish |
 | 2 | Privacy policy hosted on that same domain | ❌ missing (draft below) |
 | 3 | Domain ownership verified in Google Search Console | ❌ blocked on #1 |
 | 4 | App name + logo consistent with the homepage | ⚠️ logo exists in-app; not published |
@@ -179,9 +179,16 @@ again.
 
 ## 7. Open question for the founder
 
-**Do you own a domain, or want to register one?** Nothing in the verification
-path can be submitted without it. `callrise.ai` currently does not resolve
-(NXDOMAIN), so if it isn't registered yet, that is step zero.
+**ANSWERED 2026-08-29: the domain is `callrise-ai.com`** (owned by the
+founder). The blocking prerequisite is therefore met; what remains is
+publishing two pages on it — the homepage and the privacy policy — and
+verifying ownership in Google Search Console. Ready-to-publish copy for both
+is in `docs/GOOGLE-VERIFICATION-COPY.md`.
+
+Note the hyphen: it is `callrise-ai.com`, **not** `callrise.ai` (which does not
+resolve). Every URL submitted to Google — homepage, privacy policy, and the
+authorised domain — must use the hyphenated form, and they must all be on that
+one domain or Google's reviewer rejects the submission.
 
 *(An earlier draft of this doc also flagged `updates.callrise.ai` as a dead
 update feed. That was wrong and is corrected here: the string appears only in
