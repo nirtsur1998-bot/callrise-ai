@@ -24,10 +24,13 @@ export type { EmptyStateReason } from './emptyStatePolicy'
 interface EmptyStateProps {
   icon: LucideIcon
   title: string
+  /** One line on what this screen holds. For an `off` state the "what it
+   *  does" sentence lives on the reason instead (see `what`), because that
+   *  one is REQUIRED and this one is not. */
   description?: string
   /** Optional primary action rendered below the copy. */
   action?: EmptyStateAction
-  /** Which of the three (four) states this is. Defaults to plain `empty`. */
+  /** Which of the four states this is. Defaults to plain `empty`. */
   reason?: EmptyStateReason
   /** Tighter padding for empty states that sit inside a card. */
   compact?: boolean
@@ -87,8 +90,15 @@ export function EmptyState({
       )}
 
       <Title className="text-sm font-medium text-ink">{title}</Title>
-      {description && (
-        <p className="mt-1.5 max-w-xs text-[13px] leading-relaxed text-muted">{description}</p>
+      {/* An off-state's "what it does" line is REQUIRED and comes from the
+          reason; everything else uses the optional description. Rendered in
+          the same slot so the two never stack into a wall of text. */}
+      {reason.kind === 'off' ? (
+        <p className="mt-1.5 max-w-xs text-[13px] leading-relaxed text-muted">{reason.what}</p>
+      ) : (
+        description && (
+          <p className="mt-1.5 max-w-xs text-[13px] leading-relaxed text-muted">{description}</p>
+        )
       )}
 
       {reason.kind === 'off' && reason.cost && (

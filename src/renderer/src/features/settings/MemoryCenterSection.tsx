@@ -256,7 +256,7 @@ export function MemoryCenterSection(): React.JSX.Element {
             description={
               salesBrainOn
                 ? `${SCOPE_LABEL[scope]} facts appear here as calls are analysed.`
-                : 'Nothing will be remembered — and nothing will appear here — until you turn it on.'
+                : undefined
             }
             reason={
               salesBrainOn
@@ -264,6 +264,7 @@ export function MemoryCenterSection(): React.JSX.Element {
                 : {
                     kind: 'off',
                     settingsPage: 'sales-brain',
+                    what: 'Sales Brain learns who you are, how you sell, your business and each client, so every AI feature gets sharper over time.',
                     cost: 'Runs entirely on your own device. Nothing is sent anywhere.',
                     actionLabel: 'Turn on Sales Brain'
                   }

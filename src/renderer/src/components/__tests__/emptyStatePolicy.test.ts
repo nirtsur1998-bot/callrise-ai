@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   REASON_BADGE,
   resolveEmptyStateAction,
@@ -50,7 +52,7 @@ describe('every off-state has somewhere to go (the dead-end fix)', () => {
   it('routes to the page the reason declares', () => {
     const go = nav()
     const action = resolveEmptyStateAction(
-      { kind: 'off', settingsPage: 'sales-brain' },
+      { kind: 'off', settingsPage: 'sales-brain', what: 'What this feature does.' },
       undefined,
       go
     )
@@ -65,7 +67,11 @@ describe('every off-state has somewhere to go (the dead-end fix)', () => {
     // button comes from the reason rather than the caller.
     for (const page of ['objection-library', 'live-deal-intelligence', 'coach2'] as const) {
       const go = nav()
-      resolveEmptyStateAction({ kind: 'off', settingsPage: page }, undefined, go)!.onClick()
+      resolveEmptyStateAction(
+        { kind: 'off', settingsPage: page, what: 'What this feature does.' },
+        undefined,
+        go
+      )!.onClick()
       expect(go).toHaveBeenCalledWith(page)
     }
   })
@@ -81,11 +87,34 @@ describe('every off-state has somewhere to go (the dead-end fix)', () => {
   it('lets an explicit action win — some screens’ next step is not Settings', () => {
     const go = nav()
     const own = { label: 'Import your calls', onClick: vi.fn() }
-    const action = resolveEmptyStateAction({ kind: 'off', settingsPage: 'sales-brain' }, own, go)
+    const action = resolveEmptyStateAction(
+      { kind: 'off', settingsPage: 'sales-brain', what: 'What this feature does.' },
+      own,
+      go
+    )
     expect(action).toBe(own)
     action!.onClick()
     expect(own.onClick).toHaveBeenCalled()
     expect(go).not.toHaveBeenCalled()
+  })
+})
+
+describe('an off-state must say what the feature DOES', () => {
+  it('carries the what-it-does line on the reason, not as an optional sibling', () => {
+    // Founder: "'Deal Intelligence is switched off' tells me nothing about
+    // whether I want it. 'Deal Intelligence watches live calls for risk
+    // signals — switched off' tells me whether to click. Half my 50% problem
+    // is not knowing what things ARE, not just that they exist."
+    //
+    // Enforced by the TYPE — an `off` reason without `what` does not compile,
+    // which is the real guard and is why the source snippet below is the
+    // thing worth asserting. This test pins that the field stays REQUIRED:
+    // making it optional would compile fine and quietly reopen the hole.
+    const src = readFileSync(join(__dirname, '..', 'emptyStatePolicy.ts'), 'utf8')
+    expect(src, 'the `what` field is no longer required on the off reason').toContain(
+      '      what: string'
+    )
+    expect(src).not.toContain('what?: string')
   })
 })
 

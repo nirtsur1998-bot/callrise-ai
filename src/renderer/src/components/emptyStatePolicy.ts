@@ -38,6 +38,26 @@ export type EmptyStateReason =
       kind: 'off'
       /** Where to turn it on. Required — see above. */
       settingsPage: SettingsPageId
+      /**
+       * What the feature DOES, in one line. REQUIRED, for the same reason
+       * `settingsPage` is.
+       *
+       * Founder: *"each one should say what the feature DOES, not just that
+       * it's off. 'Deal Intelligence is switched off' tells me nothing about
+       * whether I want it. 'Deal Intelligence watches live calls for risk
+       * signals — switched off' tells me whether to click. Half my 50%
+       * problem is not knowing what things ARE, not just that they exist."*
+       *
+       * It lives on the REASON rather than as a sibling `description` prop
+       * deliberately. The first attempt made the component's props a
+       * discriminated union so `reason: off` forced `description` — which
+       * TypeScript cannot narrow when a call site passes
+       * `reason={on ? A : B}`, the natural shape for exactly these screens.
+       * Requiring it INSIDE the object being constructed works with that
+       * shape, and keeps the guarantee: an off-state that only announces its
+       * own absence does not typecheck.
+       */
+      what: string
       /** What turning it on costs, in one line, where there is a real cost
        *  (e.g. "makes AI calls during the call"). The founder's standing
        *  "smooth default, advertised advanced path" rule: advertise the
