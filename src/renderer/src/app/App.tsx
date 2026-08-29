@@ -3,6 +3,7 @@ import { AudioLines } from 'lucide-react'
 import { useAuth } from '@renderer/features/auth/useAuth'
 import { AuthScreen } from '@renderer/features/auth/AuthScreen'
 import { useTheme } from '@renderer/features/settings/useTheme'
+import { useIdentityPreview } from '@renderer/features/settings/useIdentityPreview'
 import { OnboardingFlow, type OnboardingExit } from '@renderer/features/onboarding/OnboardingFlow'
 import { isOnboardingComplete } from '@renderer/features/onboarding/prefs'
 import { ToastProvider } from '@renderer/features/notifications/ToastProvider'
@@ -31,6 +32,7 @@ function Splash(): React.JSX.Element {
  */
 function App(): React.JSX.Element {
   useTheme() // applies the saved dark/light/system preference to <html>, app-wide
+  useIdentityPreview() // applies the First Light preview class to <html>, app-wide
   const { loading, configured, user } = useAuth()
 
   // Per-device: has onboarding been finished (or skipped) already?

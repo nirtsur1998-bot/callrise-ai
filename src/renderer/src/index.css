@@ -137,11 +137,132 @@
     --scrollbar-thumb-hover: #4a443a;
   }
 
+  /* color-scheme is NOT part of the identity preview — it tells the OS how to
+     paint native scrollbars and form controls, and it has to follow the
+     light/dark theme whether or not First Light is on. It lived inside the
+     light-ramp block, which was correct while there was exactly one light
+     ramp; with the ramp now flag-scoped it has to be lifted out, or the flag
+     OFF + light theme combination paints dark native controls on a white
+     page. Found by reasoning about the split, then confirmed in the app. */
+  :root.light {
+    color-scheme: light;
+  }
+
+  /* ── THE FIRST LIGHT PREVIEW FLAG (M31 Stage 4) ───────────────────────
+   *
+   * Read this before touching any colour in this file.
+   *
+   * `@theme` above holds FIRST LIGHT. The two blocks immediately below hold
+   * the ramp the app shipped before Stage 4, scoped to `:root:not(.first-
+   * light)`, so the flag OFF state is byte-identical to what shipped — not
+   * an approximation of it, the same hex values, recovered from the commit.
+   *
+   * The inversion (new palette in @theme, old palette in an override) is
+   * deliberate. It means the contrast guard, which parses @theme and
+   * `.first-light.light`, reads FIRST LIGHT — so the guard is the
+   * acceptance criteria for the ramp we intend to ship, and it cannot be
+   * satisfied by the old one. `@layer base` beats `@theme`'s layer
+   * regardless of specificity, which is the same mechanism `:root.light`
+   * has always relied on.
+   *
+   * The old ramp is deliberately NOT guarded. It fails — that is BUG-133,
+   * measured at 1.07:1 — and it is the known-failing status quo the flag
+   * exists to let you leave. Adding it to the guard would mean either
+   * shipping a red suite or re-introducing the exemption list Stage 4
+   * emptied.
+   *
+   * Nothing branches on this class except colour values. No component reads
+   * it, no layout changes, no data path is involved — which is what makes
+   * turning it off a real revert rather than a second code path.
+   */
+  :root:not(.first-light) {
+    --color-canvas: #0b0d11;
+    --color-surface: #14171d;
+    --color-elevated: #1a1e26;
+    --color-line: #242a33;
+    --color-line-soft: #1c2128;
+    /* Pre-Stage-4 had no separate strong-border token; controls used --color-line. */
+    --color-line-strong: #242a33;
+    --color-ink: #e7e9ec;
+    --color-muted: #98a0ab;
+    --color-faint: #7c8492;
+    --color-accent: #6e7bf2;
+    --color-accent-soft: #6e7bf21f;
+    /* The old ramp had ONE accent token; every fill was `bg-accent text-white`.
+       Mapping fill->indigo and on-accent->white reproduces that exactly, so
+       the 19 converted call sites render as they always did with the flag off. */
+    --color-accent-fill: #6e7bf2;
+    --color-on-accent: #ffffff;
+    --color-positive: #4ec78f;
+    --color-positive-soft: #4ec78f1f;
+    --color-warning: #e0a83a;
+    --color-warning-soft: #e0a83a1f;
+    --color-danger: #ef6a6a;
+    --color-danger-soft: #ef6a6a1f;
+    --color-track-outlook: #4f8ff7;
+    --color-track-outlook-soft: #4f8ff71f;
+    /* Same idea as accent-fill: the tokens Stage 4 introduced are mapped back
+       onto the status colours they used to borrow, so tasks are amber and
+       Google events green again, exactly as before. */
+    --color-track-google: #4ec78f;
+    --color-track-google-soft: #4ec78f1f;
+    --color-track-task: #e0a83a;
+    --color-track-task-soft: #e0a83a1f;
+    --color-lane-speed: #e0a83a;
+    --color-lane-quality: #6e7bf2;
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.28), 0 1px 3px rgb(0 0 0 / 0.16);
+    --shadow-pop: 0 8px 28px -6px rgb(0 0 0 / 0.5), 0 2px 6px rgb(0 0 0 / 0.3);
+    --scrollbar-thumb: #2a313b;
+    --scrollbar-thumb-hover: #353d49;
+  }
+
+  :root:not(.first-light).light {
+    --color-canvas: #ffffff;
+    --color-surface: #f7f7f8;
+    --color-elevated: #eef0f2;
+    --color-line: #e3e5e9;
+    --color-line-soft: #edeef1;
+    --color-line-strong: #e3e5e9;
+    --color-ink: #16181d;
+    --color-muted: #5b6270;
+    --color-faint: #6b7280;
+    --color-accent: #6e7bf2;
+    --color-accent-soft: #6e7bf21a;
+    --color-accent-fill: #6e7bf2;
+    --color-on-accent: #ffffff;
+    --color-positive: #12855a;
+    --color-positive-soft: #12855a14;
+    --color-warning: #a76b13;
+    --color-warning-soft: #a76b1314;
+    --color-danger: #cf3b3b;
+    --color-danger-soft: #cf3b3b14;
+    --color-speaker-1: #4f46e5;
+    --color-speaker-2: #059669;
+    --color-speaker-3: #d97706;
+    --color-speaker-4: #0284c7;
+    --color-speaker-5: #e11d48;
+    --color-speaker-6: #7c3aed;
+    --color-track-outlook: #2b6fd6;
+    --color-track-outlook-soft: #2b6fd61f;
+    --color-track-google: #12855a;
+    --color-track-google-soft: #12855a14;
+    --color-track-task: #a76b13;
+    --color-track-task-soft: #a76b1314;
+    --color-lane-speed: #a76b13;
+    --color-lane-quality: #6e7bf2;
+    --shadow-card: 0 1px 2px rgb(16 18 29 / 0.06), 0 1px 3px rgb(16 18 29 / 0.08);
+    --shadow-pop: 0 12px 32px -8px rgb(16 18 29 / 0.18), 0 2px 6px rgb(16 18 29 / 0.08);
+    --scrollbar-thumb: #d6d8dd;
+    --scrollbar-thumb-hover: #c3c6cc;
+  }
+
   /* Light theme: same token names, light values — applied via a `.light`
    * class on <html> (see useTheme.ts). Every `bg-surface`/`text-ink`/etc.
    * utility re-themes automatically since Tailwind's generated utilities
-   * reference these custom properties, not literal colors. */
-  :root.light {
+   * reference these custom properties, not literal colors.
+   * `.first-light` scoping: this is FIRST LIGHT's light ramp; the old one
+   * lives in `:root:not(.first-light).light` above. */
+  :root.first-light.light {
     color-scheme: light;
     /* FIRST LIGHT, light theme. This is the ramp BUG-133 was about: the old
        values put --color-surface at 1.07:1 against canvas and the card

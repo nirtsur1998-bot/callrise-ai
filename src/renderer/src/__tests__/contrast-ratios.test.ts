@@ -292,8 +292,35 @@ function checkRamp(themeName: string, ramp: Ramp): void {
 
 describe('WCAG contrast (BUG-133 guard)', () => {
   const css = readFileSync(INDEX_CSS, 'utf8')
+  // FIRST LIGHT lives in @theme (dark) and `:root.first-light.light`. The
+  // pre-Stage-4 ramp lives in `:root:not(.first-light)` blocks and is
+  // deliberately NOT measured here — it fails, that failure is BUG-133, and
+  // it is the status quo the preview flag exists to let you leave.
   const dark = parseRamp(css, '@theme {', '\n}')
-  const light = parseRamp(css, ':root.light {', '\n  }')
+  const light = parseRamp(css, ':root.first-light.light {', '\n  }')
+
+  // The revert path is part of what Stage 4 promised, so it gets a test
+  // rather than a comment. Deleting either legacy block — the obvious
+  // "cleanup" once First Light feels settled — turns the preview toggle into
+  // a switch that does nothing in one theme, silently.
+  it('keeps both halves of the revert path present', () => {
+    expect(css).toContain(':root:not(.first-light) {')
+    expect(css).toContain(':root:not(.first-light).light {')
+    // The old ramp must still define the tokens Stage 4 introduced, or the
+    // flag-off state renders new call sites (bg-accent-fill, the lane and
+    // track badges) with no value at all.
+    const legacyDark = parseRamp(css, ':root:not(.first-light) {', '\n  }')
+    for (const t of [
+      'accent-fill',
+      'on-accent',
+      'lane-speed',
+      'lane-quality',
+      'track-google',
+      'track-task'
+    ]) {
+      expect(legacyDark[t], `legacy dark ramp is missing --color-${t}`).toBeDefined()
+    }
+  })
 
   it('parses real, non-empty ramps for both themes (sanity: the guard can see the tokens)', () => {
     expect(dark.canvas).toBeDefined()

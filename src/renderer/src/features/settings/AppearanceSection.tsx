@@ -5,6 +5,7 @@ import { useTheme } from './useTheme'
 import type { ThemeMode } from './theme'
 import { useNavigationPreview } from '@renderer/features/navigation/useNavigationPreview'
 import { useCalendarPreview } from '@renderer/features/calendar/useCalendarPreview'
+import { useIdentityPreview } from './useIdentityPreview'
 
 const OPTIONS: { id: ThemeMode; label: string }[] = [
   { id: 'dark', label: 'Dark' },
@@ -16,6 +17,7 @@ export function AppearanceSection(): React.JSX.Element {
   const { mode, setMode } = useTheme()
   const { enabled: navPreview, setEnabled: setNavPreview } = useNavigationPreview()
   const { enabled: calPreview, setEnabled: setCalPreview } = useCalendarPreview()
+  const { enabled: identityPreview, setEnabled: setIdentityPreview } = useIdentityPreview()
 
   return (
     <>
@@ -25,6 +27,26 @@ export function AppearanceSection(): React.JSX.Element {
         <p className="mt-2 text-[11px] text-faint">
           &ldquo;System&rdquo; follows your computer&rsquo;s dark/light setting.
         </p>
+      </Card>
+
+      <Card className="mb-5">
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium">Try the new look (preview)</p>
+            <p className="mt-1 text-[12px] text-muted">
+              CallRise&rsquo;s own colours — warm amber and graphite — instead of the indigo-on-blue
+              every AI tool ships with. It also fixes cards and dividers being nearly invisible in
+              the light theme. This changes colours only: nothing moves, nothing is removed, and
+              nothing about your data changes. Turn it off to see exactly what the app looked like
+              before.
+            </p>
+          </div>
+          <ToggleSwitch
+            checked={identityPreview}
+            onChange={setIdentityPreview}
+            label="Try the new look (preview)"
+          />
+        </div>
       </Card>
 
       <Card>
