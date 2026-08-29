@@ -8,6 +8,7 @@ import {
   format,
   differenceInMinutes
 } from 'date-fns'
+import { PhoneCall } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import type { CalendarEvent, CalendarItem } from './types'
 import { ITEM_STYLES, itemsOnDay, layoutColumns, formatTime } from './items'
@@ -236,6 +237,7 @@ export function WeekGrid({
                           : item.context?.brief === 'outdated'
                             ? 'prep brief needs refreshing'
                             : undefined,
+                        item.context?.callId && 'call recorded — open the meeting to view it',
                         item.subtitle
                       ]
                         .filter(Boolean)
@@ -266,16 +268,21 @@ export function WeekGrid({
                           />
                         )}
                         <span className="truncate font-medium">{item.title}</span>
-                        {item.context?.brief && (
-                          <span
-                            aria-hidden
-                            className={cn(
-                              'ml-auto h-1.5 w-1.5 shrink-0 rounded-full',
-                              item.context.brief === 'ready'
-                                ? 'bg-accent'
-                                : 'border border-current opacity-60'
-                            )}
-                          />
+                        {item.context?.callId ? (
+                          // Outcome supersedes plan on the same chip — never both.
+                          <PhoneCall aria-hidden className="ml-auto h-2.5 w-2.5 shrink-0 opacity-70" />
+                        ) : (
+                          item.context?.brief && (
+                            <span
+                              aria-hidden
+                              className={cn(
+                                'ml-auto h-1.5 w-1.5 shrink-0 rounded-full',
+                                item.context.brief === 'ready'
+                                  ? 'bg-accent'
+                                  : 'border border-current opacity-60'
+                              )}
+                            />
+                          )
                         )}
                       </div>
                       {/* The context line only appears when the block is tall

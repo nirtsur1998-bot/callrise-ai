@@ -19,6 +19,11 @@ export interface ChipContext {
   /** Omitted entirely for meetings that can't have a brief (a task, a past
    *  meeting, an event with no contact/deal link). */
   brief?: PrepBriefStatus
+  /** M31 Slice B — the call recorded during this meeting, when one exists.
+   *  Present ONLY from the hard link written at call-save time, so its
+   *  presence is a fact rather than a match confidence. There is deliberately
+   *  no "probably this call" variant: see CalendarEvent.callId. */
+  callId?: string
 }
 
 export interface ChipContextSources {
@@ -86,6 +91,11 @@ export function buildChipContext(
   // can't pay off.
   const status = sources.briefStatusByEventId.get(event.id)
   if (status && status !== 'none' && (contact || deal)) context.brief = status
+
+  // The outcome side of the same chip. No time check and no eligibility
+  // rules here: the link only exists because a call was actually recorded
+  // during this meeting, so its presence already means "this happened".
+  if (event.callId) context.callId = event.callId
 
   return Object.keys(context).length > 0 ? context : undefined
 }

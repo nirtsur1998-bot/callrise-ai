@@ -1433,6 +1433,11 @@ export interface CalendarEvent {
    *  the follow-up dashboard's "next scheduled meeting" line. */
   contactId?: string
   dealId?: string
+  /** M31 Slice B — the call recorded during this meeting, joining plan to
+   *  outcome. Set only at call-save time from the meeting the app already
+   *  knows is running; never inferred afterwards from contact + time
+   *  overlap, which would be a guess. App-local, never pushed. */
+  callId?: string
   /** Minutes-before-start lead times for a REAL reminder pushed to the
    *  linked Google/Outlook event — that provider's own app fires the actual
    *  push notification. Distinct from CallRise's own in-app alerts (see
@@ -1469,6 +1474,9 @@ export interface EventUpdateInput {
   notes?: string | null
   contactId?: string | null
   dealId?: string | null
+  /** See CalendarEvent.callId — written by the live-call save path, not the
+   *  event editor. */
+  callId?: string | null
   reminderMinutes?: number[]
 }
 

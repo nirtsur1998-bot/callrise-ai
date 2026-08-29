@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { startOfMonth, startOfWeek, addDays, isSameMonth, isToday, format } from 'date-fns'
-import { Plus } from 'lucide-react'
+import { Plus, PhoneCall } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import type { CalendarEvent, CalendarItem } from './types'
 import { ITEM_STYLES, itemsOnDay, sortForDay } from './items'
@@ -185,6 +185,11 @@ function Chip({
       : ctx?.brief === 'outdated'
         ? 'prep brief needs refreshing'
         : undefined,
+    // Says "recorded" rather than "recording": this marker means the call
+    // happened and is saved, and the chip still opens the meeting — the call
+    // is one clearly-labelled click further in, so a click never lands
+    // somewhere the user didn't ask for.
+    ctx?.callId && 'call recorded — open the meeting to view it',
     item.subtitle
   ]
     .filter(Boolean)
@@ -221,17 +226,24 @@ function Chip({
           hiding what the meeting IS. Contact/stage live in the tooltip here
           and on their own line in the week view, where there's room. */}
       <span className="truncate">{item.title}</span>
-      {ctx?.brief && (
-        <span
-          aria-hidden
-          className={cn(
-            'ml-auto h-1.5 w-1.5 shrink-0 rounded-full',
-            // 'outdated' is deliberately hollow, not a second solid colour:
-            // it means "there is one, but opening it will rebuild it", which
-            // is a weaker claim than 'ready' and should look like one.
-            ctx.brief === 'ready' ? 'bg-accent' : 'border border-current opacity-60'
-          )}
-        />
+      {ctx?.callId ? (
+        // Outcome beats plan on the same chip: once a call exists, the brief
+        // dot has nothing left to offer (the meeting already happened), so
+        // only one marker is ever shown. A chip never carries both.
+        <PhoneCall aria-hidden className="ml-auto h-2.5 w-2.5 shrink-0 opacity-70" />
+      ) : (
+        ctx?.brief && (
+          <span
+            aria-hidden
+            className={cn(
+              'ml-auto h-1.5 w-1.5 shrink-0 rounded-full',
+              // 'outdated' is deliberately hollow, not a second solid colour:
+              // it means "there is one, but opening it will rebuild it", which
+              // is a weaker claim than 'ready' and should look like one.
+              ctx.brief === 'ready' ? 'bg-accent' : 'border border-current opacity-60'
+            )}
+          />
+        )
       )}
     </button>
   )

@@ -177,6 +177,64 @@ describe('buildChipContext', () => {
   })
 })
 
+describe('the recorded-call link — plan joined to outcome', () => {
+  it('carries the call id when the meeting has a real link', () => {
+    const ctx = buildChipContext(item(event({ callId: 'call-1', contactId: 'c1' })), sources())
+    expect(ctx?.callId).toBe('call-1')
+  })
+
+  it('shows nothing when no call was recorded during the meeting', () => {
+    const ctx = buildChipContext(item(event({ contactId: 'c1' })), sources())
+    expect(ctx?.callId).toBeUndefined()
+  })
+
+  it('never invents a link from a shared contact and an overlapping time', () => {
+    // The heuristic this feature deliberately does NOT implement: a meeting
+    // and a call that share a contact and overlap in time. Without the hard
+    // link written at save time, the chip must stay silent — a match that is
+    // usually right teaches trust before the case where it misleads.
+    const ctx = buildChipContext(item(event({ contactId: 'c1' })), sources())
+    expect(ctx?.callId).toBeUndefined()
+    expect(Object.keys(ctx ?? {})).not.toContain('callId')
+  })
+
+  it('is a fact, not a confidence — there is no partial/probable variant', () => {
+    const ctx = buildChipContext(item(event({ callId: 'call-1' })), sources())
+    // Present or absent, nothing in between: the shape itself refuses to
+    // express "probably this call".
+    expect(ctx?.callId).toBe('call-1')
+    expect(typeof ctx?.callId).toBe('string')
+  })
+
+  it('never attaches a call link to a task or an overlay item', () => {
+    const overlay: CalendarItem = {
+      key: 'google-x',
+      kind: 'google',
+      title: 'Standup',
+      start: NOW,
+      end: NOW,
+      allDay: false
+    }
+    expect(buildChipContext(overlay, sources())?.callId).toBeUndefined()
+  })
+
+  it('can carry a call link on a past meeting, where the brief dot is excluded', () => {
+    // A past meeting is not brief-eligible (nothing to prepare for), but it
+    // is exactly where the outcome matters — the two markers cover opposite
+    // halves of a meeting's life, which is why a chip never shows both.
+    const past = event({
+      callId: 'call-1',
+      contactId: 'c1',
+      start: '2026-08-01T10:00:00.000Z',
+      end: '2026-08-01T11:00:00.000Z'
+    })
+    const ctx = buildChipContext(item(past), sources())
+    expect(ctx?.callId).toBe('call-1')
+    expect(ctx?.brief).toBeUndefined()
+    expect(briefEligibleEvents([item(past)], NOW)).toHaveLength(0)
+  })
+})
+
 describe('briefEligibleEvents', () => {
   it('includes a future linked meeting', () => {
     expect(briefEligibleEvents([item(event({ contactId: 'c1' }))], NOW)).toHaveLength(1)

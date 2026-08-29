@@ -568,6 +568,7 @@ export function MainApp({
               }}
               deepLinkEventId={deepLinkEventId}
               onDeepLinkConsumed={() => setDeepLinkEventId(null)}
+              onOpenCall={openCallFromPalette}
             />
           ) : active === 'crm' ? (
             <CrmView
@@ -582,6 +583,7 @@ export function MainApp({
             <CalendarView
               deepLinkEventId={deepLinkEventId}
               onDeepLinkConsumed={() => setDeepLinkEventId(null)}
+              onOpenCall={openCallFromPalette}
             />
           ) : active === 'coaching' ? (
             navPreviewEnabled ? <CoachingHub /> : <CoachingView />

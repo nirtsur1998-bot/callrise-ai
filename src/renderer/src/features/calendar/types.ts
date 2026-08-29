@@ -29,6 +29,12 @@ export interface CalendarEvent {
    *  pushed to Google/Outlook. Powers the follow-up dashboard. */
   contactId?: string
   dealId?: string
+  /** M31 Slice B — the call recorded during this meeting, joining plan to
+   *  outcome on one object. Only ever set at call-save time, when the app
+   *  already knows which meeting is running; never inferred afterwards from
+   *  contact + time overlap, which would be a guess. Absent on every meeting
+   *  that predates this, and on any meeting with no recording. */
+  callId?: string
   /** Minutes-before-start lead times for a REAL reminder pushed to the
    *  linked Google/Outlook event (that provider's own app fires the actual
    *  push notification) — distinct from CallRise's own in-app alerts. Only

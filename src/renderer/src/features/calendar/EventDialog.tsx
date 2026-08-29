@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { X, Trash2, Sparkles } from 'lucide-react'
+import { X, Trash2, Sparkles, PhoneCall } from 'lucide-react'
 import { Modal } from '@renderer/components/Modal'
 import { IconButton } from '@renderer/components/IconButton'
 import { Button } from '@renderer/components/Button'
@@ -37,6 +37,12 @@ interface EventDialogProps {
   /** M19 Task 3B — present only when editing an existing event (a new,
    *  unsaved event has no identity to key a brief on). */
   onOpenPrepBrief?: () => void
+  /** M31 Slice B — present only when a call was actually recorded during
+   *  this meeting (a hard link written at save time, never a guess). This
+   *  is where the plan hands off to the outcome: the chip and this dialog
+   *  are always the PLAN, and reaching the call is a separate, labelled
+   *  click rather than a click that silently changes what you get. */
+  onOpenCall?: () => void
   /** True when two-way sync is on for Google and/or Outlook — reminders only
    *  reach the user's phone/desktop once this event actually pushes to one
    *  of those, so the picker explains itself when neither is connected. */
@@ -50,6 +56,7 @@ export function EventDialog({
   onSubmit,
   onDelete,
   onOpenPrepBrief,
+  onOpenCall,
   syncEnabled = false
 }: EventDialogProps): React.JSX.Element {
   const [draft, setDraft] = useState<EventDraft>(initial)
@@ -263,11 +270,21 @@ export function EventDialog({
               : 'Notifies you here, on this computer, while CallRise AI is running. Turn on two-way sync for Google or Outlook (Settings → Calendar) to get real push reminders that also reach your phone.'}
           </p>
         </Field>
-        {isEdit && onOpenPrepBrief && (
-          <Button variant="secondary" size="sm" icon={Sparkles} onClick={onOpenPrepBrief}>
-            Prep brief
-          </Button>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {isEdit && onOpenPrepBrief && (
+            <Button variant="secondary" size="sm" icon={Sparkles} onClick={onOpenPrepBrief}>
+              Prep brief
+            </Button>
+          )}
+          {/* The one place the plan hands off to the outcome, said in words
+              rather than implied by an icon. Only rendered when a real call
+              was recorded during this meeting. */}
+          {isEdit && onOpenCall && (
+            <Button variant="secondary" size="sm" icon={PhoneCall} onClick={onOpenCall}>
+              View the call
+            </Button>
+          )}
+        </div>
         {error && <p className="text-[13px] text-danger">{error}</p>}
       </div>
 

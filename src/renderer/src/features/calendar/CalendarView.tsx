@@ -77,11 +77,15 @@ interface CalendarViewProps {
    *  to Calendar doesn't keep reopening a stale link. */
   deepLinkEventId?: string | null
   onDeepLinkConsumed?: () => void
+  /** M31 Slice B — open the call that was recorded during a meeting. Optional
+   *  so the calendar still works anywhere that can't navigate to a call. */
+  onOpenCall?: (callId: string) => void
 }
 
 export function CalendarView({
   deepLinkEventId,
-  onDeepLinkConsumed
+  onDeepLinkConsumed,
+  onOpenCall
 }: CalendarViewProps = {}): React.JSX.Element {
   const {
     events,
@@ -355,6 +359,14 @@ export function CalendarView({
           onDelete={dialog.mode === 'edit' ? deleteDialog : undefined}
           onOpenPrepBrief={
             dialog.event ? () => setPrepBriefMeeting(meetingFromEvent(dialog.event!)) : undefined
+          }
+          onOpenCall={
+            dialog.event?.callId && onOpenCall
+              ? () => {
+                  setDialog(null)
+                  onOpenCall(dialog.event!.callId!)
+                }
+              : undefined
           }
           syncEnabled={googleWritable || outlookWritable}
         />
