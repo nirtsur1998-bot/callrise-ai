@@ -264,11 +264,32 @@ export function EventDialog({
               )
             })}
           </div>
+          {/* One short line, always. This sentence is the app's promise about
+              whether a reminder will actually reach you, and it was long
+              enough to be the text that got clipped at the bottom of the
+              scroll area — a promise you could only read half of.
+              The Outlook multi-reminder caveat is the part that made it
+              long, so it now appears ONLY when it can apply (two or more
+              lead times picked), which is rare. It also replaces the old
+              "the soonest picked is used", which read as though picking 5m
+              and 30m would remind you at 5m: outlook-sync.ts takes
+              Math.max, so it fires 30 minutes before. Same behaviour,
+              honest description. */}
           <p className="mt-1.5 text-[11px] text-faint">
             {syncEnabled
-              ? 'Fires as a real push notification in Google/Outlook once this event syncs — on your phone too. Outlook only supports one lead time, so the soonest picked is used.'
-              : 'Notifies you here, on this computer, while CallRise AI is running. Turn on two-way sync for Google or Outlook (Settings → Calendar) to get real push reminders that also reach your phone.'}
+              ? 'Google and Outlook fire these, so they reach your phone.'
+              : 'Notifies you on this computer, only while CallRise AI is open.'}
           </p>
+          {syncEnabled && draft.reminderMinutes.length > 1 && (
+            <p className="mt-1 text-[11px] text-faint">
+              Outlook allows one only — it uses {Math.max(...draft.reminderMinutes)}m, the earliest.
+            </p>
+          )}
+          {!syncEnabled && (
+            <p className="mt-1 text-[11px] text-faint">
+              Turn on two-way sync in Settings → Calendar to get phone reminders.
+            </p>
+          )}
         </Field>
         <div className="flex flex-wrap items-center gap-2">
           {isEdit && onOpenPrepBrief && (
