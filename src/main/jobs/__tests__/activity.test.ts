@@ -312,3 +312,76 @@ describe('computeTaskbarProgress', () => {
     expect(computeTaskbarProgress(jobs)).toEqual({ progress: 0.5 })
   })
 })
+
+// BUG-129 — "it launches 10-20 notifications and it's crazy". Launch fires a
+// burst of MAINTENANCE jobs (on-device search setup, sign-in cloud sync,
+// backup, update check, Sales Brain tidy-up). Each completion used to raise a
+// toast and, whenever the window was unfocused — which is the normal case at
+// startup — an OS popup too.
+//
+// The rule pinned here is the founder-approved attention policy, both halves:
+// successful maintenance says NOTHING, and failing maintenance still says
+// something exactly once. The second half matters as much as the first: a
+// backup that silently stops working is the failure mode this project has
+// spent months eliminating, and it would be trivially easy to "fix" the spam
+// by silencing the lane wholesale.
+describe('ActivityNotifier — maintenance is quiet about success, never about failure', () => {
+  it('says nothing when a maintenance job starts', () => {
+    const notifier = new ActivityNotifier()
+    const job = makeJob({ lane: 'MAINTENANCE', title: 'Backing up to the cloud', state: 'running' })
+    expect(notifier.next([job])).toEqual([])
+  })
+
+  it('says nothing when a maintenance job succeeds', () => {
+    const notifier = new ActivityNotifier()
+    const job = makeJob({ lane: 'MAINTENANCE', title: 'Setting up on-device search', state: 'running' })
+    notifier.next([job])
+    expect(notifier.next([withState(job, 'succeeded')])).toEqual([])
+  })
+
+  it('says nothing for a maintenance job that begins and succeeds inside one snapshot', () => {
+    // The coalesced path: a fast job first seen already terminal. This is the
+    // one launch-time jobs most often take, since they finish quickly.
+    const notifier = new ActivityNotifier()
+    const job = makeJob({ lane: 'MAINTENANCE', title: 'Syncing with the cloud', state: 'succeeded' })
+    expect(notifier.next([job])).toEqual([])
+  })
+
+  it('STILL reports a maintenance job that fails', () => {
+    const notifier = new ActivityNotifier()
+    const job = makeJob({ lane: 'MAINTENANCE', title: 'Backing up to the cloud', state: 'running' })
+    notifier.next([job])
+    const events = notifier.next([withState(job, 'failed')])
+    expect(events).toHaveLength(1)
+    expect(events[0].kind).toBe('failed')
+  })
+
+  it('STILL reports a maintenance job that fails inside one snapshot', () => {
+    const notifier = new ActivityNotifier()
+    const job = makeJob({ lane: 'MAINTENANCE', title: 'Backing up to the cloud', state: 'failed' })
+    const events = notifier.next([job])
+    expect(events).toHaveLength(1)
+    expect(events[0].kind).toBe('failed')
+  })
+
+  it('leaves every other lane exactly as loud as it was', () => {
+    const notifier = new ActivityNotifier()
+    const job = makeJob({ lane: 'BATCH', title: 'Scanning 143 calls', state: 'running' })
+    expect(notifier.next([job])).toHaveLength(1) // started
+    expect(notifier.next([withState(job, 'succeeded')])).toHaveLength(1) // completed
+  })
+
+  it('silences a whole launch burst rather than merely thinning it', () => {
+    // The actual reported symptom, as a single assertion: five maintenance
+    // jobs completing together produce zero notifications.
+    const notifier = new ActivityNotifier()
+    const burst: Job[] = [
+      'Setting up on-device search',
+      'Syncing with the cloud',
+      'Backing up to the cloud',
+      'Downloading update',
+      'Sales Brain: nightly tidy-up'
+    ].map((title) => makeJob({ lane: 'MAINTENANCE', title, state: 'succeeded' }))
+    expect(notifier.next(burst)).toEqual([])
+  })
+})
