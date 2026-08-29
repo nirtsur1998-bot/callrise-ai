@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { linkKey } from './google-sync'
 import { writeJsonAtomic } from './atomic-write'
+import { purgeCompanionFiles } from './companion-files'
 
 /** Lifecycle of a local event's mirror in Google (M14 two-way sync). */
 export type SyncState =
@@ -402,6 +403,14 @@ export async function markEventDeleted(
   } catch {
     return { ok: false }
   }
+  // BUG-139 — a `<id>.conflict` copy holds the FULL pre-deletion record, so a
+  // tombstone that leaves one behind has not actually removed anything.
+  // Placed here rather than in the IPC handler on purpose: `events:delete` has
+  // four branches (sync off / never linked / linked / push-in-flight) that all
+  // funnel through this function, and a per-branch purge is three chances to
+  // miss one. After the write, so a crash between them leaves the record gone
+  // and the companion for the startup sweep — never the reverse.
+  await purgeCompanionFiles(dir, id)
   return { ok: true }
 }
 

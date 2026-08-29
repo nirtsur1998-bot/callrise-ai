@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from './atomic-write'
+import { purgeCompanionFiles } from './companion-files'
 
 export type TaskType = 'follow-up' | 'email' | 'meeting' | 'research' | 'general'
 export type TaskPriority = 'low' | 'medium' | 'high'
@@ -319,6 +320,9 @@ async function deleteTaskUnlocked(dir: string, id: string): Promise<{ ok: boolea
   } catch {
     return { ok: false }
   }
+  // BUG-139 — see companion-files.ts. A `<id>.conflict` beside the tombstone
+  // holds the full pre-deletion record, so tombstoning alone removed nothing.
+  await purgeCompanionFiles(dir, id)
   return { ok: true }
 }
 

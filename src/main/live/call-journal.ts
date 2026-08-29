@@ -358,6 +358,125 @@ export async function discardJournal(id: string): Promise<void> {
   await unlink(donePath(id)).catch(() => {})
 }
 
+/** Every per-id file this module can create, in one place, so `purgeJournalForCall`
+ *  cannot drift out of step with the path helpers above. */
+function allJournalPaths(id: string): string[] {
+  return [
+    journalPath(id),
+    recoveredPath(id),
+    donePath(id),
+    redactedMarkerPath(id),
+    recoveredCallMarkerPath(id)
+  ]
+}
+
+/**
+ * BUG-139 — remove the journal belonging to a deleted call.
+ *
+ * `deleteCall` tombstones the record and states the guarantee outright: *"a
+ * deleted call must not retain buyer words."* The journal is where those words
+ * are most literally kept, and nothing deleted it — journals live in their own
+ * directory, so they are not even a sibling that a directory-scoped cleanup
+ * would trip over. They simply outlived the record indefinitely.
+ *
+ * Consent redaction does NOT cover this. It strips the other party only when
+ * `consent.recordOtherParty !== true` — so a call the user legitimately
+ * consented to record keeps the buyer's verbatim words in its journal by
+ * design, correctly, right up until the user deletes the call. That is exactly
+ * the case where the guarantee has to hold and didn't.
+ *
+ * TWO ID SPACES, which is the part worth reading. A normally-saved call's
+ * journal is keyed by the call's own id. A call RECOVERED from a crashed
+ * journal gets a NEW id, and the link back is a `<journalId>.recovered-call`
+ * marker containing the call id. Purging only `<callId>.*` would therefore
+ * miss precisely the calls whose journals survived a crash — the ones most
+ * likely to still hold everything.
+ */
+export async function purgeJournalForCall(callId: string): Promise<number> {
+  const targets = new Set(allJournalPaths(callId))
+
+  // Recovered calls: find any journal whose marker points at this call.
+  try {
+    const entries = await readdir(journalsDir())
+    for (const name of entries) {
+      if (!name.endsWith('.recovered-call')) continue
+      const journalId = name.slice(0, -'.recovered-call'.length)
+      const pointsAt = await readRecoveredCallId(journalId)
+      if (pointsAt === callId) for (const p of allJournalPaths(journalId)) targets.add(p)
+    }
+  } catch {
+    /* no journals directory — nothing to purge, not an error */
+  }
+
+  let removed = 0
+  for (const path of targets) {
+    // Best-effort per file: a locked journal must not fail the deletion that
+    // called this. The user pressed delete; the record IS gone, and reporting
+    // failure would tell them otherwise.
+    try {
+      await unlink(path)
+      removed++
+    } catch {
+      /* missing (the normal case for most of these) or locked */
+    }
+  }
+  return removed
+}
+
+/**
+ * Startup sweep for journals whose call no longer exists — the backlog half.
+ *
+ * The delete-path fix above only protects calls deleted from now on. Every
+ * call deleted BEFORE this ships already has a tombstone, so `deleteCall`
+ * returns early and never reaches the purge; its journal would sit there
+ * forever. Found on the founder's machine: 4 journals whose call record was
+ * gone entirely, still holding transcript content.
+ *
+ * Deliberately narrow. It removes a journal only when the call is a TOMBSTONE
+ * or the record is absent AND the journal is `.done` (the call was saved, so
+ * this journal has no recovery job left). An un-`.done` journal is an
+ * unrecovered crash — `listOrphanJournals` still offers it to the user, and
+ * deleting it here would silently destroy a call they never got to keep.
+ */
+export async function sweepJournalsForMissingCalls(
+  callExists: (id: string) => Promise<boolean>
+): Promise<number> {
+  let entries: string[]
+  try {
+    entries = await readdir(journalsDir())
+  } catch {
+    return 0
+  }
+
+  const done = new Set(
+    entries.filter((f) => f.endsWith('.done')).map((f) => f.slice(0, -'.done'.length))
+  )
+  const journalIds = new Set(
+    entries
+      .filter((f) => f.endsWith('.jsonl') || f.endsWith('.jsonl.recovered'))
+      .map((f) => f.replace(/\.jsonl(\.recovered)?$/, ''))
+  )
+
+  let removed = 0
+  for (const journalId of journalIds) {
+    if (!done.has(journalId)) continue // unrecovered crash — leave it for the user
+
+    // A recovered journal's call lives under a different id.
+    const callId = (await readRecoveredCallId(journalId)) ?? journalId
+    if (await callExists(callId)) continue
+
+    for (const path of allJournalPaths(journalId)) {
+      try {
+        await unlink(path)
+        removed++
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+  return removed
+}
+
 /** Retire a journal that has been recovered into a real Call, keeping the file
  *  under a `.recovered` name rather than deleting it. Cheap insurance: if the
  *  recovery itself produced something wrong, the source is still there. */
