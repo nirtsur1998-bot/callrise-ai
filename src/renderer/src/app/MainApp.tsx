@@ -7,9 +7,17 @@ import { CommandPalette, type PaletteAction } from '@renderer/features/navigatio
 import { ShortcutsOverlay } from '@renderer/features/navigation/ShortcutsOverlay'
 import { PhoneCall, SunMoon } from 'lucide-react'
 import { useTheme } from '@renderer/features/settings/useTheme'
+import { isMac } from '@renderer/lib/platform'
 import { SkeletonRows } from '@renderer/components/Skeleton'
 import { PlaceholderView } from '@renderer/components/PlaceholderView'
-import { NAV_ITEMS, type NavId } from '@renderer/features/navigation/nav-items'
+import {
+  NAV_ITEMS,
+  NAV_ITEMS_PREVIEW,
+  OLD_TO_HUB,
+  remapForPreview,
+  type NavId
+} from '@renderer/features/navigation/nav-items'
+import { useNavigationPreview } from '@renderer/features/navigation/useNavigationPreview'
 import type { AuthUser } from '@renderer/features/auth/types'
 import { getAutoOpenMeetingPage } from '@renderer/features/settings/prefs'
 import { useAutoTranscribeCalls } from '@renderer/features/settings/useAutoTranscribeCalls'
@@ -63,6 +71,14 @@ const KnowledgeView = lazy(() =>
 const TeamView = lazy(() =>
   import('@renderer/features/team/TeamView').then((m) => ({ default: m.TeamView }))
 )
+// M31 Stage 2 — the three merged "hub" screens behind the navigationPreview
+// flag. Each is a thin SegmentedControl wrapper; none of the screens above
+// changed to support this, so these hubs simply lazy-import the same
+// components a second time (harmless — Vite/webpack dedupes the chunk).
+const CallsHub = lazy(() => import('./CallsHub').then((m) => ({ default: m.CallsHub })))
+const PipelineHub = lazy(() => import('./PipelineHub').then((m) => ({ default: m.PipelineHub })))
+const CoachingHub = lazy(() => import('./CoachingHub').then((m) => ({ default: m.CoachingHub })))
+const LibraryHub = lazy(() => import('./LibraryHub').then((m) => ({ default: m.LibraryHub })))
 
 /** The signed-in application shell. Only rendered once a user is logged in.
  *  `initialNav` lets onboarding drop the user straight onto a screen (e.g. Live
@@ -79,7 +95,28 @@ export function MainApp({
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const { mode: themeMode, setMode: setThemeMode } = useTheme()
-  const activeItem = NAV_ITEMS.find((item) => item.id === active) ?? NAV_ITEMS[0]
+
+  // M31 Stage 2 — behind a preview flag (Settings -> Appearance), default
+  // off: today's 12-item nav is untouched either way. NAV_ITEMS/NAV_ITEMS_
+  // PREVIEW share the exact same NavId type and Sidebar/CommandPalette
+  // rendering code, so flipping this off is a complete, instant revert.
+  const { enabled: navPreviewEnabled } = useNavigationPreview()
+  const navItems = navPreviewEnabled ? NAV_ITEMS_PREVIEW : NAV_ITEMS
+  const activeItem = navItems.find((item) => item.id === active) ?? navItems[0]
+
+  // Every OLD screen id still resolves to a real, unwrapped screen (no case
+  // below is ever removed) — OLD_TO_HUB only matters for choosing what the
+  // SIDEBAR highlights and what the user lands on when preview mode merges
+  // that old screen into a hub. Without it, an internal jump (e.g. ambient
+  // detection firing setActive('live-calls')) would land on the bare old
+  // screen while the 7-item sidebar has no matching highlighted item, and
+  // the tab strip inside Calls/Pipeline/Library wouldn't reflect where the
+  // user actually landed. Every internal navigation in this file goes
+  // through `navigateTo`, never `setActive` directly, so this is the one
+  // place that needs to know the mapping.
+  const navigateTo = (id: NavId): void => {
+    setActive(navPreviewEnabled ? (OLD_TO_HUB[id] ?? id) : id)
+  }
 
   // M29 A3 — one coarse usage counter per section OPEN, from the single
   // place every navigation path (sidebar, palette, deep link) converges.
@@ -99,7 +136,7 @@ export function MainApp({
   useEffect(() => {
     return window.api.app.onCallDetected((appName) => {
       if (autoTranscribeCalls) {
-        setActive('live-calls')
+        navigateTo('live-calls')
         setPendingCallAutoStart(true)
       } else {
         setDetectedCallApp(appName)
@@ -114,7 +151,7 @@ export function MainApp({
   // subscribe-in-an-effect shape as onCallDetected just above, minus the IPC
   // hop — both ends already live in this renderer process.
   useEffect(() => {
-    setGoToLiveCallsListener(() => setActive('live-calls'))
+    setGoToLiveCallsListener(() => navigateTo('live-calls'))
     return () => setGoToLiveCallsListener(null)
   }, [])
 
@@ -131,7 +168,7 @@ export function MainApp({
 
   useEffect(() => {
     return window.api.detection.onStartCapture(({ call, mode }) => {
-      setActive('live-calls')
+      navigateTo('live-calls')
       setAmbientAutoStart({ callId: call.id, mode })
     })
   }, [])
@@ -170,7 +207,7 @@ export function MainApp({
 
   const startTranscribingDetectedCall = (): void => {
     setDetectedCallApp(null)
-    setActive('live-calls')
+    navigateTo('live-calls')
     setPendingCallAutoStart(true)
   }
 
@@ -182,12 +219,14 @@ export function MainApp({
       id: 'live-call',
       label: 'Start a live call',
       icon: PhoneCall,
-      onRun: () => setActive('live-calls')
+      shortcut: isMac ? '⌘⇧L' : 'Ctrl ⇧L',
+      onRun: () => navigateTo('live-calls')
     },
     {
       id: 'toggle-theme',
       label: 'Toggle theme',
       icon: SunMoon,
+      shortcut: isMac ? '⌘⇧T' : 'Ctrl ⇧T',
       onRun: () => setThemeMode(themeMode === 'light' ? 'dark' : 'light')
     }
   ]
@@ -204,6 +243,38 @@ export function MainApp({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  // M31 Stage 2 — the shortcuts the command palette now advertises as hints
+  // must actually work, not just look like they do. ⌘⇧L/⌘⇧T mirror the two
+  // palette quick actions; ⌘1-7 jump straight to a nav item BY POSITION,
+  // active only with the preview nav on (a digit-per-row scheme stops being
+  // a clean mnemonic once there are more than ~9 items, so the legacy
+  // 12-item nav intentionally doesn't get one — see CommandPalette's
+  // showNumberShortcuts doc comment).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!(e.metaKey || e.ctrlKey)) return
+      if (e.shiftKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault()
+        navigateTo('live-calls')
+        return
+      }
+      if (e.shiftKey && e.key.toLowerCase() === 't') {
+        e.preventDefault()
+        setThemeMode(themeMode === 'light' ? 'dark' : 'light')
+        return
+      }
+      if (navPreviewEnabled && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+        const item = navItems[Number(e.key) - 1]
+        if (item) {
+          e.preventDefault()
+          navigateTo(item.id)
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [navPreviewEnabled, navItems, themeMode])
 
   // Global `?` opens the keyboard-shortcuts cheat sheet, except while the
   // user is typing in a text field (so a literal "?" still types normally).
@@ -232,6 +303,22 @@ export function MainApp({
     if (active !== 'settings') lastNonSettingsRef.current = active
   }, [active])
 
+  // The nav-preview toggle lives on the Appearance settings page, so it can
+  // only ever flip while `active === 'settings'` — meaning `active` itself
+  // never needs correcting at flip time, but the id Back will restore
+  // (lastNonSettingsRef, captured before Settings was opened) can go stale
+  // the instant the flag changes: a hub id ('calls'/'pipeline'/'library')
+  // once the just-reverted 12-item sidebar has no entry for it, or a legacy
+  // id ('live-calls', 'crm', 'knowledge', ...) once the 7-item sidebar
+  // doesn't. Left uncorrected, Back lands on an orphaned screen the sidebar
+  // has nothing highlighted for. Remapping the ref here — invisibly, while
+  // Settings still fully occludes the content pane — means Back always
+  // lands somewhere the CURRENT sidebar actually shows.
+  useEffect(() => {
+    lastNonSettingsRef.current = remapForPreview(lastNonSettingsRef.current, navPreviewEnabled)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navPreviewEnabled])
+
   // AI Note Taker's "auto-open meeting page": which call to preselect when
   // Past Calls next renders. Cleared once consumed so a later manual visit
   // to Past Calls doesn't keep reopening a stale call.
@@ -239,7 +326,7 @@ export function MainApp({
   const handleCallSaved = (callId: string): void => {
     if (!getAutoOpenMeetingPage()) return
     setOpenCallId(callId)
-    setActive('past-calls')
+    navigateTo('past-calls')
   }
 
   // M19 Task 3B — a callrise://meeting/<eventId> deep link (from a
@@ -249,7 +336,7 @@ export function MainApp({
   useEffect(() => {
     return window.api.prepBrief.onOpenRequested((eventId) => {
       setDeepLinkEventId(eventId)
-      setActive('calendar')
+      navigateTo('calendar')
     })
   }, [])
 
@@ -269,15 +356,15 @@ export function MainApp({
   const [openDealId, setOpenDealId] = useState<string | null>(null)
   const openContactFromPalette = (id: string): void => {
     setOpenContactId(id)
-    setActive('crm')
+    navigateTo('crm')
   }
   const openDealFromPalette = (id: string): void => {
     setOpenDealId(id)
-    setActive('crm')
+    navigateTo('crm')
   }
   const openCallFromPalette = (id: string): void => {
     setOpenCallId(id)
-    setActive('past-calls')
+    navigateTo('past-calls')
   }
 
   // M28 Part 4 — "open Rise about this client" from a contact/deal/call page.
@@ -287,7 +374,7 @@ export function MainApp({
   useEffect(() => {
     setOpenAssistantListener((scope) => {
       setAssistantScope(scope)
-      setActive('assistant')
+      navigateTo('assistant')
     })
     return () => setOpenAssistantListener(null)
   }, [])
@@ -301,13 +388,19 @@ export function MainApp({
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
-        onSelect={setActive}
+        onSelect={navigateTo}
+        navItems={navItems}
+        showNumberShortcuts={navPreviewEnabled}
         actions={paletteActions}
         onOpenContact={openContactFromPalette}
         onOpenDeal={openDealFromPalette}
         onOpenCall={openCallFromPalette}
       />
-      <ShortcutsOverlay open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <ShortcutsOverlay
+        open={shortcutsOpen}
+        onClose={() => setShortcutsOpen(false)}
+        navPreviewEnabled={navPreviewEnabled}
+      />
       {detectedCallApp && (
         <CallDetectedBanner
           appName={detectedCallApp}
@@ -340,10 +433,11 @@ export function MainApp({
       sidebar={
         <Sidebar
           active={active}
-          onSelect={setActive}
+          onSelect={navigateTo}
           user={user}
           onSignOut={signOut}
           onOpenPalette={() => setPaletteOpen(true)}
+          navItems={navItems}
         />
       }
       copilot={
@@ -375,7 +469,7 @@ export function MainApp({
           {active === 'home' ? (
             <HomeView
               userName={user.name?.trim() || user.email.split('@')[0]}
-              onNavigate={setActive}
+              onNavigate={navigateTo}
             />
           ) : active === 'live-calls' ? (
             <LiveView
@@ -394,6 +488,19 @@ export function MainApp({
               initialScope={assistantScope}
               onInitialScopeConsumed={() => setAssistantScope(null)}
             />
+          ) : active === 'calls' ? (
+            <CallsHub
+              onSaved={handleCallSaved}
+              autoStartFromDetection={pendingCallAutoStart}
+              onAutoStartFromDetectionConsumed={() => setPendingCallAutoStart(false)}
+              ambientAutoStart={ambientAutoStart}
+              onAmbientAutoStartConsumed={() => setAmbientAutoStart(null)}
+              onAmbientAutoStartResult={handleAmbientAutoStartResult}
+              remoteStopToken={remoteStopToken}
+              remotePauseToken={remotePauseToken}
+              initialCallId={openCallId}
+              onInitialCallConsumed={() => setOpenCallId(null)}
+            />
           ) : active === 'past-calls' ? (
             <PastCallsView
               initialSelectedId={openCallId}
@@ -401,6 +508,17 @@ export function MainApp({
             />
           ) : active === 'tasks' ? (
             <TasksView />
+          ) : active === 'pipeline' ? (
+            <PipelineHub
+              initialContactId={openContactId}
+              initialDealId={openDealId}
+              onInitialCrmSelectionConsumed={() => {
+                setOpenContactId(null)
+                setOpenDealId(null)
+              }}
+              deepLinkEventId={deepLinkEventId}
+              onDeepLinkConsumed={() => setDeepLinkEventId(null)}
+            />
           ) : active === 'crm' ? (
             <CrmView
               initialContactId={openContactId}
@@ -416,9 +534,11 @@ export function MainApp({
               onDeepLinkConsumed={() => setDeepLinkEventId(null)}
             />
           ) : active === 'coaching' ? (
-            <CoachingView />
+            navPreviewEnabled ? <CoachingHub /> : <CoachingView />
           ) : active === 'analytics' ? (
             <AnalyticsView />
+          ) : active === 'library' ? (
+            <LibraryHub />
           ) : active === 'knowledge' ? (
             <KnowledgeView />
           ) : active === 'team' ? (
@@ -427,7 +547,7 @@ export function MainApp({
             <PlaceholderView
               title={activeItem.label}
               icon={activeItem.icon}
-              onNavigate={setActive}
+              onNavigate={navigateTo}
             />
           )}
         </Suspense>

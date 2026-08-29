@@ -1,0 +1,73 @@
+import { useEffect, useState } from 'react'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
+import { CrmView } from './CrmView'
+import { TasksView } from '@renderer/features/tasks/TasksView'
+import { CalendarView } from '@renderer/features/calendar/CalendarView'
+
+type PipelineTab = 'crm' | 'tasks' | 'calendar'
+
+const TABS: { id: PipelineTab; label: string }[] = [
+  { id: 'crm', label: 'CRM' },
+  { id: 'tasks', label: 'Tasks' },
+  { id: 'calendar', label: 'Calendar' }
+]
+
+interface PipelineHubProps {
+  initialContactId: string | null
+  initialDealId: string | null
+  onInitialCrmSelectionConsumed: () => void
+  deepLinkEventId: string | null
+  onDeepLinkConsumed: () => void
+}
+
+/** M31 Stage 2 — CRM, Tasks, and Calendar as tabs of one "Pipeline" screen.
+ *  CRM keeps its OWN internal Contacts/Deals/Follow-ups tabs completely
+ *  unchanged (a deliberate two-level nesting — Pipeline > CRM > Contacts —
+ *  rather than flattening to 5 sibling tabs, so CrmView's existing,
+ *  already-tested tab logic never needs touching).
+ *
+ *  CRM and Tasks render their OWN internal PageHeader ("CRM"/"Tasks");
+ *  Calendar owns its own `h-full flex-col` layout. All three already render
+ *  inside AppShell's normal padded/scrolling content area today (none of
+ *  the three NavIds this hub replaces was ever fullBleed) — this hub adds
+ *  nothing to that chain beyond the tab strip itself, so no screen's layout
+ *  assumptions change.
+ *
+ *  Tab is forced (not just defaulted) by the same signals that used to
+ *  force-navigate the whole app to CRM or Calendar before this hub existed
+ *  — the palette's "jump to a contact/deal" and a callrise://meeting deep
+ *  link — so the merge doesn't change behavior a user already relies on. */
+export function PipelineHub({
+  initialContactId,
+  initialDealId,
+  onInitialCrmSelectionConsumed,
+  deepLinkEventId,
+  onDeepLinkConsumed
+}: PipelineHubProps): React.JSX.Element {
+  const [tab, setTab] = useState<PipelineTab>(deepLinkEventId ? 'calendar' : 'crm')
+
+  useEffect(() => {
+    if (initialContactId || initialDealId) setTab('crm')
+  }, [initialContactId, initialDealId])
+
+  useEffect(() => {
+    if (deepLinkEventId) setTab('calendar')
+  }, [deepLinkEventId])
+
+  return (
+    <div>
+      <SegmentedControl options={TABS} value={tab} onChange={setTab} className="mb-4" />
+      {tab === 'calendar' ? (
+        <CalendarView deepLinkEventId={deepLinkEventId} onDeepLinkConsumed={onDeepLinkConsumed} />
+      ) : tab === 'crm' ? (
+        <CrmView
+          initialContactId={initialContactId}
+          initialDealId={initialDealId}
+          onInitialSelectionConsumed={onInitialCrmSelectionConsumed}
+        />
+      ) : (
+        <TasksView />
+      )}
+    </div>
+  )
+}

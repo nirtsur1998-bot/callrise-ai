@@ -4,7 +4,7 @@ import { isMac } from '@renderer/lib/platform'
 import { IconButton } from '@renderer/components/IconButton'
 import { useRecentlyViewed } from '@renderer/lib/useRecentlyViewed'
 import type { RecentKind } from '@renderer/lib/recentlyViewed'
-import { NAV_ITEMS, type NavId } from './nav-items'
+import type { NavId, NavItem } from './nav-items'
 import type { AuthUser } from '@renderer/features/auth/types'
 
 /** Number of "recently viewed" rows shown in the sidebar trail. */
@@ -36,6 +36,13 @@ interface SidebarProps {
   onSignOut: () => void
   /** Opens the command palette (also bound to ⌘K globally). */
   onOpenPalette: () => void
+  /** M31 Stage 2 — the caller (MainApp) picks NAV_ITEMS or NAV_ITEMS_PREVIEW
+   *  based on the navigationPreview flag; Sidebar just renders whichever
+   *  list it's given. `onSelect` still takes any NavId, including the old
+   *  ones (`past-calls`, `crm`, ...) the recent-trail always emits — the
+   *  caller is responsible for remapping those to a hub id when the preview
+   *  is on, so this component never needs to know the flag exists. */
+  navItems: NavItem[]
 }
 
 export function Sidebar({
@@ -43,7 +50,8 @@ export function Sidebar({
   onSelect,
   user,
   onSignOut,
-  onOpenPalette
+  onOpenPalette,
+  navItems
 }: SidebarProps): React.JSX.Element {
   const displayName = user.name?.trim() || user.email.split('@')[0]
   const initial = (user.name?.trim()?.[0] ?? user.email[0] ?? '?').toUpperCase()
@@ -51,8 +59,8 @@ export function Sidebar({
   const recentItems = useRecentlyViewed().slice(0, MAX_RECENT_ROWS)
 
   // Settings is pinned above the footer, not part of the scrolling list.
-  const settingsItem = NAV_ITEMS.find((item) => item.id === 'settings')
-  const scrollItems = NAV_ITEMS.filter((item) => item.id !== 'settings')
+  const settingsItem = navItems.find((item) => item.id === 'settings')
+  const scrollItems = navItems.filter((item) => item.id !== 'settings')
 
   // Group the scrolling items by their `section`, preserving list order —
   // items sharing a section render as one contiguous group.

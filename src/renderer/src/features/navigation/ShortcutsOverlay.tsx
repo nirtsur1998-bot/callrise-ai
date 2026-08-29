@@ -1,5 +1,6 @@
 import { Modal } from '@renderer/components/Modal'
 import { IconButton } from '@renderer/components/IconButton'
+import { isMac } from '@renderer/lib/platform'
 import { X } from 'lucide-react'
 
 interface Shortcut {
@@ -12,47 +13,70 @@ interface ShortcutGroup {
   shortcuts: Shortcut[]
 }
 
-const GROUPS: ShortcutGroup[] = [
-  {
-    title: 'Navigation',
-    shortcuts: [{ label: 'Jump to a screen, contact, deal, or call', keys: '⌘K' }]
-  },
-  {
-    title: 'Command palette',
-    shortcuts: [
-      { label: 'Navigate results', keys: '↑↓' },
-      { label: 'Open selection', keys: '↵' },
-      { label: 'Close', keys: 'Esc' }
-    ]
-  },
-  {
-    title: 'Anywhere',
-    shortcuts: [{ label: 'Close any dialog', keys: 'Esc' }]
-  },
-  {
-    title: 'Call detection (works even when CallRise AI is in the background)',
-    shortcuts: [
-      { label: 'Stop capturing', keys: '⌘⇧S' },
-      { label: 'Pause / resume detection', keys: '⌘⇧P' }
-    ]
-  },
-  {
-    title: 'Help',
-    shortcuts: [{ label: 'Show keyboard shortcuts', keys: '?' }]
-  }
-]
+/** M31 Stage 2 — `navPreviewEnabled` gates the ⌘1-7 row so this sheet never
+ *  advertises a shortcut that isn't actually registered (MainApp only wires
+ *  digit shortcuts while the preview nav is on — see its own keydown
+ *  handler for why: a digit-per-item scheme stops being a clean mnemonic
+ *  once there are more than ~9 items, which the legacy 12-item nav is). */
+function buildGroups(navPreviewEnabled: boolean): ShortcutGroup[] {
+  const mod = isMac ? '⌘' : 'Ctrl '
+  return [
+    {
+      title: 'Navigation',
+      shortcuts: [
+        { label: 'Jump to a screen, contact, deal, or call', keys: `${mod}K` },
+        ...(navPreviewEnabled
+          ? [{ label: 'Jump to a section by number (1-7)', keys: `${mod}1…${mod}7` }]
+          : [])
+      ]
+    },
+    {
+      title: 'Command palette',
+      shortcuts: [
+        { label: 'Navigate results', keys: '↑↓' },
+        { label: 'Open selection', keys: '↵' },
+        { label: 'Close', keys: 'Esc' }
+      ]
+    },
+    {
+      title: 'Actions',
+      shortcuts: [
+        { label: 'Start a live call', keys: `${mod}⇧L` },
+        { label: 'Toggle theme', keys: `${mod}⇧T` }
+      ]
+    },
+    {
+      title: 'Anywhere',
+      shortcuts: [{ label: 'Close any dialog', keys: 'Esc' }]
+    },
+    {
+      title: 'Call detection (works even when CallRise AI is in the background)',
+      shortcuts: [
+        { label: 'Stop capturing', keys: '⌘⇧S' },
+        { label: 'Pause / resume detection', keys: '⌘⇧P' }
+      ]
+    },
+    {
+      title: 'Help',
+      shortcuts: [{ label: 'Show keyboard shortcuts', keys: '?' }]
+    }
+  ]
+}
 
 /** Global keyboard-shortcuts cheat sheet, opened with `?` from anywhere in
  *  the app (outside text inputs). Reuses the shared Modal shell, which already
  *  owns the backdrop, focus-trap, Escape-to-close, and scroll-lock. */
 export function ShortcutsOverlay({
   open,
-  onClose
+  onClose,
+  navPreviewEnabled = false
 }: {
   open: boolean
   onClose: () => void
+  navPreviewEnabled?: boolean
 }): React.JSX.Element | null {
   if (!open) return null
+  const GROUPS = buildGroups(navPreviewEnabled)
 
   return (
     <Modal onClose={onClose} title="Keyboard shortcuts" size="md">
