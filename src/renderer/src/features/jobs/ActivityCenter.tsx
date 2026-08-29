@@ -7,6 +7,7 @@ import { useToast } from '@renderer/features/notifications/useToast'
 import { useJobs } from './useJobs'
 import { holdsUnreviewedOutput } from './holdsUnreviewedOutput'
 import { jobTarget, openJobTarget } from './jobNav'
+import { belongsInFeed } from './feedPolicy'
 import {
   BUTTON_SIZE,
   clampToViewport,
@@ -234,9 +235,18 @@ export function ActivityCenter(): React.JSX.Element {
     })
   }, [])
 
-  const running = jobs.filter((j) => j.state === 'running')
-  const queued = jobs.filter((j) => j.state === 'queued')
-  const finished = jobs
+  // The Activity panel is a FEED, not a log (founder ruling 2026-08-29): it
+  // shows what the user did, or what the app did on their behalf that they
+  // would care about — not housekeeping. Filtered ONCE here, before any
+  // grouping, so every section below (and the unread badge) agrees about what
+  // exists; filtering per-section is how the badge ends up counting rows the
+  // panel does not show. See feedPolicy.ts for the rule and why it is keyed by
+  // lane rather than a per-job flag.
+  const feed = jobs.filter(belongsInFeed)
+
+  const running = feed.filter((j) => j.state === 'running')
+  const queued = feed.filter((j) => j.state === 'queued')
+  const finished = feed
     .filter((j) => j.state === 'succeeded' || j.state === 'failed' || j.state === 'interrupted')
     .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))
 
