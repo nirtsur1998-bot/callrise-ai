@@ -102,3 +102,80 @@ describe('color-token integrity (BUG-130 guard)', () => {
     ).toEqual([])
   })
 })
+
+// A SEPARATE, different-in-kind defect class, found 2026-08-29 (founder
+// report: the API Keys page's retention badges and status dots go nearly
+// invisible in light mode). Unlike the guard above, these classes are all
+// VALID Tailwind utilities that resolve to something — the bug is that they
+// bypass our theme-aware --color-* tokens entirely by referencing Tailwind's
+// raw built-in palette instead (e.g. `text-emerald-200`, `bg-amber-400`).
+// A raw shade is a FIXED value that never changes with the `.light` class,
+// so a shade picked to read well as light text on our dark surfaces (like
+// `emerald-200`) keeps that exact pale value on a light surface too, where
+// it nearly vanishes. This is why the guard above — which only checks that
+// an OUR-OWN-TOKEN name exists — could not have caught it: `emerald-500`
+// was never one of our token names to begin with, and was never meant to
+// be checked against index.css at all.
+//
+// The rule this enforces is the one the app's own July 2026 design-system
+// commit already stated as its goal ("replacing raw Tailwind colors
+// everywhere") but never fully finished: NO component may reference
+// Tailwind's raw color palette directly, full stop — every color, whether
+// a semantic status (positive/warning/danger) or a non-semantic categorical
+// label (like the speaker palette, or track-call/track-outlook), goes
+// through one of our own named --color-* tokens, each with its own real
+// dark AND light value. Verified before adding: a sweep of the entire
+// renderer for every standard Tailwind color family found violations in
+// exactly 2 files (10 lines) and nowhere else — this is a comprehensive
+// ban, not a narrow one, and currently has a fully known, fixable scope.
+const TAILWIND_RAW_FAMILIES = [
+  'slate',
+  'gray',
+  'zinc',
+  'neutral',
+  'stone',
+  'red',
+  'orange',
+  'amber',
+  'yellow',
+  'lime',
+  'green',
+  'emerald',
+  'teal',
+  'cyan',
+  'sky',
+  'blue',
+  'indigo',
+  'violet',
+  'purple',
+  'fuchsia',
+  'pink',
+  'rose'
+]
+const RAW_FAMILY_ALT = TAILWIND_RAW_FAMILIES.join('|')
+// Requires a numeric shade (50/100/.../900/950) so this never matches bare
+// `text-white`/`bg-black` — those ARE legitimately theme-invariant (e.g. a
+// solid accent button's label stays white in both themes by design) and
+// aren't part of Tailwind's graduated, theme-fragile palette in the first
+// place.
+const RAW_CLASS_RE = new RegExp(
+  `(?:^|[^a-zA-Z0-9-])((?:${PREFIX_ALT})-(?:${RAW_FAMILY_ALT})-[0-9]{2,3}(?:/\\d+)?)(?![a-zA-Z0-9-])`,
+  'g'
+)
+
+describe('no raw Tailwind palette colors (theme-adaptivity guard)', () => {
+  it('never references Tailwind\'s built-in color palette directly — every color must be one of our own theme-aware tokens', () => {
+    const offenders: string[] = []
+    for (const file of sourceFiles(RENDERER_SRC)) {
+      const text = readFileSync(file, 'utf8')
+      for (const m of text.matchAll(RAW_CLASS_RE)) {
+        const line = text.slice(0, m.index).split('\n').length
+        offenders.push(`${relative(RENDERER_SRC, file)}:${line} → ${m[1]}`)
+      }
+    }
+    expect(
+      offenders,
+      `These classes reference Tailwind's raw color palette instead of one of our own theme-aware --color-* tokens. A raw shade is fixed and does not adapt to the '.light' class, so a shade tuned to read well in dark mode (e.g. text-emerald-200) can render nearly invisible against a light surface. Use an existing token (--color-positive/-warning/-danger/-accent/...) or add a new named categorical one (see --color-track-call/--color-track-outlook in index.css for the pattern — a dark AND a light value, both real) instead:\n${offenders.join('\n')}`
+    ).toEqual([])
+  })
+})

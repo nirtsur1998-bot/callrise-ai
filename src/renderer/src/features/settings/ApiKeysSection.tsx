@@ -39,7 +39,7 @@ const RETENTION_LABEL: Record<RetentionPosture, string> = {
 
 const RETENTION_CLASS: Record<RetentionPosture, string> = {
   trains: 'border-danger/40 bg-danger/10 text-danger',
-  'no-training': 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200',
+  'no-training': 'border-positive/30 bg-positive-soft text-positive',
   unknown: 'border-line bg-elevated text-muted'
 }
 
@@ -169,10 +169,10 @@ function deriveStatusDot(
 }
 
 const STATUS_DOT_CLASS: Record<KeyStatusDot, string> = {
-  connected: 'bg-emerald-400',
+  connected: 'bg-positive',
   'no-key': 'bg-line',
   invalid: 'bg-danger',
-  'rate-limited': 'bg-amber-400'
+  'rate-limited': 'bg-warning'
 }
 
 const STATUS_DOT_LABEL: Record<KeyStatusDot, string> = {
@@ -274,7 +274,7 @@ export function KeyCard({
             <RetentionBadge posture={config.retention.posture} url={config.retention.url} />
           )}
           {status?.configured && (
-            <span className="flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-200">
+            <span className="flex items-center gap-1.5 rounded-lg border border-positive/30 bg-positive-soft px-2.5 py-1 text-xs font-medium text-positive">
               <CheckCircle2 className="h-3.5 w-3.5" /> Configured
               {status.hint ? ` · ${status.hint}` : ''}
             </span>
@@ -343,12 +343,12 @@ export function KeyCard({
       </div>
 
       {testResult && (
-        <p className={cn('mt-2 text-[13px]', testResult.ok ? 'text-emerald-300' : 'text-danger')}>
+        <p className={cn('mt-2 text-[13px]', testResult.ok ? 'text-positive' : 'text-danger')}>
           {testResult.message}
         </p>
       )}
       {savedNotice && (
-        <p className="mt-2 text-[13px] text-emerald-300">Saved — takes effect immediately.</p>
+        <p className="mt-2 text-[13px] text-positive">Saved — takes effect immediately.</p>
       )}
 
       <a
