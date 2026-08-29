@@ -44,10 +44,10 @@ export function AutoUpdateNoticeCard({
   if (!pending) return null
 
   return (
-    <div className="mb-5 flex items-start gap-3 rounded-xl border border-line bg-surface-1 px-4 py-3 text-[13px] text-fg-2">
+    <div className="mb-5 flex items-start gap-3 rounded-xl border border-line bg-surface px-4 py-3 text-[13px] text-muted">
       <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
       <div className="min-w-0 flex-1">
-        <p className="font-medium text-fg-1">CallRise now keeps itself up to date</p>
+        <p className="font-medium text-ink">CallRise now keeps itself up to date</p>
         <p className="mt-0.5 leading-relaxed">
           Updates download in the background and install when you quit the app — never during a
           call. This is on by default because updates are how privacy and security fixes reach you.
@@ -65,7 +65,7 @@ export function AutoUpdateNoticeCard({
         type="button"
         onClick={dismiss}
         aria-label="Dismiss"
-        className="shrink-0 rounded-md p-1 text-fg-3 transition hover:bg-surface-2 hover:text-fg-2"
+        className="shrink-0 rounded-md p-1 text-faint transition hover:bg-elevated hover:text-muted"
       >
         <X className="h-3.5 w-3.5" />
       </button>

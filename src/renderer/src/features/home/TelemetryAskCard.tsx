@@ -50,11 +50,11 @@ export function TelemetryAskCard({
   if (!unasked) return null
 
   return (
-    <div className="mb-5 rounded-xl border border-line bg-surface-1 px-5 py-4 text-[13px] text-fg-2">
+    <div className="mb-5 rounded-xl border border-line bg-surface px-5 py-4 text-[13px] text-muted">
       <div className="flex items-start gap-3">
         <HeartPulse className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
         <div className="min-w-0 flex-1">
-          <p className="font-medium text-fg-1">Help find crashes? (optional, anonymous)</p>
+          <p className="font-medium text-ink">Help find crashes? (optional, anonymous)</p>
           <p className="mt-1 leading-relaxed">
             CallRise can send anonymous crash and health reports so broken versions get fixed
             faster. It is off until you say yes, and you can change your mind in Settings → Privacy
@@ -62,7 +62,7 @@ export function TelemetryAskCard({
           </p>
           <div className="mt-3 grid gap-3 text-[12px] leading-relaxed md:grid-cols-2">
             <div>
-              <p className="mb-1 font-medium text-fg-1">Sends</p>
+              <p className="mb-1 font-medium text-ink">Sends</p>
               <ul className="list-disc space-y-0.5 pl-4">
                 {TELEMETRY_SENDS.map((line) => (
                   <li key={line}>{line}</li>
@@ -70,7 +70,7 @@ export function TelemetryAskCard({
               </ul>
             </div>
             <div>
-              <p className="mb-1 font-medium text-fg-1">Never sends</p>
+              <p className="mb-1 font-medium text-ink">Never sends</p>
               <ul className="list-disc space-y-0.5 pl-4">
                 {TELEMETRY_NEVER_SENDS.map((line) => (
                   <li key={line}>{line}</li>
@@ -93,7 +93,7 @@ export function TelemetryAskCard({
             <button
               type="button"
               onClick={() => onNavigate('settings')}
-              className="ml-1 text-[12px] font-medium text-fg-3 underline underline-offset-2 hover:text-fg-2 hover:no-underline"
+              className="ml-1 text-[12px] font-medium text-faint underline underline-offset-2 hover:text-muted hover:no-underline"
             >
               Read more in Settings
             </button>
