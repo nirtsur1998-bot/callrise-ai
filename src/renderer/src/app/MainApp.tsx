@@ -30,6 +30,7 @@ import {
   setOpenAssistantListener,
   type AssistantScopeRequest
 } from '@renderer/features/assistant/assistantNav'
+import { setJobNavListener } from '@renderer/features/jobs/jobNav'
 
 // Exactly one of these renders at a time (see the `active === ...` switch
 // below, itself remounted via `key={active}` on every switch) — so eagerly
@@ -404,6 +405,22 @@ export function MainApp({
       navigateTo('assistant')
     })
     return () => setOpenAssistantListener(null)
+  }, [])
+
+  // "Take me to what that job was about." The Activity Center and the toast
+  // host are siblings of MainApp (App.tsx), not children, so they reach this
+  // through jobNav's single listener slot — same shape as the assistant one
+  // directly above. Deliberately reuses the SAME three open* helpers the
+  // command palette uses rather than adding parallel navigation: a job result
+  // and a palette hit should land on exactly the same screen in the same
+  // state, and one code path is how that stays true.
+  useEffect(() => {
+    setJobNavListener(({ kind, id }) => {
+      if (kind === 'call') openCallFromPalette(id)
+      else if (kind === 'contact') openContactFromPalette(id)
+      else if (kind === 'deal') openDealFromPalette(id)
+    })
+    return () => setJobNavListener(null)
   }, [])
 
   const signOut = (): void => {

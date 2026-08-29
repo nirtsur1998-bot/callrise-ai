@@ -224,6 +224,7 @@ export class JobManager {
       type,
       title: def.titleFor(input),
       targetRef: def.targetRefFor?.(input),
+      targetKind: def.targetKind,
       state: 'queued',
       progress: INDETERMINATE_PROGRESS,
       lane: def.lane,

@@ -6,6 +6,7 @@ import { EmptyState } from '@renderer/components/EmptyState'
 import { useToast } from '@renderer/features/notifications/useToast'
 import { useJobs } from './useJobs'
 import { holdsUnreviewedOutput } from './holdsUnreviewedOutput'
+import { jobTarget, openJobTarget } from './jobNav'
 import {
   BUTTON_SIZE,
   clampToViewport,
@@ -13,7 +14,7 @@ import {
   panelPlacement,
   type Point
 } from './activityButtonPosition'
-import type { Job, JobActivityEvent, JobState } from '../../../../preload/index.d'
+import type { Job, JobActivityEvent, JobState, JobTargetKind } from '../../../../preload/index.d'
 
 const LAST_VIEWED_KEY = 'salesos.activityCenter.lastViewedAt'
 const POSITION_KEY = 'salesos.activityCenter.position'
@@ -44,6 +45,15 @@ function getStoredPosition(): Point | null {
  *  than a click. Without it, the tiny movement in an ordinary click would
  *  register as a drag and swallow the open-the-panel action. */
 const DRAG_THRESHOLD_PX = 4
+
+/** What the toast's action button says, per destination. Named for the place
+ *  it goes rather than the generic "View", so the label is a promise the click
+ *  keeps — and so a job with no destination is visibly a different offer. */
+const TARGET_ACTION_LABEL: Record<JobTargetKind, string> = {
+  call: 'Open call',
+  contact: 'Open contact',
+  deal: 'Open deal'
+}
 
 const STATE_TONE: Record<JobState, BadgeTone> = {
   queued: 'neutral',
@@ -175,18 +185,53 @@ export function ActivityCenter(): React.JSX.Element {
   useEffect(() => {
     return window.api.jobs.onNotify((payload) => {
       const event = payload as JobActivityEvent
+      // Founder request: the completion toast should take you to the thing the
+      // job was about, not to a list of the thing you were just told about.
+      // "View" used to open this very panel — one more click and a scan for a
+      // row you already knew existed.
+      //
+      // Falls back to opening the panel when a job has no target (a scan over
+      // many calls has no single destination) and for the digest, which is by
+      // definition several jobs. The action label follows suit rather than
+      // saying "View" for two different behaviours: what the button says is
+      // what it does.
+      const target = 'job' in event ? jobTarget(event.job) : null
+      const action = target
+        ? { label: TARGET_ACTION_LABEL[target.kind], onClick: () => openJobTarget(target) }
+        : { label: 'View', onClick: () => setOpen(true) }
+
       if (event.kind === 'started') toast.info(event.message)
-      else if (event.kind === 'succeeded')
-        toast.success(event.message, { label: 'View', onClick: () => setOpen(true) })
-      else if (event.kind === 'failed')
-        toast.error(event.message, { label: 'View', onClick: () => setOpen(true) })
+      else if (event.kind === 'succeeded') toast.success(event.message, action)
+      else if (event.kind === 'failed') toast.error(event.message, action)
       else toast.info(event.message, { label: 'View', onClick: () => setOpen(true) })
     })
   }, [toast])
 
-  // Clicked an OS-native notification while the app was unfocused.
+  // Clicked an OS-native notification while the app was unfocused. This is the
+  // most literal reading of the founder's request — you were away, Windows
+  // told you the summary was ready, you clicked it — so it navigates to the
+  // call rather than opening a panel.
+  //
+  // main already sends the jobId (activity.ts's 'jobs:openRequested'); it was
+  // simply ignored here. The job is re-read rather than looked up in the
+  // `jobs` array on purpose: this handler is registered once with an empty
+  // dep list, so it closes over the jobs array as it was at mount, and a job
+  // that completed since would not be in it — the exact case this fires for.
   useEffect(() => {
-    return window.api.jobs.onOpenRequested(() => setOpen(true))
+    return window.api.jobs.onOpenRequested((jobId) => {
+      if (!jobId) {
+        setOpen(true) // a digest — several jobs, no single destination
+        return
+      }
+      void window.api.jobs
+        .get(jobId)
+        .then((job) => {
+          const target = job ? jobTarget(job) : null
+          if (target) openJobTarget(target)
+          else setOpen(true)
+        })
+        .catch(() => setOpen(true))
+    })
   }, [])
 
   const running = jobs.filter((j) => j.state === 'running')
@@ -353,10 +398,10 @@ export function ActivityCenter(): React.JSX.Element {
                     is the only group holding something the rep must act on
                     (already-paid-for AI output waiting to be reviewed or
                     saved). Everything below it is informational. */}
-                <Group title="Needs your review" jobs={needsReview} act={act} />
-                <Group title="Running" jobs={running} act={act} />
-                <Group title="Queued" jobs={queued} act={act} />
-                <Group title="Recent" jobs={recent} act={act} />
+                <Group title="Needs your review" jobs={needsReview} act={act} onNavigate={() => setOpen(false)} />
+                <Group title="Running" jobs={running} act={act} onNavigate={() => setOpen(false)} />
+                <Group title="Queued" jobs={queued} act={act} onNavigate={() => setOpen(false)} />
+                <Group title="Recent" jobs={recent} act={act} onNavigate={() => setOpen(false)} />
               </>
             )}
           </div>
@@ -369,11 +414,14 @@ export function ActivityCenter(): React.JSX.Element {
 function Group({
   title,
   jobs,
-  act
+  act,
+  onNavigate
 }: {
   title: string
   jobs: Job[]
   act: (fn: () => Promise<unknown>) => void
+  /** Called after a row navigates, so the panel can get out of the way. */
+  onNavigate: () => void
 }): React.JSX.Element | null {
   if (jobs.length === 0) return null
   return (
@@ -383,7 +431,7 @@ function Group({
       </p>
       <div className="flex flex-col gap-1">
         {jobs.map((job) => (
-          <Row key={job.id} job={job} act={act} />
+          <Row key={job.id} job={job} act={act} onNavigate={onNavigate} />
         ))}
       </div>
     </div>
@@ -392,12 +440,15 @@ function Group({
 
 function Row({
   job,
-  act
+  act,
+  onNavigate
 }: {
   job: Job
   act: (fn: () => Promise<unknown>) => void
+  onNavigate: () => void
 }): React.JSX.Element {
   const progress = formatProgress(job.progress)
+  const target = jobTarget(job)
   const canCancel = (job.state === 'queued' || job.state === 'running') && job.cancellable
   const canRetry = job.state === 'failed'
   const canResume = job.state === 'interrupted'
@@ -428,7 +479,29 @@ function Row({
         )}
       </div>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[12.5px] font-medium text-ink">{job.title}</p>
+        {/* Founder request: a finished job should take you to what it was
+            about. `targetRef` has carried the id since M26 with a docblock
+            saying "whatever the Activity Center should deep link to" — this is
+            the first thing to read it.
+            Only a FINISHED job is clickable: while it is still running there
+            may be nothing at the destination yet (a summary job's output does
+            not exist until it succeeds), and a link that lands on an empty
+            screen teaches people not to trust the link. */}
+        {target && (job.state === 'succeeded' || job.state === 'failed') ? (
+          <button
+            type="button"
+            onClick={() => {
+              openJobTarget(target)
+              onNavigate() // get out of the way of the screen you asked for
+            }}
+            className="block w-full truncate text-left text-[12.5px] font-medium text-ink underline-offset-2 transition hover:text-accent hover:underline"
+            title={`Open the ${target.kind} this was about`}
+          >
+            {job.title}
+          </button>
+        ) : (
+          <p className="truncate text-[12.5px] font-medium text-ink">{job.title}</p>
+        )}
         {progress && <p className="text-[11px] text-faint">{progress}</p>}
         {job.error && <p className="text-[11px] text-danger">{job.error.message}</p>}
       </div>

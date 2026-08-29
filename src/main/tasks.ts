@@ -123,6 +123,7 @@ export function registerTasks(): void {
     lane: 'INTERACTIVE',
     titleFor: () => 'Generating tasks',
     targetRefFor: (i) => i.callId,
+    targetKind: 'call',
     // This job's resultData holds the proposed tasks until the rep saves or
     // regenerates them — automatic history pruning must never delete it, or
     // BUG-048 comes straight back (already-paid-for AI output silently

@@ -326,6 +326,7 @@ export function registerCalls(): void {
     lane: 'BATCH',
     titleFor: () => 'Looking for objections in this call',
     targetRefFor: (i) => i.callId,
+    targetKind: 'call',
     silent: true,
     // BUG-060 — earned: handle.signal is threaded into mineCallIntoQueue below.
     cancellable: true,
@@ -358,6 +359,7 @@ export function registerCalls(): void {
     lane: 'BATCH',
     titleFor: () => 'Working out who was on this call',
     targetRefFor: (i) => i.callId,
+    targetKind: 'call',
     // The feature fires its own far better "Automatically created and
     // attached 'Dana'" notification when it actually attaches someone.
     silent: true,
@@ -380,6 +382,7 @@ export function registerCalls(): void {
     lane: 'BATCH',
     titleFor: () => 'Drafting a CRM note',
     targetRefFor: (i) => i.callId,
+    targetKind: 'call',
     silent: true,
     // BUG-060 — earned: handle.signal is threaded into maybeGenerateCrmNote.
     cancellable: true,
@@ -622,6 +625,7 @@ export function registerCalls(): void {
     lane: 'INTERACTIVE',
     titleFor: () => 'Summarizing call',
     targetRefFor: (i) => i.callId,
+    targetKind: 'call',
     // BUG-060 — EARNED. `cancellable` now defaults to false, and is only set
     // true by an adapter that has genuinely threaded handle.signal into the
     // work it awaits (below). Do not set this on a new job type without doing
@@ -737,6 +741,7 @@ export function registerCalls(): void {
     lane: 'INTERACTIVE',
     titleFor: () => 'Coaching call',
     targetRefFor: (i) => i.callId,
+    targetKind: 'call',
     // BUG-060 — earned: handle.signal is threaded into coachCall below.
     cancellable: true,
     executor: {
@@ -837,6 +842,7 @@ export function registerCalls(): void {
     lane: 'INTERACTIVE',
     titleFor: () => 'Finding commitments',
     targetRefFor: (i) => i.callId,
+    targetKind: 'call',
     // BUG-060 — earned: handle.signal is threaded into extractCommitments.
     cancellable: true,
     executor: {

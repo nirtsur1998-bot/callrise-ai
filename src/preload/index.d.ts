@@ -2397,11 +2397,16 @@ export interface JobErrorInfo {
   code?: string
 }
 
+/** What a job's `targetRef` names, so the Activity Center knows which screen
+ *  to open. Mirrors main/jobs/types.ts. */
+export type JobTargetKind = 'call' | 'contact' | 'deal'
+
 export interface Job {
   id: string
   type: string
   title: string
   targetRef?: string
+  targetKind?: JobTargetKind
   state: JobState
   progress: JobProgress
   lane: JobLane
