@@ -11,7 +11,7 @@ import {
 import { PhoneCall } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import type { CalendarEvent, CalendarItem } from './types'
-import { ITEM_STYLES, itemsOnDay, layoutColumns, formatTime } from './items'
+import { ITEM_STYLES, RISK_DOT, BRIEF_DOT, itemsOnDay, layoutColumns, formatTime } from './items'
 
 const HOUR_HEIGHT = 44 // px per hour
 const DAY_HEIGHT = HOUR_HEIGHT * 24
@@ -107,7 +107,7 @@ export function WeekGrid({
               <span
                 className={cn(
                   'grid h-6 w-6 place-items-center rounded-full text-[12px]',
-                  today ? 'bg-accent font-semibold text-white' : 'text-ink'
+                  today ? 'bg-accent-fill font-semibold text-on-accent' : 'text-ink'
                 )}
               >
                 {format(day, 'd')}
@@ -261,10 +261,7 @@ export function WeekGrid({
                         {item.context?.risk && (
                           <span
                             aria-hidden
-                            className={cn(
-                              'h-1.5 w-1.5 shrink-0 rounded-full',
-                              item.context.risk === 'high' ? 'bg-danger' : 'bg-warning'
-                            )}
+                            className={RISK_DOT[item.context.risk === 'high' ? 'high' : 'medium']}
                           />
                         )}
                         <span className="truncate font-medium">{item.title}</span>
@@ -276,10 +273,8 @@ export function WeekGrid({
                             <span
                               aria-hidden
                               className={cn(
-                                'ml-auto h-1.5 w-1.5 shrink-0 rounded-full',
-                                item.context.brief === 'ready'
-                                  ? 'bg-accent'
-                                  : 'border border-current opacity-60'
+                                'ml-auto',
+                                BRIEF_DOT[item.context.brief === 'ready' ? 'ready' : 'outdated']
                               )}
                             />
                           )

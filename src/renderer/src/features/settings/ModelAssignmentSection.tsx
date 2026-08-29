@@ -86,14 +86,16 @@ function formatContext(n: number | null): string {
 }
 
 const LANE_LABEL: Record<'speed' | 'quality', string> = { speed: 'Speed', quality: 'Quality' }
-// speed/quality is a non-semantic categorical label (not a status severity),
-// so it deliberately does NOT reuse warning/accent for their usual MEANING —
-// it reuses their VALUES to stay theme-safe without inventing a new brand
-// color unilaterally. Flagged for M31 Stage 4 as a candidate for its own
-// dedicated --color-lane-speed/--color-lane-quality token pair instead.
+// speed/quality is a non-semantic categorical label (not a status severity).
+// This used to borrow warning/accent's VALUES — theme-safe, but it meant a
+// "Speed" badge was literally the same amber as a warning and a "Quality"
+// badge the same amber as the primary action, so a category read as a
+// severity. M31 Stage 4 resolved it: its own token pair, teal and violet,
+// used for nothing else in the app. Both values are pinned in both themes
+// by src/renderer/src/__tests__/contrast-ratios.test.ts.
 const LANE_CLASS: Record<'speed' | 'quality', string> = {
-  speed: 'border-warning/40 bg-warning/10 text-warning',
-  quality: 'border-accent/40 bg-accent/10 text-accent'
+  speed: 'border-lane-speed/40 bg-lane-speed/10 text-lane-speed',
+  quality: 'border-lane-quality/40 bg-lane-quality/10 text-lane-quality'
 }
 
 function entryStatus(entry: AiResolvedCatalogEntry): { dot: string; label: string } {

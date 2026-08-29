@@ -3,7 +3,7 @@ import { startOfMonth, startOfWeek, addDays, isSameMonth, isToday, format } from
 import { Plus, PhoneCall } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import type { CalendarEvent, CalendarItem } from './types'
-import { ITEM_STYLES, itemsOnDay, sortForDay } from './items'
+import { ITEM_STYLES, RISK_DOT, BRIEF_DOT, itemsOnDay, sortForDay } from './items'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MAX_VISIBLE = 3
@@ -83,7 +83,16 @@ export function MonthGrid({
               key={day.toISOString()}
               className={cn(
                 'group relative flex min-h-0 flex-col gap-1 overflow-hidden p-1.5 transition',
-                inMonth ? 'bg-canvas hover:bg-elevated/60' : 'bg-canvas/40',
+                // Out-of-month cells are OPAQUE canvas + dimmed contents, not
+                // a translucent `bg-canvas/40`. Found by looking at the running
+                // app after First Light: the old translucent version let the
+                // grid-gap colour (--color-line-soft) show through, which was
+                // harmless only because BUG-133 had made line-soft invisible.
+                // Fixing the borders turned the entire leading/trailing week
+                // into a solid tan block. Opaque here means the cell can never
+                // pick up whatever is painted behind the grid again.
+                'bg-canvas',
+                inMonth && 'hover:bg-elevated/60',
                 today && 'bg-accent/5'
               )}
             >
@@ -99,7 +108,18 @@ export function MonthGrid({
                 <Plus className="h-3.5 w-3.5 text-faint" />
               </button>
 
-              <div className="relative z-10 flex min-h-0 flex-col gap-1">
+              {/* The out-of-month dimming lives HERE, on the contents, not on
+                  the cell. Putting `opacity` on the cell dims the cell's own
+                  background too, which re-opens the exact hole this was
+                  fixing: a translucent cell shows the grid-gap colour through
+                  and the leading week goes solid tan again. Verified in the
+                  running app, in that order. */}
+              <div
+                className={cn(
+                  'relative z-10 flex min-h-0 flex-col gap-1',
+                  !inMonth && 'opacity-50'
+                )}
+              >
                 <button
                   type="button"
                   aria-label={`Open ${format(day, 'MMMM d')}`}
@@ -110,7 +130,7 @@ export function MonthGrid({
                   className={cn(
                     'grid h-6 w-6 shrink-0 place-items-center self-start rounded-full text-[12px] transition',
                     today
-                      ? 'bg-accent font-semibold text-white'
+                      ? 'bg-accent-fill font-semibold text-on-accent'
                       : inMonth
                         ? 'text-muted hover:bg-elevated hover:text-ink'
                         : 'text-faint'
@@ -211,15 +231,7 @@ function Chip({
       )}
     >
       {!item.allDay && <span className="shrink-0 opacity-70">{format(item.start, 'h:mm')}</span>}
-      {ctx?.risk && (
-        <span
-          aria-hidden
-          className={cn(
-            'h-1.5 w-1.5 shrink-0 rounded-full',
-            ctx.risk === 'high' ? 'bg-danger' : 'bg-warning'
-          )}
-        />
-      )}
+      {ctx?.risk && <span aria-hidden className={RISK_DOT[ctx.risk === 'high' ? 'high' : 'medium']} />}
       {/* The title stays the title. An earlier pass swapped in the contact
           name when one was linked, which reads well until two meetings with
           the same person become indistinguishable — the chip would be
@@ -235,13 +247,7 @@ function Chip({
         ctx?.brief && (
           <span
             aria-hidden
-            className={cn(
-              'ml-auto h-1.5 w-1.5 shrink-0 rounded-full',
-              // 'outdated' is deliberately hollow, not a second solid colour:
-              // it means "there is one, but opening it will rebuild it", which
-              // is a weaker claim than 'ready' and should look like one.
-              ctx.brief === 'ready' ? 'bg-accent' : 'border border-current opacity-60'
-            )}
+            className={cn('ml-auto', BRIEF_DOT[ctx.brief === 'ready' ? 'ready' : 'outdated'])}
           />
         )
       )}

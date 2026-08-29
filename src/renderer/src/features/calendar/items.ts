@@ -9,15 +9,19 @@ export const ITEM_STYLES: Record<CalendarItemKind, { chip: string; block: string
     block: 'border-l-2 border-accent bg-accent/15 text-ink',
     dot: 'bg-accent'
   },
+  // M31 Stage 4: task/google moved off --color-warning/--color-positive onto
+  // their own track tokens. A chip's colour says where the item came from —
+  // a category — and borrowing a status colour made every task read as a
+  // warning and every Google meeting read as a success.
   task: {
-    chip: 'bg-warning-soft text-warning',
-    block: 'border-l-2 border-warning bg-warning-soft text-warning',
-    dot: 'bg-warning'
+    chip: 'bg-track-task-soft text-track-task',
+    block: 'border-l-2 border-track-task bg-track-task-soft text-track-task',
+    dot: 'bg-track-task'
   },
   google: {
-    chip: 'bg-positive-soft text-positive',
-    block: 'border-l-2 border-positive bg-positive-soft text-positive',
-    dot: 'bg-positive'
+    chip: 'bg-track-google-soft text-track-google',
+    block: 'border-l-2 border-track-google bg-track-google-soft text-track-google',
+    dot: 'bg-track-google'
   },
   outlook: {
     chip: 'bg-track-outlook-soft text-track-outlook',
@@ -280,4 +284,38 @@ export function draftToInput(draft: EventDraft): {
     dealId,
     reminderMinutes
   }
+}
+
+/* M31 Stage 4 — the risk and prep-brief markers.
+ *
+ * These are dots drawn ON TOP of a coloured chip fill, which is why they get
+ * their own module-level constants rather than being inlined twice: the
+ * failure mode is not "wrong hue", it's "no contrast against the thing
+ * underneath". A medium-risk dot was --color-warning amber sitting on an
+ * amber event chip, and the ready-brief dot was --color-accent — the exact
+ * same amber as the chip fill it sat on. Both were, in the literal sense,
+ * invisible on the items most likely to have them.
+ *
+ * The load-bearing fix is the ring, not the hue: a ring in --color-canvas
+ * separates the dot from ANY chip fill in either theme, because canvas is
+ * the page ground and is therefore maximally distant from every fill drawn
+ * on it. That holds even for a track colour we add later.
+ *
+ * Hues, on top of that: risk keeps danger/warning because risk genuinely IS
+ * a severity — that reuse is correct and stays. The ready-brief dot moves
+ * from accent to positive, which is also a real claim ("this is good to
+ * open") rather than "this is ours". 'outdated' stays hollow: it means
+ * "there is one, but opening it rebuilds it", a weaker claim that should
+ * keep looking like one.
+ */
+const MARKER = 'h-1.5 w-1.5 shrink-0 rounded-full ring-1 ring-canvas'
+
+export const RISK_DOT: Record<'high' | 'medium', string> = {
+  high: `${MARKER} bg-danger`,
+  medium: `${MARKER} bg-warning`
+}
+
+export const BRIEF_DOT: Record<'ready' | 'outdated', string> = {
+  ready: `${MARKER} bg-positive`,
+  outdated: `${MARKER} border border-current bg-transparent opacity-60`
 }
