@@ -77,7 +77,6 @@ export function CalendarView({
   const {
     events,
     tasks,
-    calls,
     googleEvents,
     googleSyncing,
     googleLastSynced,
@@ -113,17 +112,8 @@ export function CalendarView({
   }, [deepLinkEventId])
 
   const items = useMemo(
-    () =>
-      buildItems(
-        events,
-        tasks,
-        calls,
-        googleEvents,
-        googleWritable,
-        outlookEvents,
-        outlookWritable
-      ),
-    [events, tasks, calls, googleEvents, googleWritable, outlookEvents, outlookWritable]
+    () => buildItems(events, tasks, googleEvents, googleWritable, outlookEvents, outlookWritable),
+    [events, tasks, googleEvents, googleWritable, outlookEvents, outlookWritable]
   )
 
   const goPrev = (): void => setCursor((c) => (view === 'month' ? subMonths(c, 1) : subWeeks(c, 1)))
@@ -241,8 +231,8 @@ export function CalendarView({
       {items.length === 0 && !loading && (
         <p className="mb-3 flex items-center gap-2 text-[13px] text-faint">
           <CalendarDays className="h-4 w-4" />
-          Your calendar is empty — click any day to add an event. Your tasks and past calls show up
-          here automatically too.
+          Your calendar is empty — click any day to add an event. Your tasks show up here
+          automatically too.
         </p>
       )}
 
@@ -294,7 +284,7 @@ export function CalendarView({
 }
 
 function Legend(): React.JSX.Element {
-  const kinds: CalendarItemKind[] = ['event', 'task', 'call', 'google', 'outlook']
+  const kinds: CalendarItemKind[] = ['event', 'task', 'google', 'outlook']
   return (
     <div className="hidden items-center gap-3 text-[11px] text-faint sm:flex">
       {kinds.map((k) => (

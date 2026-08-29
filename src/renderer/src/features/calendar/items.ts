@@ -1,6 +1,5 @@
 import { addMinutes, startOfDay, endOfDay, format } from 'date-fns'
 import type { Task } from '@renderer/features/tasks/types'
-import type { CallSummary } from '@renderer/features/calls/types'
 import type { CalendarEvent, CalendarItem, CalendarItemKind, EventDraft } from './types'
 
 /** Tailwind classes per kind: chips (month), blocks (week), and the legend dot. */
@@ -14,11 +13,6 @@ export const ITEM_STYLES: Record<CalendarItemKind, { chip: string; block: string
     chip: 'bg-warning-soft text-warning',
     block: 'border-l-2 border-warning bg-warning-soft text-warning',
     dot: 'bg-warning'
-  },
-  call: {
-    chip: 'bg-track-call-soft text-track-call',
-    block: 'border-l-2 border-track-call bg-track-call-soft text-track-call',
-    dot: 'bg-track-call'
   },
   google: {
     chip: 'bg-positive-soft text-positive',
@@ -35,21 +29,20 @@ export const ITEM_STYLES: Record<CalendarItemKind, { chip: string; block: string
 export const KIND_LABEL: Record<CalendarItemKind, string> = {
   event: 'Event',
   task: 'Task',
-  call: 'Call',
   google: 'Google',
   outlook: 'Outlook'
 }
 
-const MIN_CALL_MINUTES = 15
-
-/** Merge manual events, due tasks, past calls, and Google/Outlook events into
- *  one render-ready list. Google/Outlook events are read-only overlays UNLESS
+/** Merge manual events, due tasks, and Google/Outlook events into one
+ *  render-ready list. Google/Outlook events are read-only overlays UNLESS
  *  two-way sync is on for that provider, in which case editing/deleting one
- *  adopts it. */
+ *  adopts it. Past calls deliberately do NOT appear here (BUG-135, M31
+ *  Stage 2's calendar-design pass) — a calendar dominated by call history
+ *  rather than upcoming events read as cluttered at real call volume; that
+ *  history already lives in Past Calls and each contact/deal's own timeline. */
 export function buildItems(
   events: CalendarEvent[],
   tasks: Task[],
-  calls: CallSummary[],
   googleEvents: CalendarEvent[] = [],
   googleWritable = false,
   outlookEvents: CalendarEvent[] = [],
@@ -129,20 +122,6 @@ export function buildItems(
       allDay: true,
       done: t.status === 'done',
       subtitle: t.clientName
-    })
-  }
-
-  for (const c of calls) {
-    const start = new Date(c.createdAt)
-    const minutes = Math.max(Math.round(c.durationMs / 60000), MIN_CALL_MINUTES)
-    items.push({
-      key: `call-${c.id}`,
-      kind: 'call',
-      title: c.title,
-      start,
-      end: addMinutes(start, minutes),
-      allDay: false,
-      subtitle: `${c.speakerCount} speaker${c.speakerCount === 1 ? '' : 's'}`
     })
   }
 

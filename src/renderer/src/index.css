@@ -63,10 +63,8 @@
   --color-speaker-5: #fb7185; /* rose-400 */
   --color-speaker-6: #a78bfa; /* violet-400 */
 
-  /* Calendar track colors — distinguish local "call" events from synced
-     Outlook events on the calendar grid. */
-  --color-track-call: #38bdf8;
-  --color-track-call-soft: #38bdf81f;
+  /* Calendar track color — distinguishes synced Outlook events from local/
+     Google ones on the calendar grid. */
   --color-track-outlook: #4f8ff7;
   --color-track-outlook-soft: #4f8ff71f;
 
@@ -113,8 +111,6 @@
     --color-speaker-4: #0284c7; /* sky-600 */
     --color-speaker-5: #e11d48; /* rose-600 */
     --color-speaker-6: #7c3aed; /* violet-600 */
-    --color-track-call: #0b7fc4;
-    --color-track-call-soft: #0b7fc41f;
     --color-track-outlook: #2b6fd6;
     --color-track-outlook-soft: #2b6fd61f;
     /* Real (not just-a-border) elevation reads better on light surfaces. */

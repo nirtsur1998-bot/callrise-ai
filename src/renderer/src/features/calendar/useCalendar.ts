@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Task } from '@renderer/features/tasks/types'
-import type { CallSummary } from '@renderer/features/calls/types'
 import type { CalendarEvent } from './types'
 import { useToast } from '@renderer/features/notifications/useToast'
 
@@ -10,7 +9,6 @@ export type EventUpdateInput = Parameters<typeof window.api.events.update>[1]
 export interface UseCalendar {
   events: CalendarEvent[]
   tasks: Task[]
-  calls: CallSummary[]
   googleEvents: CalendarEvent[]
   /** True while a Google network pull is in flight. */
   googleSyncing: boolean
@@ -45,7 +43,6 @@ export interface UseCalendar {
 export function useCalendar(): UseCalendar {
   const [events, setEvents] = useState<CalendarEvent[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
-  const [calls, setCalls] = useState<CallSummary[]>([])
   const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([])
   const [googleSyncing, setGoogleSyncing] = useState(false)
   const [googleLastSynced, setGoogleLastSynced] = useState<number | null>(null)
@@ -65,24 +62,22 @@ export function useCalendar(): UseCalendar {
     }
   }, [])
 
-  // Events are editable; tasks and calls are read-only overlays. State is only
-  // set after the awaits, so this is safe to call from an effect.
+  // Events are editable; tasks are a read-only overlay. State is only set
+  // after the awaits, so this is safe to call from an effect.
   const refresh = useCallback(async () => {
     try {
       // Google/Outlook events come from the local cache here (instant, no
       // network) so they persist across local edits; refreshGoogle()/
       // refreshOutlook() re-pull from the network.
-      const [e, t, c, g, o] = await Promise.all([
+      const [e, t, g, o] = await Promise.all([
         window.api.events.list(),
         window.api.tasks.list(),
-        window.api.calls.list(),
         window.api.google.cachedEvents(),
         window.api.outlook.cachedEvents()
       ])
       if (!mountedRef.current) return
       setEvents(e)
       setTasks(t)
-      setCalls(c)
       setGoogleEvents(g)
       setOutlookEvents(o)
     } catch {
@@ -239,7 +234,6 @@ export function useCalendar(): UseCalendar {
   return {
     events,
     tasks,
-    calls,
     googleEvents,
     googleSyncing,
     googleLastSynced,

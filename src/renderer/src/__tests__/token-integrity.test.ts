@@ -122,7 +122,7 @@ describe('color-token integrity (BUG-130 guard)', () => {
 // everywhere") but never fully finished: NO component may reference
 // Tailwind's raw color palette directly, full stop — every color, whether
 // a semantic status (positive/warning/danger) or a non-semantic categorical
-// label (like the speaker palette, or track-call/track-outlook), goes
+// label (like the speaker palette, or the calendar's track-outlook), goes
 // through one of our own named --color-* tokens, each with its own real
 // dark AND light value. Verified before adding: a sweep of the entire
 // renderer for every standard Tailwind color family found violations in
@@ -175,7 +175,7 @@ describe('no raw Tailwind palette colors (theme-adaptivity guard)', () => {
     }
     expect(
       offenders,
-      `These classes reference Tailwind's raw color palette instead of one of our own theme-aware --color-* tokens. A raw shade is fixed and does not adapt to the '.light' class, so a shade tuned to read well in dark mode (e.g. text-emerald-200) can render nearly invisible against a light surface. Use an existing token (--color-positive/-warning/-danger/-accent/...) or add a new named categorical one (see --color-track-call/--color-track-outlook in index.css for the pattern — a dark AND a light value, both real) instead:\n${offenders.join('\n')}`
+      `These classes reference Tailwind's raw color palette instead of one of our own theme-aware --color-* tokens. A raw shade is fixed and does not adapt to the '.light' class, so a shade tuned to read well in dark mode (e.g. text-emerald-200) can render nearly invisible against a light surface. Use an existing token (--color-positive/-warning/-danger/-accent/...) or add a new named categorical one (see --color-track-outlook in index.css for the pattern — a dark AND a light value, both real) instead:\n${offenders.join('\n')}`
     ).toEqual([])
   })
 })

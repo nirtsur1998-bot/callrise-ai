@@ -39,11 +39,11 @@ export interface CalendarEvent {
 
 /** What can appear on the calendar. Google/Outlook events are read-only
  *  overlays unless two-way sync makes them editable. */
-export type CalendarItemKind = 'event' | 'task' | 'call' | 'google' | 'outlook'
+export type CalendarItemKind = 'event' | 'task' | 'google' | 'outlook'
 
 /**
  * A unified, render-ready item. Manual events are editable; tasks (on their
- * due date) and calls (when they happened) are read-only overlays.
+ * due date) and Google/Outlook events are read-only overlays.
  */
 export interface CalendarItem {
   key: string // unique across kinds (kind-prefixed)
