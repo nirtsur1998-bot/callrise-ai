@@ -67,10 +67,24 @@ export function MineTestPanel({ callId, enabled }: MineTestPanelProps): React.JS
       </p>
 
       {!enabled ? (
-        <p className="text-[13px] text-faint">
-          Turn on &quot;Learn objection responses from my calls&quot; in Settings → AI &amp;
-          coaching → Objection Library to try this.
-        </p>
+        // M31 Stage 3. What was here is the dead end this stage is about: a
+        // sentence telling you where to go, with nothing to click — and by
+        // now naming a path that no longer exists ("Settings -> AI & coaching
+        // -> Objection Library"; that group is called Coaching now). Copy
+        // that hardcodes a route rots the first time the route moves, and
+        // nothing fails when it does.
+        <EmptyState
+          compact
+          icon={MessageSquareQuote}
+          title="Objection mining is switched off"
+          reason={{
+            kind: 'off',
+            settingsPage: 'objection-library',
+            what: 'Reads your call transcripts for the moments a buyer pushed back and what you said next, then turns the answers that worked into reusable scripts you can edit and keep.',
+            cost: 'Makes an AI call per mined call. Off by default, and you approve every suggestion before it becomes a real script.',
+            actionLabel: 'Turn on objection mining'
+          }}
+        />
       ) : (
         <div className="flex flex-col items-start gap-3">
           {error && <p className="text-[13px] text-danger">{error}</p>}

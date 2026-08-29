@@ -30,6 +30,7 @@ import { IconButton } from '@renderer/components/IconButton'
 import { Button } from '@renderer/components/Button'
 import { BackButton } from '@renderer/components/BackButton'
 import { Card } from '@renderer/components/Card'
+import { EmptyState } from '@renderer/components/EmptyState'
 import { Skeleton } from '@renderer/components/Skeleton'
 import { fieldClass } from '@renderer/components/field'
 import { overallTier, TONE_TO_BADGE, speakerLabel } from '@renderer/features/coaching/meta'
@@ -1136,15 +1137,43 @@ export function CallDetail({
             for this call; there's no post-hoc "run it now" the way
             Commitments/Coaching have, since Tiers 1/2 only ever see the
             transcript as it happened live. */}
-        {call.dealIntelligence && (
-          <Card>
-            <div className="mb-4 flex items-center gap-2">
-              <Radar className="h-4 w-4 text-accent" />
-              <h3 className="text-sm font-semibold">Radar Report</h3>
-            </div>
+        <Card>
+          <div className="mb-4 flex items-center gap-2">
+            <Radar className="h-4 w-4 text-accent" />
+            <h3 className="text-sm font-semibold">Radar Report</h3>
+          </div>
+          {call.dealIntelligence ? (
             <RadarReport record={call.dealIntelligence} />
-          </Card>
-        )}
+          ) : settings.dealIntelligence.enabled ? (
+            // ON, but this call predates it (or nothing was caught). NOT an
+            // off-state: telling someone to switch on what is already on is
+            // the specific harm the tri-state exists to avoid.
+            <EmptyState
+              compact
+              icon={Radar}
+              title="Nothing was flagged on this call"
+              description="Deal risk signals are watched for live. This call either predates the feature or ran clean."
+            />
+          ) : (
+            // OFF. The wording has to carry a caveat most off-states do not:
+            // turning it on CANNOT populate this call. Tiers 1/2 only ever see
+            // the transcript as it happens, so there is no post-hoc "run it
+            // now" the way Coaching and Commitments have. An off-state that
+            // implied otherwise would be a promise the button cannot keep.
+            <EmptyState
+              compact
+              icon={Radar}
+              title="Deal risk watching is switched off"
+              reason={{
+                kind: 'off',
+                settingsPage: 'live-deal-intelligence',
+                what: 'Listens during a live call for signs the deal is slipping — a decision-maker who never appears, a budget question that gets dodged, a timeline that keeps moving — and flags each one as it happens.',
+                cost: 'Beta. Makes extra AI calls while a call is running, so it costs provider usage. Applies from your NEXT call onwards — it cannot go back over this one.',
+                actionLabel: 'Turn on deal risk watching'
+              }}
+            />
+          )}
+        </Card>
 
         <MineTestPanel callId={callId} enabled={settings.objectionMining.enabled} />
 
