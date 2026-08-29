@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   format,
   startOfWeek,
+  startOfMonth,
   addDays,
   addMonths,
   subMonths,
@@ -19,6 +20,7 @@ import { GoogleConnect } from '@renderer/features/google/GoogleConnect'
 import { OutlookConnect } from '@renderer/features/outlook/OutlookConnect'
 import { CalendarConnectBar } from './CalendarConnectBar'
 import { QuickEventDialog } from './QuickEventDialog'
+import { AgendaRail } from './AgendaRail'
 import { buildChipContext } from './chipContext'
 import { usePrepBriefStatuses } from './usePrepBriefStatuses'
 import { useContacts } from '@renderer/features/contacts/useContacts'
@@ -163,6 +165,19 @@ export function CalendarView({
       return context ? { ...item, context } : item
     })
   }, [baseItems, calendarPreview, contacts, deals, stages, briefStatuses])
+
+  // The range the grid is actually showing. Derived from the SAME rules each
+  // grid uses to lay itself out (month = the fixed 6-week window starting on
+  // the week containing the 1st; week = the containing Sun–Sat), so the
+  // agenda rail can never list a different span than the grid draws.
+  const visibleRange = useMemo(() => {
+    if (view === 'week') {
+      const start = startOfWeek(cursor, { weekStartsOn: 0 })
+      return { start, end: addDays(start, 6) }
+    }
+    const gridStart = startOfWeek(startOfMonth(cursor), { weekStartsOn: 0 })
+    return { start: gridStart, end: addDays(gridStart, 41) }
+  }, [cursor, view])
 
   const goPrev = (): void => setCursor((c) => (view === 'month' ? subMonths(c, 1) : subWeeks(c, 1)))
   const goNext = (): void => setCursor((c) => (view === 'month' ? addMonths(c, 1) : addWeeks(c, 1)))
@@ -309,29 +324,52 @@ export function CalendarView({
         </p>
       )}
 
-      {/* Body */}
-      <div className="min-h-0 flex-1">
-        {loading ? (
-          <div className="grid h-full grid-cols-7 gap-1.5">
-            {Array.from({ length: 35 }).map((_, i) => (
-              <Skeleton key={i} className="rounded-lg" />
-            ))}
+      {/* Body. Preview adds the agenda rail beside the grid — the grid keeps
+          its own width and behaviour, so this is additive rather than a
+          re-layout (research §2.1: the list exists so the grid is ALLOWED to
+          truncate without hiding anything). Hidden below xl, where taking
+          256px from the grid would cost more than the list gives back. */}
+      <div className="flex min-h-0 flex-1 gap-4">
+        <div className="min-h-0 min-w-0 flex-1">
+          {loading ? (
+            <div className="grid h-full grid-cols-7 gap-1.5">
+              {Array.from({ length: 35 }).map((_, i) => (
+                <Skeleton key={i} className="rounded-lg" />
+              ))}
+            </div>
+          ) : view === 'month' ? (
+            <MonthGrid
+              cursor={cursor}
+              items={items}
+              onNewEvent={(day) => openNew(day)}
+              onEditEvent={openEdit}
+              onZoomDay={zoomDay}
+            />
+          ) : (
+            <WeekGrid
+              cursor={cursor}
+              items={items}
+              onNewEvent={(start) => openNew(start, getHours(start))}
+              onEditEvent={openEdit}
+            />
+          )}
+        </div>
+        {calendarPreview && !loading && (
+          // Threshold picked from the real machine, not from the breakpoint
+          // scale: this display is 1600 physical px at 125% Windows scaling,
+          // i.e. ~1280 CSS px — exactly Tailwind's `xl` minimum, so `xl:flex`
+          // sat on the boundary and lost (a scrollbar is enough to tip it),
+          // and the rail never appeared. 1200px clears that edge case while
+          // still hiding the rail on displays where surrendering 256px would
+          // squeeze the seven-column grid harder than the list is worth.
+          <div className="hidden min-[1200px]:flex">
+            <AgendaRail
+              items={items}
+              rangeStart={visibleRange.start}
+              rangeEnd={visibleRange.end}
+              onEditEvent={openEdit}
+            />
           </div>
-        ) : view === 'month' ? (
-          <MonthGrid
-            cursor={cursor}
-            items={items}
-            onNewEvent={(day) => openNew(day)}
-            onEditEvent={openEdit}
-            onZoomDay={zoomDay}
-          />
-        ) : (
-          <WeekGrid
-            cursor={cursor}
-            items={items}
-            onNewEvent={(start) => openNew(start, getHours(start))}
-            onEditEvent={openEdit}
-          />
         )}
       </div>
 
