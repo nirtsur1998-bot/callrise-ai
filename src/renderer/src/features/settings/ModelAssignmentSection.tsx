@@ -46,7 +46,7 @@ const JOBS: JobConfig[] = [
     purpose: 'prep-brief',
     title: 'Pre-meeting prep brief',
     blurb:
-      'Benefits from long context — feed it a whole call history. (M19’s prep brief feature itself isn’t built yet; assigning a model here just gets it ready.)'
+      'Benefits from long context — feed it a whole call history.'
   },
   {
     purpose: 'deal-tier1',

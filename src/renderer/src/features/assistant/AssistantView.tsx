@@ -1041,7 +1041,7 @@ export function AssistantView({
     (id: string): void => {
       setConfirm({
         title: 'Delete conversation?',
-        body: `This cannot be undone. Anything ${ASSISTANT_SECTION_NAME} learned from it stays in the Sales Brain — you can manage that in Settings → Memory Center.`,
+        body: `This cannot be undone. Anything ${ASSISTANT_SECTION_NAME} learned from it stays in the Sales Brain — you can manage that in Settings → Sales Brain — Memories.`,
         confirmLabel: 'Delete',
         onConfirm: () => {
           void (async () => {

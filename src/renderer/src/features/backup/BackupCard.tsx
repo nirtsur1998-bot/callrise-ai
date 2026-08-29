@@ -296,7 +296,7 @@ export function BackupCard(): React.JSX.Element {
         Backups happen automatically in the background and restore on a new device when you sign in.{' '}
         {syncScope.transcripts
           ? 'Call recordings and transcripts sync too, since you turned that on above.'
-          : 'Your call recordings and transcripts never leave this Mac unless you turn that on above.'}{' '}
+          : 'Your call recordings and transcripts never leave this computer unless you turn that on above.'}{' '}
         Your Google Calendar connection is never synced — reconnect it in one click on a new device
         instead.
       </p>

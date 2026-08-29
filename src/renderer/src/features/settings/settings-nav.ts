@@ -99,7 +99,7 @@ const ALL_GROUPS: SettingsGroup[] = [
         label: 'Model Assignment',
         icon: Layers,
         description:
-          'Which model handles each job — live coaching cues, post-call summaries, scorecards, task extraction, and prep briefs — with an automatic fallback chain if one is unavailable.'
+          'Which model handles each of the 10 AI jobs — live coaching cues, post-call summaries, scorecards, task extraction, prep briefs, deal intelligence, coaching chat, Sales Brain extraction, and Rise — with an automatic fallback chain if one is unavailable.'
       }
     ]
   },
