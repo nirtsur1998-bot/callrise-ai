@@ -211,7 +211,7 @@ export function TelemetrySection(): React.JSX.Element {
               : `${queued.length} event${queued.length === 1 ? '' : 's'} waiting. These are the exact payloads that will leave this computer on the next send.`
           }
           control={
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Button
                 variant="secondary"
                 size="sm"
@@ -261,7 +261,7 @@ export function TelemetrySection(): React.JSX.Element {
               : `The last ${sent.length} event${sent.length === 1 ? '' : 's'} that left this computer, exactly as they were sent — including the install ID and session ID that went with them.`
           }
           control={
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Button
                 variant="secondary"
                 size="sm"
