@@ -101,6 +101,12 @@ const PAGE_CONTENT_PREVIEW: Partial<Record<SettingsPageId, React.ComponentType>>
 }
 
 interface SettingsShellProps {
+  /** M31 Stage 3 — open directly on this page instead of Account.
+   *  A ONE-SHOT preselect, matching MainApp's openCallId pattern: it seeds
+   *  the initial state and is never read again, so navigating away inside
+   *  Settings works normally and re-entering from the sidebar lands on
+   *  Account as before. */
+  initialPage?: SettingsPageId
   user: AuthUser
   /** Return to the main app (whichever screen was active before Settings). */
   onBack: () => void
@@ -110,9 +116,13 @@ interface SettingsShellProps {
  *  app shell entirely (no main sidebar, no copilot) while active, matching
  *  the Krisp-style "settings window" pattern: its own left nav grouped by
  *  category, one page per setting, and a Back arrow to return to the app. */
-export function SettingsShell({ user, onBack }: SettingsShellProps): React.JSX.Element {
+export function SettingsShell({
+  user,
+  onBack,
+  initialPage
+}: SettingsShellProps): React.JSX.Element {
   const { enabled: previewIA } = useSettingsPreview()
-  const [rawPage, setPage] = useState<SettingsPageId>('account')
+  const [rawPage, setPage] = useState<SettingsPageId>(initialPage ?? 'account')
 
   // Recomputed rather than module-constant, because the preview can be toggled
   // while Settings is open — the toggle lives on the Appearance page, which is

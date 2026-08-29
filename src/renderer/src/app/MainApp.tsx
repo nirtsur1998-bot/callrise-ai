@@ -31,6 +31,8 @@ import {
   type AssistantScopeRequest
 } from '@renderer/features/assistant/assistantNav'
 import { setJobNavListener } from '@renderer/features/jobs/jobNav'
+import { setSettingsNavListener } from '@renderer/features/settings/settingsNav'
+import type { SettingsPageId } from '@renderer/features/settings/settings-nav'
 
 // Exactly one of these renders at a time (see the `active === ...` switch
 // below, itself remounted via `key={active}` on every switch) — so eagerly
@@ -423,6 +425,23 @@ export function MainApp({
     return () => setJobNavListener(null)
   }, [])
 
+  // M31 Stage 3 — "in Settings → X" now lands on X. Every off-state's
+  // "turn it on" button routes through here, which is why the deep link had
+  // to exist before the off-states did: a button that opens Settings on
+  // Account is a dead end that costs a click to discover.
+  //
+  // One-shot: consumed by SettingsShell's initial state and cleared when
+  // Settings closes, so re-opening Settings from the sidebar still lands on
+  // Account rather than wherever a button last sent you.
+  const [settingsPage, setSettingsPage] = useState<SettingsPageId | null>(null)
+  useEffect(() => {
+    setSettingsNavListener((page) => {
+      setSettingsPage(page)
+      navigateTo('settings')
+    })
+    return () => setSettingsNavListener(null)
+  }, [])
+
   const signOut = (): void => {
     void window.api.auth.signOut() // the gate swaps back to the login screen via the broadcast
   }
@@ -487,7 +506,14 @@ export function MainApp({
     return (
       <>
         <Suspense fallback={null}>
-          <SettingsShell user={user} onBack={() => setActive(lastNonSettingsRef.current)} />
+          <SettingsShell
+            user={user}
+            initialPage={settingsPage ?? undefined}
+            onBack={() => {
+              setSettingsPage(null)
+              setActive(lastNonSettingsRef.current)
+            }}
+          />
         </Suspense>
         {palette}
       </>
