@@ -234,7 +234,8 @@ const api = {
     onDelta: (cb: (payload: unknown) => void) => subscribe('assistant:delta', cb),
     onError: (cb: (payload: unknown) => void) => subscribe('assistant:error', cb),
     onTurnComplete: (cb: (payload: unknown) => void) => subscribe('assistant:turnComplete', cb),
-    onPhase: (cb: (payload: unknown) => void) => subscribe('assistant:phase', cb)
+    onPhase: (cb: (payload: unknown) => void) => subscribe('assistant:phase', cb),
+    onTrace: (cb: (payload: unknown) => void) => subscribe('assistant:trace', cb)
   },
   crmNoteGenerator: {
     generate: (contactId: string, length: string, opts?: { force?: boolean }) =>

@@ -35,6 +35,8 @@ import { IconButton } from '@renderer/components/IconButton'
 import { Modal } from '@renderer/components/Modal'
 import { Skeleton, SkeletonRows } from '@renderer/components/Skeleton'
 import { cn } from '@renderer/lib/cn'
+import { TraceDisclosure } from './TraceDisclosure'
+import type { AssistantTraceStep } from '../../../../preload/index.d'
 import { fieldClass } from '@renderer/components/field'
 import { ASSISTANT_SECTION_NAME } from './config'
 import {
@@ -467,12 +469,17 @@ function VoiceNoteChip({
 function MessageRow({
   message,
   phase,
+  trace,
   onCite,
   onApplySuggestion,
   onConfirmTask
 }: {
   message: DisplayMessage
   phase: 'reading' | 'searching' | 'thinking' | null
+  /** The stream-of-thought for THIS message, when this session watched the
+   *  turn that produced it. Undefined for reloaded history — main does not
+   *  persist traces, and inventing one would defeat the point. */
+  trace?: AssistantTraceStep[]
   onCite: (c: AssistantCitation) => void
   onApplySuggestion: (messageId: string, s: AssistantSuggestion) => void
   onConfirmTask: (messageId: string, proposalId: string) => void
@@ -553,6 +560,9 @@ function MessageRow({
             )}
           </>
         )}
+        {/* Under the answer, not above it: the answer is what was asked
+            for, and the working belongs beneath it. */}
+        {trace && trace.length > 0 && <TraceDisclosure steps={trace} />}
         {message.taskProposals && message.taskProposals.length > 0 && (
           <div className="mt-2.5 space-y-2">
             {message.taskProposals.map((p) => (
@@ -1337,6 +1347,7 @@ export function AssistantView({
                   key={m.id}
                   message={m}
                   phase={chat.phase}
+                  trace={chat.traces[m.id]}
                   onCite={setCitation}
                   onApplySuggestion={(messageId, s) => void chat.applySuggestion(messageId, s)}
                   onConfirmTask={(messageId, proposalId) =>

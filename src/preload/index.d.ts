@@ -735,6 +735,29 @@ export interface AssistantApi {
   onPhase: (
     cb: (payload: { conversationId: string; phase: 'reading' | 'searching' | 'thinking' }) => void
   ) => () => void
+  /** M31 Stage 5 — what the turn ACTUALLY did, emitted once after research
+   *  completes and before the answer request goes out. Built from executed
+   *  outcomes, never from the plan: a lookup that failed or matched nothing
+   *  appears saying so, because silence about it is what makes a trace
+   *  describe intent rather than work. */
+  onTrace: (cb: (payload: AssistantTrace) => void) => () => void
+}
+
+/** One line of the stream-of-thought. `label` is written in main, which is
+ *  what knows the domain; the renderer decides presentation and is never
+ *  asked to infer what happened from a status code. */
+export interface AssistantTraceStep {
+  label: string
+  detail?: string
+  /** ok = it produced something · none = ran, found nothing · failed = threw
+   *  · skipped = never ran (a capability that is switched off). All four are
+   *  worth showing; collapsing them is how a trace starts lying by omission. */
+  status: 'ok' | 'none' | 'failed' | 'skipped'
+}
+
+export interface AssistantTrace {
+  conversationId: string
+  steps: AssistantTraceStep[]
 }
 
 export interface SkillHistoryPoint {

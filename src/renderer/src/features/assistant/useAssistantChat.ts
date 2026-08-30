@@ -7,6 +7,7 @@
 // recovered case, where the original invoke() promise died with the old
 // component instance.
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { AssistantTraceStep } from '../../../../preload/index.d'
 
 // House convention (see ModelAssignmentSection.tsx): renderer types derive
 // from the preload bridge itself, so they can never drift from what IPC
@@ -50,6 +51,9 @@ export interface UseAssistantChat {
   /** Pre-first-token activity ('reading' | 'searching' | 'thinking'), null
    *  once tokens flow or the turn settles. */
   phase: 'reading' | 'searching' | 'thinking' | null
+  /** Stream-of-thought per assistant message id. Absent for turns this
+   *  session did not watch — main does not persist traces. */
+  traces: Record<string, AssistantTraceStep[]>
   send: (
     text: string,
     voiceNote?: { mediaId: string; durationMs: number },
@@ -84,6 +88,12 @@ export function useAssistantChat(
   const [phase, setPhase] = useState<'reading' | 'searching' | 'thinking' | null>(null)
   const [scope, setScope] = useState<AssistantScope | null>(null)
   const streamingIdRef = useRef<string | null>(null)
+  // M31 Stage 5 — the stream-of-thought, keyed by the message it explains.
+  // Kept here rather than on the message itself because the trace is a
+  // RENDERER-side record of one live turn: main does not persist it, so a
+  // reloaded conversation legitimately has none, and pretending otherwise
+  // would mean inventing a trace for a turn nobody watched.
+  const [traces, setTraces] = useState<Record<string, AssistantTraceStep[]>>({})
   // Read through refs inside the load effect so a new options object per
   // render never re-runs it; the consumed set makes the initial send
   // exactly-once per conversation even across remounts.
@@ -173,6 +183,18 @@ export function useAssistantChat(
       if (p.conversationId !== conversationId) return
       setPhase(p.phase)
     })
+    // Optional-chained on purpose, and it is the same rule as the try/catch
+    // wrapping the emit side in main: instrumentation is never allowed to
+    // change the outcome it observes. A preload without this channel — an
+    // older build, a partial test fixture — must yield NO TRACE, not a
+    // conversation that fails to mount.
+    const offTrace =
+      window.api.assistant.onTrace?.((p) => {
+        if (p.conversationId !== conversationId) return
+        const id = streamingIdRef.current
+        if (!id) return
+        setTraces((prev) => ({ ...prev, [id]: p.steps }))
+      }) ?? (() => {})
     const offError = window.api.assistant.onError((p) => {
       if (p.conversationId !== conversationId) return
       setError(p.message)
@@ -188,6 +210,7 @@ export function useAssistantChat(
       offError()
       offComplete()
       offPhase()
+      offTrace()
     }
   }, [conversationId, refetch])
 
@@ -327,6 +350,7 @@ export function useAssistantChat(
     learningExcluded,
     setLearningExcluded,
     phase,
+    traces,
     scope,
     send,
     stop,

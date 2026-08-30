@@ -37,6 +37,18 @@ export type LookupKind =
   | 'today_schedule'
   | 'propose_task'
 
+/** How each lookup kind is described to the person reading the trace.
+ *  Lives here, next to the kinds themselves, because naming what a lookup
+ *  DOES is domain knowledge — the renderer should never be inferring
+ *  "searched your calls" from the string "search_calls". */
+export const LOOKUP_LABEL: Record<LookupKind, string> = {
+  search_calls: 'Searched your calls',
+  find_contact: 'Looked up a contact',
+  find_deal: 'Looked up a deal',
+  today_schedule: 'Checked today’s schedule',
+  propose_task: 'Drafted a task'
+}
+
 export interface PlannedLookup {
   kind: LookupKind
   query: string
@@ -47,6 +59,28 @@ export interface LookupSection {
    *  a `cite` get a continued [n] marker assigned by context assembly. */
   title: string
   lines: { text: string; cite?: AssistantCitation }[]
+  /**
+   * How many REAL results this lookup found. Set by the function that did
+   * the work, because nothing downstream can reconstruct it.
+   *
+   * `lines.length` is not this number and using it was a live bug, caught
+   * by the first test written against the M31 trace: every lookup here
+   * substitutes a single placeholder line when it matches nothing ("No
+   * matching calls found."), so a search that found zero results reported
+   * "1 result" in the stream-of-thought — the precise lie that feature
+   * exists to prevent, inside the feature itself.
+   *
+   * A `cite` is not a discriminator either: deal and schedule lines carry
+   * none even when they are real matches.
+   *
+   * OPTIONAL, and its absence fails CLOSED. Sections that are not lookup
+   * results at all (the client brief, the unbound-client notice) never flow
+   * through executeLookups step recording and have nothing to count. A
+   * lookup that forgets to set it reports 0 -> status 'none' -> "found
+   * nothing", which under-claims rather than inventing a result. Wrong in
+   * the safe direction is the only acceptable kind here.
+   */
+  matched?: number
 }
 
 export interface TaskProposal {
@@ -56,9 +90,39 @@ export interface TaskProposal {
   priority: 'low' | 'medium' | 'high'
 }
 
+/** What a planned lookup ACTUALLY did. 'none' and 'failed' are distinct on
+ *  purpose: "I looked and there was nothing" and "I tried and it broke" are
+ *  different facts about an answer, and collapsing them is how a trace
+ *  starts describing intent instead of events. */
+export type LookupStatus = 'found' | 'none' | 'failed'
+
+export interface LookupStep {
+  kind: LookupKind
+  query: string
+  status: LookupStatus
+  /** Result lines the lookup produced. count 0 with status found cannot
+   *  happen — the status is derived from the count. */
+  count: number
+}
+
 export interface LookupOutcome {
   sections: LookupSection[]
   taskProposals: TaskProposal[]
+  /**
+   * M31 Stage 5 — one entry per PLANNED lookup, in order, recording what
+   * happened to it.
+   *
+   * Before this, a lookup that threw was swallowed by the catch below with
+   * the comment "the answer just goes without that section" — correct for
+   * resilience, and invisible to the reader, who then got an answer quietly
+   * missing a source. Same for a lookup that ran fine and matched nothing:
+   * it pushed an empty section and left no trace at all.
+   *
+   * This is what the stream-of-thought is built from. It is produced AFTER
+   * execution and never from the plan, because what a turn intended to do
+   * is not what it did.
+   */
+  steps: LookupStep[]
 }
 
 const MAX_LOOKUPS = 3
@@ -230,6 +294,7 @@ async function searchCalls(
   }
   return {
     title: `PAST CALLS MATCHING "${query}"`,
+    matched: lines.length,
     lines: lines.length > 0 ? lines : [{ text: 'No matching calls found.' }]
   }
 }
@@ -315,6 +380,7 @@ async function findContact(
   }
   return {
     title: `CONTACT RECORDS MATCHING "${query}"`,
+    matched: lines.length,
     lines: lines.length > 0 ? lines : [{ text: 'No matching contacts found.' }]
   }
 }
@@ -348,6 +414,7 @@ async function findDeal(
   })
   return {
     title: `DEALS MATCHING "${query}"`,
+    matched: lines.length,
     lines: lines.length > 0 ? lines : [{ text: 'No matching deals found.' }]
   }
 }
@@ -427,6 +494,7 @@ async function todaySchedule(eventsDir: string, scopeContactId?: string): Promis
   if (scoped) {
     return {
       title: 'TODAY’S SCHEDULE (this client only)',
+      matched: items.length,
       lines: [
         ...(items.length > 0
           ? items.map((i) => ({ text: `${timeOf(i.start, i.allDay)} — ${i.title}` }))
@@ -442,6 +510,7 @@ async function todaySchedule(eventsDir: string, scopeContactId?: string): Promis
   }
   return {
     title: 'TODAY’S SCHEDULE',
+    matched: items.length,
     lines:
       items.length > 0
         ? items.map((i) => ({ text: `${timeOf(i.start, i.allDay)} — ${i.title}` }))
@@ -529,27 +598,46 @@ export async function executeLookups(
 ): Promise<LookupOutcome> {
   const sections: LookupSection[] = []
   const taskProposals: TaskProposal[] = []
+  const steps: LookupStep[] = []
   for (const lookup of lookups) {
+    // Recorded per lookup, from what came BACK. An empty section and a
+    // thrown lookup used to be indistinguishable from outside this loop —
+    // both simply produced no section — and that silence is what the trace
+    // exists to remove.
+    let status: LookupStatus = 'none'
+    let count = 0
     try {
+      let section: LookupSection | null = null
       if (lookup.kind === 'search_calls' && lookup.query) {
-        sections.push(await searchCalls(dirs.callsDir, lookup.query, scopeContactId))
+        section = await searchCalls(dirs.callsDir, lookup.query, scopeContactId)
       } else if (lookup.kind === 'find_contact' && lookup.query) {
-        sections.push(
-          await findContact(dirs.contactsDir, dirs.dealsDir, lookup.query, scopeContactId)
-        )
+        section = await findContact(dirs.contactsDir, dirs.dealsDir, lookup.query, scopeContactId)
       } else if (lookup.kind === 'find_deal' && lookup.query) {
-        sections.push(await findDeal(dirs.dealsDir, dirs.contactsDir, lookup.query, scopeContactId))
+        section = await findDeal(dirs.dealsDir, dirs.contactsDir, lookup.query, scopeContactId)
       } else if (lookup.kind === 'today_schedule') {
         // AUDIT FIX (2026-08-24) — the one branch that dropped the scope.
-        sections.push(await todaySchedule(dirs.eventsDir, scopeContactId))
+        section = await todaySchedule(dirs.eventsDir, scopeContactId)
       } else if (lookup.kind === 'propose_task' && lookup.query) {
         const proposal = await proposeTask(lookup.query, signal)
-        if (proposal) taskProposals.push(proposal)
+        if (proposal) {
+          taskProposals.push(proposal)
+          count = 1
+        }
       }
+      if (section) {
+        sections.push(section)
+        // section.matched, NOT lines.length — see LookupSection.matched.
+        count = section.matched ?? 0
+      }
+      status = count > 0 ? 'found' : 'none'
     } catch {
       // One failed lookup never sinks the turn — the answer just goes
-      // without that section.
+      // without that section. It no longer goes without a RECORD of that:
+      // a missing source the reader cannot see is indistinguishable from
+      // a source that never existed.
+      status = 'failed'
     }
+    steps.push({ kind: lookup.kind, query: lookup.query, status, count })
   }
-  return { sections, taskProposals }
+  return { sections, taskProposals, steps }
 }
