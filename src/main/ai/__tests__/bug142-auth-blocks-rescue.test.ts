@@ -102,9 +102,18 @@ const { resetPacingForTests } = await import('../model-pacing')
 // returned `{}` and produced a TypeError that looked nothing like the bug.
 // Same list the other chain tests use.
 const PURPOSES = [
-  'coaching-cue', 'summary', 'scorecard', 'tasks', 'other', 'prep-brief',
-  'deal-tier1', 'deal-tier2', 'coaching-chat', 'memory-extract',
-  'memory-consolidate', 'memory-reflect'
+  'coaching-cue',
+  'summary',
+  'scorecard',
+  'tasks',
+  'other',
+  'prep-brief',
+  'deal-tier1',
+  'deal-tier2',
+  'coaching-chat',
+  'memory-extract',
+  'memory-consolidate',
+  'memory-reflect'
 ]
 
 /** No explicit model assignment for any purpose — the founder's actual state,
@@ -153,6 +162,14 @@ describe('BUG-142 — a bad key must not be able to block the rescue', () => {
     // A fix that only works on the second attempt would still be broken.
     for (let i = 0; i < 3; i++) {
       attempts.length = 0
+      // Stands in for the PASSAGE OF TIME between two summaries, and it is
+      // load-bearing rather than hygiene — see the pacing test below, which
+      // pins what happens without it. The field's fifteen failures were ~11s
+      // apart; model-pacing's gap is ≤6s, so real summaries clear it. Three
+      // walks in the same millisecond do not, and resetting pacing here is
+      // the honest way to say "these are minutes apart" without faking the
+      // clock out from under the ceiling timer.
+      resetPacingForTests()
       const res = await completeWithFallback({ purpose: 'summary', messages: [] } as never)
       expect((res as { text: string }).text, `walk ${i + 1} did not reach a working key`).toBe(
         'rescued'
@@ -180,17 +197,35 @@ describe('BUG-142 — a bad key must not be able to block the rescue', () => {
     // identical failure fifteen times instead of once.
     behavior.badKeyFails = 'rate-limit'
 
-    // Walk 1: no rescue, for the same pre-walk-gate reason as the auth case.
-    await expect(
-      completeWithFallback({ purpose: 'summary', messages: [] } as never)
-    ).rejects.toThrow()
-
-    // Walk 2: the rate limit PERSISTED a cooldown, so the chain is now empty
-    // pre-walk and the rescue fires. This is the behaviour the auth case can
-    // never reach, and it is what makes a bad key worse than a rate limit.
-    attempts.length = 0
+    // AFTER THE FIX both reason classes are rescued on walk 1, which is the
+    // point: the defect was never about `auth`, it was about WHEN the rescue
+    // was allowed to fire. Before the fix this walk threw, and the difference
+    // between the two classes only showed up on walk 2.
     const res = await completeWithFallback({ purpose: 'summary', messages: [] } as never)
     expect((res as { text: string }).text).toBe('rescued')
     expect(attempts).toContain('huggingface')
+  })
+
+  it('the rescue still respects PACING — a candidate used moments ago is not re-spent', async () => {
+    // THE BOUNDARY OF THIS FIX, pinned so it is a known property rather than a
+    // surprise. The rescue candidate goes through the same `isUsableFor` gate
+    // as every other step, and that gate excludes a model paced by a recent
+    // success. So two walks in the SAME pacing window (≤6s) do not both get
+    // rescued — the second fails as before.
+    //
+    // Deliberately NOT "fixed" here. Making the rescue ignore pacing would
+    // change model-pacing's semantics, which is a behaviour change wearing a
+    // bug fix's clothes; BUG-125e's paced-tail machinery is where that belongs
+    // if it is ever wanted. The field case is unaffected: its failures were
+    // ~11s apart, comfortably past the gap.
+    const first = await completeWithFallback({ purpose: 'summary', messages: [] } as never)
+    expect((first as { text: string }).text).toBe('rescued')
+
+    // Immediately again, inside the pacing window, with no reset.
+    attempts.length = 0
+    await expect(
+      completeWithFallback({ purpose: 'summary', messages: [] } as never)
+    ).rejects.toThrow()
+    expect(attempts, 'the paced provider must not be re-spent').not.toContain('huggingface')
   })
 })

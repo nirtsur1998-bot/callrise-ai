@@ -123,7 +123,16 @@ describe('streamWithFallback gets the same auth short-circuit completeWithFallba
     await drain(stream)
     await expect(stream.final).rejects.toBeInstanceOf(AllModelsExhaustedError)
 
-    expect(built).toEqual(['groq'])
+    // CORRECTED, NOT RELAXED (2026-08-30, BUG-142). This asserted the whole
+    // attempt list, but the guarantee in its own title is about ONE PROVIDER:
+    // "not one per model on that provider". The chain is two groq models, so
+    // the claim is that groq is attempted exactly ONCE — asserted directly
+    // now, and red-checked: breaking the auth short-circuit still fails it.
+    // BUG-142's end-of-walk rescue legitimately appends one OTHER keyed
+    // provider once the chain is exhausted, which broke the stricter form
+    // without touching the guarantee. Matches the property style already used
+    // by 'auth on one provider does not stop a DIFFERENT provider' below.
+    expect(built.filter((b) => b === 'groq')).toHaveLength(1)
   })
 
   it('a rate limit does NOT short-circuit on its own — a different model on the same key still gets tried', async () => {
@@ -136,7 +145,12 @@ describe('streamWithFallback gets the same auth short-circuit completeWithFallba
     await drain(stream)
     await expect(stream.final).rejects.toBeInstanceOf(AllModelsExhaustedError)
 
-    expect(built).toEqual(['groq', 'groq'])
+    // CORRECTED, NOT RELAXED (2026-08-30, BUG-142). Title's claim: a rate
+    // limit does NOT short-circuit the provider, so the SECOND groq model is
+    // still tried. That is "groq attempted twice", not "the attempt list is
+    // exactly these two" — and asserting twice still fails if the rate-limit
+    // path ever starts short-circuiting the way auth does.
+    expect(built.filter((b) => b === 'groq')).toHaveLength(2)
   })
 
   it('auth on one provider does not stop a DIFFERENT provider from being tried', async () => {
@@ -176,7 +190,15 @@ describe('same-provider-twice-in-one-walk rate-limit heuristic (BUG-058 Phase 2)
     // Two groq attempts establish the pattern; the third groq entry is
     // skipped as an already-doomed request; google — a genuinely different
     // provider — still gets its turn.
-    expect(built).toEqual(['groq', 'groq', 'google'])
+    //
+    // CORRECTED, NOT RELAXED (2026-08-30, BUG-142). Both halves of that claim
+    // are asserted directly instead of via the full list: groq exactly twice
+    // (the third is skipped) and google reached after them. BUG-142's rescue
+    // appends one further provider at the end, which the exact-array form
+    // could not tolerate even though neither half of the guarantee moved.
+    expect(built.filter((b) => b === 'groq')).toHaveLength(2)
+    expect(built).toContain('google')
+    expect(built.indexOf('google')).toBeGreaterThan(built.lastIndexOf('groq'))
   })
 
   it('streamWithFallback: identical behavior, ported', async () => {
@@ -194,7 +216,16 @@ describe('same-provider-twice-in-one-walk rate-limit heuristic (BUG-058 Phase 2)
     await drain(stream)
     await expect(stream.final).rejects.toBeInstanceOf(AllModelsExhaustedError)
 
-    expect(built).toEqual(['groq', 'groq', 'google'])
+    // CORRECTED, NOT RELAXED (2026-08-30, BUG-142) — same correction as its
+    // completeWithFallback twin above, and this pair is worth keeping aligned:
+    // the stream version briefly failed by TWO extra entries where the twin
+    // failed by one, which is what exposed a real defect in BUG-142's stream
+    // path (pass 1 re-walking the whole chain, since that loop keeps no
+    // `attempted` set). The asymmetry between two tests named as identical was
+    // the entire signal.
+    expect(built.filter((b) => b === 'groq')).toHaveLength(2)
+    expect(built).toContain('google')
+    expect(built.indexOf('google')).toBeGreaterThan(built.lastIndexOf('groq'))
   })
 
   it('two rate-limits on DIFFERENT providers never trips the heuristic — it is same-provider only', async () => {
@@ -210,6 +241,14 @@ describe('same-provider-twice-in-one-walk rate-limit heuristic (BUG-058 Phase 2)
     // All three attempted: the groq count only reaches 1 before google's own
     // attempt, and reaches 2 only on the third (and last) entry — too late
     // to skip anything, exactly as expected since there's nothing left to skip.
-    expect(built).toEqual(['groq', 'google', 'groq'])
+    //
+    // CORRECTED, NOT RELAXED (2026-08-30, BUG-142). The claim is that the
+    // heuristic is SAME-PROVIDER ONLY, so all three configured entries are
+    // attempted and interleaving never trips it. Asserted as the counts plus
+    // the interleaved order of the first three, which is the claim; the
+    // trailing rescue entry BUG-142 adds is not part of it.
+    expect(built.filter((b) => b === 'groq')).toHaveLength(2)
+    expect(built.filter((b) => b === 'google')).toHaveLength(1)
+    expect(built.slice(0, 3)).toEqual(['groq', 'google', 'groq'])
   })
 })

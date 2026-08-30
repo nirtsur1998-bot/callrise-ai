@@ -741,7 +741,26 @@ describe('tiered cooldown, through the real chain walk — the headline scenario
     // spend zero requests, same as any other cooling model — the exact
     // starvation bug.
     await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
-    expect(built).toEqual(['groq']) // bypassed — the ONE shared entry was actually attempted
+    // CORRECTED, NOT RELAXED (2026-08-30, BUG-142) — and the FIRST attempt at
+    // this correction WAS a relaxation, caught by red-checking it.
+    //
+    // The claim is the BYPASS: a durable purpose spends a request on a model a
+    // LIVE purpose cooled, instead of being starved. The old form asserted the
+    // whole list (`['groq']`), which also forbade anything else ever being
+    // tried — never this test's subject, and BUG-142's end-of-walk rescue now
+    // appends one other keyed provider once the bypassed attempt fails.
+    //
+    // The relaxation, recorded because it is the instructive part: the first
+    // correction asserted `expect(built).toContain('groq')`. That still PASSED
+    // with the bypass deliberately broken, because groq is reached anyway —
+    // last, via the rescue — giving `['openrouter', 'google', 'groq']`. "groq
+    // was attempted" is true in both worlds, so it discriminated nothing. What
+    // separates a bypass from a rescue is not WHETHER the cooled model is
+    // tried but WHEN: the bypass tries it FIRST, as the configured entry.
+    // Hence `built[0]`, verified red on the broken bypass and green on the
+    // restored one.
+    expect(built[0]).toBe('groq') // bypassed — the ONE shared entry was attempted FIRST
+    expect(built.filter((b) => b === 'groq')).toHaveLength(1)
   })
 
   it('coaching-cue does NOT bypass its own cooldown on the shared model — that would defeat BUG-058', async () => {
