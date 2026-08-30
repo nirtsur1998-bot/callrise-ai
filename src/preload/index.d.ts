@@ -2229,6 +2229,9 @@ export interface AppControlApi {
   isPackaged: () => Promise<boolean>
   /** The version string from package.json, for the Settings "Software update" section. */
   getVersion: () => Promise<string>
+  /** Windows only — repaint the native caption buttons to match the theme.
+   *  A no-op elsewhere; never rejects. */
+  setTitleBarOverlay: (colors: { color: string; symbolColor: string }) => Promise<void>
   /** Full path to the on-disk error log, for display/copy in Settings. */
   getLogsPath: () => Promise<string>
   /** Reveals the log file in the OS file explorer (creating it first if nothing has logged yet). */

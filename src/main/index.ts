@@ -311,9 +311,39 @@ function createWindow(): void {
     minHeight: 680,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: '#0b0d11',
-    // On macOS, hide the title bar for a clean Linear/Raycast-style look.
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    // The pre-paint flash colour. Was '#0b0d11' — the pre-M31 indigo-era
+    // canvas — which First Light replaced with a warm near-black; the two are
+    // a hair apart so nobody noticed, but a stale flash colour is a stale
+    // flash colour. Matches the default (preview ON) dark canvas.
+    backgroundColor: '#0d0c0a',
+    // M31 — hide the OS title bar on BOTH platforms and let the app draw it.
+    //
+    // Windows used to get `default`, i.e. a real native title bar — stacked
+    // directly on top of AppShell's own 56px `h-14` drag strip, which is
+    // ALWAYS EMPTY (nothing in the app has ever passed `headerActions`). So
+    // every Windows user lost ~94px of vertical space to a native bar plus a
+    // blank strip, while macOS used that same strip AS its title bar. Found
+    // by measuring the running window, not by reading the config.
+    //
+    // `titleBarOverlay` keeps the real Windows caption buttons — minimise,
+    // maximise, close, snap-layouts on hover — drawn by the OS into a region
+    // at the top right, over our own strip. Deliberately not a hand-rolled
+    // set of buttons: those lose snap layouts, the double-click-to-maximise
+    // affordance, and every accessibility behaviour Windows attaches to the
+    // real ones.
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    ...(process.platform === 'win32'
+      ? {
+          titleBarOverlay: {
+            // Updated at runtime whenever the theme or the design preview
+            // changes — see 'app:setTitleBarOverlay' below. These are the
+            // first-paint values only.
+            color: '#0d0c0a',
+            symbolColor: '#f2efe8',
+            height: 40
+          }
+        }
+      : {}),
     trafficLightPosition: { x: 16, y: 18 },
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {

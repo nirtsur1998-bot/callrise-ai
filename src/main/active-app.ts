@@ -163,4 +163,38 @@ export function registerActiveApp(): void {
 
   // The Settings "Software update" section's current-version display.
   ipcMain.handle('app:getVersion', (): string => app.getVersion())
+
+  // M31 — keep the Windows caption buttons legible against whatever the app
+  // is currently painting behind them.
+  //
+  // The overlay is drawn by the OS, so it has no idea about our theme: left
+  // alone it stays whatever colour the window was created with, and flipping
+  // to the light theme leaves near-white symbols on near-white chrome —
+  // invisible close and minimise buttons. It has to be pushed, and it has to
+  // be pushed on TWO separate signals (theme, and the design preview), which
+  // is why the renderer sends the resolved colours rather than a theme name.
+  //
+  // No-op off Windows and on a closed window: this can arrive during teardown
+  // or on macOS, and neither is worth an error.
+  ipcMain.handle(
+    'app:setTitleBarOverlay',
+    (event, colors: { color?: unknown; symbolColor?: unknown }): void => {
+      if (process.platform !== 'win32') return
+      const win = BrowserWindow.fromWebContents(event.sender)
+      if (!win || win.isDestroyed()) return
+      const hex = (v: unknown): string | null =>
+        typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v) ? v : null
+      const color = hex(colors?.color)
+      const symbolColor = hex(colors?.symbolColor)
+      // Validated rather than passed through: Electron throws on a malformed
+      // colour, and a throw here would surface as a rejected IPC call in the
+      // renderer for something purely cosmetic.
+      if (!color || !symbolColor) return
+      try {
+        win.setTitleBarOverlay({ color, symbolColor, height: 40 })
+      } catch {
+        /* older Windows builds without overlay support — the app is fine */
+      }
+    }
+  )
 }

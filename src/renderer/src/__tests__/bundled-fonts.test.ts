@@ -73,19 +73,28 @@ describe('bundled typefaces (M31 Stage 4)', () => {
     ])
     const bundledFamilies = new Set(BUNDLED.map((b) => b.family))
 
-    // Scoped to @theme — the stack the app actually SHIPS.
+    // ⚠ IF YOU ARE HERE BECAUSE THIS GUARD OBJECTED TO A REVERT: it is right
+    // and the revert is right. Read this before "fixing" either.
     //
-    // index.css also contains a second pair under `:root:not(.first-light)`,
-    // which is the pre-M31 stack restored when the redesign preview is turned
-    // off. That one deliberately still names 'Inter' without bundling it,
-    // because it has to be byte-identical to what ships today and today's
-    // stack has that defect. Checking it here would demand we "fix" the thing
-    // we are deliberately preserving, and a revert that quietly improves the
-    // old state is not a revert.
+    // **A REVERT THAT QUIETLY IMPROVES THE OLD STATE IS NOT A REVERT.**
     //
-    // So the rule is: the SHIPPED stack may only name fonts we bundle; the
-    // RESTORED stack is a historical artefact and is pinned for existence by
-    // contrast-ratios.test.ts's revert-path test instead.
+    // Scoped to @theme — the stack the app actually SHIPS. index.css also
+    // holds a second pair under `:root:not(.first-light)`: the pre-M31 stack,
+    // restored when the redesign preview is turned off. That one deliberately
+    // still names 'Inter' WITHOUT bundling it, because it has to be
+    // byte-identical to what ships today, and today's stack has exactly that
+    // defect — the one this whole guard exists to prevent recurring.
+    //
+    // So the guard once failed on an honest revert, which is how this comment
+    // came to be written. The resolution was to SCOPE it, not weaken it:
+    // fixing Inter in the restored stack would have made the revert restore
+    // something the app has never actually shipped, and a preview toggle that
+    // lands you somewhere new is worse than one that lands you nowhere.
+    //
+    // The rule: the SHIPPED stack may only name fonts we bundle. The RESTORED
+    // stack is a historical artefact, deliberately preserving a known defect,
+    // and is pinned for EXISTENCE (not correctness) by the revert-path test in
+    // contrast-ratios.test.ts.
     const theme = css.slice(css.indexOf('@theme {'), css.indexOf('@layer base {'))
     const stacks = [...theme.matchAll(/--font-(?:sans|mono):([^;]+);/g)].map((m) => m[1])
     expect(stacks.length, 'no --font-sans/--font-mono found in @theme — did the tokens move?').toBe(

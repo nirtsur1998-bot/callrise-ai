@@ -580,6 +580,8 @@ const api = {
     onCallDetected: (cb: (appName: string) => void) => subscribe('app:callDetected', cb),
     isPackaged: () => ipcRenderer.invoke('app:isPackaged'),
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
+    setTitleBarOverlay: (colors: { color: string; symbolColor: string }) =>
+      ipcRenderer.invoke('app:setTitleBarOverlay', colors),
     getLogsPath: () => ipcRenderer.invoke('app:getLogsPath'),
     openLogsFolder: () => ipcRenderer.invoke('app:openLogsFolder'),
     logRendererError: (scope: string, message: string) =>
