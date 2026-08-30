@@ -307,8 +307,26 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 832,
-    minWidth: 1040,
-    minHeight: 680,
+    // M31 — these were 1040x680, which is a size some real laptops CANNOT
+    // PROVIDE, and the window then refuses to shrink to fit the screen.
+    //
+    // The arithmetic, because it is not obvious: these are CSS pixels, and
+    // Windows display scaling divides the physical screen by the scale factor
+    // before the app sees it. A 1366x768 laptop — still one of the commonest
+    // panels in use — gives 1093x614 CSS at 125%, and 911x512 at 150%. Both
+    // are SHORTER than 680. Windows ships many of those machines at 125% by
+    // default, so this is not an exotic configuration.
+    //
+    // The failure is not a squashed layout, it is worse: the window clamps at
+    // its minimum, so it is taller than the display, the bottom is off-screen
+    // and unreachable, and nothing the user does can fix it. Verified by
+    // asking Windows for a 911x512 window and watching it come back 1040x680.
+    //
+    // Chosen to fit 1366x768 at 150% with room for the taskbar. The layout
+    // was checked at this size rather than assumed — see the screenshots in
+    // the M31 note; every screen reflows and scrolls, nothing is clipped.
+    minWidth: 880,
+    minHeight: 500,
     show: false,
     autoHideMenuBar: true,
     // The pre-paint flash colour. Was '#0b0d11' — the pre-M31 indigo-era
