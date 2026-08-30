@@ -504,9 +504,16 @@ export function KeyCard({
           {config.retention && (
             <RetentionBadge posture={config.retention.posture} url={config.retention.url} />
           )}
+          {/* "Key saved", not "Configured". BOTH are true — this badge is
+              driven by `status.configured`, which is only "a key is stored" —
+              but next to a RED "Key invalid" dot, "Configured" is read as
+              "working", and the two badges contradicted each other on screen.
+              The logic is correct and stays; only the word changes, because
+              the word was doing more work than the value behind it.
+              (2026-08-30, founder: "fix the wording, not the logic".) */}
           {status?.configured && (
             <span className="flex items-center gap-1.5 rounded-lg border border-positive/30 bg-positive-soft px-2.5 py-1 text-xs font-medium text-positive">
-              <CheckCircle2 className="h-3.5 w-3.5" /> Configured
+              <CheckCircle2 className="h-3.5 w-3.5" /> Key saved
               {status.hint ? ` · ${status.hint}` : ''}
             </span>
           )}
