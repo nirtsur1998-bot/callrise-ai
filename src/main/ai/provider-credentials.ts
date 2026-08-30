@@ -30,5 +30,20 @@ export function providerHasCredentials(providerId: AIProviderId): boolean {
   const entry = PROVIDER_REGISTRY[providerId]
   if (!entry) return false
   if (!process.env[entry.keyEnvName]?.trim()) return false
+  // THE GUARANTEE MOVED TO THE COMPILER, which is where it belongs.
+  //
+  // `requiredEnvNames` is now REQUIRED on ProviderRegistryEntry (it was
+  // optional). A provider that forgets to declare its credentials is a build
+  // error, not one silently treated as needing none — which was the Cloudflare
+  // bug one level up: considered configured while its URL still had a hole in
+  // it. An explicit `[]` is the declaration.
+  //
+  // The `?? []` stays, and its meaning changed completely. It is no longer a
+  // production default that can hide a forgotten field — production CANNOT
+  // omit the field. It is a shim for the seventeen test files that replace
+  // this registry wholesale with partial fixtures (species 52). Without it
+  // those crash on `.every` of undefined; with it they behave as they always
+  // did. provider-lockstep.test.ts asserts the field is declared WITHOUT a
+  // `?`, so the compile-time guarantee cannot quietly be given back.
   return (entry.requiredEnvNames ?? []).every((n) => Boolean(process.env[n]?.trim()))
 }

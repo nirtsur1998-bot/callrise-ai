@@ -243,3 +243,37 @@ describe('providerHasCredentials: half-configured is NOT configured', () => {
     expect(providerHasCredentials('groq')).toBe(true)
   })
 })
+
+describe('credential declaration is enforced by the compiler, not by hope', () => {
+  it('requiredEnvNames is declared as required, not optional', () => {
+    // The whole fix. While the field was OPTIONAL, a provider that forgot to
+    // declare an extra credential was treated as needing none — considered
+    // configured while its base URL still had a hole in it. That is how the
+    // founder ended up on a broken provider. Required turns forgetting into a
+    // build error.
+    //
+    // This asserts the TYPE, deliberately, because the runtime still carries a
+    // nullish-coalescing shim for the seventeen test files that replace this
+    // registry wholesale with partial fixtures. Re-adding the question mark
+    // would silently restore the old behaviour AND leave that shim looking
+    // like a safety net it is not.
+    const registry = stripComments(read('src/main/ai/registry.ts'))
+    expect(registry).toMatch(/requiredEnvNames:\s*readonly string\[\]/)
+    expect(
+      registry,
+      'requiredEnvNames went back to optional - a provider can now forget it silently'
+    ).not.toMatch(/requiredEnvNames\?:/)
+  })
+
+  it('every provider actually declares it', () => {
+    const registry = stripComments(read('src/main/ai/registry.ts'))
+    const providers = [...registry.matchAll(/keyEnvName:/g)].length
+    const declared = [...registry.matchAll(/requiredEnvNames:/g)].length
+    // Equal, not off-by-one: both counts include their own declaration on the
+    // ProviderRegistryEntry interface, so the interface cancels out and what
+    // is left is one requiredEnvNames per provider.
+    expect(declared, 'a provider is missing its requiredEnvNames declaration').toBe(
+      providers
+    )
+  })
+})

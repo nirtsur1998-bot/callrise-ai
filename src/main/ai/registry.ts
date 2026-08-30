@@ -45,7 +45,7 @@ export interface ProviderRegistryEntry {
    * directly: the point is that every place which asks "does this provider
    * have what it needs?" asks the same question.
    */
-  requiredEnvNames?: readonly string[]
+  requiredEnvNames: readonly string[]
   build: (apiKey: string) => AIProvider
 }
 
@@ -159,58 +159,68 @@ export const PROVIDER_REGISTRY: Record<AIProviderId, ProviderRegistryEntry> = {
   anthropic: {
     displayName: 'Claude',
     keyEnvName: 'ANTHROPIC_API_KEY',
+    requiredEnvNames: [],
     build: (key) => new AnthropicProvider(key)
   },
   openai: {
     displayName: 'ChatGPT',
     keyEnvName: 'OPENAI_API_KEY',
+    requiredEnvNames: [],
     build: (key) => new OpenAIProvider(key)
   },
   groq: {
     displayName: 'Groq',
     keyEnvName: 'GROQ_API_KEY',
+    requiredEnvNames: [],
     defaultModelId: GROQ_CONFIG.defaultModel,
     build: (key) => createOpenAICompatibleProvider(GROQ_CONFIG, key)
   },
   openrouter: {
     displayName: 'OpenRouter',
     keyEnvName: 'OPENROUTER_API_KEY',
+    requiredEnvNames: [],
     defaultModelId: OPENROUTER_CONFIG.defaultModel,
     build: (key) => createOpenAICompatibleProvider(OPENROUTER_CONFIG, key)
   },
   google: {
     displayName: 'Gemini',
     keyEnvName: 'GOOGLE_AI_API_KEY',
+    requiredEnvNames: [],
     defaultModelId: GEMINI_DEFAULT_MODEL,
     build: (key) => createGeminiProvider(key)
   },
   nvidia: {
     displayName: 'NVIDIA NIM',
     keyEnvName: 'NVIDIA_API_KEY',
+    requiredEnvNames: [],
     defaultModelId: NVIDIA_CONFIG.defaultModel,
     build: (key) => createOpenAICompatibleProvider(NVIDIA_CONFIG, key)
   },
   cerebras: {
     displayName: 'Cerebras',
     keyEnvName: 'CEREBRAS_API_KEY',
+    requiredEnvNames: [],
     defaultModelId: CEREBRAS_CONFIG.defaultModel,
     build: (key) => createOpenAICompatibleProvider(CEREBRAS_CONFIG, key)
   },
   mistral: {
     displayName: 'Mistral',
     keyEnvName: 'MISTRAL_API_KEY',
+    requiredEnvNames: [],
     defaultModelId: MISTRAL_CONFIG.defaultModel,
     build: (key) => createOpenAICompatibleProvider(MISTRAL_CONFIG, key)
   },
   zai: {
     displayName: 'Z.ai (GLM)',
     keyEnvName: 'ZAI_API_KEY',
+    requiredEnvNames: [],
     defaultModelId: ZAI_CONFIG.defaultModel,
     build: (key) => createOpenAICompatibleProvider(ZAI_CONFIG, key)
   },
   huggingface: {
     displayName: 'Hugging Face',
     keyEnvName: 'HUGGINGFACE_API_KEY',
+    requiredEnvNames: [],
     defaultModelId: HUGGINGFACE_CONFIG.defaultModel,
     build: (key) => createOpenAICompatibleProvider(HUGGINGFACE_CONFIG, key)
   },
