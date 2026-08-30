@@ -118,8 +118,28 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     contextWindow: 128_000,
     retentionPosture: 'unknown',
     retentionUrl: 'https://groq.com/privacy-policy/',
-    keyUrl: 'https://console.groq.com/keys'
-    // Verified present on Groq's live model list (console.groq.com/docs/models), 2026-07-30.
+    keyUrl: 'https://console.groq.com/keys',
+    // Verified present on Groq's live model list (console.groq.com/docs/models),
+    // 2026-07-30.
+    //
+    // BUG-081 (2026-08-30) — OBSERVED FAILING ON ONE ACCOUNT, and deliberately
+    // NOT flagged knownStale. In the founder's ai-fallback-events.jsonl this id
+    // was REACHED 21 times (rate-limit and quota errors, which only a real model
+    // returns) with the last on 2026-08-13, then REJECTED as 'model-not-found' —
+    // "Groq does not recognize this model" — on 2026-08-25 and 2026-08-28. The
+    // control in the same log is groq-gpt-oss-120b: reached 98 times, last on
+    // 2026-08-28, never rejected.
+    //
+    // WHY THAT IS NOT ENOUGH TO MARK IT DEAD. A model-404 from Groq means the id
+    // is not available TO THAT ACCOUNT, which is not the same as decommissioned.
+    // That account was also repeatedly out of quota, which is consistent with a
+    // free tier that lost access to some models. `knownStale` removes an entry
+    // from EVERY user's chain, so setting it on one account's logs would trade a
+    // bug we have seen for a fallback-depth regression we would not see.
+    //
+    // TO SETTLE IT: configure a Groq key and check this id against Groq's live
+    // /models endpoint (resolveCatalog already does exactly this once a key
+    // exists). If it is absent there, flag it here.
   },
   {
     id: 'groq-llama-3.3-70b-versatile',
@@ -131,8 +151,20 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     contextWindow: 128_000,
     retentionPosture: 'unknown',
     retentionUrl: 'https://groq.com/privacy-policy/',
-    keyUrl: 'https://console.groq.com/keys'
-    // Verified present on Groq's live model list, 2026-07-30.
+    keyUrl: 'https://console.groq.com/keys',
+    // Same story as llama-3.1-8b-instant above, same log, same caveat — observed
+    // failing on ONE account, deliberately NOT flagged knownStale. BUG-081
+    // (2026-08-30): REACHED 73 times with the last on 2026-08-11, then REJECTED
+    // as 'model-not-found' on 2026-08-25 and 2026-08-28.
+    //
+    // This id WAS also GROQ_CONFIG.defaultModel, so it was the model every LEGACY
+    // chain step sent for a Groq user — and `legacy:groq` carries the matching
+    // signature independently: reached 13 times up to 2026-08-11, then 7
+    // model-not-found rejections through 2026-08-23. Two code paths, one string,
+    // the same dates. **That half IS fixed**: registry.ts now defaults Groq to
+    // openai/gpt-oss-120b, which is a strict improvement (proven working on the
+    // account where this id proved failing) and does not touch anyone's chain
+    // depth. Flagging the CATALOG entry would — see the note above.
   },
   {
     id: 'groq-gpt-oss-120b',

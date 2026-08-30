@@ -52,12 +52,40 @@ export interface ProviderRegistryEntry {
 // Hoisted so `build` and `defaultModelId` read the SAME literal — a second
 // copy of these strings that could drift from the first is exactly the kind
 // of duplication that makes the dedupe above silently stop working.
+// BUG-081 (2026-08-30) — BOTH of these ids were dead, and each one broke a
+// different thing.
+//
+//   defaultModel was 'llama-3.3-70b-versatile'. That is the model every LEGACY
+//   chain step sends for a Groq user, and it has no staleness check of any kind
+//   — not even the static `knownStale` gate bundled catalog entries get. So it
+//   failed on every legacy attempt, silently, for weeks: purposes with a deep
+//   tail routed around it invisibly, and thin-tailed ones just failed.
+//
+//   testModel was 'llama-3.1-8b-instant', and testModel is what validateKey
+//   probes with (openai-compatible.ts). A dead probe model means "Test key"
+//   reports a PERFECTLY GOOD Groq key as rejected. That got worse the same day:
+//   BUG-143 made validateKey load-bearing for auto-selecting the default
+//   provider, so a dead testModel would also stop a good Groq key from ever
+//   becoming the default. Two bugs composing into "your working key is refused
+//   twice and never told why".
+//
+// Both now point at openai/gpt-oss-120b, chosen on evidence rather than
+// preference: in this machine's fallback log it was reached 98 times with the
+// last on 2026-08-28 and was NEVER rejected, while the two ids above were
+// rejected as 'model-not-found' on that same date. It is the only Groq entry
+// with a demonstrably live signature.
+//
+// NOT verified against Groq's /models endpoint, because that needs a Groq key
+// and none is configured on this machine. What backs it is Groq's own answers
+// to real requests, dated, with a control — see the two knownStale notes in
+// model-catalog.ts. `provider-default-models.test.ts` now pins the invariant
+// this violated: no provider's defaultModel/testModel may name a knownStale id.
 const GROQ_CONFIG = {
   id: 'groq',
   displayName: 'Groq',
   baseURL: 'https://api.groq.com/openai/v1',
-  defaultModel: 'llama-3.3-70b-versatile',
-  testModel: 'llama-3.1-8b-instant'
+  defaultModel: 'openai/gpt-oss-120b',
+  testModel: 'openai/gpt-oss-120b'
 } as const
 
 const OPENROUTER_CONFIG = {

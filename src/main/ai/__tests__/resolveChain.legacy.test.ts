@@ -21,6 +21,7 @@ vi.mock('../index', () => ({
 const { loadAppSettings } = await import('../../app-settings')
 const { resolveConfiguredChain } = await import('../complete-with-fallback')
 const { PROVIDER_REGISTRY } = await import('../registry')
+const { MODEL_CATALOG } = await import('../model-catalog')
 
 const ALL_PURPOSES: AIPurpose[] = [
   'coaching-cue',
@@ -83,11 +84,27 @@ describe('resolveChain — a default provider no longer means "no fallback"', ()
   })
 
   it('never re-issues the legacy step\'s own model as a later attempt', () => {
-    // groq's defaultModel is byte-identical to catalog entry
-    // groq-llama-3.3-70b-versatile's modelId. Without the guard, a single-key
-    // user's attempt 1 and a later "fallback" are literally the same request.
+    // groq's defaultModel is byte-identical to one of its catalog entries'
+    // modelId. Without the guard, a single-key user's attempt 1 and a later
+    // "fallback" are literally the same request.
+    //
+    // CORRECTED, NOT RELAXED (2026-08-30, BUG-081). This pinned the literal
+    // 'llama-3.3-70b-versatile', which is a stricter claim than the premise the
+    // line itself says it is pinning: the premise is that the legacy default
+    // COLLIDES with some catalog entry for that provider, not that it is one
+    // particular string. BUG-081 changed Groq's default to openai/gpt-oss-120b
+    // (the old id was being rejected on the founder's account); the premise held
+    // exactly as before and the test failed anyway.
+    //
+    // Asserting the collision keeps the real guarantee — a default that stopped
+    // colliding would make this whole test VACUOUS, and that still goes red —
+    // while a legitimate model change no longer reads as a regression.
     const legacyModel = PROVIDER_REGISTRY.groq.defaultModelId
-    expect(legacyModel).toBe('llama-3.3-70b-versatile') // pin the premise
+    expect(
+      MODEL_CATALOG.some((e) => e.providerId === 'groq' && e.modelId === legacyModel),
+      `groq's legacy default '${legacyModel}' no longer matches any groq catalog entry — ` +
+        'the collision this test guards against is gone, so the test below proves nothing'
+    ).toBe(true)
     const steps = resolveConfiguredChain('memory-extract')
     expect(steps.slice(1).map((s) => s.modelId)).not.toContain(legacyModel)
   })
