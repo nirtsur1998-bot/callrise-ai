@@ -128,12 +128,29 @@ export function LiveView({
   // Wrap the parent's onSaved so every clip captured this call is flushed to
   // window.api.calls.addBookmark against the now-real callId, fire-and-forget,
   // before handing off to whatever the parent wants to do with the saved id.
+  // M31 Slice B — the meeting that was running when this call was recorded.
+  // Ref-bridged for the same reason dealIntelligenceReportGetterRef above is:
+  // handleSaved is a useCallback that must not re-create on every calendar
+  // tick, so reading currentMeeting directly would capture a stale value.
+  const currentMeetingRef = useRef<CalendarEvent | null>(null)
+
   const handleSaved = useCallback(
     (callId: string) => {
       clips.flush(callId)
       const report = dealIntelligenceReportGetterRef.current()
       if (report.nudges.length > 0 || report.healthScoreHistory.length > 0) {
         void window.api.calls.saveDealIntelligence(callId, report).catch(() => {})
+      }
+      // Join the plan to its outcome, at the one moment the join is a FACT
+      // rather than a guess: the app already knows which meeting is running,
+      // so record it instead of trying to infer it later from contact + time
+      // overlap (which breaks on back-to-back calls, overruns, and calls made
+      // to someone else mid-meeting). Fire-and-forget: a missed link costs a
+      // marker on a calendar chip, and must never interfere with saving the
+      // call itself, which is the part that actually matters.
+      const meeting = currentMeetingRef.current
+      if (meeting && meeting.source === 'local') {
+        void window.api.events.update(meeting.id, { callId }).catch(() => {})
       }
       onSaved?.(callId)
     },
@@ -221,6 +238,7 @@ export function LiveView({
     })
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Date.now() forces this out of render; syncing derived state from the calendar data is exactly what an effect is for
     setCurrentMeeting(match ?? null)
+    currentMeetingRef.current = match ?? null
     // M26 4.5 — mirror into the Provider's own useDealIntelligence instance,
     // which now lives above this screen and needs the same value. Calendar
     // matching itself stays here (needs useCalendar(), a screen concern);
@@ -777,7 +795,7 @@ export function LiveView({
           <button
             type="button"
             onClick={start}
-            className="no-drag flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 active:scale-95"
+            className="no-drag flex items-center gap-2 rounded-xl bg-accent-fill px-4 py-2.5 text-sm font-semibold text-on-accent shadow-sm transition hover:brightness-110 active:scale-95"
           >
             <Mic className="h-4 w-4" /> Start
           </button>

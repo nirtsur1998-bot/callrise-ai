@@ -295,6 +295,7 @@ export function registerContactIntelligence(): void {
     lane: 'INTERACTIVE',
     titleFor: () => 'Detecting who this was',
     targetRefFor: (i) => i.callId,
+    targetKind: 'call',
     // This feature already fires its own, far more useful notification when
     // it actually attaches someone (notifyAutoAttached: "Automatically
     // created and attached 'Dana'"). Without this flag, migrating it to a

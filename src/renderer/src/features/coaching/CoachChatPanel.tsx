@@ -52,7 +52,7 @@ function Bubble({
         className={cn(
           'max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap',
           isUser
-            ? 'bg-accent text-white'
+            ? 'bg-accent-fill text-on-accent'
             : isPractice
               ? 'border border-warning/30 bg-warning-soft text-ink'
               : 'border border-line-soft bg-canvas text-ink'

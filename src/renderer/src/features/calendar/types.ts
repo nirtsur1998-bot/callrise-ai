@@ -2,6 +2,8 @@
 // preload bridge exposes (see src/preload/index.d.ts); kept local so the
 // feature is self-contained, matching the calls/tasks convention.
 
+import type { ChipContext } from './chipContext'
+
 export type EventSyncState = 'local-only' | 'synced' | 'dirty' | 'deleted' | 'error'
 
 export interface CalendarEvent {
@@ -27,6 +29,12 @@ export interface CalendarEvent {
    *  pushed to Google/Outlook. Powers the follow-up dashboard. */
   contactId?: string
   dealId?: string
+  /** M31 Slice B — the call recorded during this meeting, joining plan to
+   *  outcome on one object. Only ever set at call-save time, when the app
+   *  already knows which meeting is running; never inferred afterwards from
+   *  contact + time overlap, which would be a guess. Absent on every meeting
+   *  that predates this, and on any meeting with no recording. */
+  callId?: string
   /** Minutes-before-start lead times for a REAL reminder pushed to the
    *  linked Google/Outlook event (that provider's own app fires the actual
    *  push notification) — distinct from CallRise's own in-app alerts. Only
@@ -39,11 +47,11 @@ export interface CalendarEvent {
 
 /** What can appear on the calendar. Google/Outlook events are read-only
  *  overlays unless two-way sync makes them editable. */
-export type CalendarItemKind = 'event' | 'task' | 'call' | 'google' | 'outlook'
+export type CalendarItemKind = 'event' | 'task' | 'google' | 'outlook'
 
 /**
  * A unified, render-ready item. Manual events are editable; tasks (on their
- * due date) and calls (when they happened) are read-only overlays.
+ * due date) and Google/Outlook events are read-only overlays.
  */
 export interface CalendarItem {
   key: string // unique across kinds (kind-prefixed)
@@ -57,6 +65,12 @@ export interface CalendarItem {
   /** Extra context for tooltips / styling. */
   subtitle?: string
   done?: boolean // for tasks
+  /** M31 Slice B — the sales context this chip carries (who the meeting is
+   *  with, the deal's stage and risk, whether a prep brief is ready).
+   *  Attached by CalendarView after buildItems, since it needs contacts/
+   *  deals/stages that the pure item builder has no business loading.
+   *  Absent whenever there's nothing true to say — see buildChipContext. */
+  context?: ChipContext
 }
 
 /** The editable fields for the create/edit dialog. Supports all-day and

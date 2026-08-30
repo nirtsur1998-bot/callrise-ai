@@ -14,8 +14,10 @@ import {
   History,
   MessageSquare,
   Sparkles,
-  Trash2
+  Trash2,
+  NotebookPen
 } from 'lucide-react'
+import { EmptyState } from '@renderer/components/EmptyState'
 import { flagEmoji, countryDial, countryName } from '@renderer/lib/countries'
 import { TONE_TO_GAUGE, overallTier } from '@renderer/features/coaching/meta'
 import { ScoreGauge } from '@renderer/components/ScoreGauge'
@@ -272,10 +274,27 @@ export function ContactDetail({
         </div>
       )}
 
-      {/* M23 Workstream C — standalone note generator (Settings → CRM →
-          "CRM Note Generator"). Hidden entirely when off. */}
-      {noteGeneratorEnabled && (
+      {/* M23 Workstream C — the standalone note generator.
+          M31 Stage 3: it used to be hidden entirely when off ("Hidden
+          entirely when off", as the comment here said in as many words),
+          which is the 50%-invisible problem stated by the code itself. */}
+      {noteGeneratorEnabled ? (
         <CrmNoteGeneratorCard contactId={contact.id} onContactUpdated={onContactUpdated} />
+      ) : (
+        <div className="mb-4 rounded-2xl border border-line-soft bg-surface p-5">
+          <EmptyState
+            compact
+            icon={NotebookPen}
+            title="Note drafting is switched off"
+            reason={{
+              kind: 'off',
+              settingsPage: 'crm',
+              what: 'Turns this contact’s most recent call into a written CRM note at the length you pick, and pulls out facts worth keeping on their record — job title, budget, timeline — for you to accept or reject one at a time.',
+              cost: 'Makes one AI call per draft. Nothing is saved to the contact until you confirm it.',
+              actionLabel: 'Turn on note drafting'
+            }}
+          />
+        </div>
       )}
 
       {/* Comments — the rep's own notes, plus any AI-drafted ones (opt-in,

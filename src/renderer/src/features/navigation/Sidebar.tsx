@@ -3,8 +3,8 @@ import { cn } from '@renderer/lib/cn'
 import { isMac } from '@renderer/lib/platform'
 import { IconButton } from '@renderer/components/IconButton'
 import { useRecentlyViewed } from '@renderer/lib/useRecentlyViewed'
-import type { RecentKind } from '@renderer/lib/recentlyViewed'
-import { NAV_ITEMS, type NavId } from './nav-items'
+import type { RecentItem, RecentKind } from '@renderer/lib/recentlyViewed'
+import type { NavId, NavItem } from './nav-items'
 import type { AuthUser } from '@renderer/features/auth/types'
 
 /** Number of "recently viewed" rows shown in the sidebar trail. */
@@ -19,15 +19,19 @@ const RECENT_KIND_ICON = {
   deal: Building2
 } as const satisfies Record<RecentKind, typeof PhoneCall>
 
-/** The screen a recent item's kind lives on. `onSelect` only takes a
- *  screen-level NavId, so clicking a recent contact/deal opens the CRM
- *  screen (not the specific record — see Sidebar's recent-section comment
- *  for why). */
-const RECENT_KIND_SCREEN: Record<RecentKind, NavId> = {
-  call: 'past-calls',
-  contact: 'crm',
-  deal: 'crm'
-}
+/** DELETED, and the deletion is the fix. This used to be RECENT_KIND_SCREEN:
+ *  a kind -> NavId table, so every recent row navigated to the SCREEN its
+ *  category lives on and the item's own id — carried on every RecentItem
+ *  since the feature shipped — was never read. Clicking "Ben — Super Fund
+ *  Trading Pitch" opened a call screen, not Ben's call.
+ *
+ *  Founder-reported: "a link that goes somewhere plausible but wrong, which
+ *  is worse than a dead link." Destination is now derived from the ITEM
+ *  (onSelectRecent), never inferred from its category. The correct handlers
+ *  already existed for the command palette — this reuses them rather than
+ *  writing a second way to open a record.
+ *
+ */
 
 interface SidebarProps {
   active: NavId
@@ -36,6 +40,17 @@ interface SidebarProps {
   onSignOut: () => void
   /** Opens the command palette (also bound to ⌘K globally). */
   onOpenPalette: () => void
+  /** M31 Stage 2 — the caller (MainApp) picks NAV_ITEMS or NAV_ITEMS_PREVIEW
+   *  based on the navigationPreview flag; Sidebar just renders whichever
+   *  list it's given. `onSelect` still takes any NavId, including the old
+   *  ones (`past-calls`, `crm`, ...) the recent-trail always emits — the
+   *  caller is responsible for remapping those to a hub id when the preview
+   *  is on, so this component never needs to know the flag exists. */
+  navItems: NavItem[]
+  /** Open the actual record a recent row refers to. Takes the WHOLE item,
+   *  not a kind: the id is the point, and a signature that only accepted a
+   *  kind is what let the old bug exist. */
+  onSelectRecent: (item: RecentItem) => void
 }
 
 export function Sidebar({
@@ -43,7 +58,9 @@ export function Sidebar({
   onSelect,
   user,
   onSignOut,
-  onOpenPalette
+  onOpenPalette,
+  navItems,
+  onSelectRecent
 }: SidebarProps): React.JSX.Element {
   const displayName = user.name?.trim() || user.email.split('@')[0]
   const initial = (user.name?.trim()?.[0] ?? user.email[0] ?? '?').toUpperCase()
@@ -51,8 +68,8 @@ export function Sidebar({
   const recentItems = useRecentlyViewed().slice(0, MAX_RECENT_ROWS)
 
   // Settings is pinned above the footer, not part of the scrolling list.
-  const settingsItem = NAV_ITEMS.find((item) => item.id === 'settings')
-  const scrollItems = NAV_ITEMS.filter((item) => item.id !== 'settings')
+  const settingsItem = navItems.find((item) => item.id === 'settings')
+  const scrollItems = navItems.filter((item) => item.id !== 'settings')
 
   // Group the scrolling items by their `section`, preserving list order —
   // items sharing a section render as one contiguous group.
@@ -162,7 +179,7 @@ export function Sidebar({
                     <li key={`${item.kind}-${item.id}`}>
                       <button
                         type="button"
-                        onClick={() => onSelect(RECENT_KIND_SCREEN[item.kind])}
+                        onClick={() => onSelectRecent(item)}
                         title={item.label}
                         className="press no-drag flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-[12px] text-muted transition-colors hover:bg-elevated hover:text-ink"
                       >

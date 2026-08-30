@@ -33,19 +33,29 @@ interface Rec {
   id: string
   updatedAt: string
   deleted?: boolean
+  /** BUG-138 — conflict detection now compares CONTENT, not just timestamps,
+   *  so these fixtures need a field that can actually differ between the two
+   *  sides. Without one, every cloud/local pair is identical and no conflict
+   *  copy should (or does) get written. */
+  title?: string
+  note?: string
 }
 
 /** A fixed "true" instant so the tests never depend on the real clock. */
 const T = Date.parse('2026-08-03T12:00:00.000Z')
 const iso = (ms: number): string => new Date(ms).toISOString()
 
-function cloudRow(id: string, serverEditedAtMs: number): CloudRow {
+function cloudRow(
+  id: string,
+  serverEditedAtMs: number,
+  extraPayload: Record<string, unknown> = {}
+): CloudRow {
   return {
     id,
     updated_at: iso(serverEditedAtMs),
     server_updated_at: iso(serverEditedAtMs),
     deleted: false,
-    payload: { id, updatedAt: iso(serverEditedAtMs) }
+    payload: { id, updatedAt: iso(serverEditedAtMs), ...extraPayload }
   }
 }
 
@@ -248,12 +258,23 @@ describe('reconcileStore — the bug this fix closes', () => {
 })
 
 describe('reconcileStore — concurrent-edit conflict detection', () => {
+  // BUG-138 — this expectation was CORRECTED, not relaxed. As written, its
+  // fixture gave the cloud and local sides identical content (cloudRow's
+  // payload is {id, updatedAt} and the local Rec is {id, updatedAt}), so it
+  // asserted that a .conflict copy is written when the two versions do not
+  // actually differ. That is precisely the shipped bug: on the founder's own
+  // machine it produced 201 .conflict files, every one byte-identical to the
+  // record beside it. The test's real INTENT — "conflict detection still
+  // works under skew" — is valid and kept; the fixture now contains a genuine
+  // content difference so it tests a genuine conflict.
   it('still writes a .conflict copy when both sides changed, under skew', async () => {
     // lastSyncAt and local.updatedAt are BOTH this device's own clock, so they
     // stay comparable to each other without any skew correction — the fix must
     // not have broken that by half-correcting one side.
-    const rows = [cloudRow('a', T - HOUR)]
-    const locals: Rec[] = [{ id: 'a', updatedAt: iso(T - 2 * HOUR + SKEW_48H) }]
+    const rows = [cloudRow('a', T - HOUR, { title: 'edited on the other machine' })]
+    const locals: Rec[] = [
+      { id: 'a', updatedAt: iso(T - 2 * HOUR + SKEW_48H), title: 'edited here' }
+    ]
     const lastSyncAt = iso(T - 6 * HOUR + SKEW_48H) // device-clock cursor
 
     const { imported, dir } = await run(rows, locals, SKEW_48H, lastSyncAt)
@@ -262,6 +283,59 @@ describe('reconcileStore — concurrent-edit conflict detection', () => {
 
     expect(imported).toEqual(['a'])
     expect(files).toContain('a.conflict')
+  })
+
+  // BUG-138 proper: the timestamps say "both sides changed", but the content
+  // says nothing did. Real trigger, seen in the wild: the app is killed
+  // mid-sync so lastSyncAt never advances, and the next restore then treats
+  // every untouched record as a concurrent edit.
+  it('writes NO conflict copy when the two versions are identical', async () => {
+    const rows = [cloudRow('a', T - HOUR, { title: 'same' })]
+    const locals: Rec[] = [{ id: 'a', updatedAt: iso(T - 2 * HOUR + SKEW_48H), title: 'same' }]
+    const lastSyncAt = iso(T - 6 * HOUR + SKEW_48H)
+
+    const { imported, dir } = await run(rows, locals, SKEW_48H, lastSyncAt)
+    const files = await readdir(dir)
+    await rm(dir, { recursive: true, force: true })
+
+    expect(imported).toEqual(['a']) // the cloud copy still wins and imports
+    expect(files).not.toContain('a.conflict') // but nothing was preserved
+  })
+
+  it('does not manufacture a whole burst of conflicts after a killed sync', async () => {
+    // The reported symptom, as one assertion: many records, none actually
+    // edited, one stale lastSyncAt. Before the fix this produced one
+    // .conflict per record — 201 of them on the real machine, which buries
+    // any genuine conflict the user actually needs to look at.
+    const ids = ['a', 'b', 'c', 'd', 'e']
+    const rows = ids.map((id) => cloudRow(id, T - HOUR, { title: id }))
+    const locals: Rec[] = ids.map((id) => ({
+      id,
+      updatedAt: iso(T - 2 * HOUR + SKEW_48H),
+      title: id
+    }))
+    const lastSyncAt = iso(T - 6 * HOUR + SKEW_48H)
+
+    const { dir } = await run(rows, locals, SKEW_48H, lastSyncAt)
+    const files = await readdir(dir)
+    await rm(dir, { recursive: true, force: true })
+
+    expect(files.filter((f) => f.endsWith('.conflict'))).toEqual([])
+  })
+
+  it('ignores property ORDER, which JSON.stringify would otherwise call a difference', async () => {
+    const rows = [cloudRow('a', T - HOUR, { title: 'x', note: 'y' })]
+    const locals: Rec[] = [
+      // Same fields, declared in the opposite order.
+      { note: 'y', title: 'x', id: 'a', updatedAt: iso(T - 2 * HOUR + SKEW_48H) } as Rec
+    ]
+    const lastSyncAt = iso(T - 6 * HOUR + SKEW_48H)
+
+    const { dir } = await run(rows, locals, SKEW_48H, lastSyncAt)
+    const files = await readdir(dir)
+    await rm(dir, { recursive: true, force: true })
+
+    expect(files).not.toContain('a.conflict')
   })
 })
 

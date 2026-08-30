@@ -1,3 +1,24 @@
+// Bundled brand typefaces, imported BEFORE index.css so the @font-face rules
+// are defined by the time the theme's --font-sans/--font-mono reference them.
+//
+// Self-hosted on purpose: our CSP is 'self'-only (see main/index.ts and
+// renderer/index.html), so a Google Fonts <link> would be blocked outright —
+// and a desktop app should not need the network to render its own text. Vite
+// emits these as real asset files rather than data: URIs (they are far over
+// assetsInlineLimit), which is what keeps them inside 'self'.
+//
+// Both are SIL OFL 1.1, which explicitly permits bundling and redistributing
+// the font files as part of a software package. That is the clause that ruled
+// Satoshi out — see docs/M31-typeface-license.md. The LICENSE files ship
+// inside each package, so the notice travels with the font as OFL requires.
+//
+// Full family (all subsets), not latin-only: Summary language can render
+// AI output in Cyrillic/Greek/Vietnamese, and falling back to a system face
+// mid-sentence is exactly the kind of seam this stage exists to remove. The
+// whole cost is ~270KB of woff2.
+import '@fontsource-variable/manrope'
+import '@fontsource-variable/geist-mono'
+
 import './index.css'
 
 import { lazy, StrictMode, Suspense } from 'react'

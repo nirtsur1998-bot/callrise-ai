@@ -46,7 +46,7 @@ const JOBS: JobConfig[] = [
     purpose: 'prep-brief',
     title: 'Pre-meeting prep brief',
     blurb:
-      'Benefits from long context — feed it a whole call history. (M19’s prep brief feature itself isn’t built yet; assigning a model here just gets it ready.)'
+      'Benefits from long context — feed it a whole call history.'
   },
   {
     purpose: 'deal-tier1',
@@ -86,15 +86,22 @@ function formatContext(n: number | null): string {
 }
 
 const LANE_LABEL: Record<'speed' | 'quality', string> = { speed: 'Speed', quality: 'Quality' }
+// speed/quality is a non-semantic categorical label (not a status severity).
+// This used to borrow warning/accent's VALUES — theme-safe, but it meant a
+// "Speed" badge was literally the same amber as a warning and a "Quality"
+// badge the same amber as the primary action, so a category read as a
+// severity. M31 Stage 4 resolved it: its own token pair, teal and violet,
+// used for nothing else in the app. Both values are pinned in both themes
+// by src/renderer/src/__tests__/contrast-ratios.test.ts.
 const LANE_CLASS: Record<'speed' | 'quality', string> = {
-  speed: 'border-amber-500/40 bg-amber-500/10 text-amber-200',
-  quality: 'border-sky-500/40 bg-sky-500/10 text-sky-200'
+  speed: 'border-lane-speed/40 bg-lane-speed/10 text-lane-speed',
+  quality: 'border-lane-quality/40 bg-lane-quality/10 text-lane-quality'
 }
 
 function entryStatus(entry: AiResolvedCatalogEntry): { dot: string; label: string } {
   if (!entry.hasKey) return { dot: 'bg-line', label: 'No key' }
   if (!entry.available) return { dot: 'bg-danger', label: 'Unavailable' }
-  return { dot: 'bg-emerald-400', label: 'Ready' }
+  return { dot: 'bg-positive', label: 'Ready' }
 }
 
 function CatalogRow({
@@ -196,7 +203,7 @@ function PurposeHealthNotice({ health }: { health: PurposeHealthView | undefined
         'mb-2.5 rounded-lg border px-2.5 py-2 text-[12px]',
         isFailing
           ? 'border-danger/40 bg-danger/10 text-danger'
-          : 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+          : 'border-warning/40 bg-warning/10 text-warning'
       )}
     >
       {health.message}

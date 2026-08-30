@@ -92,6 +92,7 @@ export function registerCrmNoteGenerator(): void {
     lane: 'INTERACTIVE',
     titleFor: () => 'Drafting CRM note',
     targetRefFor: (i) => i.contactId,
+    targetKind: 'contact',
     // This job's resultData holds the drafted note AND the harvested
     // suggestions until the rep has dealt with every one — automatic
     // history pruning must never delete it, or BUG-050 comes straight back.

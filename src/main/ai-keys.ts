@@ -20,17 +20,13 @@ import { loadAppSettings, saveAppSettings } from './app-settings'
 // pair. Everything below this point (encryption, save/load/clear, IPC) was
 // already generic over AiKeyName — extending it needed no new mechanism,
 // exactly per docs/ai-providers.md's "Adding a third provider" guide.
-export type AiKeyName =
-  | 'DEEPGRAM_API_KEY'
-  | 'ANTHROPIC_API_KEY'
-  | 'OPENAI_API_KEY'
-  | 'GROQ_API_KEY'
-  | 'OPENROUTER_API_KEY'
-  | 'GOOGLE_AI_API_KEY'
-  | 'NVIDIA_API_KEY'
-  | 'CEREBRAS_API_KEY'
-  | 'MISTRAL_API_KEY'
-const KEY_NAMES: AiKeyName[] = [
+// ONE list, type derived from it — same reasoning as ai/types.ts's
+// AI_PROVIDER_IDS. KEY_NAMES used to be a second hand-maintained copy of the
+// union, and it is the list getStatus() iterates: a key present in the type
+// but missing from the array saves correctly, decrypts correctly, and then
+// reports "No key" forever, because nothing ever sets its configured flag.
+// Silent, and indistinguishable from the user having pasted a bad key.
+export const AI_KEY_NAMES = [
   'DEEPGRAM_API_KEY',
   'ANTHROPIC_API_KEY',
   'OPENAI_API_KEY',
@@ -39,8 +35,22 @@ const KEY_NAMES: AiKeyName[] = [
   'GOOGLE_AI_API_KEY',
   'NVIDIA_API_KEY',
   'CEREBRAS_API_KEY',
-  'MISTRAL_API_KEY'
-]
+  'MISTRAL_API_KEY',
+  'ZAI_API_KEY',
+  'HUGGINGFACE_API_KEY',
+  'CLOUDFLARE_API_KEY',
+  // NOT a key, and the only entry here that is not one. Cloudflare's base URL
+  // contains the account id, so an API key alone cannot address the account —
+  // both values are required before a call can be made at all. It lives in
+  // this vault to reuse one save/clear/status/env pipeline rather than invent
+  // a second one, and the '_API_KEY' suffix is what tells the rest of the app
+  // it is a credential, not a key (see ActivationChecklist and the lockstep
+  // test that pins this exception).
+  'CLOUDFLARE_ACCOUNT_ID'
+] as const
+
+export type AiKeyName = (typeof AI_KEY_NAMES)[number]
+const KEY_NAMES: readonly AiKeyName[] = AI_KEY_NAMES
 
 function keysDir(): string {
   return join(app.getPath('userData'), 'ai-keys')
@@ -143,17 +153,11 @@ export function keyRejectedHint(name: AiKeyName): string {
 
 export function registerAiKeys(): void {
   ipcMain.handle('aiKeys:getStatus', async () => {
-    const status: Record<AiKeyName, { configured: boolean; hint: string | null }> = {
-      DEEPGRAM_API_KEY: { configured: false, hint: null },
-      ANTHROPIC_API_KEY: { configured: false, hint: null },
-      OPENAI_API_KEY: { configured: false, hint: null },
-      GROQ_API_KEY: { configured: false, hint: null },
-      OPENROUTER_API_KEY: { configured: false, hint: null },
-      GOOGLE_AI_API_KEY: { configured: false, hint: null },
-      NVIDIA_API_KEY: { configured: false, hint: null },
-      CEREBRAS_API_KEY: { configured: false, hint: null },
-      MISTRAL_API_KEY: { configured: false, hint: null }
-    }
+    // Built FROM the list rather than restating it — this was the third copy
+    // of these strings, and the one a new key would silently be missing from.
+    const status = Object.fromEntries(
+      AI_KEY_NAMES.map((n) => [n, { configured: false, hint: null }])
+    ) as Record<AiKeyName, { configured: boolean; hint: string | null }>
     for (const name of KEY_NAMES) {
       status[name].configured = isConfigured(name)
       const raw = process.env[name]

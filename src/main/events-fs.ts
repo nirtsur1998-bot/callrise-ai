@@ -51,6 +51,29 @@ export interface CalendarEvent {
    *  the follow-up dashboard's "next scheduled meeting" line. */
   contactId?: string
   dealId?: string
+  /** M31 Slice B — the call that was actually recorded during this meeting,
+   *  joining the plan to its outcome on ONE object.
+   *
+   *  Written at call-save time from the meeting the app already knows is
+   *  running (LiveView's currentMeeting), NOT matched afterwards. That
+   *  distinction is the whole point: after the fact, the only available
+   *  signal would be "same contact, overlapping time", which is a guess —
+   *  back-to-back calls with one contact, a call that overruns into the next
+   *  slot, or a call made to someone else during a meeting all break it. A
+   *  link that is usually right is worse than none, because it teaches the
+   *  rep to trust it before the case where it misleads them. So this is only
+   *  ever set when it is certain, and meetings without it show nothing.
+   *
+   *  Consequence, stated rather than hidden: calls recorded before this
+   *  existed have no link and never will. App-local like contactId/dealId —
+   *  never pushed to Google/Outlook.
+   *
+   *  Last-write-wins if a meeting somehow hosts more than one recording: the
+   *  rule is "the most recent call recorded during this meeting", which is
+   *  explainable and does the right thing after a stop/restart (the common
+   *  case), unlike first-wins, where a mis-started 5-second recording would
+   *  permanently claim the slot. */
+  callId?: string
   /** Minutes-before-start lead times for a REAL reminder pushed to the
    *  linked Google/Outlook event, so the provider's own app fires its own
    *  native push notification — this is NOT CallRise's own in-app alert
@@ -95,6 +118,8 @@ export interface EventUpdateInput {
   notes?: unknown
   contactId?: unknown
   dealId?: unknown
+  /** See CalendarEvent.callId — written at call-save time, not by the editor. */
+  callId?: unknown
   reminderMinutes?: unknown
 }
 
@@ -194,6 +219,7 @@ function sanitizeEventRecord(value: unknown): CalendarEvent | null {
     deleted: v.deleted === true ? true : undefined, // preserve the tombstone flag
     contactId: isSafeId(v.contactId) ? v.contactId : undefined,
     dealId: isSafeId(v.dealId) ? v.dealId : undefined,
+    callId: isSafeId(v.callId) ? v.callId : undefined,
     reminderMinutes: sanitizeReminderMinutes(v.reminderMinutes),
     createdAt,
     updatedAt: toIso(v.updatedAt) ?? createdAt
@@ -327,6 +353,7 @@ export async function updateEvent(
   if ('contactId' in patch)
     event.contactId = isSafeId(patch.contactId) ? patch.contactId : undefined
   if ('dealId' in patch) event.dealId = isSafeId(patch.dealId) ? patch.dealId : undefined
+  if ('callId' in patch) event.callId = isSafeId(patch.callId) ? patch.callId : undefined
   if ('reminderMinutes' in patch) event.reminderMinutes = sanitizeReminderMinutes(patch.reminderMinutes)
   // Start/end are resolved together so the window always stays valid/ordered.
   if ('start' in patch || 'end' in patch) {

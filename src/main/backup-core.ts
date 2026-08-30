@@ -79,6 +79,38 @@ async function writeConflictCopy(dir: string, id: string, record: unknown): Prom
 }
 
 /**
+ * BUG-138 — is there actually anything to preserve?
+ *
+ * "Both sides changed since the last sync" was the ONLY test before, and it is
+ * a statement about TIMESTAMPS, not about content. Two devices that saved the
+ * same record without changing it — or one device whose lastSyncAt never
+ * advanced because the app was killed mid-sync — satisfy it perfectly while
+ * the two versions are byte-identical. Found on the founder's own machine:
+ * 201 `.conflict` files, every single one identical to the record it sat
+ * beside. Not one was a real conflict.
+ *
+ * That is worse than clutter. The Backup card counts these and warns "N
+ * conflicting copies kept"; at 201 false positives, a genuine conflict — the
+ * one case where a user must look — is invisible in the noise. A warning that
+ * cries wolf is not a safety feature.
+ *
+ * `updatedAt` is excluded from the comparison deliberately: it is the one
+ * field guaranteed to differ (the cloud copy was just re-stamped onto this
+ * device's clock a few lines above), so including it would make every
+ * comparison unequal and restore the original bug.
+ */
+function differsIgnoringTimestamp(a: unknown, b: unknown): boolean {
+  const strip = (v: unknown): string => {
+    if (!v || typeof v !== 'object') return JSON.stringify(v ?? null)
+    const { updatedAt: _ignored, ...rest } = v as Record<string, unknown>
+    // Sorted keys so a differing property ORDER — which JSON.stringify would
+    // otherwise report as a difference — can't manufacture a conflict either.
+    return JSON.stringify(rest, Object.keys(rest).sort())
+  }
+  return strip(a) !== strip(b)
+}
+
+/**
  * Reconcile one store BY RECORD ID — never wipe, never blind-overwrite:
  *   cloud-only      → import it (id-preserving)
  *   local-only      → left alone here; the caller's push uploads it after
@@ -140,7 +172,15 @@ export async function reconcileStore<
     // Both sides here are THIS device's own clock (local.updatedAt and the
     // lastSyncAt we wrote ourselves), so they are already comparable — applying
     // the skew correction to only one of them would reintroduce the same bug.
-    if (lastSyncAt && ts(local.updatedAt) > ts(lastSyncAt) && local.deleted !== true) {
+    if (
+      lastSyncAt &&
+      ts(local.updatedAt) > ts(lastSyncAt) &&
+      local.deleted !== true &&
+      // ...and the two versions actually differ. See differsIgnoringTimestamp:
+      // without this, an app killed mid-sync manufactures one "conflict" per
+      // record on the next restore, all of them identical copies.
+      differsIgnoringTimestamp(local, payload)
+    ) {
       await writeConflictCopy(dir, local.id, local)
     }
     if (await importRecord(dir, payload)) changed++

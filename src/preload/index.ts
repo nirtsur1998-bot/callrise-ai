@@ -234,7 +234,8 @@ const api = {
     onDelta: (cb: (payload: unknown) => void) => subscribe('assistant:delta', cb),
     onError: (cb: (payload: unknown) => void) => subscribe('assistant:error', cb),
     onTurnComplete: (cb: (payload: unknown) => void) => subscribe('assistant:turnComplete', cb),
-    onPhase: (cb: (payload: unknown) => void) => subscribe('assistant:phase', cb)
+    onPhase: (cb: (payload: unknown) => void) => subscribe('assistant:phase', cb),
+    onTrace: (cb: (payload: unknown) => void) => subscribe('assistant:trace', cb)
   },
   crmNoteGenerator: {
     generate: (contactId: string, length: string, opts?: { force?: boolean }) =>
@@ -300,6 +301,8 @@ const api = {
   prepBrief: {
     getForEvent: (input: unknown) => ipcRenderer.invoke('prepBrief:getForEvent', input),
     regenerate: (input: unknown) => ipcRenderer.invoke('prepBrief:regenerate', input),
+    // Read-only batch status for the calendar's prep-brief dots.
+    statuses: (inputs: unknown) => ipcRenderer.invoke('prepBrief:statuses', inputs),
     onOpenRequested: (cb: (eventId: string) => void) =>
       subscribe<string>('prepBrief:openRequested', cb)
   },
@@ -457,7 +460,11 @@ const api = {
         | 'GOOGLE_AI_API_KEY'
         | 'NVIDIA_API_KEY'
         | 'CEREBRAS_API_KEY'
-        | 'MISTRAL_API_KEY',
+        | 'MISTRAL_API_KEY'
+        | 'ZAI_API_KEY'
+        | 'HUGGINGFACE_API_KEY'
+        | 'CLOUDFLARE_API_KEY'
+        | 'CLOUDFLARE_ACCOUNT_ID',
       value: string
     ) => ipcRenderer.invoke('aiKeys:save', name, value),
     clear: (
@@ -471,6 +478,10 @@ const api = {
         | 'NVIDIA_API_KEY'
         | 'CEREBRAS_API_KEY'
         | 'MISTRAL_API_KEY'
+        | 'ZAI_API_KEY'
+        | 'HUGGINGFACE_API_KEY'
+        | 'CLOUDFLARE_API_KEY'
+        | 'CLOUDFLARE_ACCOUNT_ID'
     ) => ipcRenderer.invoke('aiKeys:clear', name),
     validate: (
       providerId:
@@ -481,7 +492,10 @@ const api = {
         | 'google'
         | 'nvidia'
         | 'cerebras'
-        | 'mistral',
+        | 'mistral'
+        | 'zai'
+        | 'huggingface'
+        | 'cloudflare',
       value: string
     ) => ipcRenderer.invoke('aiKeys:validate', providerId, value)
   },
@@ -578,6 +592,8 @@ const api = {
     onCallDetected: (cb: (appName: string) => void) => subscribe('app:callDetected', cb),
     isPackaged: () => ipcRenderer.invoke('app:isPackaged'),
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
+    setTitleBarOverlay: (colors: { color: string; symbolColor: string }) =>
+      ipcRenderer.invoke('app:setTitleBarOverlay', colors),
     getLogsPath: () => ipcRenderer.invoke('app:getLogsPath'),
     openLogsFolder: () => ipcRenderer.invoke('app:openLogsFolder'),
     logRendererError: (scope: string, message: string) =>

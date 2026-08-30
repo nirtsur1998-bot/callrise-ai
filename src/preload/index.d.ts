@@ -735,6 +735,29 @@ export interface AssistantApi {
   onPhase: (
     cb: (payload: { conversationId: string; phase: 'reading' | 'searching' | 'thinking' }) => void
   ) => () => void
+  /** M31 Stage 5 — what the turn ACTUALLY did, emitted once after research
+   *  completes and before the answer request goes out. Built from executed
+   *  outcomes, never from the plan: a lookup that failed or matched nothing
+   *  appears saying so, because silence about it is what makes a trace
+   *  describe intent rather than work. */
+  onTrace: (cb: (payload: AssistantTrace) => void) => () => void
+}
+
+/** One line of the stream-of-thought. `label` is written in main, which is
+ *  what knows the domain; the renderer decides presentation and is never
+ *  asked to infer what happened from a status code. */
+export interface AssistantTraceStep {
+  label: string
+  detail?: string
+  /** ok = it produced something · none = ran, found nothing · failed = threw
+   *  · skipped = never ran (a capability that is switched off). All four are
+   *  worth showing; collapsing them is how a trace starts lying by omission. */
+  status: 'ok' | 'none' | 'failed' | 'skipped'
+}
+
+export interface AssistantTrace {
+  conversationId: string
+  steps: AssistantTraceStep[]
 }
 
 export interface SkillHistoryPoint {
@@ -1433,6 +1456,11 @@ export interface CalendarEvent {
    *  the follow-up dashboard's "next scheduled meeting" line. */
   contactId?: string
   dealId?: string
+  /** M31 Slice B — the call recorded during this meeting, joining plan to
+   *  outcome. Set only at call-save time from the meeting the app already
+   *  knows is running; never inferred afterwards from contact + time
+   *  overlap, which would be a guess. App-local, never pushed. */
+  callId?: string
   /** Minutes-before-start lead times for a REAL reminder pushed to the
    *  linked Google/Outlook event — that provider's own app fires the actual
    *  push notification. Distinct from CallRise's own in-app alerts (see
@@ -1469,6 +1497,9 @@ export interface EventUpdateInput {
   notes?: string | null
   contactId?: string | null
   dealId?: string | null
+  /** See CalendarEvent.callId — written by the live-call save path, not the
+   *  event editor. */
+  callId?: string | null
   reminderMinutes?: number[]
 }
 
@@ -1664,6 +1695,10 @@ export type AiKeyName =
   | 'NVIDIA_API_KEY'
   | 'CEREBRAS_API_KEY'
   | 'MISTRAL_API_KEY'
+  | 'ZAI_API_KEY'
+  | 'HUGGINGFACE_API_KEY'
+  | 'CLOUDFLARE_API_KEY'
+  | 'CLOUDFLARE_ACCOUNT_ID'
 
 export interface AiKeyStatus {
   /** True once real API calls will succeed for this key — a Settings-saved
@@ -1673,12 +1708,25 @@ export interface AiKeyStatus {
   hint: string | null
 }
 
-/** 'anthropic'/'openai' are the original M16 pair. The other six (M20) are
- *  all free-tier providers in the model catalog — see ai/model-catalog.ts
- *  in the main process; this type must stay in lockstep with
- *  src/main/ai/types.ts's AIProviderId. */
+/** 'anthropic'/'openai' are the original M16 pair. The next six (M20) and
+ *  the last two (M31 — Z.ai, Hugging Face) are all free-tier providers in the
+ *  model catalog — see ai/model-catalog.ts in the main process; this type
+ *  must stay in lockstep with src/main/ai/types.ts's AIProviderId, which is
+ *  now derived from the AI_PROVIDER_IDS array there. This copy exists because
+ *  preload cannot import from main; it is checked by
+ *  ai/__tests__/provider-lockstep.test.ts rather than by convention. */
 export type AiProviderId =
-  'anthropic' | 'openai' | 'groq' | 'openrouter' | 'google' | 'nvidia' | 'cerebras' | 'mistral'
+  | 'anthropic'
+  | 'openai'
+  | 'groq'
+  | 'openrouter'
+  | 'google'
+  | 'nvidia'
+  | 'cerebras'
+  | 'mistral'
+  | 'zai'
+  | 'huggingface'
+  | 'cloudflare'
 
 export type AiKeyValidateResult = { ok: true; models: string[] } | { ok: false; reason: string }
 
@@ -2221,6 +2269,9 @@ export interface AppControlApi {
   isPackaged: () => Promise<boolean>
   /** The version string from package.json, for the Settings "Software update" section. */
   getVersion: () => Promise<string>
+  /** Windows only — repaint the native caption buttons to match the theme.
+   *  A no-op elsewhere; never rejects. */
+  setTitleBarOverlay: (colors: { color: string; symbolColor: string }) => Promise<void>
   /** Full path to the on-disk error log, for display/copy in Settings. */
   getLogsPath: () => Promise<string>
   /** Reveals the log file in the OS file explorer (creating it first if nothing has logged yet). */
@@ -2389,11 +2440,16 @@ export interface JobErrorInfo {
   code?: string
 }
 
+/** What a job's `targetRef` names, so the Activity Center knows which screen
+ *  to open. Mirrors main/jobs/types.ts. */
+export type JobTargetKind = 'call' | 'contact' | 'deal'
+
 export interface Job {
   id: string
   type: string
   title: string
   targetRef?: string
+  targetKind?: JobTargetKind
   state: JobState
   progress: JobProgress
   lane: JobLane
@@ -2639,9 +2695,19 @@ export type PrepBriefResult =
     }
   | { ok: false; error: 'no-key' | 'failed' | 'no-context'; message?: string }
 
+/** What the calendar's prep-brief dot may claim. `ready` means opening the
+ *  brief right now genuinely serves the cached copy without spending an AI
+ *  call; `outdated` means the contact/deal/last-call it was written from has
+ *  changed since, so opening it regenerates. See getPrepBriefStatus. */
+export type PrepBriefStatus = 'none' | 'ready' | 'outdated'
+
 export interface PrepBriefApi {
   getForEvent: (input: PrepBriefEventInput) => Promise<PrepBriefResult>
   regenerate: (input: PrepBriefEventInput) => Promise<PrepBriefResult>
+  /** Read-only batch status for a whole visible calendar range — one round
+   *  trip for every chip. Never generates a brief and never writes. Events
+   *  omitted from the result (unparseable input) simply get no dot. */
+  statuses: (inputs: PrepBriefEventInput[]) => Promise<Record<string, PrepBriefStatus>>
   /** Fired when a callrise://meeting/<eventId> deep link is opened (from a
    *  meeting_starting alert) — the caller resolves eventId to a full
    *  PrepBriefEventInput itself (the renderer already holds the merged

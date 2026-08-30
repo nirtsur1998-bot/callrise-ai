@@ -5,6 +5,9 @@ import { Button } from '@renderer/components/Button'
 import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { IconButton } from '@renderer/components/IconButton'
 import type { Memory, MemoryChangelogEntry } from '../../../../preload/index.d'
+import { Brain } from 'lucide-react'
+import { EmptyState } from '@renderer/components/EmptyState'
+import { useAppSettings } from './useAppSettings'
 
 type ScopeFilter = 'rep' | 'business' | 'client'
 
@@ -148,6 +151,10 @@ function MemoryRow({
  *  'active' — a rep wanting to see "what's still a hunch" is exactly the
  *  transparency this whole section exists for. */
 export function MemoryCenterSection(): React.JSX.Element {
+  // Read only — this page never toggles Sales Brain, it just has to stop
+  // claiming facts will appear when the feature that produces them is off.
+  const { settings } = useAppSettings()
+  const salesBrainOn = settings.salesBrain.enabled
   const [scope, setScope] = useState<ScopeFilter>('rep')
   const [memories, setMemories] = useState<Memory[] | null>(null)
   const [showChangelog, setShowChangelog] = useState(false)
@@ -232,9 +239,37 @@ export function MemoryCenterSection(): React.JSX.Element {
         ) : !memories ? (
           <p className="py-4 text-center text-[13px] text-faint">Loading…</p>
         ) : filtered.length === 0 ? (
-          <p className="py-4 text-center text-[13px] text-faint">
-            Nothing here yet — {SCOPE_LABEL[scope].toLowerCase()} facts will show up as calls happen.
-          </p>
+          // M31 Stage 3 — the audit's headline example of a dishonest empty
+          // state. With Sales Brain OFF this said "facts will show up as
+          // calls happen", which is not merely unhelpful: it is FALSE.
+          // Nothing will ever show up, and it prescribes work (make more
+          // calls) that cannot possibly help. Two states that looked
+          // identical and pointed at completely different actions.
+          <EmptyState
+            compact
+            icon={Brain}
+            title={
+              salesBrainOn
+                ? `No ${SCOPE_LABEL[scope].toLowerCase()} facts yet`
+                : 'Sales Brain is switched off'
+            }
+            description={
+              salesBrainOn
+                ? `${SCOPE_LABEL[scope]} facts appear here as calls are analysed.`
+                : undefined
+            }
+            reason={
+              salesBrainOn
+                ? { kind: 'empty' }
+                : {
+                    kind: 'off',
+                    settingsPage: 'sales-brain',
+                    what: 'Sales Brain learns who you are, how you sell, your business and each client, so every AI feature gets sharper over time.',
+                    cost: 'Runs entirely on your own device. Nothing is sent anywhere.',
+                    actionLabel: 'Turn on Sales Brain'
+                  }
+            }
+          />
         ) : (
           <div>
             {filtered.map((m) => (

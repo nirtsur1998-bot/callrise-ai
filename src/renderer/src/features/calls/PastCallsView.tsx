@@ -28,10 +28,24 @@ export function PastCallsView({
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId)
   const toast = useToast()
 
-  const consumedRef = useRef(false)
+  // M31 — track WHICH id was applied, not merely THAT one was.
+  //
+  // This was a boolean latch that was set once and never reset, so
+  // initialSelectedId only ever took effect on the first mount. That was
+  // invisible while the only caller was the command palette (which opens one
+  // record and you navigate away), and it became a real bug the moment the
+  // sidebar RECENT trail started opening records too: the first click worked,
+  // and every later one silently did nothing while the page kept showing the
+  // previous call. Found by clicking two recent calls in a row and reading
+  // the title, rather than by trusting the first one that worked.
+  //
+  // Keyed by id, so a REPEAT of the same id is still consumed once (no reopen
+  // loop on a plain revisit) while a DIFFERENT id always applies.
+  const consumedIdRef = useRef<string | null>(null)
   useEffect(() => {
-    if (initialSelectedId && !consumedRef.current) {
-      consumedRef.current = true
+    if (initialSelectedId && consumedIdRef.current !== initialSelectedId) {
+      consumedIdRef.current = initialSelectedId
+      setSelectedId(initialSelectedId)
       onInitialSelectionConsumed?.()
     }
   }, [initialSelectedId, onInitialSelectionConsumed])

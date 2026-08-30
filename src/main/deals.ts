@@ -156,6 +156,7 @@ export function registerDeals(): void {
     lane: 'INTERACTIVE',
     titleFor: () => 'Assessing deal risk',
     targetRefFor: (i) => i.dealId,
+    targetKind: 'deal',
     // BUG-060 — earned: handle.signal is threaded into assessDealRisk below.
     cancellable: true,
     executor: {

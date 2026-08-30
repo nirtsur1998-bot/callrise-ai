@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { X, Trash2, Sparkles } from 'lucide-react'
+import { X, Trash2, Sparkles, PhoneCall } from 'lucide-react'
 import { Modal } from '@renderer/components/Modal'
 import { IconButton } from '@renderer/components/IconButton'
 import { Button } from '@renderer/components/Button'
@@ -37,6 +37,12 @@ interface EventDialogProps {
   /** M19 Task 3B — present only when editing an existing event (a new,
    *  unsaved event has no identity to key a brief on). */
   onOpenPrepBrief?: () => void
+  /** M31 Slice B — present only when a call was actually recorded during
+   *  this meeting (a hard link written at save time, never a guess). This
+   *  is where the plan hands off to the outcome: the chip and this dialog
+   *  are always the PLAN, and reaching the call is a separate, labelled
+   *  click rather than a click that silently changes what you get. */
+  onOpenCall?: () => void
   /** True when two-way sync is on for Google and/or Outlook — reminders only
    *  reach the user's phone/desktop once this event actually pushes to one
    *  of those, so the picker explains itself when neither is connected. */
@@ -50,6 +56,7 @@ export function EventDialog({
   onSubmit,
   onDelete,
   onOpenPrepBrief,
+  onOpenCall,
   syncEnabled = false
 }: EventDialogProps): React.JSX.Element {
   const [draft, setDraft] = useState<EventDraft>(initial)
@@ -257,17 +264,55 @@ export function EventDialog({
               )
             })}
           </div>
+          {/* One short line, always. This sentence is the app's promise about
+              whether a reminder will actually reach you, and it was long
+              enough to be the text that got clipped at the bottom of the
+              scroll area — a promise you could only read half of.
+              The Outlook multi-reminder caveat is the part that made it
+              long, so it now appears ONLY when it can apply (two or more
+              lead times picked), which is rare. It also replaces the old
+              "the soonest picked is used", which read as though picking 5m
+              and 30m would remind you at 5m: outlook-sync.ts takes
+              Math.max, so it fires 30 minutes before. Same behaviour,
+              honest description. */}
+          {/* "Sent to" rather than "fires" / "reaches your phone", on
+              purpose. CallRise writes reminders to the provider and never
+              reads them back (see BUG-136) — nothing here can confirm one
+              landed, or notice if it was rejected. Claiming it WILL reach
+              your phone states an outcome we cannot observe; describing
+              what we actually do is the honest version, and the one that
+              won't be quietly wrong the day a push starts failing. */}
           <p className="mt-1.5 text-[11px] text-faint">
             {syncEnabled
-              ? 'Fires as a real push notification in Google/Outlook once this event syncs. Outlook only supports one lead time — the soonest picked is used.'
-              : 'Only takes effect once two-way sync is on for Google or Outlook — connect one above to get real push reminders.'}
+              ? 'Sent to Google/Outlook, which then reminds you — check there if it matters.'
+              : 'Notifies you on this computer, only while CallRise AI is open.'}
           </p>
+          {syncEnabled && draft.reminderMinutes.length > 1 && (
+            <p className="mt-1 text-[11px] text-faint">
+              Outlook allows one only — it uses {Math.max(...draft.reminderMinutes)}m, the earliest.
+            </p>
+          )}
+          {!syncEnabled && (
+            <p className="mt-1 text-[11px] text-faint">
+              Turn on two-way sync in Settings → Calendar to get phone reminders.
+            </p>
+          )}
         </Field>
-        {isEdit && onOpenPrepBrief && (
-          <Button variant="secondary" size="sm" icon={Sparkles} onClick={onOpenPrepBrief}>
-            Prep brief
-          </Button>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {isEdit && onOpenPrepBrief && (
+            <Button variant="secondary" size="sm" icon={Sparkles} onClick={onOpenPrepBrief}>
+              Prep brief
+            </Button>
+          )}
+          {/* The one place the plan hands off to the outcome, said in words
+              rather than implied by an icon. Only rendered when a real call
+              was recorded during this meeting. */}
+          {isEdit && onOpenCall && (
+            <Button variant="secondary" size="sm" icon={PhoneCall} onClick={onOpenCall}>
+              View the call
+            </Button>
+          )}
+        </div>
         {error && <p className="text-[13px] text-danger">{error}</p>}
       </div>
 

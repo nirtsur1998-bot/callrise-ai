@@ -56,6 +56,7 @@ import {
   defaultToolDirs,
   executeLookups,
   planLookups,
+  LOOKUP_LABEL,
   type TaskProposal
 } from './tools'
 import {
@@ -353,7 +354,8 @@ async function handleSend(
     // answering "will the brain be consulted" must not drift. When it will
     // not be, the turn skips straight to the phase it IS in — planning runs
     // regardless — rather than inventing a step.
-    if (isSalesBrainEnabled() && getMemoryDb() !== null) {
+    const brainConsulted = isSalesBrainEnabled() && getMemoryDb() !== null
+    if (brainConsulted) {
       broadcast('assistant:phase', { conversationId, phase: 'reading' })
     } else {
       broadcast('assistant:phase', { conversationId, phase: 'searching' })
@@ -401,6 +403,84 @@ async function handleSend(
       turn.controller.signal,
       scope?.contactId
     )
+
+    // ── M31 Stage 5: the stream-of-thought record ─────────────────────
+    //
+    // WRAPPED, and never unwrapped. This is an OBSERVATION of the turn, so
+    // it must not be able to change the turn — the standing safety-path rule
+    // in this repo. A trace that throws while describing a successful answer
+    // would turn a working send into a failed one, which is a strictly worse
+    // product than having no trace at all.
+    try {
+    //
+    // Emitted HERE, after executeLookups has returned, and built from its
+    // steps rather than from `planned`. That ordering is the whole design
+    // constraint: a trace assembled from the plan would report lookups
+    // that failed or found nothing as though they had contributed, which
+    // is showing intent while claiming to show work — the exact thing this
+    // feature exists to not be.
+    //
+    // Labels are written in main because main is what knows the domain.
+    // The renderer decides presentation; it is never asked to infer what
+    // happened from a status code.
+    broadcast('assistant:trace', {
+      conversationId,
+      steps: [
+        // Sales Brain is reported whether or not it was consulted, and
+        // whether or not it found anything. "Off" and "on but nothing
+        // relevant" are different answers to "why did it say that", and
+        // both are more useful than an absent line.
+        brainConsulted
+          ? retrieved.length > 0
+            ? {
+                label: 'Read your Sales Brain',
+                detail:
+                  retrieved.length === 1
+                    ? '1 relevant memory'
+                    : String(retrieved.length) + ' relevant memories',
+                status: 'ok' as const
+              }
+            : {
+                label: 'Read your Sales Brain',
+                detail: 'nothing relevant to this question',
+                status: 'none' as const
+              }
+          : {
+              label: 'Sales Brain',
+              detail: 'off, so nothing was read',
+              status: 'skipped' as const
+            },
+        ...(scope
+          ? [
+              {
+                label: 'Read this client\'s brief',
+                detail:
+                  clientBrief.length > 0
+                    ? scope.contactName
+                    : 'nothing on file yet',
+                status: (clientBrief.length > 0 ? 'ok' : 'none') as 'ok' | 'none'
+              }
+            ]
+          : []),
+        ...(lookups.steps ?? []).map((s) => ({
+          label: LOOKUP_LABEL[s.kind] ?? s.kind,
+          detail:
+            s.status === 'failed'
+              ? (s.query ? s.query + ' — lookup failed' : 'lookup failed')
+              : s.status === 'none'
+                ? (s.query ? s.query + ' — nothing found' : 'nothing found')
+                : (s.query ? s.query + ' — ' : '') +
+                  (s.count === 1 ? '1 result' : String(s.count) + ' results'),
+          status: (s.status === 'found' ? 'ok' : s.status === 'none' ? 'none' : 'failed') as
+            | 'ok'
+            | 'none'
+            | 'failed'
+        }))
+        ]
+      })
+    } catch {
+      // No trace this turn. The answer is unaffected, which is the point.
+    }
     if (turn.stopRequested) return { ok: false, error: 'cancelled', message: 'Stopped.' }
     const context = buildAssistantContext({
       repProfile: repProfileSection('full'),

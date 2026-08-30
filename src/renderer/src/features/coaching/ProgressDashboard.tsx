@@ -98,7 +98,11 @@ export function ProgressDashboard({ onBack }: { onBack: () => void }): React.JSX
           icon={Target}
           title="No skill data yet"
           titleAs="h2"
-          description="Coach a call with Coach 2.0 turned on (Settings → Coach 2.0) to start building your skill graph."
+          // Genuinely `empty`, not `off`: reaching this screen at all now
+          // requires skill tracking to be ON (CoachingView shows the off-state
+          // instead), so the honest next step is to coach a call — not to go
+          // flip a switch that is already flipped.
+          description="Coach a call and its eight skill scores land here. The graph needs at least one coached call to draw."
         />
       ) : (
         <>

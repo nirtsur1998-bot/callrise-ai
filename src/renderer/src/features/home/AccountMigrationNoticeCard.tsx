@@ -50,18 +50,18 @@ export function AccountMigrationNoticeCard(): React.JSX.Element | null {
   if (!pending) return null
 
   return (
-    <div className="mb-5 flex items-start gap-3 rounded-xl border border-line bg-surface-1 px-4 py-3 text-[13px] text-fg-2">
+    <div className="mb-5 flex items-start gap-3 rounded-xl border border-line bg-surface px-4 py-3 text-[13px] text-muted">
       <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
       <div className="min-w-0 flex-1">
-        <p className="font-medium text-fg-1">You&rsquo;ll need to sign in again — your data is safe</p>
+        <p className="font-medium text-ink">You&rsquo;ll need to sign in again — your data is safe</p>
         <p className="mt-0.5 leading-relaxed">
           We moved to a new sign-in service, so your old session no longer works.{' '}
-          <span className="font-medium text-fg-1">
+          <span className="font-medium text-ink">
             Create your account again using the same email address
           </span>{' '}
           and everything re-uploads itself. Your calls, transcripts, contacts and Sales Brain live on
           this computer and are completely unaffected.{' '}
-          <span className="font-medium text-fg-1">
+          <span className="font-medium text-ink">
             Please don&rsquo;t press &ldquo;Sign out&rdquo;
           </span>{' '}
           — that clears your saved AI keys, and you don&rsquo;t need it here.
@@ -71,7 +71,7 @@ export function AccountMigrationNoticeCard(): React.JSX.Element | null {
         type="button"
         onClick={dismiss}
         aria-label="Dismiss"
-        className="shrink-0 rounded-md p-1 text-fg-3 transition hover:bg-surface-2 hover:text-fg-2"
+        className="shrink-0 rounded-md p-1 text-faint transition hover:bg-elevated hover:text-muted"
       >
         <X className="h-3.5 w-3.5" />
       </button>

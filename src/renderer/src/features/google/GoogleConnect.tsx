@@ -26,9 +26,17 @@ function friendlyError(code: string): string {
     case 'encryption-unavailable':
       return "This Mac's secure storage isn't available, so the login can't be saved safely."
     case 'access_denied':
-      return 'You declined the Google permission. Click Connect to try again.'
+      return "Google didn't grant access. If you declined, click Connect to try again — if your browser said “Access blocked”, see below."
     case 'timeout':
-      return 'Authorization timed out — click Connect to try again.'
+      // Google never redirected back. The most common reason by far is a
+      // TERMINAL block in the browser that we can't see from here: Google's
+      // "Access blocked — has not completed the Google verification process"
+      // page, shown when this app's OAuth client is still in Testing status
+      // and the chosen account isn't an approved tester. Retrying does
+      // nothing for that, so the old "timed out — click Connect to try
+      // again" was actively misleading: it framed a permanent
+      // configuration problem as a transient one.
+      return 'Google never finished authorizing. If your browser showed “Access blocked — CallRise AI has not completed the Google verification process”, retrying won’t help: this app’s Google connection is still in testing, and your account has to be added as an approved tester (or the app published) in its Google Cloud project first.'
     case 'read-failed':
       return "Couldn't read your calendars — try Refresh."
     case 'write-failed':
@@ -65,6 +73,14 @@ export function GoogleConnect({
   const [connected, setConnected] = useState(false)
   const [mode, setMode] = useState<SyncMode>('readonly')
   const [connecting, setConnecting] = useState(false)
+  // BUG-137 — Google's "Access blocked" page is TERMINAL: it never redirects
+  // back to our loopback server, so the app has no event to react to and
+  // simply waits out its five-minute timeout. That left a user staring at
+  // "Waiting for Google…" for five minutes before being told anything at
+  // all, and what they were finally told ("timed out, try again") was wrong.
+  // We still can't see the browser, but we don't have to pretend the silence
+  // is normal: after this long, say what has almost certainly happened.
+  const [stalled, setStalled] = useState(false)
   const [enablingSync, setEnablingSync] = useState(false)
   const [calendars, setCalendars] = useState<Calendar[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -76,6 +92,20 @@ export function GoogleConnect({
       mounted.current = false
     }
   }, [])
+
+  // Arm the "this has gone quiet" hint while an authorization is in flight.
+  // 40s is chosen to be comfortably longer than a real sign-in (which lands
+  // in a few seconds once approved) and far shorter than the main process's
+  // five-minute give-up, so the user hears something useful while the browser
+  // is still open in front of them rather than long after they've moved on.
+  useEffect(() => {
+    if (!connecting && !enablingSync) {
+      setStalled(false)
+      return
+    }
+    const id = setTimeout(() => setStalled(true), 40_000)
+    return () => clearTimeout(id)
+  }, [connecting, enablingSync])
 
   const loadCalendars = async (): Promise<void> => {
     const res = await window.api.google.listCalendars()
@@ -241,11 +271,31 @@ export function GoogleConnect({
         )}
       </div>
 
+      {/* The old wording told users to "click past the unverified app
+          warning" as though every Google warning is dismissible. The one
+          they actually hit most is not: "Access blocked — has not completed
+          the Google verification process" is a dead end, and telling someone
+          to click past it sends them looking for a button that isn't there.
+          Both cases are now named for what they are. */}
       {(connecting || enablingSync) && (
         <p className="mt-2.5 text-[11px] text-faint">
-          A Google sign-in opened in your browser. Approve it there (click past the “unverified app”
-          warning){enablingSync && ' and allow the “see and edit events” permission'}, then come
-          back — this updates automatically.
+          A Google sign-in opened in your browser. Approve it there
+          {enablingSync && ' and allow the “see and edit events” permission'} — an “unverified app”
+          warning can be clicked past. If it instead says “Access blocked”, stop: that one can’t be,
+          and this account needs adding as an approved tester first.
+        </p>
+      )}
+
+      {(connecting || enablingSync) && stalled && (
+        <p className="mt-2 flex items-start gap-1.5 text-[11px] text-warning">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>
+            Still nothing back from Google. If the browser is showing “Access blocked — CallRise AI
+            has not completed the Google verification process”, that is a dead end and waiting
+            won’t change it: this app’s Google connection has to be published, or this account
+            added as an approved tester, before it can work. You can close the browser tab and
+            carry on — Outlook works today.
+          </span>
         </p>
       )}
 

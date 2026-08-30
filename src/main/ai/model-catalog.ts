@@ -13,6 +13,7 @@
 // resolveCatalog() is the real confirmation once a user's real key runs it.
 import type { AIProviderId } from './types'
 import { PROVIDER_REGISTRY } from './registry'
+import { providerHasCredentials } from './provider-credentials'
 
 // The 8 model brands from the brief, plus 'openrouter' for the one entry
 // (auto-router) whose "model" is OpenRouter's own routing feature rather
@@ -304,6 +305,135 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     // your data" marketing claim without a direct primary-source quote.
   },
 
+  // ---- M31: Z.ai (GLM). Both ids are listed at $0.00 in/out on Z.ai's own
+  // pricing page, indefinitely — an ongoing free tier, not expiring credits.
+  // Ids taken from their API reference, which enumerates them lowercase;
+  // their marketing pages render the same models "GLM-4.5-Flash". Verified
+  // 2026-08-30. NOTE: Z.ai has no free LARGE model — the quality entry below
+  // is their best FREE model, not their best model.
+  {
+    id: 'zai-glm-4.5-flash',
+    displayName: 'GLM-4.5 Flash',
+    brand: 'zai',
+    providerId: 'zai',
+    lane: 'speed',
+    modelId: 'glm-4.5-flash',
+    contextWindow: 128_000,
+    retentionPosture: 'no-training',
+    retentionUrl: 'https://docs.z.ai/legal-agreement/terms-of-use',
+    keyUrl: 'https://z.ai/manage-apikey/apikey-list'
+    // 'no-training' rests on a direct quote from their Terms of Use, and is
+    // scoped to API users: Z.ai will not use End User Content to develop or
+    // improve its services without explicit agreement. Their consumer chat
+    // platform gets weaker terms — this entry is the API only.
+  },
+  {
+    id: 'zai-glm-4.7-flash',
+    displayName: 'GLM-4.7 Flash',
+    brand: 'zai',
+    providerId: 'zai',
+    lane: 'quality',
+    modelId: 'glm-4.7-flash',
+    contextWindow: 128_000,
+    retentionPosture: 'no-training',
+    retentionUrl: 'https://docs.z.ai/legal-agreement/terms-of-use',
+    keyUrl: 'https://z.ai/manage-apikey/apikey-list'
+    // Same terms as the entry above. Z.ai publishes no numeric rate limit in
+    // its own docs; secondary sources say one concurrent request on the free
+    // tier, which I could not confirm officially and so have not encoded.
+  },
+
+  // ---- M31: Hugging Face Inference Providers (a ROUTER, like OpenRouter).
+  // Both ids were confirmed against the LIVE endpoint — GET
+  // router.huggingface.co/v1/models, 2026-08-30 — not a docs page, which is
+  // the strongest verification any entry in this file has.
+  {
+    id: 'hf-gpt-oss-20b',
+    displayName: 'GPT-OSS 20B',
+    brand: 'openai',
+    providerId: 'huggingface',
+    lane: 'speed',
+    modelId: 'openai/gpt-oss-20b',
+    contextWindow: 128_000,
+    retentionPosture: 'unknown',
+    retentionUrl: 'https://huggingface.co/docs/inference-providers/security',
+    keyUrl: 'https://huggingface.co/settings/tokens'
+    // 'unknown' is deliberate and is NOT a gap in the research. Hugging Face
+    // itself is clean — it states it does not store the request body or
+    // response, and keeps debug logs 30 days — but the inference happens at
+    // whichever of ~18 downstream providers the router picks, and HF's own
+    // security page refers you to each provider's terms. The honest posture
+    // for a routed request is therefore 'unknown', exactly as it is for the
+    // OpenRouter auto-router entry below.
+  },
+  {
+    id: 'hf-gpt-oss-120b',
+    displayName: 'GPT-OSS 120B',
+    brand: 'openai',
+    providerId: 'huggingface',
+    lane: 'quality',
+    modelId: 'openai/gpt-oss-120b',
+    contextWindow: 128_000,
+    retentionPosture: 'unknown',
+    retentionUrl: 'https://huggingface.co/docs/inference-providers/security',
+    keyUrl: 'https://huggingface.co/settings/tokens'
+    // THIRD home for this model (Groq and Cerebras above), which the chain
+    // mechanism handles as ordinary fallback. Lane differs from those two on
+    // purpose: they are speed-lane because Groq and Cerebras are unusually
+    // fast inference, whereas the HF router is not — same weights, different
+    // latency characteristics, so the lane that reflects reality is quality.
+    // Same routed-retention caveat as the entry above.
+  },
+
+  // ---- M31: Cloudflare Workers AI. Both ids were read off Cloudflare's own
+  // per-model documentation pages on 2026-08-30, which print the namespaced
+  // Model ID verbatim — NOT from the summary list, which drops the '@cf/'
+  // prefix entirely and would have produced two ids that 404 on every call.
+  // Worth stating because a first pass at this had 'llama-3.1-8b-instruct-
+  // fp8-fast', which is a conflation of two REAL but DIFFERENT models
+  // ('-fast' and '-fp8'), and would have looked entirely plausible.
+  //
+  // Free tier is a daily-resetting neuron allowance with no card required —
+  // the largest ongoing free allowance of any provider in this catalog. Both
+  // ids below are absent from Cloudflare's paid-billing-only model list.
+  {
+    id: 'cloudflare-llama-3.1-8b-fast',
+    displayName: 'Llama 3.1 8B Fast',
+    brand: 'meta',
+    providerId: 'cloudflare',
+    lane: 'speed',
+    modelId: '@cf/meta/llama-3.1-8b-instruct-fast',
+    contextWindow: 128_000,
+    retentionPosture: 'no-training',
+    retentionUrl: 'https://developers.cloudflare.com/workers-ai/platform/data-usage/',
+    keyUrl: 'https://dash.cloudflare.com/profile/api-tokens'
+    // NOTE for whoever debugs a truncated Cloudflare response: their model
+    // page documents a DEFAULT max_tokens of 256. Every call this app makes
+    // sets maxTokens explicitly, so the default is never used — but a caller
+    // that ever stopped setting it would get 256 tokens and no error.
+  },
+  {
+    id: 'cloudflare-gpt-oss-120b',
+    displayName: 'GPT-OSS 120B',
+    brand: 'openai',
+    providerId: 'cloudflare',
+    lane: 'quality',
+    modelId: '@cf/openai/gpt-oss-120b',
+    contextWindow: 128_000,
+    retentionPosture: 'no-training',
+    retentionUrl: 'https://developers.cloudflare.com/workers-ai/platform/data-usage/',
+    keyUrl: 'https://dash.cloudflare.com/profile/api-tokens'
+    // FOURTH home for this model (Groq, Cerebras, Hugging Face above), which
+    // the chain treats as ordinary failover. Cloudflare's own model page
+    // lists function calling as supported — but their OpenAI-compatibility
+    // page documents only /chat/completions and /embeddings and says nothing
+    // about tools, so compat-layer support is UNVERIFIED. Left without
+    // supportsToolCalling per this file's convention: that flag is set to
+    // false only when verified false, never on suspicion, so an unverified
+    // model is offered rather than silently excluded. "Test key" exercises
+    // the real path and will surface it immediately if it is missing.
+  },
+
   // ---- Auto-router — resilience when a specific free id gets pulled ----
   {
     id: 'openrouter-auto-free',
@@ -382,7 +512,9 @@ export async function resolveCatalog(opts?: { forceRefresh?: boolean }): Promise
 
   for (const providerId of new Set(MODEL_CATALOG.map((e) => e.providerId))) {
     const entry = PROVIDER_REGISTRY[providerId]
-    const key = process.env[entry.keyEnvName]?.trim()
+    const key = providerHasCredentials(providerId)
+      ? process.env[entry.keyEnvName]?.trim()
+      : undefined
     providerHasKey.set(providerId, Boolean(key))
     if (!key) continue
     listModelsByProvider.set(

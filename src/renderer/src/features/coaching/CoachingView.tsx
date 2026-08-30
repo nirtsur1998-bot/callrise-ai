@@ -21,6 +21,32 @@ export function CoachingView(): React.JSX.Element {
   const [showProgress, setShowProgress] = useState(false)
 
   if (showProgress) {
+    if (!settings.coach2.enabled) {
+      return (
+        <div className="mx-auto max-w-3xl">
+          <PageHeader
+            title="Progress"
+            actions={
+              <Button variant="secondary" size="sm" onClick={() => setShowProgress(false)}>
+                <ArrowLeft className="h-3.5 w-3.5" /> Back
+              </Button>
+            }
+          />
+          <EmptyState
+            icon={LineChart}
+            title="Skill tracking is switched off"
+            titleAs="h2"
+            reason={{
+              kind: 'off',
+              settingsPage: 'coach2',
+              what: 'Scores every coached call against eight named selling skills and charts how each one moves over time, so you can see which is actually improving and pick one to work on.',
+              cost: 'Uses your existing coaching results — no extra AI calls, nothing new leaves your device.',
+              actionLabel: 'Turn on skill tracking'
+            }}
+          />
+        </div>
+      )
+    }
     return <ProgressDashboard onBack={() => setShowProgress(false)} />
   }
 
@@ -57,11 +83,15 @@ export function CoachingView(): React.JSX.Element {
         title="Coaching"
         count={`${coached.length} coached call${coached.length === 1 ? '' : 's'}`}
         actions={
-          settings.coach2.enabled && (
-            <Button variant="secondary" size="sm" onClick={() => setShowProgress(true)}>
-              <LineChart className="h-3.5 w-3.5" /> Progress
-            </Button>
-          )
+          // M31 Stage 3 — visible-off. This button used to render ONLY when
+          // Coach 2.0 was on, which is the whole "13 features with zero
+          // visible trace" problem in one line: a feature you cannot see is
+          // a feature you cannot discover, and the app looked identical
+          // whether or not you owned it. It is always here now; with the
+          // feature off it opens an honest explanation instead of a graph.
+          <Button variant="secondary" size="sm" onClick={() => setShowProgress(true)}>
+            <LineChart className="h-3.5 w-3.5" /> Progress
+          </Button>
         }
       />
       <ul className="space-y-2.5">

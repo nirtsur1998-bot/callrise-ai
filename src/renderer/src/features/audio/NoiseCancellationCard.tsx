@@ -68,7 +68,7 @@ export function NoiseCancellationCard(): React.JSX.Element | null {
               'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition disabled:opacity-60',
               helperRunning
                 ? 'border border-line bg-surface text-ink hover:bg-elevated'
-                : 'bg-accent text-white hover:opacity-90'
+                : 'bg-accent-fill text-on-accent hover:opacity-90'
             )}
           >
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
@@ -102,7 +102,7 @@ export function NoiseCancellationCard(): React.JSX.Element | null {
             type="button"
             disabled={busy}
             onClick={() => void installDriver()}
-            className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-accent-fill px-3 py-1.5 text-[13px] font-medium text-on-accent transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Install

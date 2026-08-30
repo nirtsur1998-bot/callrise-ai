@@ -1,6 +1,5 @@
 import { addMinutes, startOfDay, endOfDay, format } from 'date-fns'
 import type { Task } from '@renderer/features/tasks/types'
-import type { CallSummary } from '@renderer/features/calls/types'
 import type { CalendarEvent, CalendarItem, CalendarItemKind, EventDraft } from './types'
 
 /** Tailwind classes per kind: chips (month), blocks (week), and the legend dot. */
@@ -10,20 +9,19 @@ export const ITEM_STYLES: Record<CalendarItemKind, { chip: string; block: string
     block: 'border-l-2 border-accent bg-accent/15 text-ink',
     dot: 'bg-accent'
   },
+  // M31 Stage 4: task/google moved off --color-warning/--color-positive onto
+  // their own track tokens. A chip's colour says where the item came from —
+  // a category — and borrowing a status colour made every task read as a
+  // warning and every Google meeting read as a success.
   task: {
-    chip: 'bg-warning-soft text-warning',
-    block: 'border-l-2 border-warning bg-warning-soft text-warning',
-    dot: 'bg-warning'
-  },
-  call: {
-    chip: 'bg-track-call-soft text-track-call',
-    block: 'border-l-2 border-track-call bg-track-call-soft text-track-call',
-    dot: 'bg-track-call'
+    chip: 'bg-track-task-soft text-track-task',
+    block: 'border-l-2 border-track-task bg-track-task-soft text-track-task',
+    dot: 'bg-track-task'
   },
   google: {
-    chip: 'bg-positive-soft text-positive',
-    block: 'border-l-2 border-positive bg-positive-soft text-positive',
-    dot: 'bg-positive'
+    chip: 'bg-track-google-soft text-track-google',
+    block: 'border-l-2 border-track-google bg-track-google-soft text-track-google',
+    dot: 'bg-track-google'
   },
   outlook: {
     chip: 'bg-track-outlook-soft text-track-outlook',
@@ -35,21 +33,20 @@ export const ITEM_STYLES: Record<CalendarItemKind, { chip: string; block: string
 export const KIND_LABEL: Record<CalendarItemKind, string> = {
   event: 'Event',
   task: 'Task',
-  call: 'Call',
   google: 'Google',
   outlook: 'Outlook'
 }
 
-const MIN_CALL_MINUTES = 15
-
-/** Merge manual events, due tasks, past calls, and Google/Outlook events into
- *  one render-ready list. Google/Outlook events are read-only overlays UNLESS
+/** Merge manual events, due tasks, and Google/Outlook events into one
+ *  render-ready list. Google/Outlook events are read-only overlays UNLESS
  *  two-way sync is on for that provider, in which case editing/deleting one
- *  adopts it. */
+ *  adopts it. Past calls deliberately do NOT appear here (BUG-135, M31
+ *  Stage 2's calendar-design pass) — a calendar dominated by call history
+ *  rather than upcoming events read as cluttered at real call volume; that
+ *  history already lives in Past Calls and each contact/deal's own timeline. */
 export function buildItems(
   events: CalendarEvent[],
   tasks: Task[],
-  calls: CallSummary[],
   googleEvents: CalendarEvent[] = [],
   googleWritable = false,
   outlookEvents: CalendarEvent[] = [],
@@ -129,20 +126,6 @@ export function buildItems(
       allDay: true,
       done: t.status === 'done',
       subtitle: t.clientName
-    })
-  }
-
-  for (const c of calls) {
-    const start = new Date(c.createdAt)
-    const minutes = Math.max(Math.round(c.durationMs / 60000), MIN_CALL_MINUTES)
-    items.push({
-      key: `call-${c.id}`,
-      kind: 'call',
-      title: c.title,
-      start,
-      end: addMinutes(start, minutes),
-      allDay: false,
-      subtitle: `${c.speakerCount} speaker${c.speakerCount === 1 ? '' : 's'}`
     })
   }
 
@@ -301,4 +284,38 @@ export function draftToInput(draft: EventDraft): {
     dealId,
     reminderMinutes
   }
+}
+
+/* M31 Stage 4 — the risk and prep-brief markers.
+ *
+ * These are dots drawn ON TOP of a coloured chip fill, which is why they get
+ * their own module-level constants rather than being inlined twice: the
+ * failure mode is not "wrong hue", it's "no contrast against the thing
+ * underneath". A medium-risk dot was --color-warning amber sitting on an
+ * amber event chip, and the ready-brief dot was --color-accent — the exact
+ * same amber as the chip fill it sat on. Both were, in the literal sense,
+ * invisible on the items most likely to have them.
+ *
+ * The load-bearing fix is the ring, not the hue: a ring in --color-canvas
+ * separates the dot from ANY chip fill in either theme, because canvas is
+ * the page ground and is therefore maximally distant from every fill drawn
+ * on it. That holds even for a track colour we add later.
+ *
+ * Hues, on top of that: risk keeps danger/warning because risk genuinely IS
+ * a severity — that reuse is correct and stays. The ready-brief dot moves
+ * from accent to positive, which is also a real claim ("this is good to
+ * open") rather than "this is ours". 'outdated' stays hollow: it means
+ * "there is one, but opening it rebuilds it", a weaker claim that should
+ * keep looking like one.
+ */
+const MARKER = 'h-1.5 w-1.5 shrink-0 rounded-full ring-1 ring-canvas'
+
+export const RISK_DOT: Record<'high' | 'medium', string> = {
+  high: `${MARKER} bg-danger`,
+  medium: `${MARKER} bg-warning`
+}
+
+export const BRIEF_DOT: Record<'ready' | 'outdated', string> = {
+  ready: `${MARKER} bg-positive`,
+  outdated: `${MARKER} border border-current bg-transparent opacity-60`
 }

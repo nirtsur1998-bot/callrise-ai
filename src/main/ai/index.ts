@@ -1,5 +1,6 @@
 import type { AIProvider, AIProviderId } from './types'
 import { PROVIDER_REGISTRY } from './registry'
+import { providerHasCredentials } from './provider-credentials'
 import { loadAppSettings } from '../app-settings'
 
 export * from './types'
@@ -19,7 +20,9 @@ export function keyEnvNameFor(providerId: AIProviderId): string {
 export function getAIProvider(providerId: AIProviderId): AIProvider | null {
   const entry = PROVIDER_REGISTRY[providerId]
   const key = process.env[entry.keyEnvName]?.trim()
-  if (!key) return null
+  // providerHasCredentials, not just the key: Cloudflare also needs an account
+  // id, and a provider built without one would address nothing.
+  if (!key || !providerHasCredentials(providerId)) return null
   return entry.build(key)
 }
 

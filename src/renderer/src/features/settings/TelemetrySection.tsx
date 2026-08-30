@@ -24,10 +24,10 @@ import { TELEMETRY_NEVER_SENDS, TELEMETRY_SENDS } from './telemetry-copy'
 
 function EventRow({ event }: { event: TelemetryEvent }): React.JSX.Element {
   return (
-    <li className="rounded-lg border border-line-soft bg-surface-2 p-3 font-mono text-[11px] leading-relaxed text-fg-2">
+    <li className="rounded-lg border border-line-soft bg-elevated p-3 font-mono text-[11px] leading-relaxed text-muted">
       <div className="mb-1 flex items-center justify-between gap-3 font-sans text-[12px]">
-        <span className="font-medium text-fg-1">{event.name}</span>
-        <span className="text-fg-3">{new Date(event.ts).toLocaleString()}</span>
+        <span className="font-medium text-ink">{event.name}</span>
+        <span className="text-faint">{new Date(event.ts).toLocaleString()}</span>
       </div>
       <pre className="whitespace-pre-wrap break-all">{JSON.stringify(event.props, null, 2)}</pre>
     </li>
@@ -39,10 +39,10 @@ function SentRow({ row }: { row: TelemetrySentRow }): React.JSX.Element {
   // repeated per row, exactly as posted.
   const { event_id: _id, ...rest } = row
   return (
-    <li className="rounded-lg border border-line-soft bg-surface-2 p-3 font-mono text-[11px] leading-relaxed text-fg-2">
+    <li className="rounded-lg border border-line-soft bg-elevated p-3 font-mono text-[11px] leading-relaxed text-muted">
       <div className="mb-1 flex items-center justify-between gap-3 font-sans text-[12px]">
-        <span className="font-medium text-fg-1">{row.name}</span>
-        <span className="text-fg-3">{new Date(row.client_ts).toLocaleString()}</span>
+        <span className="font-medium text-ink">{row.name}</span>
+        <span className="text-faint">{new Date(row.client_ts).toLocaleString()}</span>
       </div>
       <pre className="whitespace-pre-wrap break-all">{JSON.stringify(rest, null, 2)}</pre>
     </li>
@@ -168,16 +168,16 @@ export function TelemetrySection(): React.JSX.Element {
         />
         <div className="mt-4 grid gap-4 border-t border-line-soft pt-4 text-[12.5px] leading-relaxed md:grid-cols-2">
           <div>
-            <p className="mb-1.5 font-medium text-fg-1">What it sends</p>
-            <ul className="list-disc space-y-1 pl-4 text-fg-2">
+            <p className="mb-1.5 font-medium text-ink">What it sends</p>
+            <ul className="list-disc space-y-1 pl-4 text-muted">
               {TELEMETRY_SENDS.map((line) => (
                 <li key={line}>{line}</li>
               ))}
             </ul>
           </div>
           <div>
-            <p className="mb-1.5 font-medium text-fg-1">What it never sends</p>
-            <ul className="list-disc space-y-1 pl-4 text-fg-2">
+            <p className="mb-1.5 font-medium text-ink">What it never sends</p>
+            <ul className="list-disc space-y-1 pl-4 text-muted">
               {TELEMETRY_NEVER_SENDS.map((line) => (
                 <li key={line}>{line}</li>
               ))}
@@ -195,7 +195,7 @@ export function TelemetrySection(): React.JSX.Element {
               : 'None — an ID is only created when you turn diagnostics on.'
           }
           control={
-            <code className="rounded-md bg-surface-2 px-2 py-1 font-mono text-[11px] text-fg-2">
+            <code className="rounded-md bg-elevated px-2 py-1 font-mono text-[11px] text-muted">
               {state?.anonId ?? '—'}
             </code>
           }
@@ -211,7 +211,7 @@ export function TelemetrySection(): React.JSX.Element {
               : `${queued.length} event${queued.length === 1 ? '' : 's'} waiting. These are the exact payloads that will leave this computer on the next send.`
           }
           control={
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Button
                 variant="secondary"
                 size="sm"
@@ -242,7 +242,7 @@ export function TelemetrySection(): React.JSX.Element {
             </div>
           }
         />
-        {lastSend && <p className="mt-3 text-[12px] text-fg-3">{lastSend}</p>}
+        {lastSend && <p className="mt-3 text-[12px] text-faint">{lastSend}</p>}
         {showQueue && queued.length > 0 && (
           <ul className="mt-4 space-y-2 border-t border-line-soft pt-4">
             {queued.map((e) => (
@@ -261,7 +261,7 @@ export function TelemetrySection(): React.JSX.Element {
               : `The last ${sent.length} event${sent.length === 1 ? '' : 's'} that left this computer, exactly as they were sent — including the install ID and session ID that went with them.`
           }
           control={
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Button
                 variant="secondary"
                 size="sm"

@@ -1,0 +1,105 @@
+import { useEffect, useState } from 'react'
+import { SegmentedControl } from '@renderer/components/SegmentedControl'
+import { Card } from '@renderer/components/Card'
+import { EmptyState } from '@renderer/components/EmptyState'
+import { MessageSquareWarning } from 'lucide-react'
+import { KnowledgeView } from '@renderer/features/knowledge/KnowledgeView'
+import { BattlecardsView } from '@renderer/features/live/battlecards/BattlecardsView'
+import { ObjectionHeatmap } from '@renderer/features/objection-library/ObjectionHeatmap'
+import { ReviewQueueView } from '@renderer/features/objection-library/ReviewQueueView'
+import { useAppSettings } from '@renderer/features/settings/useAppSettings'
+
+type LibraryTab = 'knowledge' | 'battlecards' | 'objections'
+
+const TABS: { id: LibraryTab; label: string }[] = [
+  { id: 'knowledge', label: 'Knowledge' },
+  { id: 'battlecards', label: 'Battlecards' },
+  { id: 'objections', label: 'Objections' }
+]
+
+/** The heatmap + review queue, graduated out of Settings -> Objection
+ *  Library — same two components Settings already composes (identical
+ *  headings/copy), just given a first-class home. The mining ON/OFF toggle
+ *  and the one-time "scan my past calls" trigger deliberately STAY in
+ *  Settings (a feature flag and a batch action are settings-shaped, same
+ *  established split as Sales Brain's toggle vs. its Memory Center content).
+ *
+ *  Applies the audit's own "visible-off state" recommendation for real: with
+ *  mining off, an empty heatmap/queue would read as "nothing's happened
+ *  yet" when the true reason is "this is switched off" — a different fact
+ *  needing a different action. */
+function ObjectionsTab(): React.JSX.Element {
+  const { settings } = useAppSettings()
+  if (!settings.objectionMining.enabled) {
+    return (
+      <div className="flex h-full items-center justify-center py-12">
+        <EmptyState
+          icon={MessageSquareWarning}
+          title="Objection mining is switched off"
+          titleAs="h2"
+          reason={{
+            kind: 'off',
+            settingsPage: 'objection-library',
+            what: 'Reads your call transcripts for the moments a buyer pushed back and what you said next, then turns the answers that worked into reusable scripts you can edit and keep.',
+            cost: 'Makes an AI call per mined call. You approve every suggestion before it becomes a real script.',
+            actionLabel: 'Turn on objection mining'
+          }}
+        />
+      </div>
+    )
+  }
+  return (
+    <div className="mx-auto max-w-3xl space-y-6">
+      <Card>
+        <h3 className="mb-1 text-sm font-semibold">Objection heatmap</h3>
+        <p className="mb-4 text-[12px] text-muted">
+          Which objection types come up most often across your pending review-queue candidates.
+        </p>
+        <ObjectionHeatmap />
+      </Card>
+      <Card>
+        <h3 className="mb-1 text-sm font-semibold">Review queue</h3>
+        <p className="mb-4 text-[12px] text-muted">
+          Suggestions mined from your calls, waiting for your decision. Nothing here is a real
+          script yet — approve, edit then approve, or reject each one.
+        </p>
+        <ReviewQueueView />
+      </Card>
+    </div>
+  )
+}
+
+/** M31 Stage 2 — Knowledge, Battlecards (new), and Objections as tabs of one
+ *  "Library" screen: the rep's own sales material, what's already listening
+ *  live, and what it's learned — one place for "what does this app know." */
+/** M31 — the tab a redirected navigation asked for. See OLD_TO_HUB_TAB. */
+export interface HubTabProps {
+  initialTab?: string | null
+  onInitialTabConsumed?: () => void
+}
+
+export function LibraryHub({ initialTab, onInitialTabConsumed }: HubTabProps): React.JSX.Element {
+  const [tab, setTab] = useState<LibraryTab>((initialTab as LibraryTab) ?? 'knowledge')
+  // M31 — a navigation that asked for a specific screen this hub absorbed
+  // (Home's "Tasks due" card, a recent-items click, a deep link) arrives
+  // with the tab it wanted. Applied once and then released, so it can
+  // never fight a tab the user picks afterwards.
+  useEffect(() => {
+    if (!initialTab) return
+    if (TABS.some((t) => t.id === initialTab)) setTab(initialTab as LibraryTab)
+    onInitialTabConsumed?.()
+  }, [initialTab])
+
+  return (
+    <div>
+      <SegmentedControl options={TABS} value={tab} onChange={setTab} className="mb-4" />
+      {tab === 'knowledge' ? (
+        <KnowledgeView />
+      ) : tab === 'battlecards' ? (
+        <BattlecardsView />
+      ) : (
+        <ObjectionsTab />
+      )}
+    </div>
+  )
+}

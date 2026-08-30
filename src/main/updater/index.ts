@@ -61,7 +61,7 @@ let status: UpdateStatus = { state: 'disabled', reason: 'not initialised' }
 let enabled = false
 
 /** M26 Batch 5 — the update download's job type. */
-const DOWNLOAD_JOB_TYPE = 'updater:download'
+export const DOWNLOAD_JOB_TYPE = 'updater:download'
 
 /** Start a download job unless one is already queued or running. Both the
  *  manual button and auto-mode's own trigger come through here, so they can

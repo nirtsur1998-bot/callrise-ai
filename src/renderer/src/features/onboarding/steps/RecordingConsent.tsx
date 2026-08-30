@@ -58,7 +58,7 @@ export function RecordingConsent({ o }: { o: OnboardingState }): React.JSX.Eleme
               <span
                 className={cn(
                   'mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg',
-                  selected ? 'bg-accent text-white' : 'bg-elevated text-muted'
+                  selected ? 'bg-accent-fill text-on-accent' : 'bg-elevated text-muted'
                 )}
               >
                 <Icon className="h-4 w-4" />

@@ -14,6 +14,8 @@ type AiKeyName = Parameters<typeof window.api.aiKeys.save>[0]
 type AiKeyStatus = StatusMap[AiKeyName]
 type AiProviderId = Parameters<typeof window.api.aiKeys.validate>[0]
 
+import { ModelLogo, type ModelBrand, type ProviderMark } from '@renderer/components/ModelLogo'
+
 export type RetentionPosture = 'trains' | 'no-training' | 'unknown'
 
 export interface KeyCardConfig {
@@ -29,6 +31,30 @@ export interface KeyCardConfig {
   /** Data-retention posture (M20 hard invariant) — omitted only for
    *  Deepgram, which isn't one of the model-picker's text-AI providers. */
   retention?: { posture: RetentionPosture; url: string }
+  /**
+   * A second, NON-SECRET value this provider needs before it can be called.
+   * Only Cloudflare has one: its base URL contains the account id, so a key on
+   * its own addresses nothing. Modelled as an extra field on the same card
+   * rather than a second card, because it is not a second credential — it is
+   * half of one, and splitting it would read as "two providers".
+   *
+   * Main treats the provider as unconfigured until BOTH are present
+   * (providerHasCredentials in ai/registry.ts), so a half-filled card cannot
+   * silently produce failing calls.
+   */
+  secondField?: {
+    name: AiKeyName
+    label: string
+    placeholder: string
+    /** One line telling the user where to actually find this value. Required:
+     *  a field nobody can fill in is a support ticket with a text box. */
+    hint: string
+  }
+  /** Which mark to draw beside the title. Deliberately a SEPARATE field from
+   *  `providerId`: ModelBrand names the company whose mark this is, and the
+   *  two only coincide by luck. Omitted where no mark applies (Deepgram is a
+   *  transcription service, not one of the model brands). */
+  brand?: ModelBrand | { label: string; mark?: ProviderMark }
 }
 
 const RETENTION_LABEL: Record<RetentionPosture, string> = {
@@ -39,7 +65,7 @@ const RETENTION_LABEL: Record<RetentionPosture, string> = {
 
 const RETENTION_CLASS: Record<RetentionPosture, string> = {
   trains: 'border-danger/40 bg-danger/10 text-danger',
-  'no-training': 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200',
+  'no-training': 'border-positive/30 bg-positive-soft text-positive',
   unknown: 'border-line bg-elevated text-muted'
 }
 
@@ -77,6 +103,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get an Anthropic key',
     placeholder: 'Paste your Anthropic API key',
     providerId: 'anthropic',
+    brand: { label: 'Claude', mark: 'claude' },
     retention: { posture: 'no-training', url: 'https://www.anthropic.com/legal/commercial-terms' }
   },
   {
@@ -87,6 +114,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get an OpenAI key',
     placeholder: 'Paste your OpenAI API key',
     providerId: 'openai',
+    brand: 'openai',
     retention: { posture: 'no-training', url: 'https://openai.com/policies/api-data-usage-policies' }
   },
   {
@@ -97,6 +125,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get a free Groq key',
     placeholder: 'Paste your Groq API key',
     providerId: 'groq',
+    brand: { label: 'Groq' },
     retention: { posture: 'unknown', url: 'https://groq.com/privacy-policy/' }
   },
   {
@@ -107,6 +136,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get a free OpenRouter key',
     placeholder: 'Paste your OpenRouter API key',
     providerId: 'openrouter',
+    brand: 'openrouter',
     retention: { posture: 'unknown', url: 'https://openrouter.ai/docs/features/privacy-and-logging' }
   },
   {
@@ -117,6 +147,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get a free Google AI Studio key',
     placeholder: 'Paste your Google AI Studio API key',
     providerId: 'google',
+    brand: 'google',
     retention: { posture: 'trains', url: 'https://ai.google.dev/gemini-api/terms' }
   },
   {
@@ -127,6 +158,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get a free NVIDIA NIM key',
     placeholder: 'Paste your NVIDIA API key',
     providerId: 'nvidia',
+    brand: 'nvidia',
     retention: { posture: 'unknown', url: 'https://build.nvidia.com/terms' }
   },
   {
@@ -137,6 +169,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get a free Cerebras key',
     placeholder: 'Paste your Cerebras API key',
     providerId: 'cerebras',
+    brand: { label: 'Cerebras' },
     retention: { posture: 'no-training', url: 'https://www.cerebras.ai/terms-of-service' }
   },
   {
@@ -147,7 +180,79 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get a free Mistral key',
     placeholder: 'Paste your Mistral API key',
     providerId: 'mistral',
+    brand: 'mistral',
     retention: { posture: 'unknown', url: 'https://legal.mistral.ai/terms' }
+  },
+  {
+    name: 'ZAI_API_KEY',
+    title: 'Z.ai (GLM)',
+    blurb: 'Two GLM models are permanently free — no card, no expiry. China-hosted.',
+    getKeyUrl: 'https://z.ai/manage-apikey/apikey-list',
+    getKeyLabel: 'Get a free Z.ai key',
+    placeholder: 'Paste your Z.ai API key',
+    providerId: 'zai',
+    brand: 'zai',
+    retention: { posture: 'no-training', url: 'https://docs.z.ai/legal-agreement/terms-of-use' }
+  },
+  {
+    name: 'HUGGINGFACE_API_KEY',
+    title: 'Hugging Face',
+    // The free credit really is about ten cents a month. Saying so on the
+    // card is the whole point: a provider that looks like the others and
+    // then stops working after a day is precisely the "looks real, isn't"
+    // defect this milestone exists to remove. Better a small number the
+    // reader can judge than a pleasant sentence they find out is wrong.
+    blurb: 'Routes to open models like GPT-OSS. Free credit is tiny (~$0.10/month) — good for trying it, not for daily use.',
+    getKeyUrl: 'https://huggingface.co/settings/tokens',
+    getKeyLabel: 'Get a free Hugging Face token',
+    placeholder: 'Paste your Hugging Face access token',
+    providerId: 'huggingface',
+    // No Simple Icons CC0 mark for Hugging Face in this repo's asset set, so
+    // it takes the lettermark — the documented fallback in
+    // assets/model-logos/SOURCES.md, not a placeholder to replace later.
+    // The lettermark renders label.charAt(0) — a visible 'H', matching the
+    // single letters the other fallbacks use — while the full string becomes
+    // the aria-label. So this is 'Hugging Face', not 'HF': the eye gets the
+    // letter either way, and the screen reader gets the real name.
+    brand: { label: 'Hugging Face', mark: 'huggingface' },
+    // 'unknown', not 'no-training': HF states it does not store request or
+    // response bodies, but the inference runs at whichever downstream
+    // provider the router picks, and their terms vary. See the catalog
+    // entries for the full reasoning.
+    retention: { posture: 'unknown', url: 'https://huggingface.co/docs/inference-providers/security' }
+  },
+  {
+    name: 'CLOUDFLARE_API_KEY',
+    title: 'Cloudflare Workers AI',
+    blurb:
+      'The largest genuinely free allowance here — a daily quota, no card, resets every day. Needs your account ID as well as a key.',
+    // Cloudflare's own documented deep link — resolves to the signed-in
+    // account and lands on the page that carries BOTH the prefilled
+    // "Create a Workers AI API Token" flow and the account id. The generic
+    // /profile/api-tokens page makes you assemble the permissions by hand,
+    // which is how you end up with a token that authenticates but has no
+    // Workers AI access — rejected, with nothing on screen saying why.
+    getKeyUrl: 'https://dash.cloudflare.com/?to=/:account/ai/workers-ai',
+    getKeyLabel: 'Create a free Workers AI token',
+    placeholder: 'Paste your Cloudflare API token',
+    providerId: 'cloudflare',
+    brand: { label: 'Cloudflare', mark: 'cloudflare' },
+    // Verified 2026-08-30 against their own data-usage page, which states
+    // Cloudflare does not use Customer Content to train models made available
+    // on Workers AI, nor to improve Cloudflare or third-party services.
+    retention: {
+      posture: 'no-training',
+      url: 'https://developers.cloudflare.com/workers-ai/platform/data-usage/'
+    },
+    secondField: {
+      name: 'CLOUDFLARE_ACCOUNT_ID',
+      label: 'Account ID',
+      placeholder: 'Paste your Cloudflare account ID',
+      // The dashboard URL is the most durable place to point at: it does not
+      // move when Cloudflare reorganises its navigation, which a named page
+      // does. The Workers page is given second as the signposted route.
+      hint: 'On the same Workers AI page, under "Get Account ID". Also the long string in your dashboard URL, after dash.cloudflare.com/.'
+    }
   }
 ]
 
@@ -169,10 +274,10 @@ function deriveStatusDot(
 }
 
 const STATUS_DOT_CLASS: Record<KeyStatusDot, string> = {
-  connected: 'bg-emerald-400',
+  connected: 'bg-positive',
   'no-key': 'bg-line',
   invalid: 'bg-danger',
-  'rate-limited': 'bg-amber-400'
+  'rate-limited': 'bg-warning'
 }
 
 const STATUS_DOT_LABEL: Record<KeyStatusDot, string> = {
@@ -186,13 +291,90 @@ const STATUS_DOT_LABEL: Record<KeyStatusDot, string> = {
  *  so both places share the exact same save/test/clear logic. */
 export const DEEPGRAM_KEY_CONFIG: KeyCardConfig = KEYS[0]
 
+/**
+ * The extra non-secret field (Cloudflare's account id). Deliberately plainer
+ * than the key input: no show/hide toggle, because there is nothing to hide,
+ * and a masking affordance on a value that is not a secret teaches the wrong
+ * thing about which of these two values matters.
+ */
+function SecondFieldRow({
+  field,
+  status,
+  onChanged
+}: {
+  field: NonNullable<KeyCardConfig['secondField']>
+  status: AiKeyStatus | undefined
+  onChanged: () => void
+}): React.JSX.Element {
+  const [value, setValue] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const savedTimeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(savedTimeout.current), [])
+
+  const save = async (): Promise<void> => {
+    const trimmed = value.trim()
+    if (!trimmed) return
+    setBusy(true)
+    try {
+      await window.api.aiKeys.save(field.name, trimmed)
+      setValue('')
+      setSaved(true)
+      clearTimeout(savedTimeout.current)
+      savedTimeout.current = setTimeout(() => setSaved(false), 4000)
+      onChanged()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mb-2">
+      <div className="mb-1 flex items-center gap-2">
+        <label className="text-[12px] font-medium text-muted">{field.label}</label>
+        {status?.configured && (
+          <span className="flex items-center gap-1 text-[12px] font-medium text-positive">
+            <CheckCircle2 className="h-3 w-3" /> Set
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void save()
+          }}
+          placeholder={field.placeholder}
+          autoComplete="off"
+          spellCheck={false}
+          className={cn(fieldClass, 'flex-1')}
+        />
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={!value.trim() || busy}
+          className="rounded-lg border border-line px-3.5 py-2 text-sm font-medium text-muted transition hover:bg-elevated hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+        </button>
+      </div>
+      <p className="mt-1 text-[12px] text-faint">{field.hint}</p>
+      {saved && <p className="mt-1 text-[12px] text-positive">Saved.</p>}
+    </div>
+  )
+}
+
 export function KeyCard({
   config,
   status,
+  secondStatus,
   onChanged
 }: {
   config: KeyCardConfig
   status: AiKeyStatus | undefined
+  secondStatus?: AiKeyStatus | undefined
   onChanged: () => void
 }): React.JSX.Element {
   const [value, setValue] = useState('')
@@ -258,6 +440,15 @@ export function KeyCard({
     <Card className="mb-5">
       <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
+          {/* The provider's mark, at the same 18px the model picker uses.
+              Reuses <ModelLogo> rather than a second logo component, so the
+              two places you meet a provider look like the same product —
+              including the lettermark fallback for brands Simple Icons does
+              not carry (Groq, Cerebras). See assets/model-logos/SOURCES.md:
+              CC0 marks only, never a hand-approximated trademark, and the
+              lettermark is the designed contingency rather than a
+              placeholder. */}
+          {config.brand && <ModelLogo brand={config.brand} size={18} />}
           <h3 className="text-sm font-medium">{config.title}</h3>
           {config.providerId && (
             <span
@@ -274,7 +465,7 @@ export function KeyCard({
             <RetentionBadge posture={config.retention.posture} url={config.retention.url} />
           )}
           {status?.configured && (
-            <span className="flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-200">
+            <span className="flex items-center gap-1.5 rounded-lg border border-positive/30 bg-positive-soft px-2.5 py-1 text-xs font-medium text-positive">
               <CheckCircle2 className="h-3.5 w-3.5" /> Configured
               {status.hint ? ` · ${status.hint}` : ''}
             </span>
@@ -282,6 +473,14 @@ export function KeyCard({
         </div>
       </div>
       <p className="mb-3 text-[13px] text-muted">{config.blurb}</p>
+
+      {config.secondField && (
+        <SecondFieldRow
+          field={config.secondField}
+          status={secondStatus}
+          onChanged={onChanged}
+        />
+      )}
 
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
@@ -326,7 +525,7 @@ export function KeyCard({
           type="button"
           onClick={() => void save()}
           disabled={!value.trim() || busy}
-          className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+          className="flex items-center gap-2 rounded-lg bg-accent-fill px-3.5 py-2 text-sm font-medium text-on-accent transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
         </button>
@@ -343,12 +542,25 @@ export function KeyCard({
       </div>
 
       {testResult && (
-        <p className={cn('mt-2 text-[13px]', testResult.ok ? 'text-emerald-300' : 'text-danger')}>
+        <p className={cn('mt-2 text-[13px]', testResult.ok ? 'text-positive' : 'text-danger')}>
           {testResult.message}
         </p>
       )}
+      {/* A provider with two credentials cannot honestly report "your key was
+          rejected": a wrong account id fails exactly the same way, because the
+          id is in the URL the key authenticates against. Saying "key" alone
+          sends someone to regenerate a token that was fine. Only shown on
+          failure, and only where a second credential actually exists. */}
+      {testResult && !testResult.ok && config.secondField && (
+        <p className="mt-1 text-[12px] text-muted">
+          Either credential can cause this — a token without Workers AI
+          permissions, or a wrong {config.secondField.label}. Check the{' '}
+          {config.secondField.label} first: it is the easier of the two to get
+          wrong, and it fails identically.
+        </p>
+      )}
       {savedNotice && (
-        <p className="mt-2 text-[13px] text-emerald-300">Saved — takes effect immediately.</p>
+        <p className="mt-2 text-[13px] text-positive">Saved — takes effect immediately.</p>
       )}
 
       <a
@@ -365,7 +577,10 @@ export function KeyCard({
 
 // Short labels for the compact selector — KEYS' own `title` (e.g. "Gemini
 // (Google AI Studio)") is right for the key-entry cards below but too long
-// for a segmented control with 8 options.
+// for a segmented control with ten options. Typed Record<AiProviderId, _>
+// deliberately: this is the one place in the renderer that MUST name every
+// provider, so a new one fails the build here rather than rendering a
+// blank-labelled segment nobody can identify.
 const PROVIDER_SHORT_LABEL: Record<AiProviderId, string> = {
   anthropic: 'Claude',
   openai: 'ChatGPT',
@@ -374,7 +589,10 @@ const PROVIDER_SHORT_LABEL: Record<AiProviderId, string> = {
   google: 'Gemini',
   nvidia: 'NVIDIA',
   cerebras: 'Cerebras',
-  mistral: 'Mistral'
+  mistral: 'Mistral',
+  zai: 'Z.ai',
+  huggingface: 'Hugging Face',
+  cloudflare: 'Cloudflare'
 }
 
 /** Bug found by the founder: "Ask the coach" and a few other features
@@ -384,8 +602,9 @@ const PROVIDER_SHORT_LABEL: Record<AiProviderId, string> = {
  *  hardcoded to only Claude/ChatGPT, a user who configured a different
  *  provider (Groq, Gemini, ...) saw those features fail with "add your
  *  Claude or ChatGPT key" even though a perfectly good key was already
- *  saved. All 8 providers are offered here now, matching every key card
- *  below and PROVIDER_REGISTRY. */
+ *  saved. Every provider is offered here now, matching every key card
+ *  below and PROVIDER_REGISTRY — a count is not written down on purpose,
+ *  since the last one went stale the moment M31 added two. */
 const PROVIDER_OPTIONS = KEYS.filter((k): k is KeyCardConfig & { providerId: AiProviderId } =>
   Boolean(k.providerId)
 ).map((k) => ({ id: k.providerId, label: PROVIDER_SHORT_LABEL[k.providerId] }))
@@ -454,7 +673,13 @@ export function ApiKeysSection(): React.JSX.Element {
       </p>
       <ProviderSelector key={refreshNonce} />
       {KEYS.map((k) => (
-        <KeyCard key={k.name} config={k} status={status?.[k.name]} onChanged={refresh} />
+        <KeyCard
+          key={k.name}
+          config={k}
+          status={status?.[k.name]}
+          secondStatus={k.secondField ? status?.[k.secondField.name] : undefined}
+          onChanged={refresh}
+        />
       ))}
     </>
   )

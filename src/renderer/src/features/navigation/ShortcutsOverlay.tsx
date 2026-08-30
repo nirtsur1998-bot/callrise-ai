@@ -1,58 +1,29 @@
 import { Modal } from '@renderer/components/Modal'
 import { IconButton } from '@renderer/components/IconButton'
 import { X } from 'lucide-react'
+import { shortcutGroups } from './shortcuts'
 
-interface Shortcut {
-  label: string
-  keys: string
-}
-
-interface ShortcutGroup {
-  title: string
-  shortcuts: Shortcut[]
-}
-
-const GROUPS: ShortcutGroup[] = [
-  {
-    title: 'Navigation',
-    shortcuts: [{ label: 'Jump to a screen, contact, deal, or call', keys: '⌘K' }]
-  },
-  {
-    title: 'Command palette',
-    shortcuts: [
-      { label: 'Navigate results', keys: '↑↓' },
-      { label: 'Open selection', keys: '↵' },
-      { label: 'Close', keys: 'Esc' }
-    ]
-  },
-  {
-    title: 'Anywhere',
-    shortcuts: [{ label: 'Close any dialog', keys: 'Esc' }]
-  },
-  {
-    title: 'Call detection (works even when CallRise AI is in the background)',
-    shortcuts: [
-      { label: 'Stop capturing', keys: '⌘⇧S' },
-      { label: 'Pause / resume detection', keys: '⌘⇧P' }
-    ]
-  },
-  {
-    title: 'Help',
-    shortcuts: [{ label: 'Show keyboard shortcuts', keys: '?' }]
-  }
-]
+/* The hand-written list that used to live here is gone. It was the THIRD
+   copy of the same facts (palette hints and the keydown handler being the
+   other two) and it had drifted three separate ways — a hardcoded Mac glyph
+   on Windows, a label that claimed to start a call when the handler only
+   navigates, and detection hotkeys advertised as always-on when they are
+   registered with tray presence. See shortcuts.ts. */
 
 /** Global keyboard-shortcuts cheat sheet, opened with `?` from anywhere in
  *  the app (outside text inputs). Reuses the shared Modal shell, which already
  *  owns the backdrop, focus-trap, Escape-to-close, and scroll-lock. */
 export function ShortcutsOverlay({
   open,
-  onClose
+  onClose,
+  navPreviewEnabled = false
 }: {
   open: boolean
   onClose: () => void
+  navPreviewEnabled?: boolean
 }): React.JSX.Element | null {
   if (!open) return null
+  const GROUPS = shortcutGroups(navPreviewEnabled)
 
   return (
     <Modal onClose={onClose} title="Keyboard shortcuts" size="md">

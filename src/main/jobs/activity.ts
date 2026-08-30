@@ -78,6 +78,27 @@ export class ActivityNotifier {
       // the bookkeeping below: `previous` is rebuilt from the full list at
       // the end of this method regardless.
       if (job.silent) continue
+      // BUG-129 — MAINTENANCE that SUCCEEDED is not news, and a burst of it
+      // is actively hostile. Launch runs several of these at once (on-device
+      // search setup, the sign-in cloud sync, the backup, the update check,
+      // Sales Brain's tidy-up); each one completing used to fire its own
+      // toast AND, whenever the window wasn't focused — i.e. almost always
+      // during startup, because you launch the app and look somewhere else —
+      // its own OS popup. Ten to twenty notifications for work nobody asked
+      // for and nobody needs told about.
+      //
+      // This is the attention policy the founder already approved for Stage
+      // 3, applied at the one place that can enforce it: maintenance never
+      // announces success. FAILURES ARE DELIBERATELY NOT SUPPRESSED — the
+      // same policy's other half is "failures always surface once", and a
+      // backup that silently stops working is exactly the class of thing
+      // this project has spent months killing. Only the "everything is
+      // fine" chatter goes away.
+      //
+      // Note this is a LANE rule, not a per-job-type opt-in: marking each
+      // maintenance job `silent: true` individually would work today and
+      // rot the moment someone adds job number six without knowing.
+      const isQuietMaintenance = job.lane === 'MAINTENANCE'
       const prior = this.previous.get(job.id)
       // M27 — announce a start when the job ACTUALLY starts running, not on
       // first sighting. This used to fire for any newly-seen job including a
@@ -89,6 +110,8 @@ export class ActivityNotifier {
       // work happened when it hasn't" rule this milestone is enforcing.
       const justStarted = job.state === 'running' && prior?.state !== 'running'
       if (justStarted) {
+        // "Backing up to the cloud…" starting is the definition of noise.
+        if (isQuietMaintenance) continue
         // Suppressed entirely during a call, not buffered — by the time the
         // call ends, "X started a while ago" is stale, uninteresting
         // information; the digest should be about what finished, not what
@@ -110,6 +133,7 @@ export class ActivityNotifier {
         // yet, so say nothing. The bookkeeping at the end of this method
         // still records it, so its real start is announced when it comes.
         if (job.state === 'succeeded' || job.state === 'failed') {
+          if (isQuietMaintenance && job.state === 'succeeded') continue
           if (liveActive) this.pendingDigest.push(job)
           else events.push(completionEvent(job))
         }
@@ -118,6 +142,8 @@ export class ActivityNotifier {
       const justFinished =
         !isTerminal(prior.state) && (job.state === 'succeeded' || job.state === 'failed')
       if (!justFinished) continue
+      // Same rule on the normal completion path: silence success, keep failure.
+      if (isQuietMaintenance && job.state === 'succeeded') continue
       if (liveActive) this.pendingDigest.push(job)
       else events.push(completionEvent(job))
     }

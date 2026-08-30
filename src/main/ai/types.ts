@@ -10,12 +10,35 @@
 // `stream()` is still implemented on both providers for completeness/future
 // use, but `complete()` with a `tool` set is the primitive that matters.
 
-/** 'anthropic'/'openai' are the original M16 pair. The other six are M20's
+/** 'anthropic'/'openai' are the original M16 pair. The next six are M20's
  *  addition — five OpenAI-Chat-Completions-compatible providers (each built
  *  by providers/openai-compatible.ts, parameterised by base URL) plus
- *  'google' (Gemini, its own REST adapter — not OpenAI-compatible). */
-export type AIProviderId =
-  'anthropic' | 'openai' | 'groq' | 'openrouter' | 'google' | 'nvidia' | 'cerebras' | 'mistral'
+ *  'google' (Gemini, its own REST adapter — not OpenAI-compatible). M31 adds
+ *  'zai' and 'huggingface', both OpenAI-compatible, both free-tier.
+ *
+ *  ONE ARRAY, TYPE DERIVED FROM IT — not a union with a hand-maintained copy
+ *  elsewhere. app-settings.ts's sanitizeAIProvider() needs this list at
+ *  RUNTIME to validate a persisted setting, and it carried its own literal of
+ *  the same eight strings. That copy was a silent trapdoor: a provider added
+ *  to the type but missed there still compiles, and the only symptom is the
+ *  user's saved provider being quietly reset to 'anthropic' on load. Deriving
+ *  the type from the array leaves the compiler no second version to disagree
+ *  with. */
+export const AI_PROVIDER_IDS = [
+  'anthropic',
+  'openai',
+  'groq',
+  'openrouter',
+  'google',
+  'nvidia',
+  'cerebras',
+  'mistral',
+  'zai',
+  'huggingface',
+  'cloudflare'
+] as const
+
+export type AIProviderId = (typeof AI_PROVIDER_IDS)[number]
 
 export interface AIMessage {
   role: 'user' | 'assistant'

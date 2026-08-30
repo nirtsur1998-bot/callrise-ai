@@ -53,7 +53,7 @@ export function DetectionSection(): React.JSX.Element {
       <Card className="mb-5">
         <SettingRow
           title="Ambient call detection"
-          description="Notice on its own when you're on a call in a known app (Zoom, Teams, Google Meet, Slack huddles, WhatsApp, …) and start capturing without you having to click Start. Purely a heuristic — it never records anything the recording & consent rules below wouldn't already allow."
+          description="Notice on its own when you're on a call in a known app (Zoom, Teams, Google Meet, Slack huddles, WhatsApp, …) and start capturing without you having to click Start. Purely a heuristic — it never records anything the recording & consent rules in Settings → Recording & consent wouldn't already allow."
           control={
             <ToggleSwitch
               checked={detection.enabled}

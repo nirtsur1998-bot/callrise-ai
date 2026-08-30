@@ -2,7 +2,7 @@ import type { ButtonHTMLAttributes, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 
-export type ButtonVariant = 'primary' | 'secondary' | 'danger'
+export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'stop'
 export type ButtonSize = 'sm' | 'md'
 
 interface ButtonProps extends Omit<
@@ -22,9 +22,29 @@ interface ButtonProps extends Omit<
 }
 
 const VARIANT: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-white font-medium hover:brightness-110',
+  primary: 'bg-accent-fill text-on-accent font-medium hover:brightness-110',
   secondary: 'border border-line text-muted font-medium hover:bg-elevated hover:text-ink',
-  danger: 'bg-danger-soft text-danger font-semibold hover:bg-danger/20'
+  danger: 'bg-danger-soft text-danger font-semibold hover:bg-danger/20',
+  /**
+   * M31 Stage 5 — "stop the AI", and only that.
+   *
+   * It was `secondary`: the quietest treatment in the app, on the control
+   * someone reaches for at the exact moment the AI is doing the wrong thing
+   * and they want it to stop NOW. Wrong weight for the job.
+   *
+   * Not `danger` either, and that is the more interesting half of the
+   * decision. Red means destructive-and-irreversible here (Delete, Remove);
+   * stopping a stream destroys nothing and is entirely undoable — you press
+   * Send again. Painting it red would teach that red sometimes means "safe,
+   * go ahead", which cheapens it everywhere it genuinely warns.
+   *
+   * So: maximum contrast, zero semantic colour. An inverted ink-on-canvas
+   * fill is the loudest thing this palette can say without claiming a
+   * meaning — unmistakable, but not alarming. It also cannot be confused
+   * with the amber Send it replaces, which matters because the two occupy
+   * the same spot.
+   */
+  stop: 'bg-ink text-canvas font-semibold hover:brightness-95'
 }
 
 const SIZE: Record<ButtonSize, { pad: string; text: string; gap: string; icon: string }> = {

@@ -35,6 +35,7 @@ export function registerMemoryExtractionJob(): void {
     aiPurpose: 'memory-extract',
     titleFor: () => 'Sales Brain: learning from this call',
     targetRefFor: (i) => i.callId,
+    targetKind: 'call',
     // extraction.ts/consolidation.ts have no AbortSignal support, and adding
     // one would mean rewriting M25 internals — out of scope for an adapter.
     cancellable: false,

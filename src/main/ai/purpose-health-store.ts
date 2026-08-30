@@ -16,6 +16,7 @@ import { app, ipcMain } from 'electron'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { PROVIDER_REGISTRY } from './registry'
+import { providerHasCredentials } from './provider-credentials'
 import {
   emptyHealth,
   messageFor,
@@ -198,8 +199,8 @@ async function viewFor(purpose: AIPurpose): Promise<PurposeHealthView> {
   // failure streak against it forever. Only the three memory-* purposes are
   // gated by Sales Brain; everything else has no equivalent master switch.
   const featureEnabled = purpose.startsWith('memory-') ? isSalesBrainEnabled() : true
-  const anyTextKeyConfigured = Object.values(PROVIDER_REGISTRY).some(
-    (p) => !!process.env[p.keyEnvName]?.trim()
+  const anyTextKeyConfigured = Object.keys(PROVIDER_REGISTRY).some((id) =>
+    providerHasCredentials(id as AIProviderId)
   )
   const severity = severityOf(h, Date.now(), { featureEnabled, anyTextKeyConfigured })
   const relevantProviderId =

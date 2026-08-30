@@ -39,6 +39,11 @@ export interface JobError {
   code?: string
 }
 
+/** The kinds of record a job's `targetRef` can name — i.e. the screens the
+ *  Activity Center knows how to open. Deliberately a closed union: adding a
+ *  destination should require touching the renderer that has to handle it. */
+export type JobTargetKind = 'call' | 'contact' | 'deal'
+
 export interface Job {
   id: string
   type: string
@@ -47,6 +52,9 @@ export interface Job {
    *  link to. Not always applicable (a scan over many calls has no single
    *  target). */
   targetRef?: string
+  /** What `targetRef` names. Copied from the job type at enqueue, same as
+   *  `cancellable` and `silent`. Absent = not navigable. */
+  targetKind?: JobTargetKind
   state: JobState
   progress: JobProgress
   lane: JobLane
@@ -238,6 +246,16 @@ export interface JobTypeDefinition<TInput = unknown, TResult = unknown> {
    *  computed from the input at enqueue time. */
   titleFor: (input: TInput) => string
   targetRefFor?: (input: TInput) => string | undefined
+  /** What KIND of thing `targetRef` names, so the Activity Center can open
+   *  it. `targetRef` alone is ambiguous: across the app it is variously a
+   *  call id, a contact id or a deal id, and nothing on the Job said which —
+   *  so a row could not be made clickable without guessing from the id's
+   *  shape, and every id here is a uuid. Declared per job TYPE rather than
+   *  inferred, for the same reason `retainUntilConsumed` is: an inferred
+   *  rule changes meaning silently as the code evolves.
+   *  Omit it and the row simply is not clickable — the safe default, and why
+   *  this is additive rather than a migration. */
+  targetKind?: JobTargetKind
   /** A resolved TResult that is itself a string becomes Job.resultRef
    *  automatically; set this to pull it from a richer result shape
    *  instead (e.g. `(r) => r.callId`). */

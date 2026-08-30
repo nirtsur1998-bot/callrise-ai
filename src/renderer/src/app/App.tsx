@@ -3,6 +3,8 @@ import { AudioLines } from 'lucide-react'
 import { useAuth } from '@renderer/features/auth/useAuth'
 import { AuthScreen } from '@renderer/features/auth/AuthScreen'
 import { useTheme } from '@renderer/features/settings/useTheme'
+import { useDesignPreview } from '@renderer/features/settings/useDesignPreview'
+import { useTitleBarOverlay } from '@renderer/features/settings/useTitleBarOverlay'
 import { OnboardingFlow, type OnboardingExit } from '@renderer/features/onboarding/OnboardingFlow'
 import { isOnboardingComplete } from '@renderer/features/onboarding/prefs'
 import { ToastProvider } from '@renderer/features/notifications/ToastProvider'
@@ -30,7 +32,12 @@ function Splash(): React.JSX.Element {
  * a one-time onboarding flow for a freshly set-up device, then the full app.
  */
 function App(): React.JSX.Element {
-  useTheme() // applies the saved dark/light/system preference to <html>, app-wide
+  const { mode: themeMode } = useTheme() // applies dark/light/system to <html>, app-wide
+  const { enabled: designPreview } = useDesignPreview() // the M31 redesign, incl. the palette class
+  // Windows caption buttons follow the palette. Here rather than deeper in
+  // the tree because both signals it depends on are read here, and because
+  // it must run on every screen — Settings swaps to a different tree.
+  useTitleBarOverlay(themeMode, designPreview)
   const { loading, configured, user } = useAuth()
 
   // Per-device: has onboarding been finished (or skipped) already?

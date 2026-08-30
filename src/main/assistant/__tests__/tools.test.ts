@@ -185,3 +185,57 @@ describe('executeLookups — propose_task and resilience', () => {
     expect(sections[0].lines[0].text).toContain('Dana Levy')
   })
 })
+
+describe('executeLookups records what ACTUALLY happened (M31 Stage 5)', () => {
+  // The stream-of-thought is built from these steps, so what they record is
+  // the difference between showing work and showing intent. The founder was
+  // explicit: a lookup that failed or found nothing must SAY so, because
+  // silence about it is indistinguishable from it never being attempted.
+
+  it('marks a lookup that matched nothing as none, not as a success', async () => {
+    data.calls = []
+    const out = await executeLookups([{ kind: 'search_calls', query: 'nobody' }], DIRS)
+    expect(out.steps).toHaveLength(1)
+    expect(out.steps[0].status).toBe('none')
+    expect(out.steps[0].count).toBe(0)
+    expect(out.steps[0].query).toBe('nobody')
+  })
+
+  it('marks a lookup that found results as found, with a real count', async () => {
+    data.calls = [
+      { id: 'c1', title: 'Acme pricing', preview: 'budget', createdAt: '2026-08-01T10:00:00Z' }
+    ]
+    const out = await executeLookups([{ kind: 'search_calls', query: 'Acme' }], DIRS)
+    expect(out.steps[0].status).toBe('found')
+    expect(out.steps[0].count).toBeGreaterThan(0)
+  })
+
+  it('records a THROWN lookup as failed instead of swallowing it', async () => {
+    // The pre-existing behaviour was a bare catch with the comment "the
+    // answer just goes without that section" — resilient, and invisible. The
+    // answer still goes; the omission is now on the record.
+    // The mock reads data.calls on every call, so a throwing getter is how
+    // this harness injects a failure without changing the module mock.
+    Object.defineProperty(data, 'calls', {
+      get() { throw new Error('disk gone') },
+      configurable: true
+    })
+    const out = await executeLookups([{ kind: 'search_calls', query: 'x' }], DIRS)
+    Object.defineProperty(data, 'calls', { value: [], writable: true, configurable: true })
+    expect(out.steps[0].status).toBe('failed')
+    expect(out.sections).toHaveLength(0)
+  })
+
+  it('emits one step per PLANNED lookup, in order', async () => {
+    data.calls = []
+    const out = await executeLookups(
+      [
+        { kind: 'search_calls', query: 'a' },
+        { kind: 'find_contact', query: 'b' }
+      ],
+      DIRS
+    )
+    expect(out.steps).toHaveLength(2)
+    expect(out.steps.map((s) => s.kind)).toEqual(['search_calls', 'find_contact'])
+  })
+})

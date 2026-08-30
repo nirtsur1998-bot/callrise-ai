@@ -8,21 +8,40 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { isMac } from '@renderer/lib/platform'
 import { useRecentlyViewed } from '@renderer/lib/useRecentlyViewed'
-import type { RecentKind } from '@renderer/lib/recentlyViewed'
-import { NAV_ITEMS, type NavId } from './nav-items'
+import type { RecentItem, RecentKind } from '@renderer/lib/recentlyViewed'
+import { recentTarget } from './recentTarget'
+import type { NavId, NavItem } from './nav-items'
 
 export interface PaletteAction {
   id: string
   label: string
   icon: LucideIcon
   onRun: () => void
+  /** Display-only shortcut hint (e.g. "⌘⇧L") shown next to the row. Purely
+   *  cosmetic here — the caller is responsible for the keydown handler
+   *  actually doing the thing; this just teaches the user it exists. Every
+   *  action should have one now (M31 Stage 2: this is the actual mechanism
+   *  for closing "I only know 50% of my own app's features"), not just the
+   *  ones that happened to get one first. */
+  shortcut?: string
 }
 
 interface CommandPaletteProps {
   open: boolean
   onClose: () => void
   onSelect: (id: NavId) => void
+  /** Which screens show up under "Go to" — the caller (MainApp) picks
+   *  NAV_ITEMS or NAV_ITEMS_PREVIEW based on the navigationPreview flag. */
+  navItems: NavItem[]
+  /** M31 Stage 2 — show a "⌘1".."⌘7" hint next to each nav row and actually
+   *  register the shortcuts (MainApp owns the keydown handler; this only
+   *  controls whether the HINT renders, so a hint is never shown for a key
+   *  that doesn't work). Tied to the 7-item preview list, not the legacy
+   *  12-item one — a digit-per-row scheme stops being a clean mnemonic past
+   *  9 items, so the old nav intentionally doesn't get one. */
+  showNumberShortcuts?: boolean
   /** Quick actions shown below the screen-jump results (e.g. "Start a live
    *  call", "Toggle theme"). Optional — the palette works with just nav. */
   actions?: PaletteAction[]
@@ -50,21 +69,23 @@ const RECENT_KIND_ICON = {
   deal: Building2
 } as const satisfies Record<RecentKind, LucideIcon>
 
-/** The screen a recent item's kind lives on. `onSelect` only takes a
- *  screen-level NavId, so — same limitation as the Sidebar's recent
- *  section — selecting a recent contact/deal opens the CRM screen (not the
- *  specific record); true deep-linking would need MainApp to accept an
- *  initial record id, which is outside this component's scope. */
-const RECENT_KIND_SCREEN: Record<RecentKind, NavId> = {
-  call: 'past-calls',
-  contact: 'crm',
-  deal: 'crm'
-}
+/* RECENT_KIND_SCREEN deleted (M31). It routed recent rows by CATEGORY, so
+   every recent call opened the calls screen rather than that call — the same
+   defect the Sidebar had, in the same shape, found by sweeping for the
+   pattern after the founder reported the Sidebar one.
+
+   Its comment claimed deep-linking was "outside this component's scope"
+   because MainApp would have to accept a record id. MainApp already did, and
+   THIS COMPONENT ALREADY USED IT — onOpenContact/onOpenDeal/onOpenCall are
+   props right here, wired for the search results twenty lines below. The
+   stated blocker had stopped being true and nobody re-read it: a comment
+   describing a limitation is evidence about when it was written, not about
+   now (species 51). */
 
 type Row =
-  | { kind: 'nav'; id: NavId; label: string; icon: LucideIcon }
+  | { kind: 'nav'; id: NavId; label: string; icon: LucideIcon; shortcut?: string }
   | (PaletteAction & { kind: 'action' })
-  | { kind: 'recent'; id: string; label: string; icon: LucideIcon; screen: NavId }
+  | { kind: 'recent'; id: string; label: string; icon: LucideIcon; recent: RecentItem }
   | { kind: 'contact'; id: string; label: string; sublabel?: string }
   | { kind: 'deal'; id: string; label: string; sublabel?: string }
   | { kind: 'call'; id: string; label: string; sublabel?: string }
@@ -97,6 +118,8 @@ export function CommandPalette({
   open,
   onClose,
   onSelect,
+  navItems,
+  showNumberShortcuts = false,
   actions = [],
   onOpenContact,
   onOpenDeal,
@@ -161,9 +184,17 @@ export function CommandPalette({
     }
   }, [open])
 
+  const shortcutMod = isMac ? '⌘' : 'Ctrl '
   const navRows: Row[] = useMemo(
-    () => NAV_ITEMS.map((i) => ({ kind: 'nav' as const, id: i.id, label: i.label, icon: i.icon })),
-    []
+    () =>
+      navItems.map((i, idx) => ({
+        kind: 'nav' as const,
+        id: i.id,
+        label: i.label,
+        icon: i.icon,
+        shortcut: showNumberShortcuts && idx < 9 ? `${shortcutMod}${idx + 1}` : undefined
+      })),
+    [navItems, showNumberShortcuts, shortcutMod]
   )
   const actionRows: Row[] = useMemo(
     () => actions.map((a) => ({ kind: 'action' as const, ...a })),
@@ -177,7 +208,7 @@ export function CommandPalette({
         id: `${item.kind}-${item.id}`,
         label: item.label,
         icon: RECENT_KIND_ICON[item.kind],
-        screen: RECENT_KIND_SCREEN[item.kind]
+        recent: item
       })),
     [recentlyViewed]
   )
@@ -237,7 +268,11 @@ export function CommandPalette({
     if (row.kind === 'nav') {
       onSelect(row.id)
     } else if (row.kind === 'recent') {
-      onSelect(row.screen)
+      // Derived from the ITEM, through the same helper the sidebar uses.
+      const target = recentTarget(row.recent)
+      if (target.slot === 'call') onOpenCall?.(target.id)
+      else if (target.slot === 'contact') onOpenContact?.(target.id)
+      else onOpenDeal?.(target.id)
     } else if (row.kind === 'action') {
       row.onRun()
     } else if (row.kind === 'contact') {
@@ -307,6 +342,11 @@ export function CommandPalette({
                       <span className="block truncate text-[11px] text-faint">{row.sublabel}</span>
                     )}
                   </span>
+                  {'shortcut' in row && row.shortcut && (
+                    <kbd className="shrink-0 rounded border border-line bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-faint">
+                      {row.shortcut}
+                    </kbd>
+                  )}
                   {isCurrent && <CornerDownLeft className="h-3.5 w-3.5 shrink-0 text-faint" />}
                 </button>
               </li>
