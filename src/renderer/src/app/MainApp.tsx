@@ -15,8 +15,11 @@ import {
   NAV_ITEMS_PREVIEW,
   OLD_TO_HUB,
   remapForPreview,
+  OLD_TO_HUB_TAB,
   type NavId
 } from '@renderer/features/navigation/nav-items'
+import type { RecentItem } from '@renderer/lib/recentlyViewed'
+import { recentTarget } from '@renderer/features/navigation/recentTarget'
 import { useDesignPreview } from '@renderer/features/settings/useDesignPreview'
 import { draftToInput } from '@renderer/features/calendar/items'
 import { notifyEventsChangedLocally } from '@renderer/features/calendar/eventsChanged'
@@ -132,8 +135,18 @@ export function MainApp({
   // user actually landed. Every internal navigation in this file goes
   // through `navigateTo`, never `setActive` directly, so this is the one
   // place that needs to know the mapping.
+  // Which tab the pending navigation asked for, when it asked for a screen
+  // a hub has absorbed. One-shot: consumed by the hub on mount/!change and
+  // cleared, so a later manual tab switch is never yanked back.
+  const [pendingHubTab, setPendingHubTab] = useState<string | null>(null)
+
   const navigateTo = (id: NavId): void => {
-    setActive(navPreviewEnabled ? (OLD_TO_HUB[id] ?? id) : id)
+    const hub = navPreviewEnabled ? OLD_TO_HUB[id] : undefined
+    // Only when the id is genuinely being redirected INTO a hub. Navigating
+    // straight to a hub id (sidebar click) carries no tab intent and must
+    // not clobber whichever tab the user last chose there.
+    if (hub) setPendingHubTab(OLD_TO_HUB_TAB[id] ?? null)
+    setActive(hub ?? id)
   }
 
   // M29 A3 — one coarse usage counter per section OPEN, from the single
@@ -397,6 +410,18 @@ export function MainApp({
     navigateTo('past-calls')
   }
 
+  // A recent-trail row opens the RECORD it names, by dispatching on the
+  // item rather than on its category. Deliberately delegates to the three
+  // palette handlers above instead of re-implementing them: the palette has
+  // opened records correctly all along, and the sidebar bug was a second,
+  // lossier way of doing the same job. One mechanism, two callers.
+  const openRecent = (item: RecentItem): void => {
+    const target = recentTarget(item)
+    if (target.slot === 'call') openCallFromPalette(target.id)
+    else if (target.slot === 'contact') openContactFromPalette(target.id)
+    else openDealFromPalette(target.id)
+  }
+
   // M28 Part 4 — "open Rise about this client" from a contact/deal/call page.
   // Same one-shot preselect pattern as openCallId; the signal arrives through
   // assistantNav.ts's single listener slot (the liveCallNav shape).
@@ -531,6 +556,7 @@ export function MainApp({
           onSignOut={signOut}
           onOpenPalette={() => setPaletteOpen(true)}
           navItems={navItems}
+          onSelectRecent={openRecent}
         />
       }
       copilot={
@@ -583,6 +609,8 @@ export function MainApp({
             />
           ) : active === 'calls' ? (
             <CallsHub
+              initialTab={pendingHubTab}
+              onInitialTabConsumed={() => setPendingHubTab(null)}
               onSaved={handleCallSaved}
               autoStartFromDetection={pendingCallAutoStart}
               onAutoStartFromDetectionConsumed={() => setPendingCallAutoStart(false)}
@@ -603,6 +631,8 @@ export function MainApp({
             <TasksView />
           ) : active === 'pipeline' ? (
             <PipelineHub
+              initialTab={pendingHubTab}
+              onInitialTabConsumed={() => setPendingHubTab(null)}
               initialContactId={openContactId}
               initialDealId={openDealId}
               onInitialCrmSelectionConsumed={() => {
@@ -629,11 +659,15 @@ export function MainApp({
               onOpenCall={openCallFromPalette}
             />
           ) : active === 'coaching' ? (
-            navPreviewEnabled ? <CoachingHub /> : <CoachingView />
+            navPreviewEnabled ? (
+              <CoachingHub initialTab={pendingHubTab} onInitialTabConsumed={() => setPendingHubTab(null)} />
+            ) : (
+              <CoachingView />
+            )
           ) : active === 'analytics' ? (
             <AnalyticsView />
           ) : active === 'library' ? (
-            <LibraryHub />
+            <LibraryHub initialTab={pendingHubTab} onInitialTabConsumed={() => setPendingHubTab(null)} />
           ) : active === 'knowledge' ? (
             <KnowledgeView />
           ) : active === 'team' ? (

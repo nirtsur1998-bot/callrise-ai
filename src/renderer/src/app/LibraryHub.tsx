@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { Card } from '@renderer/components/Card'
 import { EmptyState } from '@renderer/components/EmptyState'
@@ -72,8 +72,23 @@ function ObjectionsTab(): React.JSX.Element {
 /** M31 Stage 2 — Knowledge, Battlecards (new), and Objections as tabs of one
  *  "Library" screen: the rep's own sales material, what's already listening
  *  live, and what it's learned — one place for "what does this app know." */
-export function LibraryHub(): React.JSX.Element {
-  const [tab, setTab] = useState<LibraryTab>('knowledge')
+/** M31 — the tab a redirected navigation asked for. See OLD_TO_HUB_TAB. */
+export interface HubTabProps {
+  initialTab?: string | null
+  onInitialTabConsumed?: () => void
+}
+
+export function LibraryHub({ initialTab, onInitialTabConsumed }: HubTabProps): React.JSX.Element {
+  const [tab, setTab] = useState<LibraryTab>((initialTab as LibraryTab) ?? 'knowledge')
+  // M31 — a navigation that asked for a specific screen this hub absorbed
+  // (Home's "Tasks due" card, a recent-items click, a deep link) arrives
+  // with the tab it wanted. Applied once and then released, so it can
+  // never fight a tab the user picks afterwards.
+  useEffect(() => {
+    if (!initialTab) return
+    if (TABS.some((t) => t.id === initialTab)) setTab(initialTab as LibraryTab)
+    onInitialTabConsumed?.()
+  }, [initialTab])
 
   return (
     <div>

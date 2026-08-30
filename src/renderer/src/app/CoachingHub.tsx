@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { CoachingView } from '@renderer/features/coaching/CoachingView'
 import { AnalyticsView } from '@renderer/features/analytics/AnalyticsView'
@@ -26,8 +26,23 @@ const TABS: { id: CoachingTab; label: string }[] = [
  *  so it isn't a tab here either — inventing a new "start a practice
  *  session" picker is real feature work, not a regroup, and out of scope
  *  for a navigation-structure milestone. */
-export function CoachingHub(): React.JSX.Element {
-  const [tab, setTab] = useState<CoachingTab>('scorecards')
+/** M31 — the tab a redirected navigation asked for. See OLD_TO_HUB_TAB. */
+export interface HubTabProps {
+  initialTab?: string | null
+  onInitialTabConsumed?: () => void
+}
+
+export function CoachingHub({ initialTab, onInitialTabConsumed }: HubTabProps): React.JSX.Element {
+  const [tab, setTab] = useState<CoachingTab>((initialTab as CoachingTab) ?? 'scorecards')
+  // M31 — a navigation that asked for a specific screen this hub absorbed
+  // (Home's "Tasks due" card, a recent-items click, a deep link) arrives
+  // with the tab it wanted. Applied once and then released, so it can
+  // never fight a tab the user picks afterwards.
+  useEffect(() => {
+    if (!initialTab) return
+    if (TABS.some((t) => t.id === initialTab)) setTab(initialTab as CoachingTab)
+    onInitialTabConsumed?.()
+  }, [initialTab])
 
   return (
     <div>

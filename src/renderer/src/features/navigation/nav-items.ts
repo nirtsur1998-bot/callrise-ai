@@ -107,6 +107,34 @@ export const OLD_TO_HUB: Partial<Record<NavId, NavId>> = {
   knowledge: 'library'
 }
 
+/**
+ * Which TAB inside the hub each absorbed legacy id actually is.
+ *
+ * OLD_TO_HUB above answers "which screen" and throws away "which part of
+ * it" — so navigating to past-calls landed on the Calls hub showing LIVE,
+ * and navigating to tasks landed on the Pipeline hub showing CRM. Both are
+ * plausible destinations, which is what made it hard to notice: nothing
+ * failed, you just arrived somewhere adjacent to where you asked for.
+ *
+ * Founder-reported, twice in one session, from the Home stat cards ("Tasks
+ * due" -> CRM, "Calls today" -> Live call). The id was never wrong; the
+ * remap simply had nowhere to put the second half of the answer.
+ *
+ * Every key here must also be a key of OLD_TO_HUB — a legacy id that maps
+ * to a hub without saying which tab is exactly the bug this fixes.
+ * nav-items-hub-mapping.test.ts asserts that pairing both ways.
+ */
+export const OLD_TO_HUB_TAB: Partial<Record<NavId, string>> = {
+  'live-calls': 'live',
+  'past-calls': 'past',
+  crm: 'crm',
+  tasks: 'tasks',
+  calendar: 'calendar',
+  analytics: 'performance',
+  team: 'trend',
+  knowledge: 'knowledge'
+}
+
 // The inverse, for the hub ids with no single legacy screen already covering
 // both nav sets ('coaching' is valid in NAV_ITEMS too, so it needs no entry
 // here — MainApp's own render switch downgrades it to CoachingView directly).

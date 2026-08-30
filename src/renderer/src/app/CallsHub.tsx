@@ -11,6 +11,9 @@ const TABS: { id: CallsTab; label: string }[] = [
 ]
 
 interface CallsHubProps {
+  /** M31 — the tab a redirected navigation asked for (OLD_TO_HUB_TAB). */
+  initialTab?: string | null
+  onInitialTabConsumed?: () => void
   onSaved: (callId: string) => void
   autoStartFromDetection: boolean
   onAutoStartFromDetectionConsumed: () => void
@@ -57,9 +60,22 @@ export function CallsHub({
   remoteStopToken,
   remotePauseToken,
   initialCallId,
-  onInitialCallConsumed
+  onInitialCallConsumed,
+  initialTab,
+  onInitialTabConsumed
 }: CallsHubProps): React.JSX.Element {
-  const [tab, setTab] = useState<CallsTab>(initialCallId ? 'past' : 'live')
+  const [tab, setTab] = useState<CallsTab>(
+    initialTab === 'past' || initialCallId ? 'past' : 'live'
+  )
+  // M31 — a navigation that asked for a specific screen this hub absorbed
+  // (Home's "Tasks due" card, a recent-items click, a deep link) arrives
+  // with the tab it wanted. Applied once and then released, so it can
+  // never fight a tab the user picks afterwards.
+  useEffect(() => {
+    if (!initialTab) return
+    if (TABS.some((t) => t.id === initialTab)) setTab(initialTab as CallsTab)
+    onInitialTabConsumed?.()
+  }, [initialTab])
 
   useEffect(() => {
     if (autoStartFromDetection || ambientAutoStart) setTab('live')

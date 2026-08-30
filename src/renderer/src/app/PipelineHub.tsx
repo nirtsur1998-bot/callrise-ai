@@ -13,6 +13,9 @@ const TABS: { id: PipelineTab; label: string }[] = [
 ]
 
 interface PipelineHubProps {
+  /** M31 — the tab a redirected navigation asked for (OLD_TO_HUB_TAB). */
+  initialTab?: string | null
+  onInitialTabConsumed?: () => void
   initialContactId: string | null
   initialDealId: string | null
   onInitialCrmSelectionConsumed: () => void
@@ -40,6 +43,8 @@ interface PipelineHubProps {
  *  — the palette's "jump to a contact/deal" and a callrise://meeting deep
  *  link — so the merge doesn't change behavior a user already relies on. */
 export function PipelineHub({
+  initialTab,
+  onInitialTabConsumed,
   initialContactId,
   initialDealId,
   onInitialCrmSelectionConsumed,
@@ -47,7 +52,18 @@ export function PipelineHub({
   onDeepLinkConsumed,
   onOpenCall
 }: PipelineHubProps): React.JSX.Element {
-  const [tab, setTab] = useState<PipelineTab>(deepLinkEventId ? 'calendar' : 'crm')
+  const [tab, setTab] = useState<PipelineTab>(
+    deepLinkEventId ? 'calendar' : ((initialTab as PipelineTab) ?? 'crm')
+  )
+  // M31 — a navigation that asked for a specific screen this hub absorbed
+  // (Home's "Tasks due" card, a recent-items click, a deep link) arrives
+  // with the tab it wanted. Applied once and then released, so it can
+  // never fight a tab the user picks afterwards.
+  useEffect(() => {
+    if (!initialTab) return
+    if (TABS.some((t) => t.id === initialTab)) setTab(initialTab as PipelineTab)
+    onInitialTabConsumed?.()
+  }, [initialTab])
 
   useEffect(() => {
     if (initialContactId || initialDealId) setTab('crm')

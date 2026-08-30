@@ -10,7 +10,8 @@ import {
 import { cn } from '@renderer/lib/cn'
 import { isMac } from '@renderer/lib/platform'
 import { useRecentlyViewed } from '@renderer/lib/useRecentlyViewed'
-import type { RecentKind } from '@renderer/lib/recentlyViewed'
+import type { RecentItem, RecentKind } from '@renderer/lib/recentlyViewed'
+import { recentTarget } from './recentTarget'
 import type { NavId, NavItem } from './nav-items'
 
 export interface PaletteAction {
@@ -68,21 +69,23 @@ const RECENT_KIND_ICON = {
   deal: Building2
 } as const satisfies Record<RecentKind, LucideIcon>
 
-/** The screen a recent item's kind lives on. `onSelect` only takes a
- *  screen-level NavId, so — same limitation as the Sidebar's recent
- *  section — selecting a recent contact/deal opens the CRM screen (not the
- *  specific record); true deep-linking would need MainApp to accept an
- *  initial record id, which is outside this component's scope. */
-const RECENT_KIND_SCREEN: Record<RecentKind, NavId> = {
-  call: 'past-calls',
-  contact: 'crm',
-  deal: 'crm'
-}
+/* RECENT_KIND_SCREEN deleted (M31). It routed recent rows by CATEGORY, so
+   every recent call opened the calls screen rather than that call — the same
+   defect the Sidebar had, in the same shape, found by sweeping for the
+   pattern after the founder reported the Sidebar one.
+
+   Its comment claimed deep-linking was "outside this component's scope"
+   because MainApp would have to accept a record id. MainApp already did, and
+   THIS COMPONENT ALREADY USED IT — onOpenContact/onOpenDeal/onOpenCall are
+   props right here, wired for the search results twenty lines below. The
+   stated blocker had stopped being true and nobody re-read it: a comment
+   describing a limitation is evidence about when it was written, not about
+   now (species 51). */
 
 type Row =
   | { kind: 'nav'; id: NavId; label: string; icon: LucideIcon; shortcut?: string }
   | (PaletteAction & { kind: 'action' })
-  | { kind: 'recent'; id: string; label: string; icon: LucideIcon; screen: NavId }
+  | { kind: 'recent'; id: string; label: string; icon: LucideIcon; recent: RecentItem }
   | { kind: 'contact'; id: string; label: string; sublabel?: string }
   | { kind: 'deal'; id: string; label: string; sublabel?: string }
   | { kind: 'call'; id: string; label: string; sublabel?: string }
@@ -205,7 +208,7 @@ export function CommandPalette({
         id: `${item.kind}-${item.id}`,
         label: item.label,
         icon: RECENT_KIND_ICON[item.kind],
-        screen: RECENT_KIND_SCREEN[item.kind]
+        recent: item
       })),
     [recentlyViewed]
   )
@@ -265,7 +268,11 @@ export function CommandPalette({
     if (row.kind === 'nav') {
       onSelect(row.id)
     } else if (row.kind === 'recent') {
-      onSelect(row.screen)
+      // Derived from the ITEM, through the same helper the sidebar uses.
+      const target = recentTarget(row.recent)
+      if (target.slot === 'call') onOpenCall?.(target.id)
+      else if (target.slot === 'contact') onOpenContact?.(target.id)
+      else onOpenDeal?.(target.id)
     } else if (row.kind === 'action') {
       row.onRun()
     } else if (row.kind === 'contact') {
