@@ -104,13 +104,75 @@ function providerIdForKeyName(name: AiKeyName): AIProviderId | null {
  * OpenAI configured changes nothing here. Settings' provider picker (now
  * showing all 8) and the Model Assignment page remain there for anyone who
  * wants to choose explicitly instead.
+ *
+ * ── BUG-143 (2026-08-30): IT MUST ALSO WORK ──────────────────────────────
+ *
+ * The paragraph above says this fires when "the currently selected provider
+ * has no working key". The code only ever checked that a key was PRESENT —
+ * `getAIProvider` returns non-null for any key that exists, working or not —
+ * and it selected the new provider on the basis that a key had been SAVED,
+ * never that it functioned. **Presence is not working, and the gap between
+ * this comment and the code was the whole bug.**
+ *
+ * What that cost, reconstructed from the founder's own machine (stored keys
+ * were exactly Cloudflare's pair, Deepgram, and Hugging Face — with the
+ * built-in default `anthropic` holding no key at all):
+ *
+ *   1. aiProvider = 'anthropic', no key -> getAIProvider null
+ *   2. save CLOUDFLARE_API_KEY -> cloudflare has both credentials, so a token
+ *      Cloudflare REJECTS becomes the default for every feature. Post-call
+ *      summaries then failed on a dead provider (BUG-142).
+ *   3. save HUGGINGFACE_API_KEY -> getAIProvider('cloudflare') is NON-null,
+ *      because the rejected key is still PRESENT, so this returns early and
+ *      **the working key cannot take over.** The founder had to repoint the
+ *      provider by hand.
+ *
+ * So a rejected key both won the default and was then protected from being
+ * replaced by a good one. Validating before selecting breaks the sequence at
+ * step 2, so step 3 never arises.
+ *
+ * THE VALIDATION COSTS A ROUND TRIP, and only on the path that was about to
+ * change a setting anyway — it runs after the "already working" early return,
+ * so an install with a working provider never pays for it.
+ *
+ * WHEN VALIDATION FAILS THE KEY IS STILL SAVED. Refusing to store it would be
+ * a different and worse product: the user may be offline, or saving a key to
+ * finish setting up later. What is withheld is only the automatic promotion to
+ * default — and the outcome is REPORTED to the caller rather than left silent,
+ * because an automatic change to a user-visible setting that is never
+ * announced is the same species as M31 Stage 4's visibility rule. That
+ * reporting also covers the offline case honestly: "saved, but we could not
+ * verify it" is recoverable; a silent switch to a dead provider is not.
  */
-function maybeAutoSelectProvider(name: AiKeyName): void {
+export interface AutoSelectOutcome {
+  /** Set only when the default provider was actually changed. */
+  autoSelectedProvider?: AIProviderId
+  /** Present whenever validation was attempted at all. */
+  keyValidated?: boolean
+}
+
+async function maybeAutoSelectProvider(
+  name: AiKeyName,
+  value: string
+): Promise<AutoSelectOutcome> {
   const providerId = providerIdForKeyName(name)
-  if (!providerId) return
+  if (!providerId) return {}
   const current = loadAppSettings().aiProvider
-  if (getAIProvider(current)) return
+  if (getAIProvider(current)) return {}
+
+  let keyValidated = false
+  try {
+    const probe = buildProviderForValidation(providerId, value)
+    keyValidated = (await probe.validateKey(value)).ok
+  } catch {
+    // A thrown probe is indistinguishable here from a rejected one, and both
+    // answer the only question being asked: has this key been shown to work?
+    keyValidated = false
+  }
+  if (!keyValidated) return { keyValidated: false }
+
   saveAppSettings({ aiProvider: providerId })
+  return { autoSelectedProvider: providerId, keyValidated: true }
 }
 
 /** BUG-022 — wipe every stored key (not just the encrypted file: also the
@@ -172,8 +234,12 @@ export function registerAiKeys(): void {
     }
     await saveKey(name as AiKeyName, value.trim())
     process.env[name as AiKeyName] = value.trim()
-    maybeAutoSelectProvider(name as AiKeyName)
-    return { ok: true as const }
+    // BUG-143 — awaited, and its outcome returned rather than discarded. This
+    // used to be fire-and-forget on a synchronous function; the caller could
+    // not tell whether its default provider had just been changed underneath
+    // it, which is exactly what made the change silent.
+    const outcome = await maybeAutoSelectProvider(name as AiKeyName, value.trim())
+    return { ok: true as const, ...outcome }
   })
 
   // "Test key" - the cheapest possible round-trip against a key the user

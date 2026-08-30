@@ -381,6 +381,12 @@ export function KeyCard({
   const [showValue, setShowValue] = useState(false)
   const [busy, setBusy] = useState(false)
   const [savedNotice, setSavedNotice] = useState(false)
+  // BUG-143 — what the save DID beyond storing the key: either this key became
+  // the default provider, or it was declined for that job because it did not
+  // validate. Both were previously silent, and the silent version is how the
+  // founder ended up with every feature pointed at a rejected Cloudflare token
+  // while a working Hugging Face key sat right there.
+  const [saveOutcome, setSaveOutcome] = useState<'made-default' | 'unverified' | null>(null)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
   // Same auto-clearing "Saved" pattern as CrmSection/PersonalizationSection/
@@ -398,10 +404,20 @@ export function KeyCard({
       if (res.ok) {
         setValue('')
         setSavedNotice(true)
+        // BUG-143 — say what happened to the DEFAULT, not just to the key.
+        // `autoSelectedProvider` is set only when the default actually moved;
+        // `keyValidated === false` means we tried to promote this key and it
+        // did not answer, so we left the default alone.
+        setSaveOutcome(
+          res.autoSelectedProvider ? 'made-default' : res.keyValidated === false ? 'unverified' : null
+        )
         setTestResult(null)
         onChanged()
         clearTimeout(savedTimeout.current)
-        savedTimeout.current = setTimeout(() => setSavedNotice(false), 4000)
+        savedTimeout.current = setTimeout(() => {
+          setSavedNotice(false)
+          setSaveOutcome(null)
+        }, 4000)
       }
     } finally {
       setBusy(false)
@@ -561,6 +577,17 @@ export function KeyCard({
       )}
       {savedNotice && (
         <p className="mt-2 text-[13px] text-positive">Saved — takes effect immediately.</p>
+      )}
+      {saveOutcome === 'made-default' && (
+        <p className="mt-1 text-[13px] text-secondary">
+          This is now your default AI provider. You can change that below.
+        </p>
+      )}
+      {saveOutcome === 'unverified' && (
+        <p className="mt-1 text-[13px] text-secondary">
+          Saved, but this key didn&apos;t answer when we checked it — so we left your default AI
+          provider as it was. Use “Test key” to see why.
+        </p>
       )}
 
       <a

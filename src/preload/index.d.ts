@@ -1732,8 +1732,26 @@ export type AiKeyValidateResult = { ok: true; models: string[] } | { ok: false; 
 
 export interface AiKeysApi {
   getStatus: () => Promise<Record<AiKeyName, AiKeyStatus>>
-  /** Saved key takes effect on the very next AI call — no restart needed. */
-  save: (name: AiKeyName, value: string) => Promise<{ ok: boolean; error?: string }>
+  /**
+   * Saved key takes effect on the very next AI call — no restart needed.
+   *
+   * BUG-143 — the result also reports what the save did to the DEFAULT
+   * PROVIDER, which used to happen silently. `autoSelectedProvider` is set only
+   * when the default actually moved; `keyValidated` is present only when a
+   * promotion was considered at all, so `false` means "we tried this key, it
+   * did not answer, and we left your default alone" while `undefined` means
+   * "there was nothing to decide". A caller that ignores both fields behaves
+   * exactly as before.
+   */
+  save: (
+    name: AiKeyName,
+    value: string
+  ) => Promise<{
+    ok: boolean
+    error?: string
+    autoSelectedProvider?: string
+    keyValidated?: boolean
+  }>
   clear: (name: AiKeyName) => Promise<{ ok: boolean; error?: string }>
   /** Cheapest possible round-trip against a key the user just pasted (not
    *  necessarily saved yet) — every text-AI provider (not Deepgram, which
