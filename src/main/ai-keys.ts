@@ -131,9 +131,21 @@ function providerIdForKeyName(name: AiKeyName): AIProviderId | null {
  * replaced by a good one. Validating before selecting breaks the sequence at
  * step 2, so step 3 never arises.
  *
- * THE VALIDATION COSTS A ROUND TRIP, and only on the path that was about to
- * change a setting anyway — it runs after the "already working" early return,
- * so an install with a working provider never pays for it.
+ * ⚠ THE PARAGRAPH THAT USED TO SIT HERE WAS TRUE FOR ABOUT AN HOUR, AND THEN
+ * DESCRIBED SOMETHING THE CODE NO LONGER DID. It said the validation "runs
+ * after the 'already working' early return, so an install with a working
+ * provider never pays for it" — which was the bug the founder then found by
+ * hand: with a working default, NOTHING was validated, and the card showed a
+ * green "Connected" dot for the string `junk`.
+ *
+ * Left as a marker rather than deleted, because this file has now produced the
+ * same failure twice: a comment describing the intent while the code does
+ * something narrower, and nobody re-reading the comment when the code moved.
+ * The first instance is the paragraph above ("no working key" vs. presence).
+ * **When you change this function, change this comment in the same edit.**
+ *
+ * The current behaviour is in `validateAndMaybeAutoSelect` below: every text-AI
+ * key save validates, always, and the round trip is paid on every such save.
  *
  * WHEN VALIDATION FAILS THE KEY IS STILL SAVED. Refusing to store it would be
  * a different and worse product: the user may be offline, or saving a key to
@@ -144,35 +156,79 @@ function providerIdForKeyName(name: AiKeyName): AIProviderId | null {
  * reporting also covers the offline case honestly: "saved, but we could not
  * verify it" is recoverable; a silent switch to a dead provider is not.
  */
-export interface AutoSelectOutcome {
+export interface SaveKeyOutcome {
   /** Set only when the default provider was actually changed. */
   autoSelectedProvider?: AIProviderId
-  /** Present whenever validation was attempted at all. */
+  /** Present for every text-AI key: was this key shown to work, just now? */
   keyValidated?: boolean
+  /** The provider's own words when it did not. Displayed verbatim. */
+  validationReason?: string
 }
 
-async function maybeAutoSelectProvider(
+/**
+ * BUG-143 follow-up (2026-08-30) — VALIDATION IS NO LONGER PART OF THE
+ * AUTO-SELECT PATH. It is the whole point of the save.
+ *
+ * THE HOLE, found by the founder doing the ten-second check I had automated
+ * badly. The first version validated INSIDE the auto-select function, after its
+ * `if (getAIProvider(current)) return {}` early return. So on the ordinary case
+ * — you already have a working default, you paste another key — nothing was
+ * validated at all. The founder typed `junk` into the OpenAI card and the card
+ * answered with a green dot reading **"Connected"**, a green tick reading
+ * **"Configured"**, and **"Saved — takes effect immediately."** All three false.
+ *
+ * That is the SAME presence-vs-works confusion this bug is about, one layer up:
+ * `deriveStatusDot` (ApiKeysSection.tsx) reads `status.configured`, which is
+ * `Boolean(process.env[name])`. The first fix corrected the SELECTION logic and
+ * left the DISPLAY lying — on the screen where being wrong costs the most,
+ * because someone who sees "Connected" stops looking for the problem. That is
+ * exactly how the founder ended up on a broken Cloudflare provider.
+ *
+ * So: every text-AI key save now validates, and the result is reported whether
+ * or not a switch was ever on offer. Auto-selection becomes one thing the
+ * outcome can also say, rather than the only path that computes it.
+ *
+ * COST: a network round-trip on every text-AI key save. Accepted — the user has
+ * just pasted a key and is waiting on that screen, and "Test key" already does
+ * exactly this round-trip on demand. The alternative is a status indicator that
+ * cannot tell a working key from a typo.
+ *
+ * NOT COVERED: `DEEPGRAM_API_KEY` and `CLOUDFLARE_ACCOUNT_ID` both resolve to no
+ * providerId here (Deepgram is transcription, not text AI; the account id is not
+ * a key), so neither is validated and both still show "Connected" purely from
+ * presence. Deepgram has no validateKey in this registry at all. Recorded rather
+ * than quietly left — it is the same lie, on two cards this change does not
+ * reach.
+ */
+async function validateAndMaybeAutoSelect(
   name: AiKeyName,
   value: string
-): Promise<AutoSelectOutcome> {
+): Promise<SaveKeyOutcome> {
   const providerId = providerIdForKeyName(name)
   if (!providerId) return {}
-  const current = loadAppSettings().aiProvider
-  if (getAIProvider(current)) return {}
 
   let keyValidated = false
+  let validationReason: string | undefined
   try {
     const probe = buildProviderForValidation(providerId, value)
-    keyValidated = (await probe.validateKey(value)).ok
+    const result = await probe.validateKey(value)
+    keyValidated = result.ok
+    if (!result.ok) validationReason = result.reason
   } catch {
     // A thrown probe is indistinguishable here from a rejected one, and both
     // answer the only question being asked: has this key been shown to work?
     keyValidated = false
+    validationReason = 'Could not reach this provider to check the key.'
   }
-  if (!keyValidated) return { keyValidated: false }
 
-  saveAppSettings({ aiProvider: providerId })
-  return { autoSelectedProvider: providerId, keyValidated: true }
+  // Auto-selection is now conditional on BOTH: nothing usable is selected, and
+  // the key we would switch to actually works.
+  const current = loadAppSettings().aiProvider
+  if (keyValidated && !getAIProvider(current)) {
+    saveAppSettings({ aiProvider: providerId })
+    return { autoSelectedProvider: providerId, keyValidated: true }
+  }
+  return keyValidated ? { keyValidated: true } : { keyValidated: false, validationReason }
 }
 
 /** BUG-022 — wipe every stored key (not just the encrypted file: also the
@@ -238,7 +294,7 @@ export function registerAiKeys(): void {
     // used to be fire-and-forget on a synchronous function; the caller could
     // not tell whether its default provider had just been changed underneath
     // it, which is exactly what made the change silent.
-    const outcome = await maybeAutoSelectProvider(name as AiKeyName, value.trim())
+    const outcome = await validateAndMaybeAutoSelect(name as AiKeyName, value.trim())
     return { ok: true as const, ...outcome }
   })
 

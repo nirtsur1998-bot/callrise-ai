@@ -263,7 +263,12 @@ type KeyStatusDot = 'connected' | 'no-key' | 'invalid' | 'rate-limited'
  *  rejected" state — a saved-but-now-invalid key just shows "Connected"
  *  until the next Test click or a real AI call fails, same limitation M16
  *  already had. */
-function deriveStatusDot(
+// Exported for `api-key-status-dot.test.ts`. This repo cannot assert on
+// component render output (BUG-140), so the mapping that decides whether a card
+// says "Connected" or "Key invalid" is tested as the pure function it is — and
+// the two call sites below (`title=` and the visible label) both read
+// STATUS_DOT_LABEL[deriveStatusDot(...)], so pinning the function pins the text.
+export function deriveStatusDot(
   status: AiKeyStatus | undefined,
   testResult: { ok: boolean; message: string } | null
 ): KeyStatusDot {
@@ -280,7 +285,7 @@ const STATUS_DOT_CLASS: Record<KeyStatusDot, string> = {
   'rate-limited': 'bg-warning'
 }
 
-const STATUS_DOT_LABEL: Record<KeyStatusDot, string> = {
+export const STATUS_DOT_LABEL: Record<KeyStatusDot, string> = {
   connected: 'Connected',
   'no-key': 'No key',
   invalid: 'Key invalid',
@@ -411,7 +416,26 @@ export function KeyCard({
         setSaveOutcome(
           res.autoSelectedProvider ? 'made-default' : res.keyValidated === false ? 'unverified' : null
         )
-        setTestResult(null)
+        // BUG-143 follow-up — THE STATUS DOT MUST NOT SAY "Connected" FOR A KEY
+        // THAT DID NOT ANSWER. `deriveStatusDot` reads `status.configured`,
+        // which is only `Boolean(process.env[name])` — presence, not health —
+        // so a saved-but-rejected key rendered a green "Connected" dot. The
+        // founder typed `junk` and got green dot / green tick / "Saved — takes
+        // effect immediately", all three false, on the screen where being wrong
+        // costs most: someone who reads "Connected" stops looking for the
+        // problem.
+        //
+        // The save now carries the same verdict the "Test key" button produces,
+        // so it is fed into the SAME state that button uses. One display path,
+        // one meaning, and the provider's own words rather than a generic line.
+        setTestResult(
+          res.keyValidated === false
+            ? {
+                ok: false,
+                message: res.validationReason ?? "This key didn't answer when we checked it."
+              }
+            : null
+        )
         onChanged()
         clearTimeout(savedTimeout.current)
         savedTimeout.current = setTimeout(() => {

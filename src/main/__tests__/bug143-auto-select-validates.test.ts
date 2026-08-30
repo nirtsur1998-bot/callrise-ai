@@ -157,8 +157,20 @@ describe('BUG-143 — a rejected key must not become the default provider', () =
     expect(bad.autoSelectedProvider).toBeUndefined()
     expect(bad.keyValidated).toBe(false) // we tried, and it failed
 
-    // And the other shape: a save that never needed to switch reports neither
-    // field, so a caller can tell "declined" from "nothing to do".
+    // And the other shape: a save that did not need to switch.
+    //
+    // CORRECTED, NOT RELAXED (2026-08-30). This asserted
+    // `noop.keyValidated` was UNDEFINED — which encoded the old, broken
+    // behaviour where validation only ran on the auto-select path. That is
+    // exactly the hole the founder found: paste `junk` next to a working
+    // default and nothing was checked at all. Validation now always runs, so a
+    // valid key reports `true` here rather than nothing.
+    //
+    // The three outcomes are still fully distinguishable, which is what this
+    // test is actually for:
+    //   promoted -> autoSelectedProvider set, keyValidated true
+    //   declined -> keyValidated false + validationReason, no provider
+    //   fine, no switch needed -> keyValidated true, no provider
     await handlers['aiKeys:save'](null, 'HUGGINGFACE_API_KEY', 'a-working-key')
     const noop = (await handlers['aiKeys:save'](
       null,
@@ -166,7 +178,52 @@ describe('BUG-143 — a rejected key must not become the default provider', () =
       'another-working-key'
     )) as Record<string, unknown>
     expect(noop.autoSelectedProvider).toBeUndefined()
-    expect(noop.keyValidated).toBeUndefined()
+    expect(noop.keyValidated).toBe(true)
+    expect(noop.validationReason).toBeUndefined()
+  })
+
+  it('THE HOLE THE FOUNDER FOUND: a bad key is validated even when the current provider already works', async () => {
+    // CHECK 4 failed in the field and this is why. The first version of the fix
+    // validated inside maybeAutoSelectProvider, AFTER its
+    // `if (getAIProvider(current)) return {}` early return — so on the ordinary
+    // case (you already have a working default, you paste another key) NOTHING
+    // was validated, the save returned a bare `{ ok: true }`, and the card
+    // showed a green dot reading "Connected" for the string `junk`.
+    //
+    // That is the same presence-vs-works confusion as the guard this bug is
+    // about, one layer up in the UI: `deriveStatusDot` reads `status.configured`,
+    // which is `Boolean(process.env[name])`. The selection logic was fixed and
+    // the DISPLAY was left lying — on the screen where being wrong costs most,
+    // because someone who sees "Connected" stops looking for the problem.
+    await handlers['aiKeys:save'](null, 'HUGGINGFACE_API_KEY', 'a-working-key')
+    expect(loadAppSettings().aiProvider).toBe('huggingface') // a working default
+
+    rejected.add('junk')
+    const res = (await handlers['aiKeys:save'](null, 'CLOUDFLARE_API_KEY', 'junk')) as Record<
+      string,
+      unknown
+    >
+
+    // The validation must happen regardless of whether a switch was on offer.
+    expect(res.keyValidated, 'a bad key was saved with no validation at all').toBe(false)
+    // And the reason must come back, so the card can say what the provider said
+    // rather than a generic line.
+    expect(res.validationReason).toBeTruthy()
+    // The working default is still untouched — that half was always right.
+    expect(loadAppSettings().aiProvider).toBe('huggingface')
+  })
+
+  it('a good key saved alongside a working default validates too, and reports it', async () => {
+    await handlers['aiKeys:save'](null, 'HUGGINGFACE_API_KEY', 'a-working-key')
+    const res = (await handlers['aiKeys:save'](
+      null,
+      'CLOUDFLARE_API_KEY',
+      'another-working-key'
+    )) as Record<string, unknown>
+    expect(res.keyValidated).toBe(true)
+    expect(res.validationReason).toBeUndefined()
+    // Still no hijack of a working default.
+    expect(loadAppSettings().aiProvider).toBe('huggingface')
   })
 
   it('still never overrides a provider that is already working', async () => {

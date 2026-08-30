@@ -1750,7 +1750,10 @@ export interface AiKeysApi {
     ok: boolean
     error?: string
     autoSelectedProvider?: string
+    /** Present for every text-AI key: was it shown to work, just now? */
     keyValidated?: boolean
+    /** The provider's own words when it was not. Safe to display verbatim. */
+    validationReason?: string
   }>
   clear: (name: AiKeyName) => Promise<{ ok: boolean; error?: string }>
   /** Cheapest possible round-trip against a key the user just pasted (not
