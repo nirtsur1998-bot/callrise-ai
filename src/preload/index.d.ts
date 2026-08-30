@@ -1672,6 +1672,8 @@ export type AiKeyName =
   | 'NVIDIA_API_KEY'
   | 'CEREBRAS_API_KEY'
   | 'MISTRAL_API_KEY'
+  | 'ZAI_API_KEY'
+  | 'HUGGINGFACE_API_KEY'
 
 export interface AiKeyStatus {
   /** True once real API calls will succeed for this key — a Settings-saved
@@ -1681,12 +1683,24 @@ export interface AiKeyStatus {
   hint: string | null
 }
 
-/** 'anthropic'/'openai' are the original M16 pair. The other six (M20) are
- *  all free-tier providers in the model catalog — see ai/model-catalog.ts
- *  in the main process; this type must stay in lockstep with
- *  src/main/ai/types.ts's AIProviderId. */
+/** 'anthropic'/'openai' are the original M16 pair. The next six (M20) and
+ *  the last two (M31 — Z.ai, Hugging Face) are all free-tier providers in the
+ *  model catalog — see ai/model-catalog.ts in the main process; this type
+ *  must stay in lockstep with src/main/ai/types.ts's AIProviderId, which is
+ *  now derived from the AI_PROVIDER_IDS array there. This copy exists because
+ *  preload cannot import from main; it is checked by
+ *  ai/__tests__/provider-lockstep.test.ts rather than by convention. */
 export type AiProviderId =
-  'anthropic' | 'openai' | 'groq' | 'openrouter' | 'google' | 'nvidia' | 'cerebras' | 'mistral'
+  | 'anthropic'
+  | 'openai'
+  | 'groq'
+  | 'openrouter'
+  | 'google'
+  | 'nvidia'
+  | 'cerebras'
+  | 'mistral'
+  | 'zai'
+  | 'huggingface'
 
 export type AiKeyValidateResult = { ok: true; models: string[] } | { ok: false; reason: string }
 

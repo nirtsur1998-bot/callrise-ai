@@ -163,6 +163,44 @@ const KEYS: KeyCardConfig[] = [
     providerId: 'mistral',
     brand: 'mistral',
     retention: { posture: 'unknown', url: 'https://legal.mistral.ai/terms' }
+  },
+  {
+    name: 'ZAI_API_KEY',
+    title: 'Z.ai (GLM)',
+    blurb: 'Two GLM models are permanently free — no card, no expiry. China-hosted.',
+    getKeyUrl: 'https://z.ai/manage-apikey/apikey-list',
+    getKeyLabel: 'Get a free Z.ai key',
+    placeholder: 'Paste your Z.ai API key',
+    providerId: 'zai',
+    brand: 'zai',
+    retention: { posture: 'no-training', url: 'https://docs.z.ai/legal-agreement/terms-of-use' }
+  },
+  {
+    name: 'HUGGINGFACE_API_KEY',
+    title: 'Hugging Face',
+    // The free credit really is about ten cents a month. Saying so on the
+    // card is the whole point: a provider that looks like the others and
+    // then stops working after a day is precisely the "looks real, isn't"
+    // defect this milestone exists to remove. Better a small number the
+    // reader can judge than a pleasant sentence they find out is wrong.
+    blurb: 'Routes to open models like GPT-OSS. Free credit is tiny (~$0.10/month) — good for trying it, not for daily use.',
+    getKeyUrl: 'https://huggingface.co/settings/tokens',
+    getKeyLabel: 'Get a free Hugging Face token',
+    placeholder: 'Paste your Hugging Face access token',
+    providerId: 'huggingface',
+    // No Simple Icons CC0 mark for Hugging Face in this repo's asset set, so
+    // it takes the lettermark — the documented fallback in
+    // assets/model-logos/SOURCES.md, not a placeholder to replace later.
+    // The lettermark renders label.charAt(0) — a visible 'H', matching the
+    // single letters the other fallbacks use — while the full string becomes
+    // the aria-label. So this is 'Hugging Face', not 'HF': the eye gets the
+    // letter either way, and the screen reader gets the real name.
+    brand: { label: 'Hugging Face' },
+    // 'unknown', not 'no-training': HF states it does not store request or
+    // response bodies, but the inference runs at whichever downstream
+    // provider the router picks, and their terms vary. See the catalog
+    // entries for the full reasoning.
+    retention: { posture: 'unknown', url: 'https://huggingface.co/docs/inference-providers/security' }
   }
 ]
 
@@ -389,7 +427,10 @@ export function KeyCard({
 
 // Short labels for the compact selector — KEYS' own `title` (e.g. "Gemini
 // (Google AI Studio)") is right for the key-entry cards below but too long
-// for a segmented control with 8 options.
+// for a segmented control with ten options. Typed Record<AiProviderId, _>
+// deliberately: this is the one place in the renderer that MUST name every
+// provider, so a new one fails the build here rather than rendering a
+// blank-labelled segment nobody can identify.
 const PROVIDER_SHORT_LABEL: Record<AiProviderId, string> = {
   anthropic: 'Claude',
   openai: 'ChatGPT',
@@ -398,7 +439,9 @@ const PROVIDER_SHORT_LABEL: Record<AiProviderId, string> = {
   google: 'Gemini',
   nvidia: 'NVIDIA',
   cerebras: 'Cerebras',
-  mistral: 'Mistral'
+  mistral: 'Mistral',
+  zai: 'Z.ai',
+  huggingface: 'Hugging Face'
 }
 
 /** Bug found by the founder: "Ask the coach" and a few other features
@@ -408,8 +451,9 @@ const PROVIDER_SHORT_LABEL: Record<AiProviderId, string> = {
  *  hardcoded to only Claude/ChatGPT, a user who configured a different
  *  provider (Groq, Gemini, ...) saw those features fail with "add your
  *  Claude or ChatGPT key" even though a perfectly good key was already
- *  saved. All 8 providers are offered here now, matching every key card
- *  below and PROVIDER_REGISTRY. */
+ *  saved. Every provider is offered here now, matching every key card
+ *  below and PROVIDER_REGISTRY — a count is not written down on purpose,
+ *  since the last one went stale the moment M31 added two. */
 const PROVIDER_OPTIONS = KEYS.filter((k): k is KeyCardConfig & { providerId: AiProviderId } =>
   Boolean(k.providerId)
 ).map((k) => ({ id: k.providerId, label: PROVIDER_SHORT_LABEL[k.providerId] }))

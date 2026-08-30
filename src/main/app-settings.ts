@@ -737,19 +737,14 @@ export interface AppSettings {
 // module used to hand-duplicate a 2-value union here, which was already a
 // silent-drift risk at 2 providers and would have been worse at 8).
 export type { AIProviderId } from './ai/types'
+import { AI_PROVIDER_IDS } from './ai/types'
 
 function sanitizeAIProvider(value: unknown): AIProviderId {
-  const valid: AIProviderId[] = [
-    'anthropic',
-    'openai',
-    'groq',
-    'openrouter',
-    'google',
-    'nvidia',
-    'cerebras',
-    'mistral'
-  ]
-  return valid.includes(value as AIProviderId) ? (value as AIProviderId) : 'anthropic'
+  // M31: was a hand-copied literal of the same eight ids. It is now the one
+  // array the type itself is derived from, so a provider can no longer exist
+  // to the compiler but not to this validator — a mismatch that failed
+  // silently, by resetting the user's saved provider to 'anthropic'.
+  return AI_PROVIDER_IDS.includes(value as AIProviderId) ? (value as AIProviderId) : 'anthropic'
 }
 
 const EPOCH = new Date(0).toISOString()

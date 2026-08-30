@@ -70,6 +70,35 @@ const CEREBRAS_CONFIG = {
   defaultModel: 'openai/gpt-oss-120b'
 } as const
 
+// ---- M31 additions. Every string below was verified against the provider's
+// own current documentation on 2026-08-30, not recalled. Three candidates
+// were dropped at that step: GitHub Models (RETIRED 2026-07-30 — every call
+// would have 404'd), SambaNova (free tier is 20 requests per DAY) and Alibaba
+// Model Studio (base URL is workspace-scoped, so there is no static string).
+const ZAI_CONFIG = {
+  id: 'zai',
+  displayName: 'Z.ai (GLM)',
+  baseURL: 'https://api.z.ai/api/paas/v4',
+  defaultModel: 'glm-4.7-flash',
+  testModel: 'glm-4.5-flash',
+  // Z.ai's own Chat Completions reference documents "max_tokens" and never
+  // "max_completion_tokens". Identical shape to the Mistral bug below, so it
+  // gets the same treatment up front rather than after a deterministic 422.
+  maxTokensParam: 'max_tokens'
+} as const
+
+const HUGGINGFACE_CONFIG = {
+  id: 'huggingface',
+  displayName: 'Hugging Face',
+  baseURL: 'https://router.huggingface.co/v1',
+  defaultModel: 'openai/gpt-oss-120b',
+  testModel: 'openai/gpt-oss-20b',
+  // This is a ROUTER: it fans out to ~18 downstream inference providers, so
+  // the request has to use the field all of them understand rather than the
+  // newest OpenAI one. HF's own examples use "max_tokens".
+  maxTokensParam: 'max_tokens'
+} as const
+
 const MISTRAL_CONFIG = {
   id: 'mistral',
   displayName: 'Mistral',
@@ -127,5 +156,17 @@ export const PROVIDER_REGISTRY: Record<AIProviderId, ProviderRegistryEntry> = {
     keyEnvName: 'MISTRAL_API_KEY',
     defaultModelId: MISTRAL_CONFIG.defaultModel,
     build: (key) => createOpenAICompatibleProvider(MISTRAL_CONFIG, key)
+  },
+  zai: {
+    displayName: 'Z.ai (GLM)',
+    keyEnvName: 'ZAI_API_KEY',
+    defaultModelId: ZAI_CONFIG.defaultModel,
+    build: (key) => createOpenAICompatibleProvider(ZAI_CONFIG, key)
+  },
+  huggingface: {
+    displayName: 'Hugging Face',
+    keyEnvName: 'HUGGINGFACE_API_KEY',
+    defaultModelId: HUGGINGFACE_CONFIG.defaultModel,
+    build: (key) => createOpenAICompatibleProvider(HUGGINGFACE_CONFIG, key)
   }
 }

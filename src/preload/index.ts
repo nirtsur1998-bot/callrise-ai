@@ -459,7 +459,9 @@ const api = {
         | 'GOOGLE_AI_API_KEY'
         | 'NVIDIA_API_KEY'
         | 'CEREBRAS_API_KEY'
-        | 'MISTRAL_API_KEY',
+        | 'MISTRAL_API_KEY'
+        | 'ZAI_API_KEY'
+        | 'HUGGINGFACE_API_KEY',
       value: string
     ) => ipcRenderer.invoke('aiKeys:save', name, value),
     clear: (
@@ -473,6 +475,8 @@ const api = {
         | 'NVIDIA_API_KEY'
         | 'CEREBRAS_API_KEY'
         | 'MISTRAL_API_KEY'
+        | 'ZAI_API_KEY'
+        | 'HUGGINGFACE_API_KEY'
     ) => ipcRenderer.invoke('aiKeys:clear', name),
     validate: (
       providerId:
@@ -483,7 +487,9 @@ const api = {
         | 'google'
         | 'nvidia'
         | 'cerebras'
-        | 'mistral',
+        | 'mistral'
+        | 'zai'
+        | 'huggingface',
       value: string
     ) => ipcRenderer.invoke('aiKeys:validate', providerId, value)
   },
