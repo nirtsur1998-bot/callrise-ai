@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { AI_PROVIDER_IDS } from '../types'
 
@@ -112,5 +112,60 @@ describe('every provider is wired end to end', () => {
     const catalog = stripComments(read('src/main/ai/model-catalog.ts'))
     const used = new Set([...catalog.matchAll(/providerId:\s*'([^']+)'/g)].map((m) => m[1]))
     for (const id of used) expect(AI_PROVIDER_IDS).toContain(id)
+  })
+})
+
+describe('the renderer does not keep its own copy of the key list', () => {
+  // WHY THIS EXISTS, and it is not hypothetical: the tests above guard main
+  // against preload and stopped there. The renderer holds copies too, and one
+  // of them — the Home activation checklist — enumerated the eight text-AI key
+  // names to decide whether the "Add an AI provider key" step was done. Adding
+  // two providers did not touch it, so the founder pasted a real Hugging Face
+  // key and the step stayed unticked: a checklist telling someone to do a thing
+  // they had just done. Nothing failed. The guard written the same hour did not
+  // catch it, because it was looking at the wrong two files.
+  //
+  // The fix was to DELETE that list (ask "is anything but Deepgram configured?"
+  // instead). This test makes deletion the only option next time.
+
+  const RENDERER = join(ROOT, 'src/renderer')
+
+  /** The single legitimate enumeration: the key-entry cards, where each card is
+   *  a real UI object that must name its own key. Anywhere else, a list of key
+   *  names is a copy of main's list that nothing keeps in sync. */
+  const ALLOWED = 'src/renderer/src/features/settings/ApiKeysSection.tsx'
+
+  it('no renderer file except the key cards enumerates key names', () => {
+    const offenders: string[] = []
+    const files = readdirSync(RENDERER, { recursive: true, encoding: 'utf8' })
+    for (const rel of files) {
+      if (!/\.(ts|tsx)$/.test(rel)) continue
+      const full = join(RENDERER, rel)
+      if (!statSync(full).isFile()) continue
+      const posix = ('src/renderer/' + rel).replace(/\\/g, '/')
+      if (posix === ALLOWED) continue
+      const names = new Set(
+        [...stripComments(readFileSync(full, 'utf8')).matchAll(/'([A-Z][A-Z0-9_]*_API_KEY)'/g)].map(
+          (m) => m[1]
+        )
+      )
+      // One or two named keys is a specific reference (Deepgram gates
+      // transcription, and that is a real distinction). Three or more is a list.
+      if (names.size >= 3) offenders.push(`${posix} names ${[...names].sort().join(", ")}`)
+    }
+    expect(
+      offenders,
+      'these files enumerate the AI key list; derive it from aiKeys.getStatus() instead'
+    ).toEqual([])
+  })
+
+  it('every key in main has a card in the API keys page', () => {
+    // The other direction: a provider wired all the way through main and preload
+    // but with no card is a provider nobody can give a key to.
+    const cards = readFileSync(join(ROOT, ALLOWED), 'utf8')
+    const named = [...stripComments(cards).matchAll(/name:\s*'([A-Z][A-Z0-9_]*_API_KEY)'/g)].map(
+      (m) => m[1]
+    )
+    expect(sorted(named)).toEqual(sorted(MAIN_KEYS))
   })
 })

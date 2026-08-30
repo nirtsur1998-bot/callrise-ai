@@ -55,20 +55,19 @@ export function ActivationChecklist(): React.JSX.Element | null {
       ])
       if (cancelled) return
 
-      const aiKeyNames = [
-        'ANTHROPIC_API_KEY',
-        'OPENAI_API_KEY',
-        'GROQ_API_KEY',
-        'OPENROUTER_API_KEY',
-        'GOOGLE_AI_API_KEY',
-        'NVIDIA_API_KEY',
-        'CEREBRAS_API_KEY',
-        'MISTRAL_API_KEY'
-      ] as const
-
       setState({
         hasTranscriptionKey: keys?.DEEPGRAM_API_KEY?.configured === true,
-        hasAiKey: aiKeyNames.some((n) => keys?.[n]?.configured === true),
+        // NO LIST HERE, DELIBERATELY. This used to enumerate the eight text-AI
+        // key names, which made it a hand-maintained copy of a list that lives
+        // in main — and it broke the moment M31 added a ninth and tenth: the
+        // founder pasted a real Hugging Face key and this step stayed unticked,
+        // because the name was not in the local array. Asking "is anything
+        // other than Deepgram configured?" derives the answer from whatever
+        // main actually returns, so it cannot drift again. Adding a provider
+        // now requires no edit to this file at all.
+        hasAiKey: Object.entries(keys ?? {}).some(
+          ([name, status]) => name !== 'DEEPGRAM_API_KEY' && status?.configured === true
+        ),
         callCount: calls.length,
         coachedCount: calls.filter((c) => c.hasCoaching).length,
         calendarConnected: google?.connected === true || outlook?.connected === true,
