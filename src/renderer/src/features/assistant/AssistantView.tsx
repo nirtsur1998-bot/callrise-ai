@@ -1498,7 +1498,7 @@ export function AssistantView({
                       )}
                     </div>
                     {chat.sending ? (
-                      <Button variant="secondary" size="sm" icon={Square} onClick={() => void chat.stop()}>
+                      <Button variant="stop" size="sm" icon={Square} onClick={() => void chat.stop()}>
                         Stop
                       </Button>
                     ) : (

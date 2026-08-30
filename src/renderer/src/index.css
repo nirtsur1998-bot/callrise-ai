@@ -134,6 +134,45 @@
      mostly from the border + a faint drop. Cards/menus/popovers share these. */
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.28), 0 1px 3px rgb(0 0 0 / 0.16);
   --shadow-pop: 0 8px 28px -6px rgb(0 0 0 / 0.5), 0 2px 6px rgb(0 0 0 / 0.3);
+
+  /* ── MOTION (M31 Stage 5) ─────────────────────────────────────────────
+     A vocabulary, defined BEFORE anything uses it. Every animation written
+     before this stage hardcoded its own cubic-bezier — several different
+     curves with no shared meaning — which is exactly why "purposeful,
+     nothing bouncy" could not be enforced: there was nothing to enforce it
+     against.
+
+     Three durations and three curves, and the smallness is the point. A
+     scale with six of each is one nobody can hold in their head, so the next
+     person invents a seventh rather than pick.
+
+     ON THE WORD "SPRING": the brief asked for spring-physics
+     micro-interactions AND for nothing bouncy. Those pull against each
+     other — a real spring OVERSHOOTS; that is what makes it a spring.
+     `--ease-settle` is the honest resolution: it leaves fast and decelerates
+     hard, so a press feels physical and immediate, but it never crosses its
+     target and springs back. Named `settle` rather than `spring` so nobody
+     later "restores" a bounce, thinking it was lost by accident. */
+  --motion-press: 90ms; /* the tap itself — must read as instant */
+  --motion-quick: 160ms; /* hover, small state flips */
+  --motion-base: 240ms; /* entrances, collapses, panels */
+
+  --ease-entrance: cubic-bezier(0.22, 1, 0.36, 1); /* arriving: decelerate */
+  --ease-exit: cubic-bezier(0.55, 0, 1, 0.45); /* leaving: accelerate */
+  --ease-settle: cubic-bezier(0.2, 0.9, 0.3, 1); /* press/release, no overshoot */
+
+  /* Deliberately subtle. At 0.97 a dense desktop UI reads as a springy toy;
+     a press should be felt more than seen. */
+  --motion-press-scale: 0.985;
+
+  /* The highest-leverage two lines in this block. Tailwind's own `transition`
+     utility is used ~160 times across the renderer, and every one of those
+     was running on Tailwind's stock 150ms/cubic-bezier(0.4,0,0.2,1). Pointing
+     its defaults at the tokens above means the whole app adopts the
+     vocabulary without touching 160 call sites — and, more importantly, that
+     a future change to the house feel is a change HERE rather than a sweep. */
+  --default-transition-duration: var(--motion-quick);
+  --default-transition-timing-function: var(--ease-settle);
 }
 
 @layer base {
@@ -365,6 +404,34 @@
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
     font-feature-settings: 'cv11', 'ss01'; /* nicer digits/glyphs where the font supports it */
+  }
+
+  /* ── PRESS (M31 Stage 5) ──────────────────────────────────────────────
+     Every interactive control gets the same press, from one rule and the
+     motion tokens. Before this the app had hover states everywhere and an
+     active state essentially nowhere — two `active:scale` rules in the whole
+     renderer — so a click landed with no acknowledgement at all. This is the
+     single most-felt piece of Stage 5: it happens on every click a user ever
+     makes.
+
+     `scale:` the standalone property, NOT `transform: scale()`. Tailwind v4
+     emits `translate-*` / `rotate-*` as their own `translate:` and `rotate:`
+     properties, so a `transform` here would clobber every control that is
+     positioned with `-translate-y-1/2` — which includes the icon buttons
+     inside every key input. The independent properties compose instead.
+
+     `:where()` keeps specificity at zero, so any component that needs a
+     different press can simply say so without an !important war. */
+  :where(button, [role='button'], summary, [role='switch'], [role='tab']) {
+    transition-property: scale, background-color, border-color, color, opacity;
+    transition-duration: var(--motion-press);
+    transition-timing-function: var(--ease-settle);
+  }
+  :where(button, [role='button'], summary, [role='switch'], [role='tab']):not(
+      :disabled,
+      [aria-disabled='true']
+    ):active {
+    scale: var(--motion-press-scale);
   }
 
   /* One consistent, accessible focus ring on everything interactive — replaces
@@ -600,15 +667,22 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
+    /* A STATIC block, and the claim now matches the code.
+       This used to specify `animation: pulse 1.6s infinite` as a "calm
+       fallback". That pulse never ran once: the blanket reduced-motion rule
+       at the bottom of this file sets `animation-duration: 0.001ms
+       !important` on everything, and it wins — so the code described a
+       behaviour the app has never had, which is the species this milestone
+       keeps finding.
+       Resolved by deleting the claim rather than rescuing it, because the
+       blanket rule is RIGHT here: someone who asked the OS for less motion
+       should not get an infinite pulse, however gentle. A skeleton that
+       simply sits there is the correct answer, and now it is also the
+       documented one. */
     .animate-shimmer {
-      animation: pulse 1.6s ease-in-out infinite;
+      animation: none;
       background-image: none;
       background-color: var(--color-elevated);
-    }
-    @keyframes pulse {
-      50% {
-        opacity: 0.5;
-      }
     }
   }
 
