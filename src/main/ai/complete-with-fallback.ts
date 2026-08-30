@@ -614,6 +614,85 @@ function rescueSteps(
   return out
 }
 
+/**
+ * BUG-142 (2026-08-30) — the same rescue, reachable at the END of an exhausted
+ * walk rather than only before one starts.
+ *
+ * THE FIELD FAILURE. The founder pasted a Cloudflare token Cloudflare rejects.
+ * Post-call summaries stopped entirely — "Every configured key was rejected" —
+ * while a known-good Hugging Face key sat connected on the same account.
+ * Fifteen identical `legacy:cloudflare -> null` events, no fall-through.
+ *
+ * WHY THE PRE-WALK RESCUE COULD NOT HELP. `rescueSteps` above is offered only
+ * when `chain.length === 0` BEFORE the walk. That gate opens only if something
+ * PERSISTED a reason to exclude every step — a cooldown, or a structural
+ * break. An `auth` failure persists neither: `deadProviders` is declared
+ * inside the walk and dies with it, and `markStructurallyBroken` explicitly
+ * skips `auth` ("already gets a coarser, PROVIDER-wide skip"). So a bad key
+ * leaves its legacy step looking perfectly usable at the start of every walk,
+ * `chain.length` is 1 rather than 0, and the rescue never fires — identically,
+ * forever.
+ *
+ * THE INVERSION THAT PRODUCES, and it is why this is a design fix rather than
+ * a patch: **a rescue gated on emptiness rescues TRANSIENT failures and
+ * abandons PERMANENT ones.** A rate limit persists a cooldown, so the next
+ * walk starts empty and IS rescued. A wrong key persists nothing, so it never
+ * is. The more permanent the failure — the more the user actually needs their
+ * other key — the less likely they are to get it. Nobody would design that; it
+ * falls out of gating on a pre-walk snapshot.
+ *
+ * BUG-125b's own stated intent is satisfied by this version and only
+ * accidentally by the old one: "it runs only when the answer would otherwise
+ * be no". The end of an exhausted walk is precisely, and only, that moment.
+ *
+ * Everything that made the pre-walk rescue safe still holds — durable tier
+ * only, every candidate through the same `isUsableFor` gate, never a provider
+ * already represented in the chain. Two further exclusions apply here and
+ * cannot be dropped: a step already ATTEMPTED this walk (re-issuing an
+ * identical failed request is the one thing this file refuses to do), and a
+ * provider in `deadProviders` (its key was just rejected — a second model on
+ * the same dead key is a guaranteed-doomed request).
+ *
+ * ── THE BOUND, AND WHY IT IS NOT A DETAIL ────────────────────────────────
+ *
+ * The first version of this returned EVERY eligible keyed provider, and that
+ * rebuilt BUG-058's spiral inside the fix for a different bug.
+ *
+ * The cost of a widening fallback scales with the user's CONFIGURATION, not
+ * with the code. With one spare key an exhausted walk costs one extra request;
+ * with five it costs five. And the moment this path runs most often is a total
+ * outage — when every provider is down — so every walk would then spend N
+ * doomed requests and push N sets of rate limits further out. That is exactly
+ * the spiral BUG-058 exists to break, arrived at from the opposite direction.
+ * M31 added three more providers, so N is growing.
+ *
+ * So the rescue is bounded to ONE additional provider: 1 -> 2, never 1 -> N.
+ * That is enough to make "add another provider key in Settings" true advice,
+ * which was BUG-125b's entire purpose, while keeping the cost of a total
+ * outage flat instead of proportional to how well-configured the user is.
+ *
+ * Selection is registry order — deterministic and predictable rather than
+ * clever. Every candidate has already passed `isUsableFor`, so none of them is
+ * cooling, benched or paced; there is no evidence available here that would
+ * make one a better bet than another. If a ranking is ever wanted (paid before
+ * free, fastest observed, healthiest by purpose-health), it belongs in
+ * `rescueSteps` with its own reasoning, not smuggled into a `.slice()`.
+ */
+const END_OF_WALK_RESCUE_MAX = 1
+
+function endOfWalkRescue(
+  chain: ResolvedStep[],
+  attempted: Set<string>,
+  deadProviders: Set<AIProviderId>,
+  now: number,
+  tier: CooldownTier,
+  purpose: AIPurpose
+): ResolvedStep[] {
+  return rescueSteps(chain, now, tier, purpose)
+    .filter((s) => !attempted.has(s.catalogId) && !deadProviders.has(s.providerId))
+    .slice(0, END_OF_WALK_RESCUE_MAX)
+}
+
 export function resolveChain(purpose: AIPurpose, opts?: ChainCapabilityNeeds): ResolvedChain {
   const configured = resolveConfiguredChain(purpose)
   let capable = configured
@@ -1031,6 +1110,16 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   }
 
   try {
+  // BUG-142 — TWO PASSES, and the loop body below is deliberately untouched.
+  // Pass 0 is the walk exactly as it always was. If it exhausts without an
+  // answer, pass 1 re-enters over a chain extended with endOfWalkRescue()'s
+  // one candidate. Re-entering is free: the inner loop already skips anything
+  // in `attempted`, so every step from pass 0 is passed over without a request.
+  //
+  // Written as an outer loop rather than a second copy of the attempt logic on
+  // purpose — the alternative was duplicating ~150 lines of pacing, cooldown,
+  // budget and ceiling handling, which is how two paths drift apart.
+  for (let pass = 0; pass < 2; pass++) {
   for (let i = 0; i < chain.length; i++) {
     const step = chain[i]
     if (ceiling.signal.aborted) break
@@ -1177,6 +1266,27 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
         remainingBudgetMs = Math.max(0, remainingBudgetMs - (Date.now() - startedAt))
       }
     }
+  }
+  if (pass === 0) {
+    // Out of time is not out of options — a ceiling abort must not spend a
+    // fresh request; the caller is told about the timeout instead.
+    if (ceiling.signal.aborted) break
+    const extra = endOfWalkRescue(chain, attempted, deadProviders, Date.now(), tier, purpose)
+    if (extra.length === 0) break
+    void logFallbackEvent({
+      ts: new Date().toISOString(),
+      purpose,
+      fromCatalogId: lastAttempt
+        ? `legacy:${lastAttempt.providerId}`
+        : (chain[chain.length - 1]?.catalogId ?? 'chain-exhausted'),
+      toCatalogId: extra[0].catalogId,
+      reason: 'rescue',
+      detail:
+        `Chain exhausted; offering ${extra.length} keyed provider not yet tried ` +
+        `(BUG-142). This is the fall-through a rejected key used to block.`
+    })
+    chain = [...chain, ...extra]
+  }
   }
   } finally {
     clearTimeout(ceilingTimer)
@@ -1468,7 +1578,26 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     }
 
     try {
-    for (let i = 0; i < chain.length; i++) {
+    // BUG-142 — the same two-pass structure as completeWithFallback, for the
+    // same reason, with the loop body left untouched. See endOfWalkRescue.
+    //
+    // The "already shown output" guard below is preserved for free: once a
+    // stream has emitted deltas it THROWS rather than breaking, which exits
+    // this try entirely, so pass 1 is unreachable for a partially-rendered
+    // answer. A rescue that appended a second provider's text to a half-
+    // written one would be a worse bug than the one being fixed.
+    //
+    // `scanFrom` is REQUIRED here and has no counterpart in
+    // completeWithFallback, because this loop keeps no `attempted` set — it
+    // relies on the chain being deduped by construction, which was true while
+    // there was only ever one pass. Without it, pass 1 re-walks every step
+    // pass 0 already tried and re-issues each doomed request. Caught by
+    // deadProvidersPhase2's ported stream test failing by TWO extra entries
+    // where its completeWithFallback twin failed by one — the asymmetry
+    // between two tests named as identical was the entire tell.
+    let scanFrom = 0
+    for (let pass = 0; pass < 2; pass++) {
+    for (let i = scanFrom; i < chain.length; i++) {
       if (ceiling.signal.aborted) break
       const step = chain[i]
       if (deadProviders.has(step.providerId)) continue
@@ -1632,6 +1761,41 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         }
         // Nothing shown yet — safe to fall through and try the next entry.
       }
+    }
+    if (pass === 0) {
+      if (ceiling.signal.aborted) break
+      // No `attempted` set here: unlike completeWithFallback this loop keeps
+      // none, and none is needed — rescueSteps already excludes every provider
+      // represented in `chain`, and deadProviders excludes the one whose key
+      // was just rejected. So no candidate it returns can be a step this walk
+      // already tried.
+      const extra = endOfWalkRescue(
+        chain,
+        new Set<string>(),
+        deadProviders,
+        Date.now(),
+        tier,
+        purpose
+      )
+      if (extra.length === 0) break
+      void logFallbackEvent({
+        ts: new Date().toISOString(),
+        purpose,
+        fromCatalogId: lastAttempt
+          ? `legacy:${lastAttempt.providerId}`
+          : (chain[chain.length - 1]?.catalogId ?? 'chain-exhausted'),
+        toCatalogId: extra[0].catalogId,
+        reason: 'rescue',
+        detail:
+          `Chain exhausted; offering ${extra.length} keyed provider not yet tried ` +
+          `(BUG-142). This is the fall-through a rejected key used to block.`
+      })
+      // Advance PAST everything pass 0 walked, THEN append. Order matters:
+      // reading chain.length after the append would scan from the end and try
+      // nothing at all.
+      scanFrom = chain.length
+      chain = [...chain, ...extra]
+    }
     }
     } finally {
       clearTimeout(ceilingTimer)

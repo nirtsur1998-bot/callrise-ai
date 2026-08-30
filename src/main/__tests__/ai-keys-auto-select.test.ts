@@ -29,6 +29,30 @@ vi.mock('electron', () => ({
   }
 }))
 
+// BUG-143 (2026-08-30) — auto-select now VALIDATES a key before promoting it to
+// default, so these tests need a validation stub.
+//
+// THEY WERE HITTING THE NETWORK, and nobody knew. These save obviously-fake
+// keys ('gsk_test_key_value') against the REAL provider registry. Before this
+// fix nothing ever called out, so it did not matter. After it, two of them went
+// red — correctly, the keys are not real — and the two that stayed green took
+// 430ms and 222ms because they were genuinely round-tripping to Groq and
+// Google. A test suite that quietly depends on network reachability is a
+// flakiness source that only shows itself when someone makes the call
+// load-bearing.
+//
+// `importActual` keeps everything else real, so these still exercise the actual
+// selection logic; only the probe is replaced.
+vi.mock('../ai', async (importActual) => {
+  const actual = await importActual<typeof import('../ai')>()
+  return {
+    ...actual,
+    buildProviderForValidation: () => ({
+      validateKey: async () => ({ ok: true as const, models: [] })
+    })
+  }
+})
+
 const { registerAiKeys } = await import('../ai-keys')
 const { loadAppSettings } = await import('../app-settings')
 

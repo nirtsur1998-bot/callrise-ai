@@ -263,7 +263,12 @@ type KeyStatusDot = 'connected' | 'no-key' | 'invalid' | 'rate-limited'
  *  rejected" state — a saved-but-now-invalid key just shows "Connected"
  *  until the next Test click or a real AI call fails, same limitation M16
  *  already had. */
-function deriveStatusDot(
+// Exported for `api-key-status-dot.test.ts`. This repo cannot assert on
+// component render output (BUG-140), so the mapping that decides whether a card
+// says "Connected" or "Key invalid" is tested as the pure function it is — and
+// the two call sites below (`title=` and the visible label) both read
+// STATUS_DOT_LABEL[deriveStatusDot(...)], so pinning the function pins the text.
+export function deriveStatusDot(
   status: AiKeyStatus | undefined,
   testResult: { ok: boolean; message: string } | null
 ): KeyStatusDot {
@@ -280,7 +285,7 @@ const STATUS_DOT_CLASS: Record<KeyStatusDot, string> = {
   'rate-limited': 'bg-warning'
 }
 
-const STATUS_DOT_LABEL: Record<KeyStatusDot, string> = {
+export const STATUS_DOT_LABEL: Record<KeyStatusDot, string> = {
   connected: 'Connected',
   'no-key': 'No key',
   invalid: 'Key invalid',
@@ -381,6 +386,12 @@ export function KeyCard({
   const [showValue, setShowValue] = useState(false)
   const [busy, setBusy] = useState(false)
   const [savedNotice, setSavedNotice] = useState(false)
+  // BUG-143 — what the save DID beyond storing the key: either this key became
+  // the default provider, or it was declined for that job because it did not
+  // validate. Both were previously silent, and the silent version is how the
+  // founder ended up with every feature pointed at a rejected Cloudflare token
+  // while a working Hugging Face key sat right there.
+  const [saveOutcome, setSaveOutcome] = useState<'made-default' | 'unverified' | null>(null)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
   // Same auto-clearing "Saved" pattern as CrmSection/PersonalizationSection/
@@ -398,10 +409,39 @@ export function KeyCard({
       if (res.ok) {
         setValue('')
         setSavedNotice(true)
-        setTestResult(null)
+        // BUG-143 — say what happened to the DEFAULT, not just to the key.
+        // `autoSelectedProvider` is set only when the default actually moved;
+        // `keyValidated === false` means we tried to promote this key and it
+        // did not answer, so we left the default alone.
+        setSaveOutcome(
+          res.autoSelectedProvider ? 'made-default' : res.keyValidated === false ? 'unverified' : null
+        )
+        // BUG-143 follow-up — THE STATUS DOT MUST NOT SAY "Connected" FOR A KEY
+        // THAT DID NOT ANSWER. `deriveStatusDot` reads `status.configured`,
+        // which is only `Boolean(process.env[name])` — presence, not health —
+        // so a saved-but-rejected key rendered a green "Connected" dot. The
+        // founder typed `junk` and got green dot / green tick / "Saved — takes
+        // effect immediately", all three false, on the screen where being wrong
+        // costs most: someone who reads "Connected" stops looking for the
+        // problem.
+        //
+        // The save now carries the same verdict the "Test key" button produces,
+        // so it is fed into the SAME state that button uses. One display path,
+        // one meaning, and the provider's own words rather than a generic line.
+        setTestResult(
+          res.keyValidated === false
+            ? {
+                ok: false,
+                message: res.validationReason ?? "This key didn't answer when we checked it."
+              }
+            : null
+        )
         onChanged()
         clearTimeout(savedTimeout.current)
-        savedTimeout.current = setTimeout(() => setSavedNotice(false), 4000)
+        savedTimeout.current = setTimeout(() => {
+          setSavedNotice(false)
+          setSaveOutcome(null)
+        }, 4000)
       }
     } finally {
       setBusy(false)
@@ -464,9 +504,16 @@ export function KeyCard({
           {config.retention && (
             <RetentionBadge posture={config.retention.posture} url={config.retention.url} />
           )}
+          {/* "Key saved", not "Configured". BOTH are true — this badge is
+              driven by `status.configured`, which is only "a key is stored" —
+              but next to a RED "Key invalid" dot, "Configured" is read as
+              "working", and the two badges contradicted each other on screen.
+              The logic is correct and stays; only the word changes, because
+              the word was doing more work than the value behind it.
+              (2026-08-30, founder: "fix the wording, not the logic".) */}
           {status?.configured && (
             <span className="flex items-center gap-1.5 rounded-lg border border-positive/30 bg-positive-soft px-2.5 py-1 text-xs font-medium text-positive">
-              <CheckCircle2 className="h-3.5 w-3.5" /> Configured
+              <CheckCircle2 className="h-3.5 w-3.5" /> Key saved
               {status.hint ? ` · ${status.hint}` : ''}
             </span>
           )}
@@ -561,6 +608,17 @@ export function KeyCard({
       )}
       {savedNotice && (
         <p className="mt-2 text-[13px] text-positive">Saved — takes effect immediately.</p>
+      )}
+      {saveOutcome === 'made-default' && (
+        <p className="mt-1 text-[13px] text-secondary">
+          This is now your default AI provider. You can change that below.
+        </p>
+      )}
+      {saveOutcome === 'unverified' && (
+        <p className="mt-1 text-[13px] text-secondary">
+          Saved, but this key didn&apos;t answer when we checked it — so we left your default AI
+          provider as it was. Use “Test key” to see why.
+        </p>
       )}
 
       <a

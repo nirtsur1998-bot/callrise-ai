@@ -118,8 +118,44 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     contextWindow: 128_000,
     retentionPosture: 'unknown',
     retentionUrl: 'https://groq.com/privacy-policy/',
-    keyUrl: 'https://console.groq.com/keys'
-    // Verified present on Groq's live model list (console.groq.com/docs/models), 2026-07-30.
+    keyUrl: 'https://console.groq.com/keys',
+    // Verified present on Groq's live model list (console.groq.com/docs/models),
+    // 2026-07-30.
+    //
+    // BUG-081 (2026-08-30) — CONFIRMED ABSENT FROM GROQ'S LIVE /models LIST.
+    //
+    // This was deliberately NOT flagged at first. The evidence then was the
+    // founder's fallback log — reached 21 times (rate-limit and quota errors,
+    // which only a real model returns) with the last on 2026-08-13, then
+    // 'model-not-found' on 2026-08-25 and 2026-08-28. That supports "does not
+    // work on THAT ACCOUNT" and not "decommissioned": a model-404 from Groq
+    // means unavailable to you, and that account was repeatedly out of quota,
+    // exactly the condition a free tier losing model access produces. Flagging
+    // on it would have traded a bug we had seen for an invisible fallback-depth
+    // regression on everyone else. See taxonomy species 56.
+    //
+    // WHAT SETTLED IT: a real Groq key was configured and `resolveCatalog({
+    // forceRefresh: true })` cross-checked every entry against Groq's own
+    // /models endpoint. This id came back `available: false`.
+    //
+    // Two things make that decisive rather than one more data point:
+    //   * THE CONTROL ANSWERED. openai/gpt-oss-120b returned `available: true`
+    //     on the same call with the same key, so the endpoint worked and the
+    //     account has model access — this id is specifically absent.
+    //   * THE METHOD VALIDATED ITSELF. The same call independently reproduced
+    //     the two stale verdicts already established from Groq's docs in July
+    //     (llama-4-scout, qwen3-32b). It agreed with known-good answers before
+    //     being trusted on unknown ones.
+    // DELIBERATELY NOT FLAGGED IN THIS RELEASE, though the evidence above now
+    // supports it. Flagging removes the entry from bundledSteps, and Groq is
+    // left with exactly ONE live catalog entry (gpt-oss-120b) — which breaks
+    // five tests that use these two ids as their "two models on one provider"
+    // fixture. Repointing those fixtures at a provider that still has two live
+    // entries is correct but it is not a one-line change, and it does not
+    // belong in a release that was already verified and awaiting authorisation.
+    // Queued as the immediate follow-up. The cost of waiting is two doomed
+    // attempts per Groq walk, which is what has been happening for weeks
+    // already; the cost of rushing it is a fixture rewrite nobody reviewed.
   },
   {
     id: 'groq-llama-3.3-70b-versatile',
@@ -131,8 +167,28 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     contextWindow: 128_000,
     retentionPosture: 'unknown',
     retentionUrl: 'https://groq.com/privacy-policy/',
-    keyUrl: 'https://console.groq.com/keys'
-    // Verified present on Groq's live model list, 2026-07-30.
+    keyUrl: 'https://console.groq.com/keys',
+    // Same story as llama-3.1-8b-instant above, and settled the same way:
+    // CONFIRMED ABSENT from Groq's live /models list on 2026-08-30 via
+    // resolveCatalog with a real key. See that entry for why the field
+    // evidence alone was deliberately not enough.
+    //
+    // This id WAS also GROQ_CONFIG.defaultModel, so it was the model every
+    // LEGACY chain step sent for a Groq user — and `legacy:groq` carries the
+    // matching signature independently: reached 13 times up to 2026-08-11, then
+    // 7 'model-not-found' rejections through 2026-08-23. Two code paths, one
+    // dead string, the same dates. registry.ts now defaults Groq to
+    // openai/gpt-oss-120b, which the same live check confirmed present.
+    // DELIBERATELY NOT FLAGGED IN THIS RELEASE, though the evidence above now
+    // supports it. Flagging removes the entry from bundledSteps, and Groq is
+    // left with exactly ONE live catalog entry (gpt-oss-120b) — which breaks
+    // five tests that use these two ids as their "two models on one provider"
+    // fixture. Repointing those fixtures at a provider that still has two live
+    // entries is correct but it is not a one-line change, and it does not
+    // belong in a release that was already verified and awaiting authorisation.
+    // Queued as the immediate follow-up. The cost of waiting is two doomed
+    // attempts per Groq walk, which is what has been happening for weeks
+    // already; the cost of rushing it is a fixture rewrite nobody reviewed.
   },
   {
     id: 'groq-gpt-oss-120b',
