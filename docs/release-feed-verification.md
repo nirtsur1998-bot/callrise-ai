@@ -51,8 +51,19 @@ downloads the full installer instead of a delta.
 gh release view v1.5.2 --json assets --jq '.assets[].name'
 ```
 
-Expect all of: `CallRise AI Windows.exe`, `CallRise AI Windows Portable.exe`,
-`CallRise AI Windows.exe.blockmap`, `latest.yml`.
+Expect all of: `CallRise-AI-Windows.exe`, `CallRise-AI-Windows-Portable.exe`,
+`CallRise-AI-Windows.exe.blockmap`, `latest.yml`.
+
+**GitHub HYPHENATES asset names.** What electron-builder writes locally as
+`CallRise AI Windows.exe` is served as `CallRise-AI-Windows.exe`. This document's
+first version listed the spaced names, and the first real run of these checks
+looked for those, 404'd, and then **hashed the 404 page** — reporting
+"downloaded 0.0 MB" and a mismatching sha512 that read exactly like a corrupt
+feed. Three of five checks failed on a release that was perfectly fine.
+
+So don't hardcode the name at all: **take it from `latest.yml`'s own `path:`
+field.** That is the file electron-updater actually fetches, which makes it both
+the robust choice and the correct thing to be verifying.
 
 ### 4. `latest.yml` from the PUBLIC URL, and its hash checked against the REAL installer
 
@@ -73,7 +84,7 @@ curl -sL https://github.com/nirtsur1998-bot/callrise-ai/releases/latest/download
 Read `version` (must equal the tag) and `sha512`. Then:
 
 ```bash
-curl -sL -o /tmp/installer.exe "https://github.com/nirtsur1998-bot/callrise-ai/releases/latest/download/CallRise%20AI%20Windows.exe" && openssl dgst -sha512 -binary /tmp/installer.exe | openssl base64 -A
+curl -sL -o /tmp/installer.exe "https://github.com/nirtsur1998-bot/callrise-ai/releases/latest/download/CallRise-AI-Windows.exe" && openssl dgst -sha512 -binary /tmp/installer.exe | openssl base64 -A
 ```
 
 The output must equal the manifest's `sha512` exactly.
@@ -90,7 +101,7 @@ curl -sI -o /dev/null -w '%{http_code} %{url_effective}\n' -L https://github.com
 Expect `200` and a URL ending in the new tag.
 
 ```bash
-curl -sI -o /dev/null -w '%{http_code}\n' -L "https://github.com/nirtsur1998-bot/callrise-ai/releases/latest/download/CallRise%20AI%20Windows.exe"
+curl -sI -o /dev/null -w '%{http_code}\n' -L "https://github.com/nirtsur1998-bot/callrise-ai/releases/latest/download/CallRise-AI-Windows.exe"
 ```
 
 Expect `200`.
