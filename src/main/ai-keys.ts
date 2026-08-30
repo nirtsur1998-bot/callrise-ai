@@ -37,7 +37,16 @@ export const AI_KEY_NAMES = [
   'CEREBRAS_API_KEY',
   'MISTRAL_API_KEY',
   'ZAI_API_KEY',
-  'HUGGINGFACE_API_KEY'
+  'HUGGINGFACE_API_KEY',
+  'CLOUDFLARE_API_KEY',
+  // NOT a key, and the only entry here that is not one. Cloudflare's base URL
+  // contains the account id, so an API key alone cannot address the account —
+  // both values are required before a call can be made at all. It lives in
+  // this vault to reuse one save/clear/status/env pipeline rather than invent
+  // a second one, and the '_API_KEY' suffix is what tells the rest of the app
+  // it is a credential, not a key (see ActivationChecklist and the lockstep
+  // test that pins this exception).
+  'CLOUDFLARE_ACCOUNT_ID'
 ] as const
 
 export type AiKeyName = (typeof AI_KEY_NAMES)[number]

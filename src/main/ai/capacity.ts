@@ -37,7 +37,7 @@
 // not see. That is taxonomy species 13, in our own runtime code rather than
 // in a doc — see the M26 Engine Room note.
 import { MODEL_CATALOG } from './model-catalog'
-import { PROVIDER_REGISTRY } from './registry'
+import { providerHasCredentials } from './provider-credentials'
 import { isUsableFor } from './model-cooldown'
 import { purposeTier, resolveChain } from './complete-with-fallback'
 import type { AIPurpose } from './types'
@@ -50,8 +50,7 @@ function keyedCatalogIds(): string[] {
   const out: string[] = []
   for (const entry of MODEL_CATALOG) {
     if (entry.knownStale) continue // can never serve anything — see resolveConfiguredChain
-    const keyEnvName = PROVIDER_REGISTRY[entry.providerId].keyEnvName
-    if (!process.env[keyEnvName]?.trim()) continue
+    if (!providerHasCredentials(entry.providerId)) continue
     out.push(entry.id)
   }
   return out

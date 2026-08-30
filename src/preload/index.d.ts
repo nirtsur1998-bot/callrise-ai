@@ -1674,6 +1674,8 @@ export type AiKeyName =
   | 'MISTRAL_API_KEY'
   | 'ZAI_API_KEY'
   | 'HUGGINGFACE_API_KEY'
+  | 'CLOUDFLARE_API_KEY'
+  | 'CLOUDFLARE_ACCOUNT_ID'
 
 export interface AiKeyStatus {
   /** True once real API calls will succeed for this key — a Settings-saved
@@ -1701,6 +1703,7 @@ export type AiProviderId =
   | 'mistral'
   | 'zai'
   | 'huggingface'
+  | 'cloudflare'
 
 export type AiKeyValidateResult = { ok: true; models: string[] } | { ok: false; reason: string }
 

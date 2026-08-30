@@ -65,8 +65,17 @@ export function ActivationChecklist(): React.JSX.Element | null {
         // other than Deepgram configured?" derives the answer from whatever
         // main actually returns, so it cannot drift again. Adding a provider
         // now requires no edit to this file at all.
+        // The '_API_KEY' suffix is load-bearing, not cosmetic: the vault also
+        // holds CLOUDFLARE_ACCOUNT_ID, which is half of a base URL rather than
+        // a credential. Counting it would tick this step for someone who had
+        // pasted an account id and no key — the same false-done this whole
+        // checklist exists to avoid. Still no list: the rule reads the naming
+        // convention, and provider-lockstep.test.ts pins the one exception.
         hasAiKey: Object.entries(keys ?? {}).some(
-          ([name, status]) => name !== 'DEEPGRAM_API_KEY' && status?.configured === true
+          ([name, status]) =>
+            name.endsWith('_API_KEY') &&
+            name !== 'DEEPGRAM_API_KEY' &&
+            status?.configured === true
         ),
         callCount: calls.length,
         coachedCount: calls.filter((c) => c.hasCoaching).length,

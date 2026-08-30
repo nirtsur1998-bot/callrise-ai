@@ -10,6 +10,7 @@
 // DEFAULT_CATALOG_CHAIN kick in (fresh installs, or a purpose nobody has
 // configured anything for).
 import { PROVIDER_REGISTRY } from './registry'
+import { providerHasCredentials } from './provider-credentials'
 import { getActiveAIProvider } from './index'
 import { loadAppSettings } from '../app-settings'
 import { catalogEntry, type CatalogEntry } from './model-catalog'
@@ -302,8 +303,7 @@ function bundledSteps(purpose: AIPurpose): ResolvedStep[] {
     const entry = catalogEntry(id)
     if (!entry) continue
     if (entry.knownStale) continue
-    const keyEnvName = PROVIDER_REGISTRY[entry.providerId].keyEnvName
-    if (!process.env[keyEnvName]?.trim()) continue
+    if (!providerHasCredentials(entry.providerId)) continue
     steps.push({ catalogId: entry.id, providerId: entry.providerId, modelId: entry.modelId })
   }
   return steps
@@ -350,8 +350,7 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
       // (resolveCatalog's async availability check isn't wired into this
       // synchronous hot path) — not fixed here.
       if (entry.knownStale) continue
-      const keyEnvName = PROVIDER_REGISTRY[entry.providerId].keyEnvName
-      if (!process.env[keyEnvName]?.trim()) continue // skip - no key configured
+      if (!providerHasCredentials(entry.providerId)) continue // skip - not configured
       steps.push({ catalogId: entry.id, providerId: entry.providerId, modelId: entry.modelId })
     }
     if (steps.length > 0) return steps
@@ -535,8 +534,8 @@ function capabilityFallbackSteps(
 ): ResolvedStep[] {
   if (!needs.needsVision && !needs.needsDocument) return []
   const out: ResolvedStep[] = []
-  for (const [providerId, entry] of Object.entries(PROVIDER_REGISTRY)) {
-    if (!process.env[entry.keyEnvName]?.trim()) continue
+  for (const [providerId] of Object.entries(PROVIDER_REGISTRY)) {
+    if (!providerHasCredentials(providerId as AIProviderId)) continue
     const step: ResolvedStep = {
       catalogId: `legacy:${providerId}`,
       providerId: providerId as ResolvedStep['providerId'],
@@ -601,8 +600,8 @@ function rescueSteps(
   // typing in Rise, which is durable.
   if (tier !== 'durable') return []
   const out: ResolvedStep[] = []
-  for (const [providerId, entry] of Object.entries(PROVIDER_REGISTRY)) {
-    if (!process.env[entry.keyEnvName]?.trim()) continue
+  for (const [providerId] of Object.entries(PROVIDER_REGISTRY)) {
+    if (!providerHasCredentials(providerId as AIProviderId)) continue
     if (already.some((s) => s.providerId === providerId)) continue
     const step: ResolvedStep = {
       catalogId: `legacy:${providerId}`,
@@ -1040,7 +1039,8 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
     if (deadProviders.has(step.providerId)) continue
 
     const key = process.env[PROVIDER_REGISTRY[step.providerId].keyEnvName]?.trim()
-    if (!key) continue // resolved eagerly above, but env could change mid-loop in theory
+    // resolved eagerly above, but env could change mid-loop in theory
+    if (!key || !providerHasCredentials(step.providerId)) continue
     await waitOutPacingIfNeeded(step)
     if (req.signal?.aborted) throw new Error('aborted by caller during paced wait')
     if (ceiling.signal.aborted) break
@@ -1472,7 +1472,9 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
       if (ceiling.signal.aborted) break
       const step = chain[i]
       if (deadProviders.has(step.providerId)) continue
-      const key = process.env[PROVIDER_REGISTRY[step.providerId].keyEnvName]?.trim()
+      const key = providerHasCredentials(step.providerId)
+        ? process.env[PROVIDER_REGISTRY[step.providerId].keyEnvName]?.trim()
+        : undefined
       if (!key) continue
       await waitOutPacingIfNeeded(step)
       if (req.signal?.aborted) {

@@ -461,7 +461,9 @@ const api = {
         | 'CEREBRAS_API_KEY'
         | 'MISTRAL_API_KEY'
         | 'ZAI_API_KEY'
-        | 'HUGGINGFACE_API_KEY',
+        | 'HUGGINGFACE_API_KEY'
+        | 'CLOUDFLARE_API_KEY'
+        | 'CLOUDFLARE_ACCOUNT_ID',
       value: string
     ) => ipcRenderer.invoke('aiKeys:save', name, value),
     clear: (
@@ -477,6 +479,8 @@ const api = {
         | 'MISTRAL_API_KEY'
         | 'ZAI_API_KEY'
         | 'HUGGINGFACE_API_KEY'
+        | 'CLOUDFLARE_API_KEY'
+        | 'CLOUDFLARE_ACCOUNT_ID'
     ) => ipcRenderer.invoke('aiKeys:clear', name),
     validate: (
       providerId:
@@ -489,7 +493,8 @@ const api = {
         | 'cerebras'
         | 'mistral'
         | 'zai'
-        | 'huggingface',
+        | 'huggingface'
+        | 'cloudflare',
       value: string
     ) => ipcRenderer.invoke('aiKeys:validate', providerId, value)
   },

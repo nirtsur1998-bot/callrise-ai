@@ -24,19 +24,46 @@ per the milestone's requirement) — no other modification to the path data.
 | `nvidia.svg` | NVIDIA (Nemotron) | `nvidia` | CC0 1.0 |
 | `mistral.svg` | Mistral | `mistralai` | CC0 1.0 |
 | `openrouter.svg` | OpenRouter | `openrouter` | CC0 1.0 |
+| `claude.svg` | Claude / Anthropic | `claude` | CC0 1.0 |
+| `huggingface.svg` | Hugging Face | `huggingface` | CC0 1.0 |
+| `cloudflare.svg` | Cloudflare (Workers AI) | `cloudflare` | CC0 1.0 |
 
 ## Not sourced — lettermark fallback in use
 
-**Groq**, **Cerebras**, and **Z.ai (GLM)** are not present in Simple Icons as
-of 2026-07-30 (newer/smaller brands the library hasn't added yet). Rather
-than hand-approximate a trademarked mark from memory — which risks being
-both inaccurate and a shakier rights position than a CC0-licensed source —
-these three render via `<ModelLogo>`'s lettermark fallback (a rounded tile
+**Groq**, **Cerebras**, and **Z.ai (GLM)** are not present in Simple Icons.
+Re-checked 2026-08-30 — all three still 404 on the CDN.
+
+**Correction, 2026-08-30 (M31).** The original pass checked only these three,
+so **Claude/Anthropic** and **Hugging Face** rendered as lettermarks despite
+having had CC0 marks available the whole time — the founder spotted it on the
+API keys page. The lesson is the cheap one: *the fallback firing is not
+evidence that no mark exists*, it is evidence that none is bundled. When a
+brand is added here, re-run the check for every brand currently on the
+lettermark, not just the new one. The bottom three rows of the table above
+came from that re-check.
+
+Groq, Cerebras and Z.ai keep the lettermark, and that remains a decision
+rather than a gap. Hand-approximating a trademarked mark from memory would be
+both less accurate and a shakier rights position than a CC0-licensed source,
+so these three render via `<ModelLogo>`'s lettermark fallback (a rounded tile
 with the brand's initial in the app's accent color). This is the exact
 contingency the fallback was built for, not a placeholder-until-later; if
 Simple Icons adds these brands later, drop the fetched SVG in here with the
-same `fill="currentColor"` normalization and the component picks it up
-automatically — no other code change needed.
+same normalization and the component picks it up automatically.
+
+**Normalization, exactly:** append `fill="currentColor" width="100%"
+height="100%"` to the opening `<svg>` tag, changing nothing else. The width
+and height matter — an otherwise-correct file without them renders at the
+wrong size, which is how the first attempt at the three 2026-08-30 marks went
+in. Compare a new file against an existing one before committing it.
+
+**Where each mark is wired.** Claude, Hugging Face and Cloudflare are
+PROVIDERS rather than model makers, so they go through `ModelLogo`'s
+`PROVIDER_SVG` map (passed as a `{ label, mark }` brand) rather than
+`BRAND_SVG`. `ModelBrand` is documented as staying in lockstep with the main
+process's own union in `ai/model-catalog.ts`, and widening it to carry a
+renderer-only provider would quietly end that — not a trade worth making for
+a logo.
 
 ## Brand guidelines note
 

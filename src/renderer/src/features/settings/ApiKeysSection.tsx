@@ -14,7 +14,7 @@ type AiKeyName = Parameters<typeof window.api.aiKeys.save>[0]
 type AiKeyStatus = StatusMap[AiKeyName]
 type AiProviderId = Parameters<typeof window.api.aiKeys.validate>[0]
 
-import { ModelLogo, type ModelBrand } from '@renderer/components/ModelLogo'
+import { ModelLogo, type ModelBrand, type ProviderMark } from '@renderer/components/ModelLogo'
 
 export type RetentionPosture = 'trains' | 'no-training' | 'unknown'
 
@@ -31,11 +31,30 @@ export interface KeyCardConfig {
   /** Data-retention posture (M20 hard invariant) — omitted only for
    *  Deepgram, which isn't one of the model-picker's text-AI providers. */
   retention?: { posture: RetentionPosture; url: string }
+  /**
+   * A second, NON-SECRET value this provider needs before it can be called.
+   * Only Cloudflare has one: its base URL contains the account id, so a key on
+   * its own addresses nothing. Modelled as an extra field on the same card
+   * rather than a second card, because it is not a second credential — it is
+   * half of one, and splitting it would read as "two providers".
+   *
+   * Main treats the provider as unconfigured until BOTH are present
+   * (providerHasCredentials in ai/registry.ts), so a half-filled card cannot
+   * silently produce failing calls.
+   */
+  secondField?: {
+    name: AiKeyName
+    label: string
+    placeholder: string
+    /** One line telling the user where to actually find this value. Required:
+     *  a field nobody can fill in is a support ticket with a text box. */
+    hint: string
+  }
   /** Which mark to draw beside the title. Deliberately a SEPARATE field from
    *  `providerId`: ModelBrand names the company whose mark this is, and the
    *  two only coincide by luck. Omitted where no mark applies (Deepgram is a
    *  transcription service, not one of the model brands). */
-  brand?: ModelBrand | { label: string }
+  brand?: ModelBrand | { label: string; mark?: ProviderMark }
 }
 
 const RETENTION_LABEL: Record<RetentionPosture, string> = {
@@ -84,7 +103,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get an Anthropic key',
     placeholder: 'Paste your Anthropic API key',
     providerId: 'anthropic',
-    brand: { label: 'Anthropic' },
+    brand: { label: 'Claude', mark: 'claude' },
     retention: { posture: 'no-training', url: 'https://www.anthropic.com/legal/commercial-terms' }
   },
   {
@@ -195,12 +214,39 @@ const KEYS: KeyCardConfig[] = [
     // single letters the other fallbacks use — while the full string becomes
     // the aria-label. So this is 'Hugging Face', not 'HF': the eye gets the
     // letter either way, and the screen reader gets the real name.
-    brand: { label: 'Hugging Face' },
+    brand: { label: 'Hugging Face', mark: 'huggingface' },
     // 'unknown', not 'no-training': HF states it does not store request or
     // response bodies, but the inference runs at whichever downstream
     // provider the router picks, and their terms vary. See the catalog
     // entries for the full reasoning.
     retention: { posture: 'unknown', url: 'https://huggingface.co/docs/inference-providers/security' }
+  },
+  {
+    name: 'CLOUDFLARE_API_KEY',
+    title: 'Cloudflare Workers AI',
+    blurb:
+      'The largest genuinely free allowance here — a daily quota, no card, resets every day. Needs your account ID as well as a key.',
+    getKeyUrl: 'https://dash.cloudflare.com/profile/api-tokens',
+    getKeyLabel: 'Create a free Workers AI token',
+    placeholder: 'Paste your Cloudflare API token',
+    providerId: 'cloudflare',
+    brand: { label: 'Cloudflare', mark: 'cloudflare' },
+    // Verified 2026-08-30 against their own data-usage page, which states
+    // Cloudflare does not use Customer Content to train models made available
+    // on Workers AI, nor to improve Cloudflare or third-party services.
+    retention: {
+      posture: 'no-training',
+      url: 'https://developers.cloudflare.com/workers-ai/platform/data-usage/'
+    },
+    secondField: {
+      name: 'CLOUDFLARE_ACCOUNT_ID',
+      label: 'Account ID',
+      placeholder: 'Paste your Cloudflare account ID',
+      // The dashboard URL is the most durable place to point at: it does not
+      // move when Cloudflare reorganises its navigation, which a named page
+      // does. The Workers page is given second as the signposted route.
+      hint: 'In your dashboard URL — dash.cloudflare.com/<this long string> — or on Workers & Pages → Overview.'
+    }
   }
 ]
 
@@ -239,13 +285,90 @@ const STATUS_DOT_LABEL: Record<KeyStatusDot, string> = {
  *  so both places share the exact same save/test/clear logic. */
 export const DEEPGRAM_KEY_CONFIG: KeyCardConfig = KEYS[0]
 
+/**
+ * The extra non-secret field (Cloudflare's account id). Deliberately plainer
+ * than the key input: no show/hide toggle, because there is nothing to hide,
+ * and a masking affordance on a value that is not a secret teaches the wrong
+ * thing about which of these two values matters.
+ */
+function SecondFieldRow({
+  field,
+  status,
+  onChanged
+}: {
+  field: NonNullable<KeyCardConfig['secondField']>
+  status: AiKeyStatus | undefined
+  onChanged: () => void
+}): React.JSX.Element {
+  const [value, setValue] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const savedTimeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(savedTimeout.current), [])
+
+  const save = async (): Promise<void> => {
+    const trimmed = value.trim()
+    if (!trimmed) return
+    setBusy(true)
+    try {
+      await window.api.aiKeys.save(field.name, trimmed)
+      setValue('')
+      setSaved(true)
+      clearTimeout(savedTimeout.current)
+      savedTimeout.current = setTimeout(() => setSaved(false), 4000)
+      onChanged()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mb-2">
+      <div className="mb-1 flex items-center gap-2">
+        <label className="text-[12px] font-medium text-muted">{field.label}</label>
+        {status?.configured && (
+          <span className="flex items-center gap-1 text-[12px] font-medium text-positive">
+            <CheckCircle2 className="h-3 w-3" /> Set
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void save()
+          }}
+          placeholder={field.placeholder}
+          autoComplete="off"
+          spellCheck={false}
+          className={cn(fieldClass, 'flex-1')}
+        />
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={!value.trim() || busy}
+          className="rounded-lg border border-line px-3.5 py-2 text-sm font-medium text-muted transition hover:bg-elevated hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+        </button>
+      </div>
+      <p className="mt-1 text-[12px] text-faint">{field.hint}</p>
+      {saved && <p className="mt-1 text-[12px] text-positive">Saved.</p>}
+    </div>
+  )
+}
+
 export function KeyCard({
   config,
   status,
+  secondStatus,
   onChanged
 }: {
   config: KeyCardConfig
   status: AiKeyStatus | undefined
+  secondStatus?: AiKeyStatus | undefined
   onChanged: () => void
 }): React.JSX.Element {
   const [value, setValue] = useState('')
@@ -345,6 +468,14 @@ export function KeyCard({
       </div>
       <p className="mb-3 text-[13px] text-muted">{config.blurb}</p>
 
+      {config.secondField && (
+        <SecondFieldRow
+          field={config.secondField}
+          status={secondStatus}
+          onChanged={onChanged}
+        />
+      )}
+
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <input
@@ -441,7 +572,8 @@ const PROVIDER_SHORT_LABEL: Record<AiProviderId, string> = {
   cerebras: 'Cerebras',
   mistral: 'Mistral',
   zai: 'Z.ai',
-  huggingface: 'Hugging Face'
+  huggingface: 'Hugging Face',
+  cloudflare: 'Cloudflare'
 }
 
 /** Bug found by the founder: "Ask the coach" and a few other features
@@ -522,7 +654,13 @@ export function ApiKeysSection(): React.JSX.Element {
       </p>
       <ProviderSelector key={refreshNonce} />
       {KEYS.map((k) => (
-        <KeyCard key={k.name} config={k} status={status?.[k.name]} onChanged={refresh} />
+        <KeyCard
+          key={k.name}
+          config={k}
+          status={status?.[k.name]}
+          secondStatus={k.secondField ? status?.[k.secondField.name] : undefined}
+          onChanged={refresh}
+        />
       ))}
     </>
   )

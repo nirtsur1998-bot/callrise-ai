@@ -34,7 +34,8 @@ export const AI_PROVIDER_IDS = [
   'cerebras',
   'mistral',
   'zai',
-  'huggingface'
+  'huggingface',
+  'cloudflare'
 ] as const
 
 export type AIProviderId = (typeof AI_PROVIDER_IDS)[number]

@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { AI_PROVIDER_IDS } from '../types'
+import { providerHasCredentials } from '../provider-credentials'
 
 /**
  * M31 — the preload copies of AiProviderId / AiKeyName cannot import from
@@ -159,13 +160,86 @@ describe('the renderer does not keep its own copy of the key list', () => {
     ).toEqual([])
   })
 
-  it('every key in main has a card in the API keys page', () => {
+  it('every key in main is reachable from the API keys page', () => {
     // The other direction: a provider wired all the way through main and preload
     // but with no card is a provider nobody can give a key to.
-    const cards = readFileSync(join(ROOT, ALLOWED), 'utf8')
-    const named = [...stripComments(cards).matchAll(/name:\s*'([A-Z][A-Z0-9_]*_API_KEY)'/g)].map(
-      (m) => m[1]
+    //
+    // Matches BOTH shapes a name can appear in — a card's own `name`, and a
+    // `secondField.name` — because Cloudflare's account id is entered on the
+    // Cloudflare card rather than getting a card of its own. The regex is
+    // therefore anchored on "name:" alone, not on the _API_KEY suffix.
+    const cards = stripComments(readFileSync(join(ROOT, ALLOWED), 'utf8'))
+    const named = [...cards.matchAll(/name:\s*'([A-Z][A-Z0-9_]*)'/g)].map((m) => m[1])
+    expect(sorted([...new Set(named)])).toEqual(sorted(MAIN_KEYS))
+  })
+
+  it('only the documented non-credential value lacks the _API_KEY suffix', () => {
+    // ActivationChecklist decides "has the user added an AI provider?" from
+    // this suffix, so the suffix is a contract, not a naming habit. Adding
+    // another non-key value to the vault must force a decision about that
+    // step rather than silently ticking it — this is the tripwire.
+    const notKeys = MAIN_KEYS.filter((n) => !n.endsWith('_API_KEY'))
+    expect(notKeys).toEqual(['CLOUDFLARE_ACCOUNT_ID'])
+  })
+
+  it('every provider needing extra credentials declares them', () => {
+    // requiredEnvNames is what makes a half-configured provider count as
+    // unconfigured everywhere. A name here that is not a real key would fail
+    // open — the check would pass vacuously for a var nobody ever sets.
+    const registry = stripComments(read('src/main/ai/registry.ts'))
+    const required = [...registry.matchAll(/requiredEnvNames:\s*\[([^\]]*)\]/g)].flatMap((m) =>
+      [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1])
     )
-    expect(sorted(named)).toEqual(sorted(MAIN_KEYS))
+    // Written as a const reference in the registry, so resolve that too.
+    const viaConst = registry.includes('requiredEnvNames: [CLOUDFLARE_ACCOUNT_ENV]')
+    expect(viaConst || required.length > 0).toBe(true)
+    for (const name of required) expect(MAIN_KEYS).toContain(name)
+  })
+})
+
+describe('providerHasCredentials: half-configured is NOT configured', () => {
+  // The behaviour the whole requiredEnvNames change exists for. Without this,
+  // a Cloudflare key with no account id builds a base URL with a hole in it
+  // and every call 404s against an address that looks almost right.
+  const saved: Record<string, string | undefined> = {}
+  const set = (k: string, v: string | undefined): void => {
+    if (!(k in saved)) saved[k] = process.env[k]
+    if (v === undefined) delete process.env[k]
+    else process.env[k] = v
+  }
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  })
+
+  it('is false with a key but no account id', () => {
+    set('CLOUDFLARE_API_KEY', 'test-token')
+    set('CLOUDFLARE_ACCOUNT_ID', undefined)
+    expect(providerHasCredentials('cloudflare')).toBe(false)
+  })
+
+  it('is false with an account id but no key', () => {
+    set('CLOUDFLARE_API_KEY', undefined)
+    set('CLOUDFLARE_ACCOUNT_ID', 'abc123')
+    expect(providerHasCredentials('cloudflare')).toBe(false)
+  })
+
+  it('is true only with both', () => {
+    set('CLOUDFLARE_API_KEY', 'test-token')
+    set('CLOUDFLARE_ACCOUNT_ID', 'abc123')
+    expect(providerHasCredentials('cloudflare')).toBe(true)
+  })
+
+  it('treats whitespace as absent, matching every other key check', () => {
+    set('CLOUDFLARE_API_KEY', 'test-token')
+    set('CLOUDFLARE_ACCOUNT_ID', '   ')
+    expect(providerHasCredentials('cloudflare')).toBe(false)
+  })
+
+  it('a single-credential provider still needs only its key', () => {
+    set('GROQ_API_KEY', 'test-token')
+    expect(providerHasCredentials('groq')).toBe(true)
   })
 })
