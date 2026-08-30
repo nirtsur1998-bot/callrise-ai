@@ -25,6 +25,7 @@ import {
   Loader2
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { ScrollToEnd } from '@renderer/components/ScrollToEnd'
 import { SpeakerTranscript } from '@renderer/components/SpeakerTranscript'
 import { SummaryView, SummaryLoading } from '@renderer/components/SummaryView'
 import { IconButton } from '@renderer/components/IconButton'
@@ -147,9 +148,9 @@ export function CallDetail({
   // Collapsed by default. It is the longest object on the page and the last
   // thing a rep opens a past call to read — see docs/M31-design-research.md.
   const [transcriptOpen, setTranscriptOpen] = useState(false)
-  // Drives the jump-to-end affordance. Starts true so the button never
-  // flashes on a transcript short enough not to scroll.
-  const [transcriptAtBottom, setTranscriptAtBottom] = useState(true)
+  // The jump-to-end state moved into <ScrollToEnd>, which owns it for every
+  // scroller it is attached to — including the re-measure on open, via its
+  // ResizeObserver, which is why no flag has to be re-armed here any more.
   const { contacts, create: createContact } = useContacts()
   const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([])
   // M23 Workstream D — Outlook events used to never reach the calendar-match
@@ -891,7 +892,13 @@ export function CallDetail({
       </div>
 
       {/* Scrollable body */}
-      <div ref={bodyScrollRef} className="flex-1 space-y-4 overflow-y-auto pb-2">
+      {/* relative: anchors this screen's own ScrollToEnd. CallDetail is
+          full-bleed, so AppShell's column does not scroll here and cannot
+          host it. */}
+      <div
+        ref={bodyScrollRef}
+        className="relative flex-1 space-y-4 overflow-y-auto pb-2"
+      >
         {noKey && <NoKeyBanner />}
 
         {/* ── WHO ────────────────────────────────────────────────────────
@@ -1299,13 +1306,7 @@ export function CallDetail({
           <div className="mb-4 flex items-center justify-between">
             <button
               type="button"
-              onClick={() => {
-                setTranscriptOpen((o) => !o)
-                // Re-armed on open: the flag is only meaningful while
-                // the scroller exists, and a stale true would hide the
-                // jump control on a long transcript until first scroll.
-                setTranscriptAtBottom(false)
-              }}
+              onClick={() => setTranscriptOpen((o) => !o)}
               aria-expanded={transcriptOpen}
               className="-ml-1 flex items-center gap-2 rounded-md px-1 py-0.5 text-sm font-semibold transition-colors hover:text-ink"
             >
@@ -1386,15 +1387,6 @@ export function CallDetail({
             <div className="relative">
               <div
                 ref={transcriptScrollRef}
-                onScroll={(e) => {
-                  const el = e.currentTarget
-                  // 24px of slack: exact equality never holds with
-                  // sub-pixel heights, and a button that will not go away at
-                  // the very bottom is worse than no button.
-                  setTranscriptAtBottom(
-                    el.scrollHeight - el.scrollTop - el.clientHeight < 24
-                  )
-                }}
                 className="max-h-[60vh] overflow-y-auto pr-1"
               >
                 <SpeakerTranscript
@@ -1406,37 +1398,22 @@ export function CallDetail({
                   onRename={renameSpeaker}
                 />
               </div>
-              {/* Jump to the end of the call — the same affordance a long
-                  chat gives you. Only rendered while there is somewhere to
-                  go: an always-present button that does nothing teaches
-                  people to ignore it. Sits INSIDE the transcript box, so it
-                  means "end of the transcript" and never "bottom of the
-                  page", which are different places now that this scrolls
-                  itself. */}
-              {!transcriptAtBottom && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const el = transcriptScrollRef.current
-                    if (!el) return
-                    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-                  }}
-                  aria-label="Jump to the end of the transcript"
-                  className={cn(
-                    'absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full',
-                    'border border-line bg-elevated p-1.5 text-muted shadow-card',
-                    'transition-colors hover:bg-surface hover:text-ink'
-                  )}
-                >
-                  <ChevronDown className="h-4 w-4" strokeWidth={2.25} />
-                </button>
-              )}
+              <ScrollToEnd
+                targetRef={transcriptScrollRef}
+                label="Jump to the end of the transcript"
+              />
             </div>
           ) : (
             <p className="text-sm italic text-faint">This call has no transcript.</p>
           )}
         </div>
 
+        {/* Page-level jump. The transcript has its own (scoped to the
+            transcript box) because with the record collapsed these are two
+            different destinations — "end of the call" and "end of the page"
+            stopped being the same place when the transcript got its own
+            scroller. */}
+        <ScrollToEnd targetRef={bodyScrollRef} label="Jump to the bottom of this call" />
       </div>
 
       {showTasks && (

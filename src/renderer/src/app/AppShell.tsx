@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
+import { ScrollToEnd } from '@renderer/components/ScrollToEnd'
 import { cn } from '@renderer/lib/cn'
 
 interface AppShellProps {
@@ -35,6 +36,8 @@ export default function AppShell({
   fullBleed = false,
   children
 }: AppShellProps): React.JSX.Element {
+  const mainScrollRef = useRef<HTMLDivElement>(null)
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-canvas text-ink">
       {/* Left: navigation */}
@@ -52,14 +55,26 @@ export default function AppShell({
         >
           {headerActions && <div className="no-drag flex items-center gap-2">{headerActions}</div>}
         </header>
+        {/* `relative` so ScrollToEnd can anchor to this column, and the ref
+            so it can measure it. Attached HERE rather than per page: every
+            ordinary screen scrolls inside this one element, so a new long
+            page inherits the control without knowing it exists. Full-bleed
+            screens own their own scroller and attach their own (CallDetail
+            does). */}
         <div
+          ref={mainScrollRef}
           className={cn(
+            'relative',
             fullBleed
               ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
               : 'flex-1 overflow-y-auto px-8 py-7'
           )}
         >
           {children}
+          {/* Not on full-bleed screens: there the scroller is a child, so
+              this element never scrolls and the button would never show —
+              worse, it would look like the feature is missing. */}
+          {!fullBleed && <ScrollToEnd targetRef={mainScrollRef} />}
         </div>
       </main>
 

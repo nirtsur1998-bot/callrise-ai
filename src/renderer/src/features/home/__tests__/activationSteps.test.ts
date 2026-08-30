@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   buildActivationSteps,
   activationProgress,
-  type ActivationState
+  type ActivationState,
+  type ActivationStep
 } from '../activationSteps'
 
 /**
@@ -17,6 +18,9 @@ import {
  *   • a done step TEACHES — "'Sales Brain — on' is a tick. 'Sales Brain — on,
  *     learning from your calls' tells me what I've got"
  *   • every step answers "why would I bother"
+ *
+ * And one that arrived later, with evidence behind it: FOUR STEPS, NOT SIX.
+ * See the count test below.
  */
 
 const nothing: ActivationState = {
@@ -24,9 +28,7 @@ const nothing: ActivationState = {
   hasAiKey: false,
   callCount: 0,
   coachedCount: 0,
-  calendarConnected: false,
-  salesBrainOn: false,
-  calendarBlockedReason: null
+  salesBrainOn: false
 }
 
 const everything: ActivationState = {
@@ -34,16 +36,35 @@ const everything: ActivationState = {
   hasAiKey: true,
   callCount: 12,
   coachedCount: 5,
-  calendarConnected: true,
-  salesBrainOn: true,
-  calendarBlockedReason: null
+  salesBrainOn: true
 }
+
+describe('the list is four steps, and that is a constraint', () => {
+  it('has exactly four', () => {
+    // docs/M31-design-research.md, round 1: Chameleon's analysis of 15M
+    // onboarding interactions puts completion at ~74% for four steps and ~16%
+    // at seven-plus. This list was SIX until the research reached the repo —
+    // not a decision, an absence of one. The founder cut "Connect your
+    // calendar" (unfinishable while BUG-136 blocks Google sign-in — an
+    // unfinishable step is worse than an absent one) and "Coach one of your
+    // calls" (a good action, but not activation).
+    //
+    // A fifth step should be an argument, not a commit. That is what this
+    // assertion is for.
+    expect(buildActivationSteps(nothing)).toHaveLength(4)
+  })
+
+  it('keeps the ones without which the product does nothing', () => {
+    const ids = buildActivationSteps(nothing).map((s) => s.id)
+    expect(ids).toEqual(['transcription-key', 'ai-key', 'first-call', 'sales-brain'])
+  })
+})
 
 describe('it knows what is already done', () => {
   it('marks nothing done on a blank install', () => {
     const steps = buildActivationSteps(nothing)
     expect(steps.every((s) => s.status === 'todo')).toBe(true)
-    expect(activationProgress(steps)).toEqual({ done: 0, total: 6, complete: false })
+    expect(activationProgress(steps)).toEqual({ done: 0, total: 4, complete: false })
   })
 
   it('marks everything done for a fully set-up account', () => {
@@ -53,33 +74,27 @@ describe('it knows what is already done', () => {
   })
 
   it('reflects a PARTIALLY set-up account rather than starting from zero', () => {
-    // The specific lie the founder named: five unchecked boxes when four are
-    // done. Each flag independently flips exactly one step.
+    // The specific lie the founder named: unchecked boxes for work already done.
     const partial: ActivationState = {
       ...nothing,
       hasTranscriptionKey: true,
       hasAiKey: true,
-      callCount: 3,
-      salesBrainOn: true
+      callCount: 3
     }
     const steps = buildActivationSteps(partial)
-    const byId = Object.fromEntries(steps.map((s) => [s.id, s.status]))
-    expect(byId).toEqual({
+    expect(Object.fromEntries(steps.map((s) => [s.id, s.status]))).toEqual({
       'transcription-key': 'done',
       'ai-key': 'done',
       'first-call': 'done',
-      'first-coach': 'todo',
-      calendar: 'todo',
-      'sales-brain': 'done'
+      'sales-brain': 'todo'
     })
-    expect(activationProgress(steps)).toEqual({ done: 4, total: 6, complete: false })
+    expect(activationProgress(steps)).toEqual({ done: 3, total: 4, complete: false })
   })
 
   it('counts a single call correctly — no "1 calls"', () => {
-    const one = buildActivationSteps({ ...nothing, callCount: 1, coachedCount: 1 })
+    const one = buildActivationSteps({ ...nothing, callCount: 1 })
     expect(one.find((s) => s.id === 'first-call')!.doneLabel).toContain('1 call saved')
-    expect(one.find((s) => s.id === 'first-coach')!.doneLabel).toContain('1 call has a scorecard')
-    const many = buildActivationSteps({ ...nothing, callCount: 4, coachedCount: 2 })
+    const many = buildActivationSteps({ ...nothing, callCount: 4 })
     expect(many.find((s) => s.id === 'first-call')!.doneLabel).toContain('4 calls saved')
   })
 })
@@ -87,16 +102,12 @@ describe('it knows what is already done', () => {
 describe('a completed step teaches rather than just ticking', () => {
   it('says what you HAVE, not that you did it', () => {
     for (const step of buildActivationSteps(everything)) {
-      // Long enough to be a sentence about the feature, not a checkmark's
-      // worth of text. "Done" and "On" alone would pass a length check of 2.
       expect(step.doneLabel.length, `${step.id} has a token doneLabel`).toBeGreaterThan(25)
     }
   })
 
   it("names what the thing DOES, using the founder's own example", () => {
     const brain = buildActivationSteps(everything).find((s) => s.id === 'sales-brain')!
-    // "'Sales Brain — on' is a tick. 'Sales Brain — on, learning from your
-    // calls' tells me what I've got."
     expect(brain.doneLabel.toLowerCase()).toContain('learning from your calls')
   })
 })
@@ -105,19 +116,11 @@ describe('every step answers "why would I bother"', () => {
   it('gives each step a why that describes the OUTCOME', () => {
     for (const step of buildActivationSteps(nothing)) {
       expect(step.why.length, `${step.id} has no real why`).toBeGreaterThan(40)
-      // A why that just restates the title is not a why.
       expect(step.why.toLowerCase()).not.toBe(step.title.toLowerCase())
     }
   })
 
-  it('the calendar step names prep briefs, not "connect your calendar"', () => {
-    // The founder's literal example of the difference.
-    const cal = buildActivationSteps(nothing).find((s) => s.id === 'calendar')!
-    expect(cal.why.toLowerCase()).toContain('prep brief')
-  })
-
   it('gives every step somewhere to go', () => {
-    // A step with no destination is the dead end this whole stage removed.
     for (const step of buildActivationSteps(nothing)) {
       expect(
         Boolean(step.settingsPage || step.navTo),
@@ -127,46 +130,35 @@ describe('every step answers "why would I bother"', () => {
   })
 })
 
-describe('a step that cannot be completed says so', () => {
-  const blocked: ActivationState = {
-    ...nothing,
-    calendarBlockedReason: 'Google sign-in is currently unavailable.'
-  }
-
-  it('marks it blocked rather than todo', () => {
-    const cal = buildActivationSteps(blocked).find((s) => s.id === 'calendar')!
-    expect(cal.status).toBe('blocked')
-    expect(cal.blockedReason).toContain('Google sign-in')
+describe('the blocked-step machinery survives the calendar cut', () => {
+  // No step produces a blocked status today — the only one that did was the
+  // calendar step, cut on 2026-08-30. The MECHANISM is deliberately kept: it
+  // is the right shape for any future step that can be unreachable through no
+  // fault of the user, and deleting it would mean rebuilding it (and its
+  // reasoning) the next time one appears.
+  //
+  // So it is tested against a hand-built list rather than through
+  // buildActivationSteps. That is the honest way to test a rule whose only
+  // producer was removed — the alternative is deleting the tests and quietly
+  // losing the guarantee.
+  const step = (id: string, status: ActivationStep['status']): ActivationStep => ({
+    id,
+    title: id,
+    why: 'x',
+    doneLabel: 'y',
+    status
   })
 
   it('does not count a blocked step against the user', () => {
-    // Not their failure, so the checklist must not sit at 5/6 forever
+    // Not their failure, so the checklist must not sit at 3/4 forever
     // implying they left something undone.
-    const steps = buildActivationSteps({
-      ...blocked,
-      hasTranscriptionKey: true,
-      hasAiKey: true,
-      callCount: 1,
-      coachedCount: 1,
-      salesBrainOn: true
-    })
-    expect(activationProgress(steps)).toEqual({ done: 5, total: 5, complete: true })
+    const steps = [step('a', 'done'), step('b', 'done'), step('c', 'blocked')]
+    expect(activationProgress(steps)).toEqual({ done: 2, total: 2, complete: true })
   })
 
   it('never reports blocked as done', () => {
-    // The opposite error: pretending an unreachable step is finished.
-    const steps = buildActivationSteps(blocked)
-    expect(steps.find((s) => s.id === 'calendar')!.status).not.toBe('done')
+    const steps = [step('a', 'blocked'), step('b', 'todo')]
     expect(activationProgress(steps).done).toBe(0)
-  })
-
-  it('drops the blocked state the moment the step is actually satisfied', () => {
-    // A connected calendar beats a blocked-reason: if it is already working,
-    // an outage notice about connecting it is noise.
-    const cal = buildActivationSteps({ ...blocked, calendarConnected: true }).find(
-      (s) => s.id === 'calendar'
-    )!
-    expect(cal.status).toBe('done')
-    expect(cal.blockedReason).toBeUndefined()
+    expect(activationProgress(steps).complete).toBe(false)
   })
 })

@@ -42,17 +42,17 @@ export interface ActivationState {
   callCount: number
   /** Calls that have been coached. */
   coachedCount: number
-  /** Google or Outlook calendar connected. */
-  calendarConnected: boolean
+  /* calendarConnected / calendarBlockedReason were removed when the
+     calendar step was cut (2026-08-30). The blocked MACHINERY below is
+     deliberately kept — ActivationStep.blockedReason, and
+     activationProgress excluding blocked from both halves of the ratio —
+     because it is the right shape for any future step that can be
+     unreachable, and it is still tested. Re-adding the calendar step means
+     re-adding these two fields AND the google/outlook fetches in
+     ActivationChecklist that fed them. */
   /** Sales Brain on — the thing that makes every other AI feature sharper. */
   salesBrainOn: boolean
-  /**
-   * A reason the calendar step cannot currently be completed, or null.
-   * Surfaced rather than hidden: at the time of writing, Google sign-in is
-   * broken app-wide (BUG-136 — the OAuth client is unpublished), so telling
-   * someone to "connect your calendar" is telling them to go and fail.
-   */
-  calendarBlockedReason: string | null
+  // (see the note above — both calendar fields were removed together)
 }
 
 export type ActivationStatus = 'done' | 'todo' | 'blocked'
@@ -78,10 +78,19 @@ export interface ActivationStep {
 /**
  * The steps, in the order someone with nothing set up should do them.
  *
- * Deliberately SIX, not the full feature list. The audit found ~40 stranded
- * features; a checklist of forty is a second discoverability problem. These
- * are the ones without which the product does nothing at all, plus the one
- * (Sales Brain) that changes the quality of everything after it.
+ * Deliberately FOUR. Two constraints, and the second one has numbers behind
+ * it:
+ *
+ *   1. Not the full feature list. The audit found ~40 stranded features; a
+ *      checklist of forty is a second discoverability problem. These are the
+ *      ones without which the product does nothing at all, plus the one
+ *      (Sales Brain) that changes the quality of everything after it.
+ *   2. FOUR IS THE CEILING, not a coincidence. docs/M31-design-research.md
+ *      records Chameleon data across 15M onboarding interactions:
+ *      completion runs ~74% at four steps and collapses to ~16% at seven
+ *      plus. This list was six before the research reached the repo.
+ *      activationSteps.test.ts asserts the count, so a fifth step has to be
+ *      an argument rather than a commit.
  */
 export function buildActivationSteps(state: ActivationState): ActivationStep[] {
   const steps: ActivationStep[] = [
@@ -112,32 +121,22 @@ export function buildActivationSteps(state: ActivationState): ActivationStep[] {
       navTo: 'live-calls',
       status: state.callCount > 0 ? 'done' : 'todo'
     },
-    {
-      id: 'first-coach',
-      title: 'Coach one of your calls',
-      why: 'Scores the call against named selling skills and shows the evidence — the specific moments it is judging, not just a number.',
-      doneLabel:
-        state.coachedCount === 1
-          ? 'Done — 1 call has a scorecard you can open.'
-          : `Done — ${state.coachedCount} calls have scorecards.`,
-      navTo: 'past-calls',
-      status: state.coachedCount > 0 ? 'done' : 'todo'
-    },
-    {
-      id: 'calendar',
-      title: 'Connect your calendar',
-      why: 'Your meetings appear in CallRise with a prep brief on each one — who you are meeting, what you last discussed, and what is still open.',
-      doneLabel: 'Connected — meetings show up here with prep briefs.',
-      settingsPage: 'calendar',
-      status: state.calendarConnected
-        ? 'done'
-        : state.calendarBlockedReason
-          ? 'blocked'
-          : 'todo',
-      ...(state.calendarBlockedReason && !state.calendarConnected
-        ? { blockedReason: state.calendarBlockedReason }
-        : {})
-    },
+    // TWO STEPS WERE CUT HERE (2026-08-30), and the reason is evidence, not
+    // taste. docs/M31-design-research.md records Chameleon data on 15M
+    // onboarding interactions: completion runs ~74% at four steps and falls
+    // to ~16% at seven-plus. This list had SIX, which was not a decision —
+    // it was written before the research was in the repo. Founder cut it to
+    // four once the numbers were on the table.
+    //
+    // "Connect your calendar" — an unfinishable step is worse than an absent
+    // one, and it is unfinishable while BUG-136 has Google sign-in broken.
+    // That was the founder's own rule about blocked steps, applied to their
+    // own checklist. If calendar becomes connectable, it can be argued back
+    // in — the blocked-state machinery below still works and is still tested.
+    //
+    // "Coach one of your calls" — a good action, but not ACTIVATION. Someone
+    // already set up will find it; someone who is not is not ready for it.
+    // Activation is the shortest path to the product doing something at all.
     {
       id: 'sales-brain',
       title: 'Let it learn from your calls',

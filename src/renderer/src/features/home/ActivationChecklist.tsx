@@ -47,11 +47,13 @@ export function ActivationChecklist(): React.JSX.Element | null {
       // render because one IPC call rejected would be worse than one that is
       // briefly wrong, so each falls back to "not done" — which shows the
       // step rather than hiding it, the safer direction for a nudge.
-      const [keys, calls, google, outlook] = await Promise.all([
+      // google/outlook were fetched here for the calendar step, which was
+      // cut on 2026-08-30. Removed with it rather than left running: two
+      // IPC round trips on every Home render, feeding a field nothing reads,
+      // is the kind of cost that survives forever because it is invisible.
+      const [keys, calls] = await Promise.all([
         window.api.aiKeys.getStatus().catch(() => null),
-        window.api.calls.list().catch(() => []),
-        window.api.google.getStatus().catch(() => null),
-        window.api.outlook.getStatus().catch(() => null)
+        window.api.calls.list().catch(() => [])
       ])
       if (cancelled) return
 
@@ -79,27 +81,7 @@ export function ActivationChecklist(): React.JSX.Element | null {
         ),
         callCount: calls.length,
         coachedCount: calls.filter((c) => c.hasCoaching).length,
-        calendarConnected: google?.connected === true || outlook?.connected === true,
-        salesBrainOn: settings.salesBrain.enabled,
-        // NOT WIRED TODAY, and the reason is worth stating rather than
-        // hiding, because the capability above it is real and tested.
-        //
-        // BUG-136 means Google sign-in currently fails for everyone (the
-        // OAuth client is unpublished), and a step telling someone to
-        // "connect your calendar" while that is true sends them to fail. The
-        // blocked state exists for exactly that.
-        //
-        // But THE APP CANNOT CURRENTLY DETECT IT. `google.getStatus()`
-        // returns only { connected, configured, mode }; the failure reason
-        // exists solely as the return value of `connect()`, which the
-        // checklist must not call — that opens a browser window nobody asked
-        // for. Inventing a detection here would be a guess dressed as a
-        // status, so this stays null and the step reads as an ordinary todo.
-        //
-        // What would wire it: persist the last connect failure in main and
-        // surface it on getStatus(). Small, and out of scope mid-checklist —
-        // logged rather than smuggled in.
-        calendarBlockedReason: null
+        salesBrainOn: settings.salesBrain.enabled
       })
     })()
     return () => {
