@@ -33,6 +33,18 @@ per the milestone's requirement) — no other modification to the path data.
 **Groq**, **Cerebras**, and **Z.ai (GLM)** are not present in Simple Icons.
 Re-checked 2026-08-30 — all three still 404 on the CDN.
 
+<!-- LETTERMARK-RECHECK-BY: 2026-11-30 -->
+<!-- LETTERMARK-SLUGS: groq, cerebras, zai -->
+
+> **This claim has an expiry, not a reminder.** The two markers above are read
+> by `components/__tests__/logo-policy-expiry.test.ts`, which **fails** once
+> the date passes and prints the exact commands to re-run. That is deliberate:
+> the previous version of this section recorded its check date and asked
+> whoever came next to re-check "later", and nobody did for a month while the
+> claim was cited as current. A re-check that depends on someone choosing to
+> do it is not a control. Do not push the date forward without actually
+> running the check — a fresh date with nothing behind it is worse than none.
+
 **Correction, 2026-08-30 (M31).** The original pass checked only these three,
 so **Claude/Anthropic** and **Hugging Face** rendered as lettermarks despite
 having had CC0 marks available the whole time — the founder spotted it on the

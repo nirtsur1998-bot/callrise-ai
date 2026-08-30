@@ -226,7 +226,13 @@ const KEYS: KeyCardConfig[] = [
     title: 'Cloudflare Workers AI',
     blurb:
       'The largest genuinely free allowance here — a daily quota, no card, resets every day. Needs your account ID as well as a key.',
-    getKeyUrl: 'https://dash.cloudflare.com/profile/api-tokens',
+    // Cloudflare's own documented deep link — resolves to the signed-in
+    // account and lands on the page that carries BOTH the prefilled
+    // "Create a Workers AI API Token" flow and the account id. The generic
+    // /profile/api-tokens page makes you assemble the permissions by hand,
+    // which is how you end up with a token that authenticates but has no
+    // Workers AI access — rejected, with nothing on screen saying why.
+    getKeyUrl: 'https://dash.cloudflare.com/?to=/:account/ai/workers-ai',
     getKeyLabel: 'Create a free Workers AI token',
     placeholder: 'Paste your Cloudflare API token',
     providerId: 'cloudflare',
@@ -245,7 +251,7 @@ const KEYS: KeyCardConfig[] = [
       // The dashboard URL is the most durable place to point at: it does not
       // move when Cloudflare reorganises its navigation, which a named page
       // does. The Workers page is given second as the signposted route.
-      hint: 'In your dashboard URL — dash.cloudflare.com/<this long string> — or on Workers & Pages → Overview.'
+      hint: 'On the same Workers AI page, under "Get Account ID". Also the long string in your dashboard URL, after dash.cloudflare.com/.'
     }
   }
 ]
@@ -538,6 +544,19 @@ export function KeyCard({
       {testResult && (
         <p className={cn('mt-2 text-[13px]', testResult.ok ? 'text-positive' : 'text-danger')}>
           {testResult.message}
+        </p>
+      )}
+      {/* A provider with two credentials cannot honestly report "your key was
+          rejected": a wrong account id fails exactly the same way, because the
+          id is in the URL the key authenticates against. Saying "key" alone
+          sends someone to regenerate a token that was fine. Only shown on
+          failure, and only where a second credential actually exists. */}
+      {testResult && !testResult.ok && config.secondField && (
+        <p className="mt-1 text-[12px] text-muted">
+          Either credential can cause this — a token without Workers AI
+          permissions, or a wrong {config.secondField.label}. Check the{' '}
+          {config.secondField.label} first: it is the easier of the two to get
+          wrong, and it fails identically.
         </p>
       )}
       {savedNotice && (
