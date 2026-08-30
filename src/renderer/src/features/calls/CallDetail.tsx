@@ -17,6 +17,7 @@ import {
   Search,
   ChevronUp,
   ChevronDown,
+  ChevronRight,
   Bookmark as BookmarkIcon,
   ClipboardList,
   Radar,
@@ -140,6 +141,15 @@ export function CallDetail({
   const [activeMatch, setActiveMatch] = useState(0)
   const bodyScrollRef = useRef<HTMLDivElement>(null)
   const transcriptWrapperRef = useRef<HTMLDivElement>(null)
+  // The transcript scrolls itself now, so bookmark jumps target this rather
+  // than the page body.
+  const transcriptScrollRef = useRef<HTMLDivElement>(null)
+  // Collapsed by default. It is the longest object on the page and the last
+  // thing a rep opens a past call to read — see docs/M31-design-research.md.
+  const [transcriptOpen, setTranscriptOpen] = useState(false)
+  // Drives the jump-to-end affordance. Starts true so the button never
+  // flashes on a transcript short enough not to scroll.
+  const [transcriptAtBottom, setTranscriptAtBottom] = useState(true)
   const { contacts, create: createContact } = useContacts()
   const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([])
   // M23 Workstream D — Outlook events used to never reach the calendar-match
@@ -257,12 +267,29 @@ export function CallDetail({
   // without segment-level timestamps to seek precisely.
   const scrollToBookmark = useCallback(
     (atMs: number) => {
-      const container = bodyScrollRef.current
-      const wrapper = transcriptWrapperRef.current
-      if (!container || !wrapper || !call || call.durationMs <= 0) return
-      const fraction = Math.min(1, Math.max(0, atMs / call.durationMs))
-      const target = wrapper.offsetTop + fraction * wrapper.clientHeight
-      container.scrollTo({ top: Math.max(0, target - 24), behavior: 'smooth' })
+      if (!call || call.durationMs <= 0) return
+      // M31: the transcript is collapsed by default and scrolls internally,
+      // so a bookmark jump has to OPEN it first. Without this the affordance
+      // would still be clickable and would silently do nothing — the exact
+      // "plausible but wrong" shape this milestone keeps removing.
+      setTranscriptOpen(true)
+      // Two frames: the list does not exist until after the state change has
+      // painted, so scrollHeight is 0 if read any earlier.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const container = bodyScrollRef.current
+          const wrapper = transcriptWrapperRef.current
+          const inner = transcriptScrollRef.current
+          if (!container || !wrapper) return
+          container.scrollTo({ top: Math.max(0, wrapper.offsetTop - 24), behavior: 'smooth' })
+          if (!inner) return
+          const fraction = Math.min(1, Math.max(0, atMs / call.durationMs))
+          // scrollHeight, not clientHeight: the content is now taller than
+          // the box that shows it, and clientHeight would land every bookmark
+          // inside the first screenful.
+          inner.scrollTo({ top: fraction * inner.scrollHeight, behavior: 'smooth' })
+        })
+      })
     },
     [call]
   )
@@ -867,6 +894,14 @@ export function CallDetail({
       <div ref={bodyScrollRef} className="flex-1 space-y-4 overflow-y-auto pb-2">
         {noKey && <NoKeyBanner />}
 
+        {/* ── WHO ────────────────────────────────────────────────────────
+            Founder call, and the right one: "who was this with" precedes
+            "what happened". It is also state-dependent by the same rule as
+            the summary and the coaching card — UNLINKED it is an action (a
+            call with no contact is a record disconnected from the CRM, the
+            deal and the history), and LINKED it is the identity everything
+            below is about. Either way it belongs above the answers, not in
+            the utility group where the first pass put it. */}
         {/* Linked contact */}
         <Card>
           <div className="mb-3 flex items-center gap-2">
@@ -956,6 +991,11 @@ export function CallDetail({
           />
         </Card>
 
+
+        {/* ── WHAT HAPPENED ─────────────────────────────────────────────
+            The answer to the first question a rep opens a past call with.
+            State-dependent by design: an unsummarised call shows the action
+            here, a summarised one shows the answer, in the same place. */}
         {/* AI summary */}
         <Card>
           <div className="mb-4 flex items-center justify-between">
@@ -987,157 +1027,9 @@ export function CallDetail({
           )}
         </Card>
 
-        {/* Transcript */}
-        <div
-          ref={transcriptWrapperRef}
-          className="rounded-2xl border border-line-soft bg-surface px-7 py-6"
-        >
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-sm font-semibold">Transcript</h3>
-            {call.segments.length > 0 && (
-              <IconButton
-                icon={copied ? Check : Copy}
-                label="Copy transcript"
-                onClick={copyTranscript}
-              />
-            )}
-          </div>
-          {call.segments.length > 0 && (
-            <div className="mb-4 flex items-center gap-2">
-              <div className="relative flex-1">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value)
-                    setActiveMatch(0)
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter' || matchCount === 0) return
-                    e.preventDefault()
-                    setActiveMatch((i) =>
-                      e.shiftKey ? (i - 1 + matchCount) % matchCount : (i + 1) % matchCount
-                    )
-                  }}
-                  placeholder="Search transcript…"
-                  className={cn(fieldClass, 'pl-8')}
-                />
-              </div>
-              {trimmedSearch && (
-                <div className="flex shrink-0 items-center gap-0.5 text-[12px] text-muted">
-                  <span className="mr-1 tabular-nums">
-                    {matchCount > 0 ? `${clampedActiveMatch + 1} of ${matchCount}` : 'No matches'}
-                  </span>
-                  <IconButton
-                    icon={ChevronUp}
-                    label="Previous match"
-                    disabled={matchCount === 0}
-                    onClick={() => setActiveMatch((i) => (i - 1 + matchCount) % matchCount)}
-                  />
-                  <IconButton
-                    icon={ChevronDown}
-                    label="Next match"
-                    disabled={matchCount === 0}
-                    onClick={() => setActiveMatch((i) => (i + 1) % matchCount)}
-                  />
-                </div>
-              )}
-            </div>
-          )}
-          {call.segments.length > 0 ? (
-            <SpeakerTranscript
-              segments={call.segments}
-              repSpeaker={call.coaching?.metrics.repSpeaker ?? null}
-              highlightQuery={trimmedSearch}
-              activeMatchIndex={matchCount > 0 ? clampedActiveMatch : undefined}
-              identities={call.speakerIdentities}
-              onRename={renameSpeaker}
-            />
-          ) : (
-            <p className="text-sm italic text-faint">This call has no transcript.</p>
-          )}
-        </div>
-
-        {/* Bookmarks */}
-        {bookmarks.length > 0 && (
-          <Card>
-            <div className="mb-4 flex items-center gap-2">
-              <BookmarkIcon className="h-4 w-4 text-accent" />
-              <h3 className="text-sm font-semibold">Bookmarks</h3>
-              <span className="text-[11px] text-faint">{bookmarks.length}</span>
-            </div>
-            <div className="space-y-2.5">
-              {bookmarks.map((bm) => (
-                <div
-                  key={bm.id}
-                  className="flex items-start gap-3 rounded-xl border border-line-soft bg-canvas p-3"
-                >
-                  <button
-                    type="button"
-                    onClick={() => scrollToBookmark(bm.atMs)}
-                    className="shrink-0 rounded-md bg-accent-soft px-2 py-1 text-[11px] font-semibold tabular-nums text-accent transition hover:brightness-110"
-                  >
-                    {formatMmSs(bm.atMs)}
-                  </button>
-                  <p className="min-w-0 flex-1 line-clamp-2 text-sm text-ink">{bm.text}</p>
-                  <IconButton
-                    icon={Trash2}
-                    label="Remove bookmark"
-                    variant="danger"
-                    onClick={() => void removeBookmark(bm.id)}
-                  />
-                </div>
-              ))}
-            </div>
-          </Card>
-        )}
-
-        {/* Sales coaching */}
-        <Card>
-          <div className="mb-4 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <GraduationCap className="h-4 w-4 text-accent" />
-              <h3 className="text-sm font-semibold">Sales coaching</h3>
-            </div>
-            {call.coaching && !coaching && (
-              <Button variant="secondary" size="sm" icon={RotateCw} onClick={coachCall}>
-                Re-coach
-              </Button>
-            )}
-          </div>
-          {coaching ? (
-            <CoachLoading />
-          ) : call.coaching ? (
-            <CoachReportView
-              report={call.coaching}
-              callId={callId}
-              callTitle={call.title}
-              identities={call.speakerIdentities}
-              multichannel={call.segments.some((s) => s.channel !== undefined)}
-            />
-          ) : (
-            <div className="flex flex-col items-start gap-3">
-              <p className="text-sm text-muted">
-                Get an evidence-based scorecard for this call — six coaching dimensions scored 1–5
-                with quotes from the transcript, your talk-time metrics, your top two things to
-                improve, and one concrete thing to try on your next call.
-              </p>
-              {coachError && <p className="whitespace-pre-wrap text-[13px] text-danger">{coachError}</p>}
-              <Button icon={GraduationCap} onClick={coachCall}>
-                Coach this call
-              </Button>
-            </div>
-          )}
-        </Card>
-
-        {/* M23 Workstream B — coaching chat (advisor + practice mode) */}
-        <CoachChatCard
-          callId={callId}
-          initialMessages={call.coachChat ?? []}
-          hasContact={!!call.contactId}
-        />
-
+        {/* ── WHAT DO I OWE ─────────────────────────────────────────────
+            Commitments and tasks: the things that turn into work. Second
+            because they are time-sensitive in a way the coaching is not. */}
         {/* Commitments (§4.7) — who promised what */}
         <Card>
           <div className="mb-4 flex items-center justify-between">
@@ -1175,6 +1067,75 @@ export function CallDetail({
               {commitmentsError && <p className="text-[13px] text-danger">{commitmentsError}</p>}
               <Button icon={ClipboardList} onClick={findCommitments}>
                 Find commitments
+              </Button>
+            </div>
+          )}
+        </Card>
+
+        {/* Tasks */}
+        <Card>
+          <div className="mb-4 flex items-center gap-2">
+            <ListChecks className="h-4 w-4 text-accent" />
+            <h3 className="text-sm font-semibold">Tasks</h3>
+          </div>
+          <div className="flex flex-col items-start gap-3">
+            <p className="text-sm text-muted">
+              Let Claude suggest action items from this call — follow-ups, emails to send, meetings
+              to book, and research to do. You&apos;ll review and edit them before anything is
+              saved.{' '}
+              <span className="text-faint">
+                These are reminders only; the app won&apos;t send or schedule anything.
+              </span>
+            </p>
+            {tasksAdded > 0 && (
+              <p className="text-[13px] text-positive">
+                Added {tasksAdded} {tasksAdded === 1 ? 'task' : 'tasks'} — find them in the Tasks
+                tab.
+              </p>
+            )}
+            <Button icon={ListChecks} onClick={() => setShowTasks(true)}>
+              Generate tasks
+            </Button>
+          </div>
+        </Card>
+
+        {/* ── WHAT DID I DO WRONG ───────────────────────────────────────
+            Coaching, live-deal radar, objection mining. Same state-dependent
+            rule as the summary: the button and the scorecard occupy one
+            position. */}
+        {/* Sales coaching */}
+        <Card>
+          <div className="mb-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <GraduationCap className="h-4 w-4 text-accent" />
+              <h3 className="text-sm font-semibold">Sales coaching</h3>
+            </div>
+            {call.coaching && !coaching && (
+              <Button variant="secondary" size="sm" icon={RotateCw} onClick={coachCall}>
+                Re-coach
+              </Button>
+            )}
+          </div>
+          {coaching ? (
+            <CoachLoading />
+          ) : call.coaching ? (
+            <CoachReportView
+              report={call.coaching}
+              callId={callId}
+              callTitle={call.title}
+              identities={call.speakerIdentities}
+              multichannel={call.segments.some((s) => s.channel !== undefined)}
+            />
+          ) : (
+            <div className="flex flex-col items-start gap-3">
+              <p className="text-sm text-muted">
+                Get an evidence-based scorecard for this call — six coaching dimensions scored 1–5
+                with quotes from the transcript, your talk-time metrics, your top two things to
+                improve, and one concrete thing to try on your next call.
+              </p>
+              {coachError && <p className="whitespace-pre-wrap text-[13px] text-danger">{coachError}</p>}
+              <Button icon={GraduationCap} onClick={coachCall}>
+                Coach this call
               </Button>
             </div>
           )}
@@ -1225,32 +1186,51 @@ export function CallDetail({
 
         <MineTestPanel callId={callId} enabled={settings.objectionMining.enabled} />
 
-        {/* Tasks */}
-        <Card>
-          <div className="mb-4 flex items-center gap-2">
-            <ListChecks className="h-4 w-4 text-accent" />
-            <h3 className="text-sm font-semibold">Tasks</h3>
-          </div>
-          <div className="flex flex-col items-start gap-3">
-            <p className="text-sm text-muted">
-              Let Claude suggest action items from this call — follow-ups, emails to send, meetings
-              to book, and research to do. You&apos;ll review and edit them before anything is
-              saved.{' '}
-              <span className="text-faint">
-                These are reminders only; the app won&apos;t send or schedule anything.
-              </span>
-            </p>
-            {tasksAdded > 0 && (
-              <p className="text-[13px] text-positive">
-                Added {tasksAdded} {tasksAdded === 1 ? 'task' : 'tasks'} — find them in the Tasks
-                tab.
-              </p>
-            )}
-            <Button icon={ListChecks} onClick={() => setShowTasks(true)}>
-              Generate tasks
-            </Button>
-          </div>
-        </Card>
+        {/* ── ASK ───────────────────────────────────────────────────────
+            Interactive, and placed after the three questions above so the
+            rep has the context before they start asking about it. */}
+        {/* M23 Workstream B — coaching chat (advisor + practice mode) */}
+        <CoachChatCard
+          callId={callId}
+          initialMessages={call.coachChat ?? []}
+          hasContact={!!call.contactId}
+        />
+
+        {/* ── UTILITY ───────────────────────────────────────────────────
+            Real, used rarely, and not what the page is opened for. */}
+        {/* Bookmarks */}
+        {bookmarks.length > 0 && (
+          <Card>
+            <div className="mb-4 flex items-center gap-2">
+              <BookmarkIcon className="h-4 w-4 text-accent" />
+              <h3 className="text-sm font-semibold">Bookmarks</h3>
+              <span className="text-[11px] text-faint">{bookmarks.length}</span>
+            </div>
+            <div className="space-y-2.5">
+              {bookmarks.map((bm) => (
+                <div
+                  key={bm.id}
+                  className="flex items-start gap-3 rounded-xl border border-line-soft bg-canvas p-3"
+                >
+                  <button
+                    type="button"
+                    onClick={() => scrollToBookmark(bm.atMs)}
+                    className="shrink-0 rounded-md bg-accent-soft px-2 py-1 text-[11px] font-semibold tabular-nums text-accent transition hover:brightness-110"
+                  >
+                    {formatMmSs(bm.atMs)}
+                  </button>
+                  <p className="min-w-0 flex-1 line-clamp-2 text-sm text-ink">{bm.text}</p>
+                  <IconButton
+                    icon={Trash2}
+                    label="Remove bookmark"
+                    variant="danger"
+                    onClick={() => void removeBookmark(bm.id)}
+                  />
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
 
         {/* Files */}
         <Card>
@@ -1302,6 +1282,161 @@ export function CallDetail({
             </div>
           )}
         </Card>
+        {/* ── THE RECORD ────────────────────────────────────────────────
+            LAST, and collapsed. It is the longest object on the page and it
+            used to sit fifth of thirteen, so every action lived below it: on
+            the founder's own 116-segment call that is ~10 screens of
+            scrolling before "Coach this call", and ~20 on a p90 call.
+            Kept on this page rather than moved to a tab because the coaching
+            scorecard QUOTES it — claim and evidence belong in one scroll.
+            See docs/M31-design-research.md for why the side-panel variant is
+            blocked by the 880px width floor. */}
+        {/* Transcript */}
+        <div
+          ref={transcriptWrapperRef}
+          className="rounded-2xl border border-line-soft bg-surface px-7 py-6"
+        >
+          <div className="mb-4 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => {
+                setTranscriptOpen((o) => !o)
+                // Re-armed on open: the flag is only meaningful while
+                // the scroller exists, and a stale true would hide the
+                // jump control on a long transcript until first scroll.
+                setTranscriptAtBottom(false)
+              }}
+              aria-expanded={transcriptOpen}
+              className="-ml-1 flex items-center gap-2 rounded-md px-1 py-0.5 text-sm font-semibold transition-colors hover:text-ink"
+            >
+              <ChevronRight
+                className={cn(
+                  'h-4 w-4 shrink-0 text-faint transition-transform',
+                  transcriptOpen && 'rotate-90'
+                )}
+                strokeWidth={2.5}
+              />
+              Transcript
+              {/* The count is the honest preview of what opening costs. */}
+              {call.segments.length > 0 && (
+                <span className="text-[12px] font-normal text-faint">
+                  {call.segments.length} lines
+                </span>
+              )}
+            </button>
+            {call.segments.length > 0 && transcriptOpen && (
+              <IconButton
+                icon={copied ? Check : Copy}
+                label="Copy transcript"
+                onClick={copyTranscript}
+              />
+            )}
+          </div>
+          {call.segments.length > 0 && transcriptOpen && (
+            <div className="mb-4 flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value)
+                    setActiveMatch(0)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' || matchCount === 0) return
+                    e.preventDefault()
+                    setActiveMatch((i) =>
+                      e.shiftKey ? (i - 1 + matchCount) % matchCount : (i + 1) % matchCount
+                    )
+                  }}
+                  placeholder="Search transcript…"
+                  className={cn(fieldClass, 'pl-8')}
+                />
+              </div>
+              {trimmedSearch && (
+                <div className="flex shrink-0 items-center gap-0.5 text-[12px] text-muted">
+                  <span className="mr-1 tabular-nums">
+                    {matchCount > 0 ? `${clampedActiveMatch + 1} of ${matchCount}` : 'No matches'}
+                  </span>
+                  <IconButton
+                    icon={ChevronUp}
+                    label="Previous match"
+                    disabled={matchCount === 0}
+                    onClick={() => setActiveMatch((i) => (i - 1 + matchCount) % matchCount)}
+                  />
+                  <IconButton
+                    icon={ChevronDown}
+                    label="Next match"
+                    disabled={matchCount === 0}
+                    onClick={() => setActiveMatch((i) => (i + 1) % matchCount)}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          {!transcriptOpen ? null : call.segments.length > 0 ? (
+            /* THE MECHANICAL FIX. This container had no max-height and no
+               overflow, so it rendered every segment at full height and
+               pushed all eight sections below it down the page. On the
+               founder's own 116-segment call that was ~10 screens of scroll
+               before "Coach this call", and the longest call on this machine
+               has 479 segments (~44 screens). Reordering alone would not have
+               fixed that — it would have moved the cliff, not removed it. */
+            <div className="relative">
+              <div
+                ref={transcriptScrollRef}
+                onScroll={(e) => {
+                  const el = e.currentTarget
+                  // 24px of slack: exact equality never holds with
+                  // sub-pixel heights, and a button that will not go away at
+                  // the very bottom is worse than no button.
+                  setTranscriptAtBottom(
+                    el.scrollHeight - el.scrollTop - el.clientHeight < 24
+                  )
+                }}
+                className="max-h-[60vh] overflow-y-auto pr-1"
+              >
+                <SpeakerTranscript
+                  segments={call.segments}
+                  repSpeaker={call.coaching?.metrics.repSpeaker ?? null}
+                  highlightQuery={trimmedSearch}
+                  activeMatchIndex={matchCount > 0 ? clampedActiveMatch : undefined}
+                  identities={call.speakerIdentities}
+                  onRename={renameSpeaker}
+                />
+              </div>
+              {/* Jump to the end of the call — the same affordance a long
+                  chat gives you. Only rendered while there is somewhere to
+                  go: an always-present button that does nothing teaches
+                  people to ignore it. Sits INSIDE the transcript box, so it
+                  means "end of the transcript" and never "bottom of the
+                  page", which are different places now that this scrolls
+                  itself. */}
+              {!transcriptAtBottom && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = transcriptScrollRef.current
+                    if (!el) return
+                    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+                  }}
+                  aria-label="Jump to the end of the transcript"
+                  className={cn(
+                    'absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full',
+                    'border border-line bg-elevated p-1.5 text-muted shadow-card',
+                    'transition-colors hover:bg-surface hover:text-ink'
+                  )}
+                >
+                  <ChevronDown className="h-4 w-4" strokeWidth={2.25} />
+                </button>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm italic text-faint">This call has no transcript.</p>
+          )}
+        </div>
+
       </div>
 
       {showTasks && (
