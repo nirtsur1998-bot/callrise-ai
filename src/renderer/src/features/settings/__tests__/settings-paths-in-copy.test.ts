@@ -72,10 +72,22 @@ describe('"Settings → X" copy names a page that exists', () => {
   //
   // The consequence, stated plainly because it is a real limit: copy naming
   // an OLD label ("Settings -> AI & coaching") passes today, since that group
-  // still exists with the preview off. When the preview becomes permanent and
-  // the legacy IA is deleted, this test turns red on every one of those —
-  // which is the correct moment to fix them, and is exactly why the legacy
-  // arrays should be deleted rather than left behind.
+  // still exists with the preview off.
+  //
+  // ⚠ IF YOU ARE READING THIS BECAUSE THIS TEST JUST WENT RED ACROSS DOZENS
+  // OF FILES: that is EXPECTED, and it is this guard doing its job, not
+  // breaking. It happens the moment the settings preview becomes permanent
+  // and ALL_GROUPS (the legacy IA) is deleted — at which point every string
+  // still naming an old label stops being true, all at once, and this is the
+  // alarm for it. There is nothing wrong with the guard; there are N pieces
+  // of copy to update, and the failure message lists every one by file.
+  //
+  // Deliberately scheduled that way rather than made to fail now. Failing
+  // today would be wrong: with the preview off, "Settings -> AI & coaching"
+  // is exactly where the user should go, and forcing those strings to the new
+  // names would break them for everyone who has not opted in. The guard has
+  // to go red at the changeover, which is the one moment both IAs cannot be
+  // simultaneously correct.
   //
   // Built with alerts LIVE deliberately, even though ALERTS_BACKEND_LIVE is
   // false today. The question this guard asks is "does this page EXIST", not

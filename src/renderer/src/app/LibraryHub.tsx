@@ -37,7 +37,13 @@ function ObjectionsTab(): React.JSX.Element {
           icon={MessageSquareWarning}
           title="Objection mining is switched off"
           titleAs="h2"
-          description="Turn on “Learn objection responses from my calls” in Settings → AI & coaching → Objection Library to start building this list."
+          reason={{
+            kind: 'off',
+            settingsPage: 'objection-library',
+            what: 'Reads your call transcripts for the moments a buyer pushed back and what you said next, then turns the answers that worked into reusable scripts you can edit and keep.',
+            cost: 'Makes an AI call per mined call. You approve every suggestion before it becomes a real script.',
+            actionLabel: 'Turn on objection mining'
+          }}
         />
       </div>
     )
