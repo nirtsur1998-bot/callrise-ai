@@ -14,6 +14,8 @@ type AiKeyName = Parameters<typeof window.api.aiKeys.save>[0]
 type AiKeyStatus = StatusMap[AiKeyName]
 type AiProviderId = Parameters<typeof window.api.aiKeys.validate>[0]
 
+import { ModelLogo, type ModelBrand } from '@renderer/components/ModelLogo'
+
 export type RetentionPosture = 'trains' | 'no-training' | 'unknown'
 
 export interface KeyCardConfig {
@@ -29,6 +31,11 @@ export interface KeyCardConfig {
   /** Data-retention posture (M20 hard invariant) — omitted only for
    *  Deepgram, which isn't one of the model-picker's text-AI providers. */
   retention?: { posture: RetentionPosture; url: string }
+  /** Which mark to draw beside the title. Deliberately a SEPARATE field from
+   *  `providerId`: ModelBrand names the company whose mark this is, and the
+   *  two only coincide by luck. Omitted where no mark applies (Deepgram is a
+   *  transcription service, not one of the model brands). */
+  brand?: ModelBrand | { label: string }
 }
 
 const RETENTION_LABEL: Record<RetentionPosture, string> = {
@@ -77,6 +84,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get an Anthropic key',
     placeholder: 'Paste your Anthropic API key',
     providerId: 'anthropic',
+    brand: { label: 'Anthropic' },
     retention: { posture: 'no-training', url: 'https://www.anthropic.com/legal/commercial-terms' }
   },
   {
@@ -87,6 +95,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get an OpenAI key',
     placeholder: 'Paste your OpenAI API key',
     providerId: 'openai',
+    brand: 'openai',
     retention: { posture: 'no-training', url: 'https://openai.com/policies/api-data-usage-policies' }
   },
   {
@@ -97,6 +106,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get a free Groq key',
     placeholder: 'Paste your Groq API key',
     providerId: 'groq',
+    brand: { label: 'Groq' },
     retention: { posture: 'unknown', url: 'https://groq.com/privacy-policy/' }
   },
   {
@@ -107,6 +117,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get a free OpenRouter key',
     placeholder: 'Paste your OpenRouter API key',
     providerId: 'openrouter',
+    brand: 'openrouter',
     retention: { posture: 'unknown', url: 'https://openrouter.ai/docs/features/privacy-and-logging' }
   },
   {
@@ -117,6 +128,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get a free Google AI Studio key',
     placeholder: 'Paste your Google AI Studio API key',
     providerId: 'google',
+    brand: 'google',
     retention: { posture: 'trains', url: 'https://ai.google.dev/gemini-api/terms' }
   },
   {
@@ -127,6 +139,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get a free NVIDIA NIM key',
     placeholder: 'Paste your NVIDIA API key',
     providerId: 'nvidia',
+    brand: 'nvidia',
     retention: { posture: 'unknown', url: 'https://build.nvidia.com/terms' }
   },
   {
@@ -137,6 +150,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get a free Cerebras key',
     placeholder: 'Paste your Cerebras API key',
     providerId: 'cerebras',
+    brand: { label: 'Cerebras' },
     retention: { posture: 'no-training', url: 'https://www.cerebras.ai/terms-of-service' }
   },
   {
@@ -147,6 +161,7 @@ const KEYS: KeyCardConfig[] = [
     getKeyLabel: 'Get a free Mistral key',
     placeholder: 'Paste your Mistral API key',
     providerId: 'mistral',
+    brand: 'mistral',
     retention: { posture: 'unknown', url: 'https://legal.mistral.ai/terms' }
   }
 ]
@@ -258,6 +273,15 @@ export function KeyCard({
     <Card className="mb-5">
       <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
+          {/* The provider's mark, at the same 18px the model picker uses.
+              Reuses <ModelLogo> rather than a second logo component, so the
+              two places you meet a provider look like the same product —
+              including the lettermark fallback for brands Simple Icons does
+              not carry (Groq, Cerebras). See assets/model-logos/SOURCES.md:
+              CC0 marks only, never a hand-approximated trademark, and the
+              lettermark is the designed contingency rather than a
+              placeholder. */}
+          {config.brand && <ModelLogo brand={config.brand} size={18} />}
           <h3 className="text-sm font-medium">{config.title}</h3>
           {config.providerId && (
             <span

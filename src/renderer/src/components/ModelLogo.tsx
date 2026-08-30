@@ -61,7 +61,21 @@ const BRAND_LABEL: Record<ModelBrand, string> = {
 }
 
 export interface ModelLogoProps {
-  brand: ModelBrand
+  /** A model/provider brand with a bundled CC0 mark, or a plain name to draw
+   *  as a lettermark.
+   *
+   *  The string escape hatch exists because the API-keys page lists PROVIDERS
+   *  (Anthropic, Groq, Cerebras, Deepgram) while `ModelBrand` names MODEL
+   *  MAKERS, and the two only partly overlap. Widening ModelBrand instead
+   *  would have broken its stated contract — it is kept "in lockstep with
+   *  main/ai/model-catalog.ts's ModelBrand", and adding renderer-only members
+   *  would quietly end that.
+   *
+   *  A plain string ALWAYS draws a lettermark, never a mark: per SOURCES.md,
+   *  the only marks in this app are CC0 ones from Simple Icons, and a brand
+   *  absent from that set gets the designed lettermark rather than a
+   *  hand-approximated trademark. */
+  brand: ModelBrand | { label: string }
   /** Square size in px. Defaults to the picker row's 24×24 optical box. */
   size?: number
   className?: string
@@ -72,8 +86,9 @@ export interface ModelLogoProps {
  *  this brand. Identifies the model/provider only — never implies
  *  partnership or endorsement (see SOURCES.md's brand-guidelines note). */
 export function ModelLogo({ brand, size = 24, className }: ModelLogoProps): React.JSX.Element {
-  const svg = BRAND_SVG[brand]
-  const label = BRAND_LABEL[brand]
+  const isNamed = typeof brand === 'string'
+  const svg = isNamed ? BRAND_SVG[brand] : undefined
+  const label = isNamed ? BRAND_LABEL[brand] : brand.label
 
   if (svg) {
     return (
