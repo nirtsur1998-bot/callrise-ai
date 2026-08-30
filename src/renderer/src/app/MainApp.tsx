@@ -7,7 +7,6 @@ import { CommandPalette, type PaletteAction } from '@renderer/features/navigatio
 import { ShortcutsOverlay } from '@renderer/features/navigation/ShortcutsOverlay'
 import { PhoneCall, SunMoon, CalendarPlus } from 'lucide-react'
 import { useTheme } from '@renderer/features/settings/useTheme'
-import { isMac } from '@renderer/lib/platform'
 import { SkeletonRows } from '@renderer/components/Skeleton'
 import { PlaceholderView } from '@renderer/components/PlaceholderView'
 import {
@@ -19,6 +18,7 @@ import {
   type NavId
 } from '@renderer/features/navigation/nav-items'
 import type { RecentItem } from '@renderer/lib/recentlyViewed'
+import { shortcutKeys, shortcutLabel } from '@renderer/features/navigation/shortcuts'
 import { recentTarget } from '@renderer/features/navigation/recentTarget'
 import { useDesignPreview } from '@renderer/features/settings/useDesignPreview'
 import { draftToInput } from '@renderer/features/calendar/items'
@@ -245,26 +245,30 @@ export function MainApp({
   // Quick actions offered by the command palette alongside screen jumps.
   // Kept small and honest — only things this component can actually do
   // without reaching into other features' local state.
+  // Labels and key hints come from the shortcut registry, not from three
+  // hand-typed copies. The ids here ARE the registry ids, and shortcutKeys
+  // throws on an unknown one — a typo is a crash in dev rather than a
+  // silently missing hint, which is the invisible-feature problem again.
   const paletteActions: PaletteAction[] = [
     {
       id: 'live-call',
-      label: 'Start a live call',
+      label: shortcutLabel('live-call'),
       icon: PhoneCall,
-      shortcut: isMac ? '⌘⇧L' : 'Ctrl ⇧L',
+      shortcut: shortcutKeys('live-call'),
       onRun: () => navigateTo('live-calls')
     },
     {
       id: 'new-event',
-      label: 'New event',
+      label: shortcutLabel('new-event'),
       icon: CalendarPlus,
-      shortcut: isMac ? '⌘⇧E' : 'Ctrl ⇧E',
+      shortcut: shortcutKeys('new-event'),
       onRun: () => setQuickEventOpen(true)
     },
     {
       id: 'toggle-theme',
-      label: 'Toggle theme',
+      label: shortcutLabel('toggle-theme'),
       icon: SunMoon,
-      shortcut: isMac ? '⌘⇧T' : 'Ctrl ⇧T',
+      shortcut: shortcutKeys('toggle-theme'),
       onRun: () => setThemeMode(themeMode === 'light' ? 'dark' : 'light')
     }
   ]
