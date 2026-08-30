@@ -73,8 +73,24 @@ describe('bundled typefaces (M31 Stage 4)', () => {
     ])
     const bundledFamilies = new Set(BUNDLED.map((b) => b.family))
 
-    const stacks = [...css.matchAll(/--font-(?:sans|mono):([^;]+);/g)].map((m) => m[1])
-    expect(stacks.length, 'no --font-sans/--font-mono found — did the tokens move?').toBe(2)
+    // Scoped to @theme — the stack the app actually SHIPS.
+    //
+    // index.css also contains a second pair under `:root:not(.first-light)`,
+    // which is the pre-M31 stack restored when the redesign preview is turned
+    // off. That one deliberately still names 'Inter' without bundling it,
+    // because it has to be byte-identical to what ships today and today's
+    // stack has that defect. Checking it here would demand we "fix" the thing
+    // we are deliberately preserving, and a revert that quietly improves the
+    // old state is not a revert.
+    //
+    // So the rule is: the SHIPPED stack may only name fonts we bundle; the
+    // RESTORED stack is a historical artefact and is pinned for existence by
+    // contrast-ratios.test.ts's revert-path test instead.
+    const theme = css.slice(css.indexOf('@theme {'), css.indexOf('@layer base {'))
+    const stacks = [...theme.matchAll(/--font-(?:sans|mono):([^;]+);/g)].map((m) => m[1])
+    expect(stacks.length, 'no --font-sans/--font-mono found in @theme — did the tokens move?').toBe(
+      2
+    )
 
     for (const stack of stacks) {
       for (const raw of stack.split(',')) {

@@ -3,7 +3,7 @@ import { ChevronDown, Plug, RefreshCw, X } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { GoogleConnect } from '@renderer/features/google/GoogleConnect'
 import { OutlookConnect } from '@renderer/features/outlook/OutlookConnect'
-import { loadConnectBannerDismissed, saveConnectBannerDismissed } from './calendarPreview'
+import { loadConnectBannerDismissed, saveConnectBannerDismissed } from './connectBannerPref'
 
 interface CalendarConnectBarProps {
   googleSyncing: boolean

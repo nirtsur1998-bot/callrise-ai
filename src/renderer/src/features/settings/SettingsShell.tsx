@@ -11,7 +11,7 @@ import {
   resolvePageId,
   type SettingsPageId
 } from './settings-nav'
-import { useSettingsPreview } from './useSettingsPreview'
+import { useDesignPreview } from './useDesignPreview'
 import { AccountSection } from './AccountSection'
 import { ApiKeysSection } from './ApiKeysSection'
 import { ModelAssignmentSection } from './ModelAssignmentSection'
@@ -121,7 +121,7 @@ export function SettingsShell({
   onBack,
   initialPage
 }: SettingsShellProps): React.JSX.Element {
-  const { enabled: previewIA } = useSettingsPreview()
+  const { enabled: previewIA } = useDesignPreview()
   const [rawPage, setPage] = useState<SettingsPageId>(initialPage ?? 'account')
 
   // Recomputed rather than module-constant, because the preview can be toggled

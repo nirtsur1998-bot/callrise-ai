@@ -3,10 +3,7 @@ import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
 import { useTheme } from './useTheme'
 import type { ThemeMode } from './theme'
-import { useNavigationPreview } from '@renderer/features/navigation/useNavigationPreview'
-import { useCalendarPreview } from '@renderer/features/calendar/useCalendarPreview'
-import { useIdentityPreview } from './useIdentityPreview'
-import { useSettingsPreview } from './useSettingsPreview'
+import { useDesignPreview } from './useDesignPreview'
 
 const OPTIONS: { id: ThemeMode; label: string }[] = [
   { id: 'dark', label: 'Dark' },
@@ -16,10 +13,7 @@ const OPTIONS: { id: ThemeMode; label: string }[] = [
 
 export function AppearanceSection(): React.JSX.Element {
   const { mode, setMode } = useTheme()
-  const { enabled: navPreview, setEnabled: setNavPreview } = useNavigationPreview()
-  const { enabled: calPreview, setEnabled: setCalPreview } = useCalendarPreview()
-  const { enabled: identityPreview, setEnabled: setIdentityPreview } = useIdentityPreview()
-  const { enabled: settingsPreview, setEnabled: setSettingsPreview } = useSettingsPreview()
+  const { enabled: newDesign, setEnabled: setNewDesign } = useDesignPreview()
 
   return (
     <>
@@ -31,83 +25,29 @@ export function AppearanceSection(): React.JSX.Element {
         </p>
       </Card>
 
-      <Card className="mb-5">
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-sm font-medium">Try the new look (preview)</p>
-            <p className="mt-1 text-[12px] text-muted">
-              CallRise&rsquo;s own colours — warm amber and graphite — instead of the indigo-on-blue
-              every AI tool ships with. It also fixes cards and dividers being nearly invisible in
-              the light theme. This changes colours only: nothing moves, nothing is removed, and
-              nothing about your data changes. Turn it off to see exactly what the app looked like
-              before.
-            </p>
-          </div>
-          <ToggleSwitch
-            checked={identityPreview}
-            onChange={setIdentityPreview}
-            label="Try the new look (preview)"
-          />
-        </div>
-      </Card>
+      {/* M31 — ONE switch for the whole redesign.
+          This was four separate toggles, one per stage (navigation, calendar,
+          look, Settings layout). The founder's call, and it is hard to argue
+          with: "four toggles for one redesign is itself a discoverability
+          problem, which would be ironic."
 
-      <Card className="mb-5">
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-sm font-medium">Try the new Settings layout (preview)</p>
-            <p className="mt-1 text-[12px] text-muted">
-              This list, regrouped around what you&rsquo;re trying to do &mdash; Calls, Coaching, Your
-              AI, Connections, App &mdash; instead of which part of the app owns it. Six pages are
-              renamed to say what they do, and two pairs that were one thing in two rows are now
-              one page. Nothing is removed and no setting changes. Turn it off to go straight back
-              to today&rsquo;s list.
-            </p>
-          </div>
-          <ToggleSwitch
-            checked={settingsPreview}
-            onChange={setSettingsPreview}
-            label="Try the new Settings layout (preview)"
-          />
-        </div>
-      </Card>
-
+          One switch also means ONE failure mode. With four, "off" had sixteen
+          possible states and fifteen of them were half-reverted — a new
+          sidebar with the old palette, a new Settings layout inside the old
+          nav. Now there is exactly one thing to be true or false. */}
       <Card>
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-sm font-medium">Try the new navigation (preview)</p>
+            <p className="text-sm font-medium">New design (preview)</p>
             <p className="mt-1 text-[12px] text-muted">
-              A reworked sidebar — 7 sections instead of 12, with Live/Past Calls, CRM/Tasks/
-              Calendar, and Coaching/Analytics/Team each grouped under one item. Nothing is
-              removed: every existing screen is still there, just regrouped, and every keyboard
-              shortcut, deep link, and saved link keeps working. Turn this off any time to go
-              straight back to today&rsquo;s layout — nothing about your data changes either way.
+              CallRise&rsquo;s own colours and typeface, a sidebar of 7 sections instead of 12, a
+              Settings list grouped around what you&rsquo;re trying to do, and a calendar that
+              opens on the week. Nothing is removed and nothing about your data changes &mdash;
+              every screen, shortcut and saved link still works either way. Turn it off to go
+              straight back to the app exactly as it ships today.
             </p>
           </div>
-          <ToggleSwitch
-            checked={navPreview}
-            onChange={setNavPreview}
-            label="Try the new navigation (preview)"
-          />
-        </div>
-      </Card>
-
-      <Card className="mt-5">
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-sm font-medium">Try the new calendar (preview)</p>
-            <p className="mt-1 text-[12px] text-muted">
-              Opens on the week instead of the month (and remembers whichever view you last used),
-              and replaces the two large Google/Outlook connection cards with a single compact line
-              — the full connection controls are still one click away, and also in Settings →
-              Calendar. Nothing about your events or sync changes. Turn this off any time to go
-              straight back to today&rsquo;s calendar.
-            </p>
-          </div>
-          <ToggleSwitch
-            checked={calPreview}
-            onChange={setCalPreview}
-            label="Try the new calendar (preview)"
-          />
+          <ToggleSwitch checked={newDesign} onChange={setNewDesign} label="New design (preview)" />
         </div>
       </Card>
     </>

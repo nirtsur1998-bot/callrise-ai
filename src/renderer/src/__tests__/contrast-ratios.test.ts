@@ -320,6 +320,21 @@ describe('WCAG contrast (BUG-133 guard)', () => {
     ]) {
       expect(legacyDark[t], `legacy dark ramp is missing --color-${t}`).toBeDefined()
     }
+
+    // The TYPEFACE reverts too, and this is here because it did not at first.
+    // The font tokens sat in @theme with no legacy counterpart, so turning the
+    // preview off restored the palette and the Settings IA while leaving the
+    // app in Manrope — a half-revert, on the half nobody thinks to check,
+    // while the switch's own copy promised "colours and typeface ... exactly
+    // as it ships today". Caught by looking at the running app, not by
+    // reading the diff.
+    const legacyBlock = css.slice(
+      css.indexOf(':root:not(.first-light) {'),
+      css.indexOf(':root:not(.first-light).light {')
+    )
+    expect(legacyBlock, 'flag-off does not restore the pre-M31 --font-sans').toContain('--font-sans')
+    expect(legacyBlock, 'flag-off does not restore the pre-M31 --font-mono').toContain('--font-mono')
+    expect(legacyBlock, 'the legacy sans stack should be the pre-M31 one').toContain("'Segoe UI'")
   })
 
   it('parses real, non-empty ramps for both themes (sanity: the guard can see the tokens)', () => {

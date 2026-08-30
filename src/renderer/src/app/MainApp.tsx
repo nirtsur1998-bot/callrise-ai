@@ -17,7 +17,7 @@ import {
   remapForPreview,
   type NavId
 } from '@renderer/features/navigation/nav-items'
-import { useNavigationPreview } from '@renderer/features/navigation/useNavigationPreview'
+import { useDesignPreview } from '@renderer/features/settings/useDesignPreview'
 import { draftToInput } from '@renderer/features/calendar/items'
 import { notifyEventsChangedLocally } from '@renderer/features/calendar/eventsChanged'
 import type { AuthUser } from '@renderer/features/auth/types'
@@ -118,7 +118,7 @@ export function MainApp({
   // off: today's 12-item nav is untouched either way. NAV_ITEMS/NAV_ITEMS_
   // PREVIEW share the exact same NavId type and Sidebar/CommandPalette
   // rendering code, so flipping this off is a complete, instant revert.
-  const { enabled: navPreviewEnabled } = useNavigationPreview()
+  const { enabled: navPreviewEnabled } = useDesignPreview()
   const navItems = navPreviewEnabled ? NAV_ITEMS_PREVIEW : NAV_ITEMS
   const activeItem = navItems.find((item) => item.id === active) ?? navItems[0]
 

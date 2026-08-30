@@ -185,6 +185,19 @@
    * turning it off a real revert rather than a second code path.
    */
   :root:not(.first-light) {
+    /* The typeface is part of the redesign, so it reverts with it.
+       Caught by LOOKING at the running app after the four preview flags
+       collapsed into one: the palette and the Settings IA reverted correctly
+       and the type did not, because the font tokens sat in @theme with no
+       legacy counterpart. The switch's own copy promises "colours and
+       typeface ... exactly as it ships today", which would have been a false
+       claim on the half nobody thinks to check.
+       The woff2 files stay bundled either way — they are ~270KB and the
+       revert is about what you SEE, not about un-shipping an asset. */
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
+    --font-mono:
+      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+      monospace;
     --color-canvas: #0b0d11;
     --color-surface: #14171d;
     --color-elevated: #1a1e26;

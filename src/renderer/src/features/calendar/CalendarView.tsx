@@ -26,7 +26,7 @@ import { usePrepBriefStatuses } from './usePrepBriefStatuses'
 import { useContacts } from '@renderer/features/contacts/useContacts'
 import { useDeals } from '@renderer/features/deals/useDeals'
 import { useDealStages } from '@renderer/features/deals/useDealStages'
-import { useCalendarPreview } from './useCalendarPreview'
+import { useDesignPreview } from '@renderer/features/settings/useDesignPreview'
 import { loadCalendarView, saveCalendarView } from './viewPreference'
 import { MonthGrid } from './MonthGrid'
 import { WeekGrid } from './WeekGrid'
@@ -115,7 +115,7 @@ export function CalendarView({
   // With the flag OFF this is byte-for-byte today's behavior: hardcoded
   // 'month', nothing read from or written to localStorage. See
   // docs/M31-calendar-research.md §2.2 for why Week.
-  const { enabled: calendarPreview } = useCalendarPreview()
+  const { enabled: calendarPreview } = useDesignPreview()
   const [view, setViewState] = useState<View>(() => (calendarPreview ? loadCalendarView() : 'month'))
   const setView = (next: View): void => {
     setViewState(next)
