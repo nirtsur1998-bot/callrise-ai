@@ -193,6 +193,71 @@ deal-outcome-based analysis to ever work (a premise problem, and the feature sho
 reconsidered rather than waited on). Check it deliberately; do not let it quietly wait
 forever.
 
+## The backfill: worth doing, and it will NOT cross the line. Both halves matter.
+
+The founder asked, before spending an evening on it, what the realistic number is. Measured:
+
+Of the **19** contacts with at least one coached call — the ceiling on deals backfillable
+from existing history — by how many calls exist with them in total:
+
+| Calls with that contact | Count | What it probably is |
+|---|---|---|
+| 1 | **8** | could be anything: a one-off, a support call, a test |
+| 2 | **4** | |
+| 3+ | **7** | a repeated conversation — most likely a real pursuit |
+
+Only **1 of 36 contacts** has a company recorded, so there is no CRM signal to lean on.
+
+**A realistic count of genuine, rememberable deals is therefore around 7–11, not 19.**
+
+### ⚠ And the gate is harder than 19 ≥ 16 makes it look
+
+**The gate needs 8 in EACH ARM — 8 won AND 8 lost. Not 16 between them.** That reframes the
+whole calculation, because the binding constraint is the *lost* arm:
+
+| Win rate | Deals needed to reach 8 lost |
+|---|---|
+| 50% | 16 |
+| 60% | 20 |
+| 70% | **27** |
+
+The founder's four existing deals are **all won**. That is weak evidence — four deals, and
+possibly a recording habit rather than a win rate — but it points the wrong way for this
+purpose. If the real win rate is high, the lost arm needs *many* more deals than the total
+count suggests.
+
+**So: ~7–11 realistic backfilled deals, probably win-skewed, against a requirement of 8
+lost. The backfill does not unlock the analysis, and must not be described as though it
+might.** Best case — 19 deals splitting near 50/50 — it just barely would; that case is not
+the likely one.
+
+### Why build it anyway
+
+- It is the **foundation regardless**: every future closed deal lands on top of it, and the
+  work is not repeated.
+- It establishes the capture habit and the data shape while the stakes are zero.
+- **The “I don't remember” count is itself a finding.** If most of the 19 come back
+  unremembered, that says the backfill cannot be trusted — and the counter should say so
+  rather than counting them.
+- It is a one-evening cost, once.
+
+### The design constraint that is not negotiable
+
+**List-driven, never memory-driven.** The founder's reasoning, and it is the reason this
+flow exists in this shape:
+
+> *A memory-driven backfill selects on memorability, produces clean-looking counts, passes
+> leave-one-out, and is silently poisoned in exactly the category we just added
+> `went-quiet` to capture. No gate catches that, because nothing is wrong with the numbers.*
+
+So the sample is **"every contact I have coached calls with"**, not "every deal I recall".
+The flow shows all 19 rows up front with progress, because a list that reveals its length one
+row at a time gets abandoned halfway — **and a half-finished list-driven backfill is a
+memory-driven one wearing better clothes.** "I don't remember" is a first-class answer,
+distinct from an unanswered row. One entry point, findable, and **no reminders** — if the
+founder does 10 and stops, the counter reflects what exists rather than prompting toward a
+number.
+
 ## What Stage 2 will NOT deliver, said now
 
 - **No insight, for months.** With 0 lost deals, the counter will read *"nothing can be
