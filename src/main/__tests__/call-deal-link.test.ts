@@ -18,7 +18,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { saveCall, getCall, importCall, callBackupPayload } from '../calls-fs'
+import { saveCall, getCall, importCall, callBackupPayload, setCallDeal } from '../calls-fs'
 
 describe('the call→deal link survives sync the way the contact link does', () => {
   let dir: string
@@ -101,5 +101,80 @@ describe('the call→deal link survives sync the way the contact link does', () 
     const call = await getCall(dir, (s as { id: string }).id)
     const payload = callBackupPayload(call!) as Record<string, unknown>
     expect(payload.dealId).toBeNull()
+  })
+})
+
+describe('setCallDeal — the write path both linking surfaces share', () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'callrise-setcalldeal-'))
+  })
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  async function newCall(): Promise<string> {
+    const s = await saveCall(dir, {
+      startedAt: new Date().toISOString(),
+      durationMs: 1000,
+      segments: [{ speaker: 0, text: 'x', startMs: 0, endMs: 10 }]
+    } as never)
+    return (s as { id: string }).id
+  }
+
+  it('sets the link', async () => {
+    const id = await newCall()
+    await setCallDeal(dir, id, 'deal-alpha')
+    expect((await getCall(dir, id))?.dealId).toBe('deal-alpha')
+  })
+
+  it('null CLEARS the link — the Unlink button, and the backfill undo', async () => {
+    const id = await newCall()
+    await setCallDeal(dir, id, 'deal-alpha')
+    await setCallDeal(dir, id, null)
+    expect((await getCall(dir, id))?.dealId).toBeUndefined()
+  })
+
+  it('a malformed id is a NO-OP that keeps the existing link', async () => {
+    // The three-way shape, and the branch that matters. Failing CLOSED here
+    // means the link is missing, which is visible on screen. Failing open
+    // means a path-shaped or object-shaped id lands in a field that is later
+    // joined against and fed into the outcome analysis — invisible, and wrong.
+    const id = await newCall()
+    await setCallDeal(dir, id, 'deal-alpha')
+    for (const bad of ['../../etc/passwd', '', 'has spaces', {}, 42, ['deal-alpha']]) {
+      await setCallDeal(dir, id, bad)
+      expect((await getCall(dir, id))?.dealId, `${JSON.stringify(bad)} was accepted`).toBe(
+        'deal-alpha'
+      )
+    }
+  })
+
+  it('...and a malformed id on an UNLINKED call leaves it unlinked', async () => {
+    // The other half of the same branch. Without this, "no-op" could be
+    // implemented as "always keep whatever was there", and the previous test
+    // would pass while a garbage id silently became the link on a fresh call.
+    const id = await newCall()
+    await setCallDeal(dir, id, '../../etc/passwd')
+    expect((await getCall(dir, id))?.dealId).toBeUndefined()
+  })
+
+  it('bumps updatedAt, so a linked call actually syncs', async () => {
+    // Cloud sync is newest-wins on updatedAt. A link written without touching
+    // it would be correct locally and never leave the machine — the deal would
+    // lose its calls on every other device, silently.
+    const id = await newCall()
+    const before = (await getCall(dir, id))!.updatedAt
+    await new Promise((r) => setTimeout(r, 5))
+    await setCallDeal(dir, id, 'deal-alpha')
+    const after = (await getCall(dir, id))!.updatedAt
+    expect(Date.parse(after), 'updatedAt did not move — the link would never sync').toBeGreaterThan(
+      Date.parse(before)
+    )
+  })
+
+  it('returns null for a call that does not exist', async () => {
+    expect(await setCallDeal(dir, 'no-such-call', 'deal-alpha')).toBeNull()
   })
 })

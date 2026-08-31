@@ -112,6 +112,15 @@ interface CallBase {
   preview: string
   /** The contact this call is linked to, if any. */
   contactId?: string
+  /** M32 Stage 2 — the DEAL this call belongs to. Explicit, never inferred:
+   *  `contactId` above is optional and ambiguous (one contact, two deals), so
+   *  it cannot stand in for this. Only linked calls count toward outcome
+   *  tracking. A THIRD independent declaration of the same field (main's
+   *  calls-fs.ts and preload/index.d.ts are the others) — the renderer cannot
+   *  import from main. Unlike a union, a missing FIELD fails on first use, so
+   *  the typecheck is the guard here rather than a text-lockstep test; it is
+   *  what caught this copy being absent. */
+  dealId?: string
   /** M23 — sticky call-type classification, auto-detected then overridable. */
   callType?: CallType
 }

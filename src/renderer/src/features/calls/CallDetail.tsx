@@ -46,6 +46,7 @@ import { MineTestPanel } from '@renderer/features/objection-library/MineTestPane
 import { useJobByTarget } from '@renderer/features/jobs/useJobByTarget'
 import { useContacts } from '@renderer/features/contacts/useContacts'
 import { ContactPicker } from '@renderer/features/contacts/ContactPicker'
+import { CallDealPicker } from './CallDealPicker'
 import {
   CalendarMatchSuggestion,
   AutoLinkedNotice
@@ -995,6 +996,16 @@ export function CallDetail({
             contacts={contacts}
             onSelect={(contactId) => void linkContact(contactId)}
             onCreate={createContact}
+          />
+          {/* M32 Stage 2 — the deal link sits directly under the contact link
+              because they are the same kind of fact about this call, and
+              because the contact is what makes the deal list useful: it is
+              what puts the right deals at the top. */}
+          <CallDealPicker
+            callId={callId}
+            value={call.dealId}
+            contactId={call.contactId}
+            onChanged={notifyChanged}
           />
         </Card>
 

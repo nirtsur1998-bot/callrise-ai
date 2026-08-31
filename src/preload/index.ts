@@ -163,6 +163,8 @@ const api = {
     postCallBrief: (callId: string) => ipcRenderer.invoke('calls:postCallBrief', callId),
     setContact: (callId: string, contactId: string | null) =>
       ipcRenderer.invoke('calls:setContact', callId, contactId),
+    setDeal: (callId: string, dealId: string | null) =>
+      ipcRenderer.invoke('calls:setDeal', callId, dealId),
     setCallType: (callId: string, callType: string | null) =>
       ipcRenderer.invoke('calls:setCallType', callId, callType),
     addBookmark: (callId: string, atMs: number, text: string) =>

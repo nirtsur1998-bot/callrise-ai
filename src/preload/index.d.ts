@@ -856,6 +856,20 @@ interface CallBase {
   /** The contact this call is linked to (manual, or confirmed from a calendar
    *  match) — the CRM foundation's call-history link. */
   contactId?: string
+  /**
+   * M32 Stage 2 — the DEAL this call belongs to, and the join outcome
+   * tracking runs on.
+   *
+   * EXPLICIT, NEVER INFERRED. `contactId` above is not a substitute: it is
+   * optional (96 of 163 calls on the founder's machine have none) and
+   * ambiguous (a contact with two deals gives no way to say which). A guessed
+   * link is indistinguishable from a real one in every later analysis.
+   *
+   * Set from either side — `calls.setDeal` on the call, or the deal's own
+   * "Calls on this deal" list. The deal side is a QUERY over this field
+   * rather than a second stored list, so the two surfaces cannot disagree.
+   */
+  dealId?: string
   /** M23 — sticky call-type classification, auto-detected then overridable. */
   callType?: CallType
 }
@@ -1089,6 +1103,12 @@ export interface CallsApi {
   postCallBrief: (callId: string) => Promise<PostCallBriefEvent>
   /** Link (contactId) or clear (null) the contact this call belongs to. */
   setContact: (callId: string, contactId: string | null) => Promise<Call | null>
+  /** M32 Stage 2 — link (or clear, with `null`) the DEAL this call belongs to.
+   *  Separate from setContact because a contact can have two deals, and which
+   *  one a call belongs to is exactly the question the contact route cannot
+   *  answer. Always explicit; the app may OFFER an unambiguous link but never
+   *  records one on the user's behalf. */
+  setDeal: (callId: string, dealId: string | null) => Promise<Call | null>
   /** M23 — override (or clear, with `null`) this call's auto-detected type. */
   setCallType: (callId: string, callType: CallType | null) => Promise<Call | null>
   /** Bookmark a moment mid-call ("clip this") — atMs from call start, plus the

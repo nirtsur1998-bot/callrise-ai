@@ -24,6 +24,7 @@ import { recordRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import { formatValue, formatCloseDate } from './format'
 import { isDealStale, createFollowUpTask } from './staleness'
 import { RiskAssessmentCard } from './RiskAssessmentCard'
+import { DealCallsSection } from './DealCallsSection'
 import type { Deal, DealStage } from './types'
 
 interface DealDetailProps {
@@ -194,19 +195,33 @@ export function DealDetail({
         </div>
       )}
 
-      {/* Call history — the linked contact's full history, same as Phase 1 */}
+      {/* M32 Stage 2 — THIS DEAL's calls, from `call.dealId`.
+          What used to be here was the CONTACT's full history, which for a
+          contact with two deals showed an identical list under both. It was
+          not wrong about anything it claimed; it simply was not answering the
+          question its heading asked. The contact's other calls are still
+          right below, as candidates to link — which is what they are. */}
       <div className="flex-1 overflow-y-auto pb-2">
-        <div className="mb-3 flex items-center gap-2">
-          <PhoneCall className="h-4 w-4 text-accent" />
-          <h3 className="text-sm font-semibold">Call history</h3>
-          {!loading && <span className="text-[11px] text-faint">{linked.length}</span>}
-        </div>
-
-        <CallHistoryList
-          loading={loading}
-          linked={linked}
-          emptyMessage={`No calls linked to ${contact?.name ?? 'this contact'} yet. Open a saved call and link it there.`}
+        <DealCallsSection
+          dealId={deal.id}
+          contactId={deal.contactId}
+          contactName={contact?.name}
         />
+
+        <div className="mt-6 border-t border-line-soft pt-5">
+          <div className="mb-3 flex items-center gap-2">
+            <PhoneCall className="h-4 w-4 text-faint" />
+            <h3 className="text-sm font-semibold text-muted">
+              Everything with {contact?.name ?? 'this contact'}
+            </h3>
+            {!loading && <span className="text-[11px] text-faint">{linked.length}</span>}
+          </div>
+          <CallHistoryList
+            loading={loading}
+            linked={linked}
+            emptyMessage={`No calls linked to ${contact?.name ?? 'this contact'} yet. Open a saved call and link it there.`}
+          />
+        </div>
       </div>
     </div>
   )
