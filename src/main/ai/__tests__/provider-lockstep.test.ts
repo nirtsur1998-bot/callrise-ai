@@ -92,10 +92,25 @@ describe("preload's inline bridge unions carry every value", () => {
     expect(sorted(inlineUnion(PRELOAD_JS, 'aiKeys:clear'))).toEqual(sorted(MAIN_KEYS))
   })
 
-  it('aiKeys:validate accepts every provider id', () => {
+  it('aiKeys:validate accepts every provider id, plus Deepgram and nothing else', () => {
     // This one backs the "Test key" button — a provider missing here has a
     // card that saves a key and can never confirm it works.
-    expect(sorted(inlineUnion(PRELOAD_JS, 'aiKeys:validate'))).toEqual(sorted(AI_PROVIDER_IDS))
+    //
+    // BUG-146 made this union a deliberate SUPERSET of the provider ids: it now
+    // also carries 'deepgram', which is a validate target but NOT a provider id
+    // (Deepgram cannot complete a text request, so it must never reach the
+    // default-text-AI-provider picker — see deepgram-is-not-a-provider.test.ts).
+    //
+    // Kept as an exact toEqual against the expected set rather than softened to
+    // toContain. A toContain here would still pass with a provider MISSING,
+    // which is the entire failure this test exists to catch — and "corrected,
+    // not relaxed" is a claim that has already been wrong in this repo once
+    // (2026-08-30, toEqual(['groq']) -> toContain('groq'), which discriminated
+    // nothing). Red-checked both ways: dropping a provider fails, and adding an
+    // unexpected extra target fails.
+    expect(sorted(inlineUnion(PRELOAD_JS, 'aiKeys:validate'))).toEqual(
+      sorted([...AI_PROVIDER_IDS, 'deepgram'])
+    )
   })
 })
 

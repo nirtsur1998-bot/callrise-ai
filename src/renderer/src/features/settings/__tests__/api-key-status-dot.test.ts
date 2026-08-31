@@ -48,15 +48,46 @@ describe('the API key status dot never claims more than it knows', () => {
     expect(STATUS_DOT_LABEL[deriveStatusDot(absent, null)]).toBe('No key')
   })
 
-  it('THE REMAINING LIE, pinned so it is a known gap rather than a surprise', () => {
-    // With no validation result at all — a key restored from disk at startup,
-    // or one of the two cards this fix does not reach (DEEPGRAM_API_KEY and
-    // CLOUDFLARE_ACCOUNT_ID resolve to no providerId, so neither is ever
-    // validated) — the dot STILL falls back to presence and says "Connected".
-    //
-    // That is the M16-era limitation the source comment already admits. It is
-    // asserted here rather than left implicit: this test going red means
-    // someone fixed it, and they should delete this case and say so.
-    expect(STATUS_DOT_LABEL[deriveStatusDot(saved, null)]).toBe('Connected')
+  // THE REMAINING LIE WAS FIXED, AND THIS IS THE SAYING-SO.
+  //
+  // The case that stood here asserted that a saved key with no verdict reads
+  // "Connected", and carried an instruction: "this test going red means someone
+  // fixed it, and they should delete this case and say so." It went red on
+  // 2026-08-31 (BUG-146). Deleted, and said so.
+  //
+  // What replaced it is the opposite guarantee. Presence is no longer allowed
+  // to stand in for health anywhere on this screen.
+  it('BUG-146: a saved key with NO verdict reads "Not checked", never "Connected"', () => {
+    // This is the state EVERY card is in on a fresh launch — verdicts live in
+    // React state and are not persisted — so it is the common case, not an edge
+    // one. It is also the exact state the founder was in when a green
+    // "Connected" told them a rejected Cloudflare token was fine.
+    const dot = deriveStatusDot(saved, null)
+    expect(dot).toBe('unchecked')
+    expect(STATUS_DOT_LABEL[dot]).toBe('Not checked')
+    expect(STATUS_DOT_LABEL[dot]).not.toBe('Connected')
+  })
+
+  it('"Not checked" and "No key" are different words for different states', () => {
+    // They must not collapse into one another: "we have no key" and "we have a
+    // key we have not checked" call for different actions from the user, and
+    // rendering them identically would just move the lie rather than remove it.
+    expect(deriveStatusDot(saved, null)).not.toBe(deriveStatusDot(absent, null))
+    expect(STATUS_DOT_LABEL[deriveStatusDot(absent, null)]).toBe('No key')
+  })
+
+  it('"Connected" is now reachable ONLY through a verdict that said ok', () => {
+    // The property that makes the word mean something. Enumerated rather than
+    // argued: of every input shape this function accepts, exactly the ok-verdict
+    // one may produce "Connected".
+    const inputs = [
+      deriveStatusDot(saved, null),
+      deriveStatusDot(absent, null),
+      deriveStatusDot(saved, { ok: false, message: 'Your key was rejected.' }),
+      deriveStatusDot(saved, { ok: false, message: 'Rate limited, try again shortly.' }),
+      deriveStatusDot(absent, { ok: false, message: 'Your key was rejected.' })
+    ]
+    expect(inputs.filter((d) => d === 'connected')).toEqual([])
+    expect(deriveStatusDot(saved, { ok: true, message: 'Key works.' })).toBe('connected')
   })
 })

@@ -12,7 +12,17 @@ import { useAppSettings } from './useAppSettings'
 type StatusMap = Awaited<ReturnType<typeof window.api.aiKeys.getStatus>>
 type AiKeyName = Parameters<typeof window.api.aiKeys.save>[0]
 type AiKeyStatus = StatusMap[AiKeyName]
-type AiProviderId = Parameters<typeof window.api.aiKeys.validate>[0]
+/** BUG-146 — the validate bridge now also accepts 'deepgram', which is NOT a
+ *  provider id. Deriving AiProviderId straight from it (as this line used to)
+ *  silently widened the type that PROVIDER_OPTIONS and PROVIDER_SHORT_LABEL are
+ *  built from, i.e. it would have offered Deepgram in the "default text AI
+ *  provider" picker — the one outcome the whole `validateAs` split exists to
+ *  prevent. The compiler caught it; the subtraction below states the invariant
+ *  instead, and `deepgram-is-not-a-provider.test.ts` pins the half TypeScript
+ *  cannot see (that 'deepgram' really is absent from PROVIDER_REGISTRY — if it
+ *  ever joined, this Exclude would quietly remove a real provider). */
+type AiValidateTarget = Parameters<typeof window.api.aiKeys.validate>[0]
+type AiProviderId = Exclude<AiValidateTarget, 'deepgram'>
 
 import { ModelLogo, type ModelBrand, type ProviderMark } from '@renderer/components/ModelLogo'
 
@@ -25,9 +35,16 @@ export interface KeyCardConfig {
   getKeyUrl: string
   getKeyLabel: string
   placeholder: string
-  /** Set for every text-AI provider — Deepgram has no "Test key" flow (it's
-   *  transcription, not text completion — a separate, untouched system). */
+  /** Set for every text-AI provider. Also what PROVIDER_OPTIONS is built
+   *  from, so it means "selectable as the default text AI provider" — which
+   *  is why Deepgram must never have one. */
   providerId?: AiProviderId
+  /** BUG-146 — what "Test key" probes, when that is not the provider id.
+   *  Deepgram is the only card that needs this: it HAS a real check (see
+   *  main/deepgram-key.ts) but must stay out of `providerId` and therefore out
+   *  of the default-provider picker. Absent everywhere else, where the provider
+   *  id already names the thing to check. */
+  validateAs?: 'deepgram'
   /** Data-retention posture (M20 hard invariant) — omitted only for
    *  Deepgram, which isn't one of the model-picker's text-AI providers. */
   retention?: { posture: RetentionPosture; url: string }
@@ -93,7 +110,11 @@ const KEYS: KeyCardConfig[] = [
     blurb: 'Turns your voice into text in real time during a call.',
     getKeyUrl: 'https://console.deepgram.com/',
     getKeyLabel: 'Get a free Deepgram key',
-    placeholder: 'Paste your Deepgram API key'
+    placeholder: 'Paste your Deepgram API key',
+    // BUG-146 — the app's most consequential credential, and until now the
+    // only one with no way to check it. NOT `providerId`: that would enrol
+    // Deepgram in the default-text-AI-provider picker it can never serve.
+    validateAs: 'deepgram'
   },
   {
     name: 'ANTHROPIC_API_KEY',
@@ -256,13 +277,29 @@ const KEYS: KeyCardConfig[] = [
   }
 ]
 
-type KeyStatusDot = 'connected' | 'no-key' | 'invalid' | 'rate-limited'
+type KeyStatusDot = 'connected' | 'no-key' | 'invalid' | 'rate-limited' | 'unchecked'
 
-/** Session-local: derived from the last "Test key" result plus whether a
- *  key is saved at all. There's no persisted "this key is currently
- *  rejected" state — a saved-but-now-invalid key just shows "Connected"
- *  until the next Test click or a real AI call fails, same limitation M16
- *  already had. */
+/**
+ * Session-local: the last verdict this session produced for this card, from
+ * either "Test key" or the save's own probe (they share one mechanism in main
+ * — see probeKey in ai-keys.ts), plus whether a key is saved at all.
+ *
+ * BUG-146 — 'unchecked' REPLACED the old fall-through to 'connected'.
+ *
+ * The comment that stood here said a saved-but-now-invalid key "just shows
+ * Connected ... same limitation M16 already had". That sentence is cited in
+ * ai-keys-comment-drift.test.ts as instance #2 of this repo's comment drift:
+ * honest when written, then the hiding place for the bug the founder found by
+ * typing `junk` into a card. The limitation it described is now gone rather
+ * than re-documented.
+ *
+ * A stored key with no verdict this session — the state EVERY card is in on a
+ * fresh launch, because verdicts are not persisted — now reads "Not checked"
+ * instead of "Connected". That is a downgrade in reassurance and an upgrade in
+ * truth: presence was never health, and "Connected" is the word that makes
+ * someone stop looking for the problem. "Not checked" is one click from an
+ * answer, and the click is right there.
+ */
 // Exported for `api-key-status-dot.test.ts`. This repo cannot assert on
 // component render output (BUG-140), so the mapping that decides whether a card
 // says "Connected" or "Key invalid" is tested as the pure function it is — and
@@ -272,24 +309,30 @@ export function deriveStatusDot(
   status: AiKeyStatus | undefined,
   testResult: { ok: boolean; message: string } | null
 ): KeyStatusDot {
-  if (testResult && !testResult.ok) {
+  if (testResult) {
+    if (testResult.ok) return 'connected'
     return /rate.?limit/i.test(testResult.message) ? 'rate-limited' : 'invalid'
   }
-  return status?.configured ? 'connected' : 'no-key'
+  return status?.configured ? 'unchecked' : 'no-key'
 }
 
 const STATUS_DOT_CLASS: Record<KeyStatusDot, string> = {
   connected: 'bg-positive',
   'no-key': 'bg-line',
   invalid: 'bg-danger',
-  'rate-limited': 'bg-warning'
+  'rate-limited': 'bg-warning',
+  // Deliberately NOT bg-line: "no key" and "key we haven't checked" are
+  // different states and must not render identically. bg-muted is the same
+  // neutral dot LiveCallPill already uses for an idle-but-present state.
+  unchecked: 'bg-muted'
 }
 
 export const STATUS_DOT_LABEL: Record<KeyStatusDot, string> = {
   connected: 'Connected',
   'no-key': 'No key',
   invalid: 'Key invalid',
-  'rate-limited': 'Rate limited'
+  'rate-limited': 'Rate limited',
+  unchecked: 'Not checked'
 }
 
 /** Reused by the onboarding flow's ApiKey step (single-card, Deepgram-only)
@@ -428,13 +471,23 @@ export function KeyCard({
         // The save now carries the same verdict the "Test key" button produces,
         // so it is fed into the SAME state that button uses. One display path,
         // one meaning, and the provider's own words rather than a generic line.
+        //
+        // BUG-146 — the SUCCESS case is now recorded too. It used to set null,
+        // which meant "no verdict" and fell through to presence; with presence
+        // no longer standing in for health, discarding a successful check would
+        // show "Not checked" one line under "Saved". Three states, three
+        // values: checked-good, checked-bad, and `undefined` = nothing could
+        // check it (CLOUDFLARE_ACCOUNT_ID), which stays null and reads
+        // "Not checked" honestly.
         setTestResult(
-          res.keyValidated === false
-            ? {
-                ok: false,
-                message: res.validationReason ?? "This key didn't answer when we checked it."
-              }
-            : null
+          res.keyValidated === true
+            ? { ok: true, message: 'Key works.' }
+            : res.keyValidated === false
+              ? {
+                  ok: false,
+                  message: res.validationReason ?? "This key didn't answer when we checked it."
+                }
+              : null
         )
         onChanged()
         clearTimeout(savedTimeout.current)
@@ -460,12 +513,19 @@ export function KeyCard({
     }
   }
 
+  // BUG-146 — what this card can have checked. Deepgram carries `validateAs`
+  // because it has a real probe but deliberately no provider id; every other
+  // card is named by its provider id. Derived rather than a second hand-kept
+  // field, so the two cannot drift the way AI_KEY_NAMES once drifted from its
+  // own union.
+  const testTarget = config.validateAs ?? config.providerId
+
   const testKey = async (): Promise<void> => {
-    if (!config.providerId || !value.trim() || testing) return
+    if (!testTarget || !value.trim() || testing) return
     setTesting(true)
     setTestResult(null)
     try {
-      const res = await window.api.aiKeys.validate(config.providerId, value.trim())
+      const res = await window.api.aiKeys.validate(testTarget, value.trim())
       setTestResult(
         res.ok ? { ok: true, message: 'Key works.' } : { ok: false, message: res.reason }
       )
@@ -490,7 +550,7 @@ export function KeyCard({
               placeholder. */}
           {config.brand && <ModelLogo brand={config.brand} size={18} />}
           <h3 className="text-sm font-medium">{config.title}</h3>
-          {config.providerId && (
+          {testTarget && (
             <span
               className="flex items-center gap-1.5 text-xs font-medium text-muted"
               title={STATUS_DOT_LABEL[statusDot]}
@@ -553,7 +613,7 @@ export function KeyCard({
             className="absolute right-1 top-1/2 -translate-y-1/2"
           />
         </div>
-        {config.providerId && (
+        {testTarget && (
           <button
             type="button"
             onClick={() => void testKey()}
