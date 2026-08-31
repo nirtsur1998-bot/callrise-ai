@@ -31,17 +31,6 @@ const ASSIGNABLE_PURPOSES: AIPurpose[] = [
   'assistant-chat'
 ]
 
-export function registerModelCatalog(): void {
-  // Bundled catalog only — instant, no network, used for the picker's first
-  // paint before the live check (below) resolves.
-  ipcMain.handle('aiCatalog:list', () => MODEL_CATALOG)
-
-  // Cross-checked against each configured provider's live /models endpoint.
-  // `forceRefresh` backs a manual "Refresh" action in Settings.
-  ipcMain.handle('aiCatalog:resolve', async (_event, forceRefresh: unknown) => {
-    return resolveCatalog({ forceRefresh: forceRefresh === true })
-  })
-
 /**
  * BUG-149 — derive the chain stored behind a user's primary pick.
  *
@@ -76,21 +65,74 @@ export function registerModelCatalog(): void {
  * rewrite a setting the user chose, which is exactly what BUG-148 was about.
  */
 function deriveChain(purpose: AIPurpose, pick: string): string[] {
-  const pickProvider = catalogEntry(pick)?.providerId
-  const entries = CANDIDATE_POOL[purpose]
-    .filter((id) => id !== pick)
-    .map((id) => catalogEntry(id))
-    .filter((e): e is NonNullable<typeof e> => Boolean(e) && !e!.knownStale)
+const pickProvider = catalogEntry(pick)?.providerId
+const entries = CANDIDATE_POOL[purpose]
+  .filter((id) => id !== pick)
+  .map((id) => catalogEntry(id))
+  .filter((e): e is NonNullable<typeof e> => Boolean(e) && !e!.knownStale)
 
-  const keyed = entries.filter((e) => providerHasCredentials(e.providerId))
-  const unkeyed = entries.filter((e) => !providerHasCredentials(e.providerId))
-  const ordered = [
-    ...keyed.filter((e) => e.providerId !== pickProvider),
-    ...keyed.filter((e) => e.providerId === pickProvider),
-    ...unkeyed
-  ]
-  return [pick, ...ordered.map((e) => e.id)]
+const keyed = entries.filter((e) => providerHasCredentials(e.providerId))
+const unkeyed = entries.filter((e) => !providerHasCredentials(e.providerId))
+const ordered = [
+  ...keyed.filter((e) => e.providerId !== pickProvider),
+  ...keyed.filter((e) => e.providerId === pickProvider),
+  ...unkeyed
+]
+return [pick, ...ordered.map((e) => e.id)]
 }
+
+/**
+ * BUG-149 follow-up — "tell me, don't fix it behind my back" (founder,
+ * 2026-08-31).
+ *
+ * BUG-149's fix is deliberately FUTURE-ONLY: stored chains are not migrated,
+ * and `deriveChain` reads credentials at ASSIGN time. Both were chosen so the
+ * app never silently rewrites a setting the user made. But "we will not touch
+ * it" and "we will not mention it" are different promises, and only the first
+ * was intended — leaving the second is just a silent gap where someone keeps a
+ * worse chain forever without ever being told a better one is available.
+ *
+ * So this reports, and changes nothing. Same shape as the demotion notice:
+ * visible, explains itself, acts only when the user says so.
+ *
+ * DELIBERATELY NARROW. It fires ONLY when a stored chain is single-provider AND
+ * re-deriving it now would cross providers. It does not fire for a cosmetic
+ * reordering, or for a chain that is already cross-provider, or for a purpose
+ * left on Automatic (nothing was assigned, so there is nothing to improve and
+ * the runtime already derives fresh every call). A nudge that fires when
+ * nothing meaningful changed is one people learn to dismiss.
+ */
+export function chainCouldCrossProviders(purpose: AIPurpose, chain: string[]): boolean {
+if (chain.length === 0) return false
+const providersOf = (ids: string[]): Set<string> =>
+  new Set(
+    ids
+      .map((id) => catalogEntry(id)?.providerId)
+      .filter((p): p is NonNullable<typeof p> => Boolean(p))
+  )
+
+// Already spread across providers — nothing to say.
+if (providersOf(chain).size > 1) return false
+
+// Compare only the prefix that SURVIVES the cap, because that prefix is the
+// whole of what ever runs. `chain` is already capped (sanitizeModelAssignments
+// caps on every load), so its length is the live budget.
+const derived = deriveChain(purpose, chain[0]).slice(0, chain.length)
+return providersOf(derived).size > 1
+}
+
+export function registerModelCatalog(): void {
+  // Bundled catalog only — instant, no network, used for the picker's first
+  // paint before the live check (below) resolves.
+  ipcMain.handle('aiCatalog:list', () => MODEL_CATALOG)
+
+  // Cross-checked against each configured provider's live /models endpoint.
+  // `forceRefresh` backs a manual "Refresh" action in Settings.
+  ipcMain.handle('aiCatalog:resolve', async (_event, forceRefresh: unknown) => {
+    return resolveCatalog({ forceRefresh: forceRefresh === true })
+  })
+
+
 
   // V1 chain-editing scope (see docs/ai-providers.md's M20 addendum): the
   // user picks ONE primary model per job, and the chain is auto-derived as
@@ -110,6 +152,17 @@ function deriveChain(purpose: AIPurpose, pick: string): string[] {
     }
     const p = purpose as AIPurpose
     return saveAppSettings({ aiModelAssignments: { [p]: { chain: deriveChain(p, catalogId) } } })
+  })
+
+  // BUG-149 follow-up — which assigned jobs would gain a second provider if
+  // they were reassigned right now. Read-only; the UI offers a button that
+  // calls assignPrimaryModel with the SAME primary, so the user's actual pick
+  // is never changed by taking the suggestion.
+  ipcMain.handle('aiCatalog:chainsCouldImprove', () => {
+    const assignments = loadAppSettings().aiModelAssignments
+    return ASSIGNABLE_PURPOSES.filter((p) =>
+      chainCouldCrossProviders(p, assignments[p]?.chain ?? [])
+    )
   })
 
   // The counterpart to assignPrimaryModel — clears a job back to an empty
