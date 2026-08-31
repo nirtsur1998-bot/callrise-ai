@@ -283,3 +283,149 @@ to verify it must not become a place my data ends up.* Practically:
 renders, and a locator run too early reports **"expected exactly 1 match, found
 0"** — which reads exactly like a missing feature rather than an early call. A
 driver that can report a shipped control as absent is worse than a slow one.
+
+---
+
+# THE SECOND RULE — added 2026-08-31, M32 Stage 2
+
+> **Assert on the property that would be WRONG if the feature were broken, not
+> on the mechanism that is supposed to produce it.**
+
+This is the third time in one milestone that a check passed by asserting on a
+proxy for the thing instead of on the thing. The founder named it after the
+worst instance, and it is worth stating as bluntly as it happened.
+
+## The theme check that reported two identical screenshots as a light/dark pass
+
+The claim made to the founder was: *"verified in both themes."* What actually
+happened, in three stacked errors:
+
+1. **There is no `dark` class.** `useTheme.ts` does
+   `classList.toggle('light', resolved === 'light')` — dark is the *absence* of
+   a class. The harness added a `dark` class, which styled nothing at all.
+2. **The substring test for `'light'` matched `first-light`** — the
+   design-preview class — so a dark app was read as being in light mode.
+3. **The assertion then passed on the junk class the harness had just added
+   itself.** `before !== after` was true, because the harness had mutated
+   `className` and then compared `className`.
+
+Result: two byte-identical dark screenshots, reported as a two-theme pass. The
+class is a **proxy** for the theme. The rendered colour **is** the theme:
+
+```js
+const bg = () => ev('getComputedStyle(document.body).backgroundColor')
+// rgb(13, 12, 10) -> rgb(255, 254, 252). If that number does not move,
+// nothing moved, whatever the class list says.
+```
+
+The same rule catches the other two instances from this milestone: a
+`/light/.test(rootClass)` check that passed because the app was *already* light
+(no control), and a demotion assertion that measured demotion and inferred
+reordering. In all three the mechanism was inspected and the outcome was not.
+
+## Corollaries, each paid for on 2026-08-31
+
+### Hash every screenshot pair. Always.
+
+An opaque probe host at `z-index: 99999` sat on top of the very dialog it was
+meant to display. `innerText` read the modal **perfectly** — every row, every
+button — while the modal was invisible to any human looking at the window. Two
+screenshots came out byte-identical at 7128 bytes: a flat sheet.
+
+**A text assertion can confidently describe something no user can see.**
+Comparing the screenshot *hashes* is what caught it. `sha256sum a.png b.png` —
+if two shots that should differ are identical, stop and look before writing a
+word about either.
+
+### Anything a harness creates, it must verify it REMOVED
+
+`Modal` renders through a portal to `document.body`. Removing the probe's host
+`div` therefore removed nothing: each run left its dialog mounted, and three
+runs stacked three dialogs. The row count went **15 → 45** while every
+structural assertion kept passing — on the pile.
+
+Same shape as module-global state leaking between tests. Removing is not
+cleaning up; **verifying the removal** is:
+
+```js
+// unmount the root (a portal outlives its host div), then PROVE it is gone
+if (window.__root) { window.__root.unmount(); window.__root = null }
+host.remove()
+// ...and assert no stray artefacts remain, or the next run measures a pile
+if (strayAnswerButtons > 0) throw new Error('cleanup left something behind')
+```
+
+### A fallback that widens what counts as success can launder a failure
+
+Because the modal portals away, reading `host.innerText` gave **0 chars for a
+dialog that had rendered perfectly**. The fix — fall back to `document.body` —
+also made a genuinely *blank* host pass, because the login screen underneath is
+~90 chars and cleared the 60-char threshold.
+
+**A length check cannot tell "my component" from "whatever was already on
+screen."** Capture a baseline *before* the render and require the page to have
+GAINED content.
+
+### "It is in the DOM" is not "the user can click it"
+
+The backfill's structural check reported *"every row has all five answer
+buttons"* — true, and true of rows **no user could reach**. The dialog was
+1261px tall in an 816px viewport at `top: -223`, with nothing scrollable
+anywhere in the ancestor chain: **3 of 15 rows were physically unclickable.**
+
+For anything the user must operate, measure operability, not presence:
+
+```js
+el.scrollIntoView({ block: 'center' })
+const r = el.getBoundingClientRect()
+const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+const clickable = hit === el || el.contains(hit)   // NOT just "el exists"
+```
+
+Note the second half: `elementFromPoint` is what catches the element being
+*covered*. A bounding box inside the viewport is still not a click that lands.
+
+---
+
+# TECHNIQUE — verifying a visual change when auth blocks the app
+
+**2026-08-31.** The founder was away, the signed-in app was unreachable, and a
+sandbox profile (a copy of the data with no credentials) stops at the login
+screen. Seeding a session meant copying the profile's encryption key, which the
+permission layer correctly refused.
+
+The app is running **Vite in dev mode**, which serves every source module on
+demand. So the components can be imported into the live page and mounted
+directly — no session required:
+
+```js
+// Bare specifiers do not resolve in a page context, and the ?v= hash goes
+// stale. Discover the dep URLs from the entry module the app already loaded.
+const entry = await (await fetch('/src/main.tsx')).text()
+const findUrl = (needle) => {
+  const i = entry.indexOf(needle)
+  const q = String.fromCharCode(34)
+  return entry.slice(entry.lastIndexOf(q, i) + 1, entry.indexOf(q, i))
+}
+const React = (await import(findUrl('/deps/react.js'))).default        // CJS interop
+const { createRoot } = (await import(findUrl('/deps/react-dom_client.js'))).default
+const C = await import('/src/features/deals/OutcomeInsightCard.tsx')
+createRoot(host).render(React.createElement(C.OutcomeInsightCard, props))
+```
+
+Three things to know before reaching for it:
+
+- **The renderer's Vite root is `src/renderer`**, so the module path is
+  `/src/features/…`, NOT `/src/renderer/src/features/…`. The wrong path returns
+  **200 with index.html**, not a 404 — so `curl -o /dev/null -w %{http_code}`
+  says nothing. Look at the first bytes of the body.
+- **Main-process IPC works.** `window.api.*` is live, so a component that
+  fetches its own data renders with REAL data. The backfill dialog showed the
+  founder's actual 15 rows this way.
+- **It is not an end-to-end pass, and must not be reported as one.** The
+  component is mounted directly rather than reached by navigating the app, so
+  it says nothing about whether the parent view places it, or about what a
+  click does. Pair it with a main-process test for the write path.
+
+This found a real defect on its first outing — see `docs/M32-stage2-outcome-tracking.md`,
+"THE DEFECT ONLY RENDERING FOUND". `render-surfaces.mjs` is the worked example.

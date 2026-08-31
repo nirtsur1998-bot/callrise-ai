@@ -233,6 +233,14 @@ forever.
 
 The founder asked, before spending an evening on it, what the realistic number is. Measured:
 
+> **CORRECTED 2026-08-31, after rendering the real list: the ceiling is 15, not 19.**
+> 19 counted contacts with at least one coached call. The backfill also excludes
+> contacts who already have a deal, which removes four. Every figure below was
+> derived from 19 and is therefore optimistic by about a fifth: the realistic
+> range of genuine, rememberable deals scales from **7–11 down to roughly 6–9**.
+> The conclusion does not change — it gets further from the bar, not closer.
+> The flow itself reads its count from state and says 15 without being told.
+
 Of the **19** contacts with at least one coached call — the ceiling on deals backfillable
 from existing history — by how many calls exist with them in total:
 

@@ -18,9 +18,16 @@ actually required scale with the win rate:
 | 60% | 20 |
 | 70% | 27 |
 
-Today: **4 won, 0 lost.** The backfill covers ~19 contacts. Even a perfect
-backfill will not reach the bar on its own — that was measured before it was
-built, and the counter says so on screen rather than implying an arrival date.
+Today: **4 won, 0 lost.** The backfill covers **15 contacts** — corrected from
+the 19 in the scope doc after rendering the real list: 19 counted contacts with
+at least one coached call, and the backfill excludes contacts who already have
+a deal. Even a perfect backfill will not reach the bar on its own — that was
+measured before it was built, and the counter says so on screen rather than
+implying an arrival date.
+
+The flow reads its count from state (`{answered} of {total}`), so it says 15
+without anyone maintaining a number. This doc and the scope doc are the copies
+that had to be corrected by hand — which is the usual direction of that bug.
 
 `MIN_PER_ARM = 8` is labelled in the source as a **judgment, not a
 derivation.** Pretending otherwise is the exact dishonesty this stage guards
@@ -91,8 +98,9 @@ keeps being asked.
 
 ## Designed for the tenth row, not the first
 
-19 rows in one sitting means every unit of friction is multiplied by 19. Each
-rule below is a thing the obvious implementation gets wrong:
+15 rows in one sitting (the founder's framing was 19; the real list is 15)
+means every unit of friction is multiplied by 15. Each rule below is a thing
+the obvious implementation gets wrong:
 
 1. **One click per row.** Buttons on the row. No dropdown (two clicks), no
    dialog (three plus a dismiss), no save step.

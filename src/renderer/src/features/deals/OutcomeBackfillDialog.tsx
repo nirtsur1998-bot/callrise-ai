@@ -186,8 +186,30 @@ export function OutcomeBackfillDialog({
   const pct = total > 0 ? Math.round((answered / total) * 100) : 0
 
   return (
-    <Modal onClose={onClose} title="Record past outcomes" size="xl">
-      <div className="space-y-4">
+    // ── BOUNDED HEIGHT, INTERNAL SCROLL ────────────────────────────────
+    //
+    // MEASURED IN THE RUNNING APP, not reasoned about: with 15 rows the panel
+    // was 1261px tall in an 816px viewport, positioned at top:-223 — Modal
+    // centres a flex item with `overflow-hidden` and no max-height, so it
+    // overflowed in BOTH directions with nothing scrollable anywhere in the
+    // ancestor chain. **Three of fifteen rows were physically unclickable.**
+    //
+    // The structural check that ran just before this measurement reported
+    // "every row has all five answer buttons" — true, and about rows no user
+    // could reach. A DOM assertion describes what is in the document, not what
+    // is operable, and the two are only the same until a layout bug.
+    //
+    // So: cap the panel, and scroll the LIST rather than the dialog. That also
+    // gives the tenth row what it needs — the progress bar stays pinned
+    // instead of scrolling away, so "how far along am I?" never costs a scroll
+    // up and back.
+    <Modal
+      onClose={onClose}
+      title="Record past outcomes"
+      size="2xl"
+      className="flex max-h-[85vh] flex-col"
+    >
+      <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
         <p className="max-w-3xl text-[13px] leading-relaxed text-muted">
           Every contact you&apos;ve had a coached call with is listed below —{' '}
           <strong className="font-medium text-ink">all of them, not a selection</strong>. That is
@@ -199,10 +221,11 @@ export function OutcomeBackfillDialog({
           — a guess would be worse than a blank.
         </p>
 
-        {/* Progress, pinned above the list and never inside it: the founder
-            should be able to see how far along they are without scrolling to
-            find out, and it must not shift as rows are answered. */}
-        <div className="rounded-xl border border-line-soft bg-surface px-3.5 py-3">
+        {/* Progress, pinned ABOVE the scroll region — not merely above the
+            list in source order. Before the panel was capped this scrolled
+            away with everything else, so at row ten "how far along am I?" cost
+            a scroll up and a scroll back. Fifteen times. */}
+        <div className="shrink-0 rounded-xl border border-line-soft bg-surface px-3.5 py-3">
           <div className="flex items-baseline justify-between">
             <span className="text-[13px] font-medium text-ink">
               {answered} of {total} answered
@@ -229,7 +252,10 @@ export function OutcomeBackfillDialog({
             deal.
           </p>
         ) : (
-          <ul className="space-y-1.5">
+          // -my-1 px-1: the scroll container clips focus rings at its edges
+          // otherwise, so a keyboard user cannot see which button is focused
+          // on the first and last visible rows.
+          <ul className="-mx-1 min-h-0 flex-1 space-y-1.5 overflow-y-auto px-1">
             {rows.map((row) => (
               <BackfillRowItem
                 key={row.contactId}
@@ -242,7 +268,9 @@ export function OutcomeBackfillDialog({
           </ul>
         )}
 
-        <div className="flex justify-end pt-1">
+        {/* Stays visible at the bottom rather than living past fifteen rows
+            of scroll — closing must never require scrolling to the end. */}
+        <div className="flex shrink-0 justify-end border-t border-line-soft pt-3">
           <Button variant="secondary" onClick={onClose}>
             Done
           </Button>
@@ -306,7 +334,7 @@ function BackfillRowItem({
                 title={ANSWER_HINT[value]}
                 aria-pressed={active}
                 className={cn(
-                  'rounded-md border px-2 py-1 text-[12px] font-medium transition-colors',
+                  'rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                   active
                     ? ANSWER_ACTIVE[value]
                     : 'border-line text-muted hover:border-line-strong hover:text-ink'
