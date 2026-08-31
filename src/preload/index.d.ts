@@ -1341,7 +1341,12 @@ export interface ContactIntelligenceApi {
   detectName: (callId: string) => Promise<{ ok: boolean; jobId?: string }>
 }
 
-export type DealStageKind = 'open' | 'won' | 'lost'
+/** THIRD independent declaration of this union (main/deal-stages.ts and
+ *  renderer/features/deals/types.ts are the others) — the preload bridge is
+ *  ambient and cannot import either. `deal-stage-kind-lockstep.test.ts` reads
+ *  all three files and fails if they disagree; adding 'went-quiet' to only one
+ *  of them left the typecheck fully green on 2026-08-31. */
+export type DealStageKind = 'open' | 'won' | 'lost' | 'went-quiet'
 
 export interface DealStage {
   id: string

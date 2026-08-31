@@ -2,7 +2,20 @@
 // (see src/preload/index.d.ts); kept local so the feature is self-contained,
 // matching the contacts/tasks convention.
 
-export type DealStageKind = 'open' | 'won' | 'lost'
+/**
+ * A SECOND, INDEPENDENT DECLARATION of main's `DealStageKind`
+ * (main/deal-stages.ts) — the renderer cannot import from main.
+ *
+ * That independence is exactly principle 8's shape, and it bit on 2026-08-31:
+ * adding 'went-quiet' to main's union left this one untouched and **the whole
+ * typecheck stayed green**, because nothing forces the two to meet. The
+ * renderer simply kept describing a world with three kinds while main had four.
+ *
+ * `deal-stage-kind-lockstep.test.ts` now reads both files and fails if they
+ * disagree, the same way provider-lockstep pins the preload bridge's inline
+ * unions. Keep them identical.
+ */
+export type DealStageKind = 'open' | 'won' | 'lost' | 'went-quiet'
 
 export interface DealStage {
   id: string

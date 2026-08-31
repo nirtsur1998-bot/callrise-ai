@@ -10,7 +10,33 @@ import { writeJsonAtomicSync } from './atomic-write'
 import { listDealsUsingStage } from './deals-fs'
 import { scheduleBackup } from './backup'
 
-export type DealStageKind = 'open' | 'won' | 'lost'
+/**
+ * M32 Stage 2 — 'went-quiet' is NEW, and it is a distinct OUTCOME, not a
+ * flavour of 'lost'.
+ *
+ * The founder's words: *"these deals don't end, they fade."* Before this, a
+ * deal that simply stopped answering had to be filed under Lost, which merges
+ * two different things — "they decided no" and "it evaporated" — into one
+ * bucket. That merge would have quietly poisoned every later comparison,
+ * because the behaviours that precede a refusal and the behaviours that precede
+ * a fade are not the same behaviours, and the whole point of Stage 2 is to
+ * learn which is which.
+ *
+ * Recorded now even though nothing analyses it yet, precisely BECAUSE nothing
+ * analyses it yet: the data has to be collected correctly before it is worth
+ * collecting at all, and a distinction not captured today cannot be recovered
+ * later from deals that have already closed.
+ */
+export type DealStageKind = 'open' | 'won' | 'lost' | 'went-quiet'
+
+/** Every kind that means the deal is CLOSED — i.e. it has an outcome. Derived
+ *  once here so a fifth kind cannot be added while some caller keeps its own
+ *  hand-written list of "the closed ones" (the AI_KEY_NAMES lesson). */
+export const CLOSED_STAGE_KINDS: readonly DealStageKind[] = ['won', 'lost', 'went-quiet']
+
+export function isClosedKind(kind: DealStageKind): boolean {
+  return CLOSED_STAGE_KINDS.includes(kind)
+}
 
 export interface DealStage {
   id: string
@@ -33,7 +59,11 @@ const DEFAULT_STAGES: DealStage[] = [
   { id: 'proposal', label: 'Proposal', kind: 'open' },
   { id: 'negotiating', label: 'Negotiating', kind: 'open' },
   { id: 'won', label: 'Won', kind: 'won' },
-  { id: 'lost', label: 'Lost', kind: 'lost' }
+  { id: 'lost', label: 'Lost', kind: 'lost' },
+  // Founder's wording, chosen over "No decision": *"that's what actually
+  // happens and it's what I'd say out loud. 'No decision' sounds like a formal
+  // outcome; these deals don't end, they fade."*
+  { id: 'went-quiet', label: 'Went quiet', kind: 'went-quiet' }
 ]
 
 function stagesPath(): string {
@@ -45,7 +75,10 @@ function dealsDir(): string {
 }
 
 function sanitizeKind(value: unknown): DealStageKind {
-  return value === 'won' || value === 'lost' ? value : 'open'
+  // Unknown/absent falls back to 'open', NOT to a closed kind. A stage file
+  // written by a NEWER build (one that knows a kind this build does not) must
+  // degrade to "still in play" rather than silently marking live deals closed.
+  return value === 'won' || value === 'lost' || value === 'went-quiet' ? value : 'open'
 }
 
 function sanitizeLabel(value: unknown): string {

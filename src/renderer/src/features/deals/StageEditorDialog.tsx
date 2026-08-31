@@ -6,8 +6,16 @@ import { IconButton } from '@renderer/components/IconButton'
 import { fieldClass } from '@renderer/components/field'
 import type { DealStage, DealStageKind } from './types'
 
-const KIND_LABEL: Record<DealStageKind, string> = { open: 'Open', won: 'Won', lost: 'Lost' }
-const KIND_ORDER: DealStageKind[] = ['open', 'won', 'lost']
+const KIND_LABEL: Record<DealStageKind, string> = {
+  open: 'Open',
+  won: 'Won',
+  lost: 'Lost',
+  'went-quiet': 'Went quiet'
+}
+// Exhaustive by construction: a Record<DealStageKind, _> above fails the build
+// when a kind is added, and this list is derived from it rather than being a
+// second hand-kept copy that would silently omit the new one.
+const KIND_ORDER: DealStageKind[] = Object.keys(KIND_LABEL) as DealStageKind[]
 
 interface StageEditorDialogProps {
   stages: DealStage[]
