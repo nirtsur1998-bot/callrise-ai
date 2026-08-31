@@ -56,6 +56,12 @@ const { completeWithFallback, resolveConfiguredChain, AllModelsExhaustedError } 
 )
 const { resetCooldownsForTests } = await import('../model-cooldown')
 const { resetPacingForTests } = await import('../model-pacing')
+// BUG-148 — provider demotion is module-global like cooldowns and pacing, so it
+// leaks between tests the same way. Without this, a file that drives two auth
+// failures demotes the provider partway through and every LATER test in it
+// silently exercises a REORDERED chain — passing, while no longer covering the
+// path it names. That was measured here, not assumed.
+const { resetDemotionsForTests } = await import('../provider-demotion')
 
 const PURPOSES = [
   'coaching-cue', 'summary', 'scorecard', 'tasks', 'other', 'prep-brief',
@@ -78,6 +84,7 @@ beforeEach(() => {
   // for every purpose, so that is correct at runtime) — which means one
   // test's 429s would otherwise silently suppress the next test's attempts.
   resetCooldownsForTests()
+  resetDemotionsForTests()
   resetPacingForTests()
   activeProviderId.current = 'groq'
   vi.mocked(loadAppSettings).mockReturnValue(allEmpty())

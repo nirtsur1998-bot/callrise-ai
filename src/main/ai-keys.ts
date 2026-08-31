@@ -16,6 +16,7 @@ import { buildProviderForValidation, getAIProvider, PROVIDER_REGISTRY, type AIPr
 import type { AIValidateKeyResult } from './ai/types'
 import { loadAppSettings, saveAppSettings } from './app-settings'
 import { validateDeepgramKey } from './deepgram-key'
+import { clearDemotion, demotionState } from './ai/provider-demotion'
 
 // M20 added the six new text-AI provider keys (GROQ_API_KEY through
 // MISTRAL_API_KEY) alongside M16's original ANTHROPIC_API_KEY/OPENAI_API_KEY
@@ -297,6 +298,17 @@ async function validateAndMaybeAutoSelect(
   const validationReason = probe.ok ? undefined : probe.reason
   const providerId = providerIdForKeyName(name)
 
+  // BUG-148 — a key that just proved it works cancels any demotion against
+  // its provider immediately. Without this, the fix would punish exactly the
+  // person doing the right thing: you paste the corrected key, the card goes
+  // green, and the chain still refuses to lead with it until a background job
+  // happens to succeed on it or four hours elapse.
+  //
+  // Deliberately keyed on the VALIDATED result, not on the save. A save alone
+  // is what BUG-143 was about — presence is not health, and a demotion cleared
+  // by presence would be cleared by pasting the same rejected key again.
+  if (providerId && keyValidated) clearDemotion(providerId)
+
   // Auto-selection is now conditional on BOTH: nothing usable is selected, and
   // the key we would switch to actually works.
   const current = loadAppSettings().aiProvider
@@ -354,11 +366,26 @@ export function registerAiKeys(): void {
     // of these strings, and the one a new key would silently be missing from.
     const status = Object.fromEntries(
       AI_KEY_NAMES.map((n) => [n, { configured: false, hint: null }])
-    ) as Record<AiKeyName, { configured: boolean; hint: string | null }>
+    ) as Record<
+      AiKeyName,
+      { configured: boolean; hint: string | null; demotedSince?: number }
+    >
+    const now = Date.now()
     for (const name of KEY_NAMES) {
       status[name].configured = isConfigured(name)
       const raw = process.env[name]
       if (raw) status[name].hint = maskedHint(raw)
+      // BUG-148 — "visibly, never silently" (founder, 2026-08-31). A demotion
+      // reorders attempts behind the user's back unless something says so, and
+      // an automatic change to user-visible behaviour that is never announced
+      // is taxonomy species 44. Carried on the status the card already fetches
+      // rather than a new channel, so it cannot go stale relative to the rest
+      // of the card.
+      const providerId = providerIdForKeyName(name)
+      if (providerId) {
+        const demotion = demotionState(providerId, now)
+        if (demotion?.demoted) status[name].demotedSince = demotion.demotedAt ?? undefined
+      }
     }
     return status
   })

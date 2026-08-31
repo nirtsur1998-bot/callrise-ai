@@ -27,6 +27,7 @@ import {
   markStructurallyBroken,
   soonestExpiry
 } from './model-cooldown'
+import { isDemoted, noteAuthRejection, clearDemotion } from './provider-demotion'
 import { isPacedFor, pacedUntilFor, PACING_GAP_MS } from './model-pacing'
 import { exhaustionReport } from './exhaustion-report'
 import { markUsed } from './model-pacing'
@@ -298,8 +299,38 @@ const LEGACY_TAIL_MAX: Record<AIPurpose, number> = {
  *  The key check must stay read-fresh from process.env on every resolution —
  *  ai-keys.ts sets and deletes those vars mid-session. */
 function bundledSteps(purpose: AIPurpose): ResolvedStep[] {
+  return stepsFromIds(DEFAULT_CATALOG_CHAIN[purpose])
+}
+
+/**
+ * BUG-148 decision 5B — the pool a demoted live purpose may substitute FROM.
+ *
+ * `DEFAULT_CATALOG_CHAIN` caps the two live purposes to `SPEED_CHAIN.slice(0,
+ * 2)`, and that cap answers "how many attempts may this purpose make" — a
+ * different question from "which models are eligible". Substitution returns
+ * exactly ONE step, so the length cap is already satisfied; restricting the
+ * POOL to the capped prefix as well would have made 5B a no-op for the most
+ * common configuration in this product.
+ *
+ * Concretely, and this was caught by its own test rather than reasoned about:
+ * SPEED_CHAIN's first two entries are BOTH Groq, so a user whose default
+ * provider is Groq — the free tier this app steers people to — had no
+ * non-Groq candidate inside the cap, and a demoted Groq default fell straight
+ * back to itself. The fix would have looked applied and done nothing.
+ *
+ * The uncapped chain is still the same LANE (SPEED_CHAIN is the fast lane end
+ * to end), so a substitute is never a slower class of model than the capped
+ * prefix would have offered.
+ */
+const SUBSTITUTE_POOL: Record<AIPurpose, string[]> = {
+  ...DEFAULT_CATALOG_CHAIN,
+  'coaching-cue': SPEED_CHAIN,
+  'deal-tier1': SPEED_CHAIN
+}
+
+function stepsFromIds(ids: string[]): ResolvedStep[] {
   const steps: ResolvedStep[] = []
-  for (const id of DEFAULT_CATALOG_CHAIN[purpose]) {
+  for (const id of ids) {
     const entry = catalogEntry(id)
     if (!entry) continue
     if (entry.knownStale) continue
@@ -376,9 +407,41 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
   if (!legacy) return bundledSteps(purpose)
 
   const tailMax = LEGACY_TAIL_MAX[purpose]
+
+  // BUG-148 — has this provider been rejecting our credential?
+  // Read once, here, so the two branches below cannot disagree about it.
+  const legacyDemoted = isDemoted(legacy.providerId, Date.now())
+
   // Computed before bundledSteps() so the live paths do no extra work at all:
   // coaching-cue re-resolves this every few seconds mid-call.
-  if (tailMax === 0) return [legacy]
+  if (tailMax === 0) {
+    // BUG-148 decision 5B (founder, 2026-08-31). The two live purposes
+    // (coaching-cue, deal-tier1) have tailMax 0, so their chain is EXACTLY
+    // [legacy] — there is nowhere to demote TO, and reordering alone would be
+    // a no-op on the two purposes this bug costs the most.
+    //
+    // So a demoted legacy step is REPLACED rather than reordered, and the
+    // chain stays exactly one step long. The founder's constraint was "one
+    // extra step, not an open tail"; this spends none — the live budget is
+    // unchanged, only WHICH single attempt it buys.
+    //
+    // Latency is not being spent either, and that was checked rather than
+    // assumed: DEFAULT_CATALOG_CHAIN for both purposes is SPEED_CHAIN, the
+    // explicitly fast lane, while the legacy step is whatever the user's
+    // "default text AI provider" happens to be and is lane-BLIND — it can
+    // easily be a large quality model. The substitute is, if anything, faster.
+    //
+    // "Reorder, never remove" still holds where it matters: demotion is
+    // GLOBAL per provider, and the durable purposes (tailMax 3) keep the
+    // demoted step at the back of their chains, so it is still attempted and
+    // can still earn its own restoration. It is not orphaned by being skipped
+    // on a 6-second live path.
+    if (!legacyDemoted) return [legacy]
+    const substitute = stepsFromIds(SUBSTITUTE_POOL[purpose]).filter(
+      (s) => s.providerId !== legacy.providerId
+    )[0]
+    return substitute ? [{ ...substitute, fromImplicitTail: true }] : [legacy]
+  }
 
   // Never re-issue the identical request as a later "fallback". The dedupe in
   // completeWithFallback works on catalogId, and a synthetic `legacy:<id>` can
@@ -404,6 +467,20 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
   const tail = [...others, ...same]
     .slice(0, tailMax)
     .map((s) => ({ ...s, fromImplicitTail: true }))
+
+  // BUG-148 — a provider that keeps rejecting our credential gives up its
+  // place at the FRONT, and nothing else. Same steps, same length, same cost:
+  // only the order changes, so the worst case is exactly today's behaviour.
+  //
+  // It stays in the chain ON PURPOSE. Removing it is what creates the trap the
+  // founder named — "nothing ever retries a demoted provider" — because a step
+  // that is never attempted can never produce the success that would clear it.
+  // At the back it is still reached whenever everything ahead fails, which is
+  // exactly when we would want to try it anyway.
+  //
+  // If the tail is empty there is nothing to demote behind, and [legacy] is
+  // returned unchanged rather than an empty chain.
+  if (legacyDemoted && tail.length > 0) return [...tail, legacy]
   return [legacy, ...tail]
 }
 
@@ -1076,6 +1153,8 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   // already-doomed walk, layered on top of per-model cooldown, not replacing
   // it.
   const deadProviders = new Set<AIProviderId>()
+  // BUG-148 — de-duplicates auth rejections WITHIN this walk; see noteAuthRejection.
+  const authNotedThisWalk = new Set<AIProviderId>()
   const rateLimitCountByProvider = new Map<AIProviderId, number>()
 
   // BUG-059 — one hard wall-clock ceiling across the ENTIRE walk, including
@@ -1172,6 +1251,12 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
       const result = await completeWithSameModelRetry(provider, req, step.modelId, attemptSignal, purpose)
       // Proof the limit lifted — trust that over any earlier estimate.
       clearCooldown(step.catalogId, purpose)
+      // BUG-148 — and proof the credential works. A demoted provider is
+      // still ATTEMPTED (it moved to the back of the chain, it was not
+      // removed), so this line stays reachable for one, and reaching it is
+      // exactly the evidence that should restore it. That reachability is
+      // the whole reason demotion reorders instead of removing.
+      clearDemotion(step.providerId)
       // BUG-058 remainder — a success is real evidence this model's capacity
       // was just spent, exactly like a rate-limit failure below is; a
       // DIFFERENT durable purpose asking again in the next few seconds
@@ -1187,7 +1272,19 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
       const failureClass = err instanceof AIProviderError ? effectiveFailureClass(err) : 'transient'
       const resetsAt = err instanceof AIProviderError ? err.resetsAt : undefined
       lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail, failureClass, resetsAt }
-      if (reason === 'auth') deadProviders.add(step.providerId)
+      if (reason === 'auth') {
+        deadProviders.add(step.providerId)
+        // BUG-148 — the rejection is now REMEMBERED, not merely survived.
+        // authNotedThisWalk holds one walk to at most one rejection per
+        // provider: a walk can attempt the same key twice (a legacy step plus
+        // a bundled entry on the same provider), and counting those separately
+        // would demote on the strength of ONE call — the one-strike option
+        // that was deliberately not chosen.
+        if (!authNotedThisWalk.has(step.providerId)) {
+          authNotedThisWalk.add(step.providerId)
+          noteAuthRejection(step.providerId, Date.now())
+        }
+      }
       // BUG-058 — honour the provider's own "come back in N seconds" so the
       // next call skips this model instead of re-burning it. Without this,
       // every subsequent call restarted at position 1 and hit the same 429.
@@ -1539,6 +1636,8 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
     // this same walk (noteRateLimitForDeadProviders, above) — one rate-
     // limited model still proves nothing about its neighbors on its own.
     const deadProviders = new Set<AIProviderId>()
+    // BUG-148 — de-duplicates auth rejections WITHIN this walk; see noteAuthRejection.
+    const authNotedThisWalk = new Set<AIProviderId>()
     const rateLimitCountByProvider = new Map<AIProviderId, number>()
 
     // M27 A1 — one hard wall-clock ceiling across the ENTIRE stream walk,
@@ -1668,6 +1767,12 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           }
           const usage = await streamResult.usage
           clearCooldown(step.catalogId, purpose)
+          // BUG-148 — the streaming walk restores a demoted provider on its
+          // own success too. Both walks record auth rejections, so both must
+          // be able to clear them; clearing on only one side would let a
+          // provider that streams fine stay demoted forever on the strength
+          // of a stale rejection.
+          clearDemotion(step.providerId)
           // BUG-058 remainder — same reasoning as completeWithFallback: mark
           // on the real outcome (success), never on a plain failure.
           markUsed(step.catalogId, Date.now(), tier)
@@ -1695,7 +1800,19 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
         const failureClass = err instanceof AIProviderError ? effectiveFailureClass(err) : 'transient'
         const resetsAt = err instanceof AIProviderError ? err.resetsAt : undefined
         lastAttempt = { reason: reason as AIProviderErrorCode, providerId: step.providerId, detail, failureClass, resetsAt }
-        if (reason === 'auth') deadProviders.add(step.providerId)
+        if (reason === 'auth') {
+          deadProviders.add(step.providerId)
+          // BUG-148 — the rejection is now REMEMBERED, not merely survived.
+          // authNotedThisWalk holds one walk to at most one rejection per
+          // provider: a walk can attempt the same key twice (a legacy step plus
+          // a bundled entry on the same provider), and counting those separately
+          // would demote on the strength of ONE call — the one-strike option
+          // that was deliberately not chosen.
+          if (!authNotedThisWalk.has(step.providerId)) {
+            authNotedThisWalk.add(step.providerId)
+            noteAuthRejection(step.providerId, Date.now())
+          }
+        }
         // M27 B3 — gated on failureClass alone; see completeWithFallback's
         // identical branch for the full reasoning (a 'failed'-coded quota
         // exhaustion, e.g. Groq's own "out of quota/credits" message, was

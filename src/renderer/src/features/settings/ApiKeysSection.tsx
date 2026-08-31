@@ -316,6 +316,36 @@ export function deriveStatusDot(
   return status?.configured ? 'unchecked' : 'no-key'
 }
 
+/**
+ * BUG-148 — the sentence shown when the scheduler has stopped leading with a
+ * provider. The founder's framing, kept verbatim because it is the honest one:
+ * we are not overriding their choice, we are declining to spend the first
+ * attempt of every call on a credential the provider just rejected.
+ *
+ * Says WHAT happened, WHY, and WHAT clears it. It deliberately does not
+ * interrupt: no banner, no modal, no badge on the nav — it sits on the card
+ * for the provider it concerns, which is where someone wondering about that
+ * provider already is.
+ */
+export function demotionNotice(demotedSince: number | undefined): string | null {
+  if (demotedSince === undefined) return null
+  // An ABSOLUTE clock time, not "5 min ago", and the reason is not cosmetic:
+  // a relative label needs `Date.now()` at render time, which is an impure
+  // call during render (React flags it, and it produces text that silently
+  // disagrees with itself between two renders of the same state). Formatting
+  // the timestamp we were given depends only on the prop, so the same state
+  // always renders the same words.
+  const at = new Date(demotedSince).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+  return (
+    `Skipped since ${at}: this provider rejected your key on more than one call, ` +
+    'so it is no longer tried first. Your default AI provider setting has not changed. ' +
+    'Test or re-save a working key to use it first again.'
+  )
+}
+
 const STATUS_DOT_CLASS: Record<KeyStatusDot, string> = {
   connected: 'bg-positive',
   'no-key': 'bg-line',
@@ -535,6 +565,7 @@ export function KeyCard({
   }
 
   const statusDot = deriveStatusDot(status, testResult)
+  const demotionMessage = demotionNotice(status?.demotedSince)
 
   return (
     <Card className="mb-5">
@@ -666,6 +697,8 @@ export function KeyCard({
           wrong, and it fails identically.
         </p>
       )}
+      {/* BUG-148 — findable without hunting, and without interrupting. */}
+      {demotionMessage && <p className="mt-2 text-[13px] text-warning">{demotionMessage}</p>}
       {savedNotice && (
         <p className="mt-2 text-[13px] text-positive">Saved — takes effect immediately.</p>
       )}

@@ -21,7 +21,7 @@
 // read `STATUS_DOT_LABEL[deriveStatusDot(...)]`, so pinning the function pins
 // the words on screen.
 import { describe, expect, it } from 'vitest'
-import { deriveStatusDot, STATUS_DOT_LABEL } from '../ApiKeysSection'
+import { deriveStatusDot, demotionNotice, STATUS_DOT_LABEL } from '../ApiKeysSection'
 
 const saved = { configured: true, hint: '••••' }
 const absent = { configured: false, hint: null }
@@ -89,5 +89,33 @@ describe('the API key status dot never claims more than it knows', () => {
     ]
     expect(inputs.filter((d) => d === 'connected')).toEqual([])
     expect(deriveStatusDot(saved, { ok: true, message: 'Key works.' })).toBe('connected')
+  })
+})
+
+describe('BUG-148: the demotion says so, without interrupting', () => {
+  it('says nothing at all for a provider in good standing', () => {
+    // The common case, and the one that must stay silent: a notice that
+    // appears when nothing is wrong is a notice people learn to ignore.
+    expect(demotionNotice(undefined)).toBeNull()
+  })
+
+  it('names what happened, that the SETTING is untouched, and what clears it', () => {
+    const msg = demotionNotice(Date.UTC(2026, 7, 31, 12, 34))
+    expect(msg).toBeTruthy()
+    // The founder's framing: we are not overriding the choice, we are
+    // declining to spend the first attempt on a rejected credential. If this
+    // sentence goes, the UI has started making a silent change again.
+    expect(msg).toMatch(/rejected your key/i)
+    expect(msg).toMatch(/setting has not changed/i)
+    expect(msg).toMatch(/Test or re-save/i)
+  })
+
+  it('is a PURE function of its input — the same state always renders the same words', () => {
+    // Not a style point. The first version formatted "5 min ago", which needs
+    // Date.now() at render time: an impure call during render, flagged by the
+    // React rules lint, and text that can disagree with itself between two
+    // renders of identical state. Calling it twice must give one answer.
+    const at = Date.UTC(2026, 7, 31, 9, 5)
+    expect(demotionNotice(at)).toBe(demotionNotice(at))
   })
 })

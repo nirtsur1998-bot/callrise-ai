@@ -95,6 +95,12 @@ const { loadAppSettings } = await import('../../app-settings')
 const { completeWithFallback } = await import('../complete-with-fallback')
 const { resetCooldownsForTests } = await import('../model-cooldown')
 const { resetPacingForTests } = await import('../model-pacing')
+// BUG-148 — provider demotion is module-global like cooldowns and pacing, so it
+// leaks between tests the same way. Without this, a file that drives two auth
+// failures demotes the provider partway through and every LATER test in it
+// silently exercises a REORDERED chain — passing, while no longer covering the
+// path it names. That was measured here, not assumed.
+const { resetDemotionsForTests } = await import('../provider-demotion')
 
 // Every purpose present with an EMPTY chain. `resolveConfiguredChain` reads
 // `aiModelAssignments[purpose].chain` directly, so an ABSENT purpose throws
@@ -133,6 +139,7 @@ beforeEach(() => {
   // of cross-test contamination that makes one of these files intermittent.
   behavior.badKeyFails = 'auth'
   resetCooldownsForTests()
+  resetDemotionsForTests()
   resetPacingForTests()
   activeProviderId.current = 'cloudflare'
   vi.mocked(loadAppSettings).mockReturnValue(allEmpty())

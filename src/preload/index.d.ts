@@ -1701,11 +1701,26 @@ export type AiKeyName =
   | 'CLOUDFLARE_ACCOUNT_ID'
 
 export interface AiKeyStatus {
-  /** True once real API calls will succeed for this key — a Settings-saved
-   *  key, or a developer .env value, either way. */
+  /** A key is PRESENT — a Settings-saved key, or a developer .env value.
+   *  Not "works": nothing here has checked it. The comment on this field used
+   *  to say "True once real API calls will succeed for this key", which was the
+   *  presence-read-as-health confusion BUG-146 removed from the rest of the
+   *  screen. Corrected 2026-08-31 rather than left as the last copy of it. */
   configured: boolean
   /** Masked preview ("sk-ant-…UD2I") for display only — never the raw key. */
   hint: string | null
+  /**
+   * BUG-148 — set when this provider has been DEMOTED: it rejected our
+   * credential on enough separate calls that the chain stopped leading with
+   * it. Epoch ms of when the demotion began.
+   *
+   * Present so the user can find out that it happened, and when, without
+   * hunting. It changes the ORDER attempts are made in; it never changes the
+   * stored `aiProvider` setting, which keeps pointing wherever the user
+   * pointed it. Undefined for a provider in good standing, and for every key
+   * with no provider of its own (Deepgram, CLOUDFLARE_ACCOUNT_ID).
+   */
+  demotedSince?: number
 }
 
 /** 'anthropic'/'openai' are the original M16 pair. The next six (M20) and

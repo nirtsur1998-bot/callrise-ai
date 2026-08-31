@@ -75,6 +75,12 @@ const {
   STRUCTURAL_BREAK_MS
 } = await import('../model-cooldown')
 const { resetPacingForTests } = await import('../model-pacing')
+// BUG-148 — provider demotion is module-global like cooldowns and pacing, so it
+// leaks between tests the same way. Without this, a file that drives two auth
+// failures demotes the provider partway through and every LATER test in it
+// silently exercises a REORDERED chain — passing, while no longer covering the
+// path it names. That was measured here, not assumed.
+const { resetDemotionsForTests } = await import('../provider-demotion')
 
 // These pre-Phase-5 tests aren't about tiering — 'durable' on both the
 // write (causedBy) and read (callerTier) side reproduces the exact
@@ -113,6 +119,7 @@ const ORIGINAL_ENV = { ...process.env }
 
 beforeEach(() => {
   resetCooldownsForTests()
+  resetDemotionsForTests()
   resetPacingForTests()
   built.length = 0
   behavior.throwCode = 'rate-limit'
