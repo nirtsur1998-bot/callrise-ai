@@ -483,8 +483,14 @@ const api = {
         | 'CLOUDFLARE_API_KEY'
         | 'CLOUDFLARE_ACCOUNT_ID'
     ) => ipcRenderer.invoke('aiKeys:clear', name),
+    // BUG-146 — 'deepgram' is NOT a provider id. It names the transcription
+    // credential, which has a real check but no PROVIDER_REGISTRY entry (it
+    // cannot complete a text request, so it must never reach the default-text-
+    // AI-provider picker). Must stay in lockstep with AiValidateTarget in
+    // main/ai-keys.ts; a test asserts 'deepgram' is not a provider id, because
+    // the day it becomes one this union stops discriminating.
     validate: (
-      providerId:
+      target:
         | 'anthropic'
         | 'openai'
         | 'groq'
@@ -495,9 +501,10 @@ const api = {
         | 'mistral'
         | 'zai'
         | 'huggingface'
-        | 'cloudflare',
+        | 'cloudflare'
+        | 'deepgram',
       value: string
-    ) => ipcRenderer.invoke('aiKeys:validate', providerId, value)
+    ) => ipcRenderer.invoke('aiKeys:validate', target, value)
   },
   aiCatalog: {
     // Bundled catalog - instant, no network, used for the picker's first paint.
@@ -512,7 +519,13 @@ const api = {
     // Clears a job back to "Automatic" — main picks the best available model
     // from whatever the user has keys for, same resolution completeWithFallback()
     // already uses when nothing's explicitly assigned.
-    resetToAutomatic: (purpose: string) => ipcRenderer.invoke('settings:resetToAutomatic', purpose)
+    resetToAutomatic: (purpose: string) => ipcRenderer.invoke('settings:resetToAutomatic', purpose),
+    // BUG-149 follow-up — which assigned jobs would gain a SECOND PROVIDER if
+    // reassigned with the keys held right now. Read-only: the fix is
+    // deliberately future-only, so this reports the gap instead of silently
+    // closing it. Taking the suggestion calls assignPrimaryModel with the SAME
+    // primary, so the user's own pick is never changed for them.
+    chainsCouldImprove: () => ipcRenderer.invoke('aiCatalog:chainsCouldImprove')
   },
   aiFallback: {
     recentEvents: () => ipcRenderer.invoke('aiFallback:recentEvents')

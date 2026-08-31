@@ -75,6 +75,20 @@ const {
   STRUCTURAL_BREAK_MS
 } = await import('../model-cooldown')
 const { resetPacingForTests } = await import('../model-pacing')
+// BUG-148 — provider demotion is module-global like cooldowns and pacing, so it
+// leaks between tests the same way: a file that drives two auth failures leaves
+// the provider DEMOTED for every later test in it. Measured with a probe, not
+// assumed — asserting the demotion passed before this line existed.
+//
+// CORRECTION, and it is the more useful half. The first version of this comment
+// said those later tests "silently exercise a REORDERED chain". They do not,
+// and that claim was inferred from the demotion rather than measured. These
+// fixtures mock `catalogEntry: () => null`, so `bundledSteps` always returns
+// [] and the reorder — guarded on `tail.length > 0` — cannot fire. Demotion
+// leaks; its EFFECT here is currently nil. The reset stays because the leak is
+// real and the next fixture with a populated catalog would silently inherit it,
+// which is exactly the class of thing nobody re-derives later.
+const { resetDemotionsForTests } = await import('../provider-demotion')
 
 // These pre-Phase-5 tests aren't about tiering — 'durable' on both the
 // write (causedBy) and read (callerTier) side reproduces the exact
@@ -113,6 +127,7 @@ const ORIGINAL_ENV = { ...process.env }
 
 beforeEach(() => {
   resetCooldownsForTests()
+  resetDemotionsForTests()
   resetPacingForTests()
   built.length = 0
   behavior.throwCode = 'rate-limit'

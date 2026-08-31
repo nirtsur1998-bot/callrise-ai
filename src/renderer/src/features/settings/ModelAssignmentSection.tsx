@@ -21,6 +21,35 @@ interface JobConfig {
 // objection-mining, call-title, crm-notes, deal-risk) intentionally has no
 // row here, same as the brief scoped it - it stays on the Default text AI
 // provider (API keys page) forever, a clean extension point if ever needed.
+/**
+ * BUG-149 follow-up — the sentence shown when a stored chain could now use a
+ * second provider.
+ *
+ * BUG-149's fix is future-only by design: stored chains are never migrated and
+ * credentials are read at assign time, both so the app cannot silently rewrite
+ * a setting the user made. "We will not touch it" was the intent; "we will not
+ * mention it" was not, and leaving that unsaid is just a silent gap where
+ * someone keeps a worse chain forever without being told a better one exists.
+ *
+ * Says WHAT is limited, WHY it matters, and WHAT fixes it. It does not
+ * interrupt and it changes nothing on its own — the same contract as the
+ * demotion notice on the API keys page.
+ */
+export function improvableChainNotice(titles: string[]): string | null {
+  if (titles.length === 0) return null
+  const jobs =
+    titles.length === 1
+      ? titles[0]
+      : `${titles.slice(0, -1).join(', ')} and ${titles[titles.length - 1]}`
+  const verb = titles.length === 1 ? 'falls back' : 'fall back'
+  return (
+    `${jobs} ${verb} to the same provider twice. You now hold a key for another ` +
+    'provider that could take that slot, which matters most when the first one is ' +
+    'rate-limited or down. Reassigning keeps the model you picked and only rebuilds ' +
+    'what sits behind it.'
+  )
+}
+
 const JOBS: JobConfig[] = [
   {
     purpose: 'coaching-cue',
@@ -363,6 +392,15 @@ export function ModelAssignmentSection(): React.JSX.Element {
   // settingsUpdatedAt (saveAppSettings stamps it unconditionally) and
   // trigger a spurious cloud-sync write for a patch that changed nothing.
   const [assignments, setAssignments] = useState(settings.aiModelAssignments)
+  // BUG-149 follow-up — jobs whose stored chain would gain a second provider if
+  // reassigned right now. Refetched after every assign, because taking the
+  // suggestion is exactly what should make it disappear.
+  const [improvable, setImprovable] = useState<AiPurpose[]>([])
+
+  const refreshImprovable = (): void => {
+    void window.api.aiCatalog.chainsCouldImprove().then(setImprovable)
+  }
+  useEffect(refreshImprovable, [])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -387,11 +425,13 @@ export function ModelAssignmentSection(): React.JSX.Element {
   const assign = async (purpose: AiPurpose, catalogId: string): Promise<void> => {
     const next = await window.api.aiCatalog.assignPrimaryModel(purpose, catalogId)
     setAssignments(next.aiModelAssignments)
+    refreshImprovable()
   }
 
   const reset = async (purpose: AiPurpose): Promise<void> => {
     const next = await window.api.aiCatalog.resetToAutomatic(purpose)
     setAssignments(next.aiModelAssignments)
+    refreshImprovable()
   }
 
   if (!catalog) {
@@ -422,6 +462,40 @@ export function ModelAssignmentSection(): React.JSX.Element {
           Refresh availability
         </button>
       </div>
+
+      {/* BUG-149 follow-up — tell, do not silently fix. No banner, no modal:
+          a line on the page this concerns, with the action next to it. */}
+      {improvableChainNotice(
+        improvable
+          .map((p) => JOBS.find((j) => j.purpose === p)?.title)
+          .filter((t): t is string => Boolean(t))
+      ) && (
+        <div className="mb-4 rounded-xl border border-warning/30 bg-warning-soft p-3">
+          <p className="text-[13px] text-ink">
+            {improvableChainNotice(
+              improvable
+                .map((p) => JOBS.find((j) => j.purpose === p)?.title)
+                .filter((t): t is string => Boolean(t))
+            )}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {improvable.map((purpose) => {
+              const primary = assignments[purpose]?.chain[0]
+              if (!primary) return null
+              return (
+                <button
+                  key={purpose}
+                  type="button"
+                  onClick={() => void assign(purpose, primary)}
+                  className="rounded-lg border border-line bg-surface px-2.5 py-1.5 text-[12px] font-medium text-ink transition hover:bg-elevated"
+                >
+                  Reassign {JOBS.find((j) => j.purpose === purpose)?.title ?? purpose}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       <RecentFallbackActivity />
 

@@ -13,7 +13,10 @@ import { app, ipcMain, safeStorage } from 'electron'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { buildProviderForValidation, getAIProvider, PROVIDER_REGISTRY, type AIProviderId } from './ai'
+import type { AIValidateKeyResult } from './ai/types'
 import { loadAppSettings, saveAppSettings } from './app-settings'
+import { validateDeepgramKey } from './deepgram-key'
+import { clearDemotion, demotionState } from './ai/provider-demotion'
 
 // M20 added the six new text-AI provider keys (GROQ_API_KEY through
 // MISTRAL_API_KEY) alongside M16's original ANTHROPIC_API_KEY/OPENAI_API_KEY
@@ -144,8 +147,15 @@ function providerIdForKeyName(name: AiKeyName): AIProviderId | null {
  * The first instance is the paragraph above ("no working key" vs. presence).
  * **When you change this function, change this comment in the same edit.**
  *
- * The current behaviour is in `validateAndMaybeAutoSelect` below: every text-AI
+ * The current behaviour is in `probeKey` below, which
+ * `validateAndMaybeAutoSelect` calls as its FIRST statement: every text-AI
  * key save validates, always, and the round trip is paid on every such save.
+ *
+ * BUG-146 widened that beyond text AI without weakening it: `DEEPGRAM_API_KEY`
+ * is probed too, by its own checker, because "has a provider id" was never the
+ * right question — "can anything check this credential?" is. The one credential
+ * still outside it is `CLOUDFLARE_ACCOUNT_ID`, which reports "Not checked"
+ * rather than claiming health it has not got.
  *
  * WHEN VALIDATION FAILS THE KEY IS STILL SAVED. Refusing to store it would be
  * a different and worse product: the user may be offline, or saving a key to
@@ -159,7 +169,11 @@ function providerIdForKeyName(name: AiKeyName): AIProviderId | null {
 export interface SaveKeyOutcome {
   /** Set only when the default provider was actually changed. */
   autoSelectedProvider?: AIProviderId
-  /** Present for every text-AI key: was this key shown to work, just now? */
+  /** Was this credential shown to work, just now? Present for every key that
+   *  something can check — every text-AI key, and (BUG-146) DEEPGRAM_API_KEY.
+   *  `undefined` means NOTHING could check it, which today is only
+   *  CLOUDFLARE_ACCOUNT_ID, and is displayed as "Not checked" rather than
+   *  being rounded up to good or down to bad. */
   keyValidated?: boolean
   /** The provider's own words when it did not. Displayed verbatim. */
   validationReason?: string
@@ -193,38 +207,115 @@ export interface SaveKeyOutcome {
  * exactly this round-trip on demand. The alternative is a status indicator that
  * cannot tell a working key from a typo.
  *
- * NOT COVERED: `DEEPGRAM_API_KEY` and `CLOUDFLARE_ACCOUNT_ID` both resolve to no
- * providerId here (Deepgram is transcription, not text AI; the account id is not
- * a key), so neither is validated and both still show "Connected" purely from
- * presence. Deepgram has no validateKey in this registry at all. Recorded rather
- * than quietly left — it is the same lie, on two cards this change does not
- * reach.
+ * ── BUG-146 (2026-08-31): DEEPGRAM IS NOW COVERED TOO ───────────────
+ *
+ * The note that stood here said Deepgram and CLOUDFLARE_ACCOUNT_ID were both
+ * unvalidated because neither resolves to a providerId. That was true, and for
+ * Deepgram it was the worst possible place to be true: it is what live
+ * transcription runs on, so its failure surfaces MID-CALL.
+ *
+ * Validation is therefore no longer keyed on "is this a text-AI provider".
+ * `probeKey` below answers "can anything check this credential?" — a different
+ * question, with a different answer for Deepgram (see deepgram-key.ts).
+ * Auto-selection stays keyed on the provider id, because promoting Deepgram to
+ * "default text AI provider" would be nonsense.
+ *
+ * STILL NOT COVERED: `CLOUDFLARE_ACCOUNT_ID` (BUG-147). It is not a key and has
+ * no probe of its own, so `probeKey` returns null for it and its card reports
+ * "Not checked" rather than claiming anything. Recorded, not quietly left.
  */
+/**
+ * BUG-146 — "can anything check this credential?", which is deliberately NOT
+ * the same question as "is this a text-AI provider?". Deepgram answers yes to
+ * the first and no to the second, and conflating the two is exactly why the
+ * app's most consequential key went unchecked from M16 until now.
+ *
+ * null means NOTHING can check it (CLOUDFLARE_ACCOUNT_ID) — distinct from
+ * { ok: false }, which means something checked it and it failed. Callers must
+ * keep those apart: one is "we do not know", the other is "we know it is bad".
+ *
+ * Exported for its own test.
+ */
+/**
+ * What the renderer's "Test key" button names when it asks for a check.
+ *
+ * A text-AI provider is named by its own id. Deepgram is named by the literal
+ * below because it is deliberately NOT in PROVIDER_REGISTRY — the registry
+ * feeds the "default text AI provider" picker, and Deepgram cannot complete a
+ * text request. Giving it a provider id to make validation work would have put
+ * it in that picker; this keeps the two concerns apart.
+ *
+ * Pinned by a test asserting this string is NOT a provider id, because the day
+ * it becomes one this union silently stops discriminating.
+ */
+export const DEEPGRAM_TARGET = 'deepgram'
+export type AiValidateTarget = AIProviderId | typeof DEEPGRAM_TARGET
+
+/** Target -> the key it names. The ONE place that mapping exists.
+ *
+ *  Resolved THROUGH `KEY_NAMES` rather than cast: `keyEnvName` is typed
+ *  `string`, so a registry entry naming a key this module does not know would
+ *  otherwise sail through as a valid AiKeyName and reach probeKey. Returning
+ *  null for it is the refuse-don't-guess shape (species 53) and costs a lookup
+ *  over a 13-element array. */
+function keyNameForTarget(target: AiValidateTarget): AiKeyName | null {
+  if (target === DEEPGRAM_TARGET) return 'DEEPGRAM_API_KEY'
+  const envName = PROVIDER_REGISTRY[target as AIProviderId]?.keyEnvName
+  return KEY_NAMES.find((n) => n === envName) ?? null
+}
+
+export async function probeKey(
+  name: AiKeyName,
+  value: string
+): Promise<AIValidateKeyResult | null> {
+  if (name === 'DEEPGRAM_API_KEY') return validateDeepgramKey(value)
+
+  const providerId = providerIdForKeyName(name)
+  if (!providerId) return null
+
+  try {
+    const probe = buildProviderForValidation(providerId, value)
+    return await probe.validateKey(value)
+  } catch {
+    // A thrown probe is indistinguishable here from a rejected one, and both
+    // answer the only question being asked: has this key been shown to work?
+    return { ok: false, reason: 'Could not reach this provider to check the key.' }
+  }
+}
+
 async function validateAndMaybeAutoSelect(
   name: AiKeyName,
   value: string
 ): Promise<SaveKeyOutcome> {
-  const providerId = providerIdForKeyName(name)
-  if (!providerId) return {}
+  const probe = await probeKey(name, value)
+  // Nothing can check this credential. Report NOTHING rather than a cheerful
+  // default: `keyValidated` stays undefined, which the card renders as "Not
+  // checked". An UNCHECKABLE credential and a verified-good one must not
+  // produce the same screen.
+  if (!probe) return {}
 
-  let keyValidated = false
-  let validationReason: string | undefined
-  try {
-    const probe = buildProviderForValidation(providerId, value)
-    const result = await probe.validateKey(value)
-    keyValidated = result.ok
-    if (!result.ok) validationReason = result.reason
-  } catch {
-    // A thrown probe is indistinguishable here from a rejected one, and both
-    // answer the only question being asked: has this key been shown to work?
-    keyValidated = false
-    validationReason = 'Could not reach this provider to check the key.'
-  }
+  const keyValidated = probe.ok
+  const validationReason = probe.ok ? undefined : probe.reason
+  const providerId = providerIdForKeyName(name)
+
+  // BUG-148 — a key that just proved it works cancels any demotion against
+  // its provider immediately. Without this, the fix would punish exactly the
+  // person doing the right thing: you paste the corrected key, the card goes
+  // green, and the chain still refuses to lead with it until a background job
+  // happens to succeed on it or four hours elapse.
+  //
+  // Deliberately keyed on the VALIDATED result, not on the save. A save alone
+  // is what BUG-143 was about — presence is not health, and a demotion cleared
+  // by presence would be cleared by pasting the same rejected key again.
+  if (providerId && keyValidated) clearDemotion(providerId)
 
   // Auto-selection is now conditional on BOTH: nothing usable is selected, and
   // the key we would switch to actually works.
   const current = loadAppSettings().aiProvider
-  if (keyValidated && !getAIProvider(current)) {
+  // `providerId &&` is new with BUG-146: DEEPGRAM_API_KEY now validates, and a
+  // validated Deepgram key must never be promoted to "default text AI
+  // provider" — it cannot complete a single text request.
+  if (providerId && keyValidated && !getAIProvider(current)) {
     saveAppSettings({ aiProvider: providerId })
     return { autoSelectedProvider: providerId, keyValidated: true }
   }
@@ -275,11 +366,26 @@ export function registerAiKeys(): void {
     // of these strings, and the one a new key would silently be missing from.
     const status = Object.fromEntries(
       AI_KEY_NAMES.map((n) => [n, { configured: false, hint: null }])
-    ) as Record<AiKeyName, { configured: boolean; hint: string | null }>
+    ) as Record<
+      AiKeyName,
+      { configured: boolean; hint: string | null; demotedSince?: number }
+    >
+    const now = Date.now()
     for (const name of KEY_NAMES) {
       status[name].configured = isConfigured(name)
       const raw = process.env[name]
       if (raw) status[name].hint = maskedHint(raw)
+      // BUG-148 — "visibly, never silently" (founder, 2026-08-31). A demotion
+      // reorders attempts behind the user's back unless something says so, and
+      // an automatic change to user-visible behaviour that is never announced
+      // is taxonomy species 44. Carried on the status the card already fetches
+      // rather than a new channel, so it cannot go stale relative to the rest
+      // of the card.
+      const providerId = providerIdForKeyName(name)
+      if (providerId) {
+        const demotion = demotionState(providerId, now)
+        if (demotion?.demoted) status[name].demotedSince = demotion.demotedAt ?? undefined
+      }
     }
     return status
   })
@@ -303,21 +409,25 @@ export function registerAiKeys(): void {
   // it's relied on mid-call. Every text-AI provider in PROVIDER_REGISTRY
   // (M20: 8, up from the original anthropic/openai pair) has this; Deepgram
   // has no equivalent flow here (transcription, not text AI).
-  ipcMain.handle('aiKeys:validate', async (_event, providerId: unknown, value: unknown) => {
-    if (
-      typeof providerId !== 'string' ||
-      !(providerId in PROVIDER_REGISTRY) ||
-      typeof value !== 'string' ||
-      !value.trim()
-    ) {
+  ipcMain.handle('aiKeys:validate', async (_event, target: unknown, value: unknown) => {
+    if (typeof target !== 'string' || typeof value !== 'string' || !value.trim()) {
       return { ok: false as const, reason: 'Enter a key first.' }
     }
-    try {
-      const provider = buildProviderForValidation(providerId as AIProviderId, value.trim())
-      return await provider.validateKey(value.trim())
-    } catch {
-      return { ok: false as const, reason: 'Could not validate the key. Please try again.' }
-    }
+    const name =
+      target === DEEPGRAM_TARGET || target in PROVIDER_REGISTRY
+        ? keyNameForTarget(target as AiValidateTarget)
+        : null
+    if (!name) return { ok: false as const, reason: 'Enter a key first.' }
+
+    // BUG-146 — delegated to probeKey rather than re-probing here. "Test key"
+    // and the save path answered the same question through two code paths
+    // before, which is how Groq's dead testModel (BUG-081) made "Test key"
+    // reject keys the save path was happy with. One mechanism, one answer.
+    const result = await probeKey(name, value.trim())
+    // Unreachable from the UI: a card with nothing to check renders no Test
+    // button. Worded so that even if it were reached it does not accuse the
+    // value of being wrong — not knowing is not the same as knowing it is bad.
+    return result ?? { ok: false as const, reason: 'This value has no automatic check.' }
   })
 
   ipcMain.handle('aiKeys:clear', async (_event, name: unknown) => {

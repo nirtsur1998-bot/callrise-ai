@@ -95,6 +95,20 @@ const { loadAppSettings } = await import('../../app-settings')
 const { completeWithFallback } = await import('../complete-with-fallback')
 const { resetCooldownsForTests } = await import('../model-cooldown')
 const { resetPacingForTests } = await import('../model-pacing')
+// BUG-148 — provider demotion is module-global like cooldowns and pacing, so it
+// leaks between tests the same way: a file that drives two auth failures leaves
+// the provider DEMOTED for every later test in it. Measured with a probe, not
+// assumed — asserting the demotion passed before this line existed.
+//
+// CORRECTION, and it is the more useful half. The first version of this comment
+// said those later tests "silently exercise a REORDERED chain". They do not,
+// and that claim was inferred from the demotion rather than measured. These
+// fixtures mock `catalogEntry: () => null`, so `bundledSteps` always returns
+// [] and the reorder — guarded on `tail.length > 0` — cannot fire. Demotion
+// leaks; its EFFECT here is currently nil. The reset stays because the leak is
+// real and the next fixture with a populated catalog would silently inherit it,
+// which is exactly the class of thing nobody re-derives later.
+const { resetDemotionsForTests } = await import('../provider-demotion')
 
 // Every purpose present with an EMPTY chain. `resolveConfiguredChain` reads
 // `aiModelAssignments[purpose].chain` directly, so an ABSENT purpose throws
@@ -133,6 +147,7 @@ beforeEach(() => {
   // of cross-test contamination that makes one of these files intermittent.
   behavior.badKeyFails = 'auth'
   resetCooldownsForTests()
+  resetDemotionsForTests()
   resetPacingForTests()
   activeProviderId.current = 'cloudflare'
   vi.mocked(loadAppSettings).mockReturnValue(allEmpty())
@@ -149,10 +164,21 @@ describe('BUG-142 — a bad key must not be able to block the rescue', () => {
   it('THE FIELD CASE: summary with a rejected key and a working second key still answers', async () => {
     const res = await completeWithFallback({ purpose: 'summary', messages: [] } as never)
 
-    // The working provider must have been reached. Asserting on the ATTEMPT
-    // list rather than only on the result, so a pass cannot come from the
-    // wrong provider having answered.
-    expect(attempts).toContain('huggingface')
+    // The working provider must have been reached AS THE RESCUE — that is,
+    // AFTER the legacy step was tried and failed.
+    //
+    // This was `toContain('huggingface')` until 2026-08-31 (M32). That asserted
+    // MEMBERSHIP while every sentence around it is POSITIONAL: "the rescue",
+    // "on the SECOND walk". Those are different claims, and only the positional
+    // one is what this file exists to protect — huggingface being reached is
+    // not the fix, huggingface being reached *at the end of an exhausted walk*
+    // is. A future change that made huggingface simply LEAD the chain would
+    // satisfy `toContain` while the rescue never fired at all.
+    //
+    // Exact order, not an index comparison: the walk is two steps and both
+    // matter. Anything else appearing, or these two swapping, is a different
+    // mechanism than the one named here.
+    expect(attempts).toEqual(['cloudflare', 'huggingface'])
     expect((res as { text: string }).text).toBe('rescued')
   })
 
@@ -203,7 +229,10 @@ describe('BUG-142 — a bad key must not be able to block the rescue', () => {
     // between the two classes only showed up on walk 2.
     const res = await completeWithFallback({ purpose: 'summary', messages: [] } as never)
     expect((res as { text: string }).text).toBe('rescued')
-    expect(attempts).toContain('huggingface')
+    // Positional for the same reason as the first test: the claim is that the
+    // rate-limited legacy step was tried FIRST and the rescue then fired, which
+    // is what makes this a control for the auth case rather than a repeat of it.
+    expect(attempts).toEqual(['cloudflare', 'huggingface'])
   })
 
   it('the rescue still respects PACING — a candidate used moments ago is not re-spent', async () => {

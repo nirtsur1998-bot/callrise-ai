@@ -64,26 +64,73 @@ describe('ai-keys.ts: the doc comment cannot quietly stop being true', () => {
     ).toBe(true)
   })
 
-  it('...and nothing returns before the validation that makes it true', () => {
-    // THE COUPLING. The claim is "always". The way it silently becomes false is
-    // exactly how it became false the first time: an early return added between
-    // the providerId guard and the probe, so the ordinary path (you already
-    // have a working default, you paste another key) validates nothing.
+  // BUG-146 (2026-08-31) SPLIT THE PROBE OUT INTO `probeKey`, so the single
+  // check that used to live here is now three. The GUARANTEE is unchanged and
+  // deliberately not weakened: on the save path, every credential that CAN be
+  // checked IS checked, with nothing returning first. Only its shape moved.
+  //
+  // Each of the three was red-checked by breaking the property it names.
+
+  it('the save path probes before it can return anything', () => {
+    // Half one of the old coupling. validateAndMaybeAutoSelect must reach
+    // probeKey unconditionally — an early return added above it is exactly how
+    // BUG-143 happened: with a working default, nothing was validated at all.
     const body = bodyOf('validateAndMaybeAutoSelect')
-    const guardEnd = body.indexOf('if (!providerId) return {}')
+    const probe = body.indexOf('probeKey(')
+    expect(probe, 'validateAndMaybeAutoSelect no longer calls probeKey').toBeGreaterThan(-1)
+
+    const before = body.slice(0, probe)
+    const earlyReturns = before.split('\n').filter((l) => /^\s*(if\s*\(.*\)\s*)?return\b/.test(l))
+    expect(
+      earlyReturns,
+      'Something returns BEFORE probeKey, so the save no longer validates ' +
+        '"always" — but the comment still says it does. That is the exact ' +
+        'shape of BUG-143. Either remove the early return, or change the ' +
+        'sentence and this test together.'
+    ).toEqual([])
+  })
+
+  it('...and nothing returns between the providerId guard and the probe', () => {
+    // Half two, in its new home. Same failure mode, one level down.
+    const body = bodyOf('probeKey')
+    const guardEnd = body.indexOf('if (!providerId) return null')
     const probe = body.indexOf('validateKey(')
     expect(guardEnd, 'the providerId guard moved or changed shape').toBeGreaterThan(-1)
     expect(probe, 'validateKey is no longer called here').toBeGreaterThan(guardEnd)
 
-    const between = body.slice(guardEnd + 'if (!providerId) return {}'.length, probe)
+    // Lines STRICTLY BEFORE the probe's own line. `return await
+    // probe.validateKey(...)` returns and probes in one statement, so slicing at
+    // the probe's COLUMN leaves a dangling `return await probe.` that reads as
+    // an early return. Cutting at the line start asks the question actually
+    // meant: does anything return on a line the probe never reaches?
+    const probeLineStart = body.lastIndexOf('\n', probe) + 1
+    const between = body.slice(guardEnd + 'if (!providerId) return null'.length, probeLineStart)
     const earlyReturns = between.split('\n').filter((l) => /^\s*(if\s*\(.*\)\s*)?return\b/.test(l))
     expect(
       earlyReturns,
-      'Something returns BEFORE validateKey, so the save no longer validates ' +
-        `"always" — but the comment still says it does. That is the exact ` +
-        'shape of BUG-143 and of the two comment drifts before it. Either ' +
-        'remove the early return, or change the sentence and this test together.'
+      'Something returns BEFORE validateKey inside probeKey, so text-AI key ' +
+        'saves no longer validate "always".'
     ).toEqual([])
+  })
+
+  it('BUG-146: Deepgram is probed BEFORE the providerId guard, or not at all', () => {
+    // The ORDERING is the fix. Deepgram has no PROVIDER_REGISTRY entry, so
+    // providerIdForKeyName returns null for it — if its branch ever moved below
+    // `if (!providerId) return null`, that guard would swallow it and the most
+    // consequential credential in the app would silently stop being checked,
+    // with every other test here still green. That is the shape of the original
+    // bug: not wrong logic, an unreachable branch.
+    const body = bodyOf('probeKey')
+    const deepgram = body.indexOf("'DEEPGRAM_API_KEY'")
+    const guard = body.indexOf('if (!providerId) return null')
+    expect(deepgram, 'probeKey no longer mentions DEEPGRAM_API_KEY').toBeGreaterThan(-1)
+    expect(guard, 'the providerId guard moved or changed shape').toBeGreaterThan(-1)
+    expect(
+      deepgram,
+      'The Deepgram branch is now BELOW the providerId guard, which returns ' +
+        'null for Deepgram — so Deepgram is never checked, silently. This is ' +
+        'BUG-146 reopening.'
+    ).toBeLessThan(guard)
   })
 
   it('auto-selection cannot happen without a validated key', () => {

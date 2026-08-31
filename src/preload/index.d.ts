@@ -1701,11 +1701,26 @@ export type AiKeyName =
   | 'CLOUDFLARE_ACCOUNT_ID'
 
 export interface AiKeyStatus {
-  /** True once real API calls will succeed for this key — a Settings-saved
-   *  key, or a developer .env value, either way. */
+  /** A key is PRESENT — a Settings-saved key, or a developer .env value.
+   *  Not "works": nothing here has checked it. The comment on this field used
+   *  to say "True once real API calls will succeed for this key", which was the
+   *  presence-read-as-health confusion BUG-146 removed from the rest of the
+   *  screen. Corrected 2026-08-31 rather than left as the last copy of it. */
   configured: boolean
   /** Masked preview ("sk-ant-…UD2I") for display only — never the raw key. */
   hint: string | null
+  /**
+   * BUG-148 — set when this provider has been DEMOTED: it rejected our
+   * credential on enough separate calls that the chain stopped leading with
+   * it. Epoch ms of when the demotion began.
+   *
+   * Present so the user can find out that it happened, and when, without
+   * hunting. It changes the ORDER attempts are made in; it never changes the
+   * stored `aiProvider` setting, which keeps pointing wherever the user
+   * pointed it. Undefined for a provider in good standing, and for every key
+   * with no provider of its own (Deepgram, CLOUDFLARE_ACCOUNT_ID).
+   */
+  demotedSince?: number
 }
 
 /** 'anthropic'/'openai' are the original M16 pair. The next six (M20) and
@@ -1737,11 +1752,16 @@ export interface AiKeysApi {
    *
    * BUG-143 — the result also reports what the save did to the DEFAULT
    * PROVIDER, which used to happen silently. `autoSelectedProvider` is set only
-   * when the default actually moved; `keyValidated` is present only when a
-   * promotion was considered at all, so `false` means "we tried this key, it
-   * did not answer, and we left your default alone" while `undefined` means
-   * "there was nothing to decide". A caller that ignores both fields behaves
-   * exactly as before.
+   * when the default actually moved.
+   *
+   * BUG-146 — `keyValidated` no longer tracks "was a promotion considered".
+   * The two came apart when Deepgram gained a real check: it is validated on
+   * every save and is NEVER a promotion candidate, because it cannot serve as
+   * a text-AI provider. `keyValidated` now answers one question only — was
+   * this credential shown to work, just now? `true`/`false` when something
+   * checked it; `undefined` when nothing could (today only
+   * CLOUDFLARE_ACCOUNT_ID). A caller that ignores every field behaves exactly
+   * as before.
    */
   save: (
     name: AiKeyName,
@@ -1756,11 +1776,17 @@ export interface AiKeysApi {
     validationReason?: string
   }>
   clear: (name: AiKeyName) => Promise<{ ok: boolean; error?: string }>
-  /** Cheapest possible round-trip against a key the user just pasted (not
-   *  necessarily saved yet) — every text-AI provider (not Deepgram, which
-   *  has no equivalent flow here). */
-  validate: (providerId: AiProviderId, value: string) => Promise<AiKeyValidateResult>
+  /** Cheapest possible round-trip against a credential the user just pasted
+   *  (not necessarily saved yet). Every text-AI provider, plus — since
+   *  BUG-146 — Deepgram, named by 'deepgram' rather than a provider id
+   *  because it has no PROVIDER_REGISTRY entry and must not gain one.
+   *  CLOUDFLARE_ACCOUNT_ID remains uncheckable (BUG-147). */
+  validate: (target: AiValidateTarget, value: string) => Promise<AiKeyValidateResult>
 }
+
+/** Mirrors AiValidateTarget in main/ai-keys.ts. 'deepgram' is deliberately
+ *  not an AiProviderId — see the note on `validate` above. */
+export type AiValidateTarget = AiProviderId | 'deepgram'
 
 export type ModelLane = 'speed' | 'quality'
 export type RetentionPosture = 'trains' | 'no-training' | 'unknown'
@@ -1800,6 +1826,17 @@ export interface AiCatalogApi {
    *  default chain) every time this job runs. Returns the updated
    *  AppSettings, same shape as settings.update(). */
   resetToAutomatic: (purpose: AiPurpose) => Promise<AppSettings>
+  /**
+   * BUG-149 follow-up — assigned jobs whose stored chain is single-provider
+   * and WOULD cross providers if reassigned with the keys held right now.
+   *
+   * BUG-149's fix is future-only by design: stored chains are never migrated
+   * and credentials are read at assign time, both so the app cannot silently
+   * rewrite a setting the user made. This is the other half of that promise —
+   * "we will not touch it" was intended, "we will not mention it" was not.
+   * Empty for a healthy install.
+   */
+  chainsCouldImprove: () => Promise<AiPurpose[]>
 }
 
 export interface AiFallbackEventView {

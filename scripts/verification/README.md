@@ -44,6 +44,12 @@ Restoration as mechanism rather than memory. `withRestoredState(fn, opts)`:
 to touch. Anything outside that list appearing in the diff is reported as a
 failure — which is precisely the class of mistake the first incident was.
 
+It suppresses the FAILURE REPORT for those files; it does **not** leave them
+behind. Every key file is restored either way — a throwaway credential saved by
+a check is deleted on the way out, because cleaning it up by hand is exactly the
+"something I have to remember" this module exists to delete. (M32 did have to
+remember it, once, before the restore existed.)
+
 ```js
 import { withRestoredState } from './state-guard.mjs'
 
@@ -91,3 +97,113 @@ absent proves nothing.
 On 2026-08-30 `validationReason` worked (`git log -S` attributes it to one
 commit, and it was absent from the prior asar). `Key invalid` would have been
 useless — it predates the change and was already shipped.
+
+## Driving the app: three things that cost a session on 2026-08-31
+
+### `element.click()` can report success and do nothing
+
+The third instance of this shape, so it is written down rather than rediscovered.
+A CDP `Runtime.evaluate` that finds an element by text and calls `.click()`
+returned `CLICKED` — and the page did not move. The match was a wrapper element
+that has no handler; the real one is a child.
+
+**Dispatch a real mouse event at the element's own centre, and read state after
+every click that matters.**
+
+```js
+const r = el.getBoundingClientRect()          // from inside the page
+// then, from the driver:
+for (const type of ['mousePressed', 'mouseReleased'])
+  await cdp.send('Input.dispatchMouseEvent',
+    { type, x: r.x + r.width / 2, y: r.y + r.height / 2, button: 'left', clickCount: 1 })
+```
+
+And compare something real before/after — `document.body.innerText.slice(0, 80)`
+is enough. **Do not compare a slice that is the same on both pages**: the first
+version of this check compared the first 60 characters, which are the settings
+shell header on every settings page, and reported "changed: false" for a
+navigation that had in fact worked. A control that cannot distinguish the two
+states is not a control.
+
+### Identity: pin the page URL, not a marker string
+
+The strongest available proof that you are driving YOUR build is the page's own
+URL. `connect()` returns `page.url`; a dev build reports
+`file:///C:/Users/User/Desktop/<worktree>/out/renderer/index.html`, which the
+installed app cannot produce. **A path cannot be coincidentally present the way
+a string can** — prefer it over a `git log -S` marker, and keep the process
+start-time check as the second half.
+
+### The app CANNOT run beside the installed copy — do not spend an hour on it
+
+Three attempts, all wrong, in order:
+
+1. `npm run dev -- --user-data-dir=...` — `electron-vite`'s CLI rejects unknown
+   options outright.
+2. `electron out/main/index.js --user-data-dir=...` — the switch lands AFTER the
+   app path, so Electron passes it to the app instead of consuming it.
+3. `APPDATA=<temp> electron ...` — `app.getPath('appData')` reads the Windows
+   shell API, not the environment variable.
+
+None of them can work, and the reason is in the source: `src/main/index.ts`
+does `app.setPath('userData', join(app.getPath('appData'), 'sales-os'))`. The
+path is **hardcoded**, so every instance shares one userData and therefore one
+single-instance lock. A second instance calls `app.quit()` before `whenReady`.
+
+**So a live drive means closing the founder's running app, and it runs against
+their REAL data.** Ask first — and snapshot `ai-keys/` with per-file hashes plus
+`app-settings.json` before anything, then verify byte-identity afterwards. Read
+only: no typing into a key field, no Save, no Remove, no toggles.
+
+### The target below the fold: a click that lands on nothing
+
+Third driving defect from the same session, and the easiest to miss because it
+produces **no error at all**.
+
+`getBoundingClientRect()` returns viewport coordinates. An element further down
+a scrolling page has a `y` **outside the window**, and
+`Input.dispatchMouseEvent` at that point hits nothing — no exception, no
+warning, and the next screenshot looks plausible. The API keys page has twelve
+cards; the ninth was nowhere near the viewport, so the click and the
+`Input.insertText` after it both went into the void. Only reading the input's
+`.value` back caught it.
+
+**Scroll first, measure second, and refuse if it is still not on screen:**
+
+```js
+el.scrollIntoView({ block: 'center' })
+const r = el.getBoundingClientRect()
+if (!(r.y > 0 && r.y < innerHeight)) return { err: 'off-screen after scrollIntoView' }
+```
+
+Refusing matters as much as scrolling: a sticky header, a modal or a collapsed
+section can each leave the element unreachable, and clicking anyway is how a
+driver silently operates on the wrong thing.
+
+### Assert that your action CHANGED the state, never that the state matches
+
+Third instance of this family, and the cheapest one to prevent.
+
+M32's visual pass clicked **Light**, then asserted `/light/.test(rootClass)`. It passed.
+The app **was already in light theme** — the click changed nothing, the assertion
+confirmed a state that pre-existed it, and the run reported a successful theme
+switch. The consequence went further than the check: every screenshot shown to
+the founder up to that point was light, while both of us believed a two-theme
+pass was underway. **Dark had never been rendered.**
+
+```js
+const before = await rootClass()
+await click('Dark')
+const after = await rootClass()
+if (before === after) throw new Error('the click was a no-op')   // ← the control
+if (/(^|s)light(s|$)/.test(after)) throw new Error('still light: ' + after)
+```
+
+**Read the state, act, read it again, and assert on the DIFFERENCE.** Asserting
+the end state alone cannot tell "my action worked" from "it was already like
+that" — and the second is silent, plausible, and produces screenshots that look
+exactly like success.
+
+Same family as *a click that reports success and does nothing* and *a target
+below the fold*: in all three the action never happened and nothing said so. The
+difference here is that the check itself supplied the false confirmation.

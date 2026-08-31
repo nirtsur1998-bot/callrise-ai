@@ -34,9 +34,22 @@ import type { SettingsPageId } from '@renderer/features/settings/settings-nav'
  *  plain snapshot rather than the live APIs: it makes every branch reachable
  *  from a test without mocking eight IPC channels. */
 export interface ActivationState {
-  /** DEEPGRAM_API_KEY configured — live transcription works at all. */
+  /**
+   * DEEPGRAM_API_KEY is PRESENT. **Not "transcription works"** — this said that
+   * until 2026-08-31 (M32/BUG-146) and it was never true: the value behind it
+   * is `Boolean(process.env.DEEPGRAM_API_KEY)`, and nothing on this path has
+   * ever checked the key. A wrong key satisfies it exactly as well as a right
+   * one.
+   *
+   * The step it drives is titled "Add a transcription key" and ticks when you
+   * have added one, which is honest. **Keep the claim at that height.** The
+   * Settings card is where a key can actually be checked (deepgram-key.ts);
+   * this checklist deliberately does not, because a Home screen that fires
+   * network probes on every render is its own bug.
+   */
   hasTranscriptionKey: boolean
-  /** Any text-AI provider key configured — summaries, coaching, everything. */
+  /** Any text-AI provider key is PRESENT — same limit as above: presence, not
+   *  health, and deliberately so. */
   hasAiKey: boolean
   /** Saved calls on disk. */
   callCount: number
@@ -98,7 +111,14 @@ export function buildActivationSteps(state: ActivationState): ActivationStep[] {
       id: 'transcription-key',
       title: 'Add a transcription key',
       why: 'Without it nothing is written down — CallRise can hear your calls but cannot turn them into text. Deepgram is free to start and takes about a minute.',
-      doneLabel: 'Added — your calls are transcribed live, word by word, as you speak.',
+      // "can", not "does". This read "your calls are transcribed live, word by
+      // word, as you speak" — a claim that transcription IS HAPPENING, made on
+      // the strength of `Boolean(process.env.DEEPGRAM_API_KEY)`. See the note on
+      // `hasTranscriptionKey`: the comment above that field was overclaiming
+      // quietly and this label was overclaiming loudly, one line apart, both off
+      // the same presence check. **When a comment is found lying, check whether
+      // the string next to it is lying louder** (founder, 2026-08-31).
+      doneLabel: 'Added — CallRise can transcribe your calls.',
       settingsPage: 'ai-setup',
       status: state.hasTranscriptionKey ? 'done' : 'todo'
     },
@@ -106,7 +126,10 @@ export function buildActivationSteps(state: ActivationState): ActivationStep[] {
       id: 'ai-key',
       title: 'Add an AI provider key',
       why: 'Turns transcripts into things you can use: call summaries, coaching scores, extracted tasks, prep briefs. Several providers have free tiers.',
-      doneLabel: 'Added — summaries, coaching and task extraction can all run.',
+      // Same correction, milder original: "can all run" already reads as
+      // capability rather than activity, but "Added — ... can all run" invites
+      // "and therefore are". "Set up" says what presence actually establishes.
+      doneLabel: 'Added — summaries, coaching and task extraction are set up.',
       settingsPage: 'ai-setup',
       status: state.hasAiKey ? 'done' : 'todo'
     },

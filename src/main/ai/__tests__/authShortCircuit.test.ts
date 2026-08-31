@@ -56,6 +56,20 @@ const { completeWithFallback, resolveConfiguredChain, AllModelsExhaustedError } 
 )
 const { resetCooldownsForTests } = await import('../model-cooldown')
 const { resetPacingForTests } = await import('../model-pacing')
+// BUG-148 — provider demotion is module-global like cooldowns and pacing, so it
+// leaks between tests the same way: a file that drives two auth failures leaves
+// the provider DEMOTED for every later test in it. Measured with a probe, not
+// assumed — asserting the demotion passed before this line existed.
+//
+// CORRECTION, and it is the more useful half. The first version of this comment
+// said those later tests "silently exercise a REORDERED chain". They do not,
+// and that claim was inferred from the demotion rather than measured. These
+// fixtures mock `catalogEntry: () => null`, so `bundledSteps` always returns
+// [] and the reorder — guarded on `tail.length > 0` — cannot fire. Demotion
+// leaks; its EFFECT here is currently nil. The reset stays because the leak is
+// real and the next fixture with a populated catalog would silently inherit it,
+// which is exactly the class of thing nobody re-derives later.
+const { resetDemotionsForTests } = await import('../provider-demotion')
 
 const PURPOSES = [
   'coaching-cue', 'summary', 'scorecard', 'tasks', 'other', 'prep-brief',
@@ -78,6 +92,7 @@ beforeEach(() => {
   // for every purpose, so that is correct at runtime) — which means one
   // test's 429s would otherwise silently suppress the next test's attempts.
   resetCooldownsForTests()
+  resetDemotionsForTests()
   resetPacingForTests()
   activeProviderId.current = 'groq'
   vi.mocked(loadAppSettings).mockReturnValue(allEmpty())
