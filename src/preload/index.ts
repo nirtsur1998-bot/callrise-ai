@@ -364,6 +364,13 @@ const api = {
     get: () => ipcRenderer.invoke('dealStages:get'),
     set: (stages: unknown) => ipcRenderer.invoke('dealStages:set', stages)
   },
+  dealBackfill: {
+    state: () => ipcRenderer.invoke('dealBackfill:state'),
+    insight: () => ipcRenderer.invoke('dealBackfill:insight'),
+    answer: (contactId: string, answer: string) =>
+      ipcRenderer.invoke('dealBackfill:answer', contactId, answer),
+    clear: (contactId: string) => ipcRenderer.invoke('dealBackfill:clear', contactId)
+  },
   events: {
     list: () => ipcRenderer.invoke('events:list'),
     create: (input: unknown) => ipcRenderer.invoke('events:create', input),

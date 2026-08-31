@@ -69,4 +69,68 @@ export interface Deal {
    *  only. Absent/empty on deals that haven't changed stage since this field
    *  was added. */
   stageHistory?: DealStageChange[]
+  /** M32 Stage 2 — why the deal ended this way, in the user's own words.
+   *  Optional in the strongest sense: the prompt that fills it is skippable in
+   *  one action, never blocks, and stops asking after repeated skips. Captured
+   *  on WON deals too, so the record isn't one-armed. */
+  outcomeReason?: string
+}
+
+/**
+ * M32 Stage 2 — a SECOND independent declaration of main's `BackfillAnswer`
+ * (main/deal-outcomes.ts), for the same reason DealStageKind above is one:
+ * the renderer cannot import from main. Pinned by
+ * `deal-union-lockstep.test.ts`, which reads all three files as text.
+ */
+export type BackfillAnswer = 'won' | 'lost' | 'went-quiet' | 'dont-remember' | 'not-a-deal'
+
+export interface OutcomeCounts {
+  won: number
+  lost: number
+  wentQuiet: number
+  dontRemember: number
+  notADeal: number
+  unanswered: number
+}
+
+/**
+ * Whether anything may be said about outcomes yet.
+ *
+ * The `insufficient` arm carries counts and NOTHING ELSE — no effect size, no
+ * direction, no percentage. There is therefore nothing for this renderer to
+ * accidentally display as a finding, and no number for a caveat to be read as.
+ * That is a structural guarantee, not a convention: adding an analysis number
+ * to this arm fails `deal-outcomes.test.ts`.
+ */
+export type Insight =
+  | {
+      status: 'insufficient'
+      counts: OutcomeCounts
+      usable: { won: number; lost: number; wentQuiet: number }
+      needPerArm: number
+      bindingArm: 'won' | 'lost'
+      backfillUntrustworthy: boolean
+    }
+  | {
+      status: 'ready'
+      counts: OutcomeCounts
+      usable: { won: number; lost: number; wentQuiet: number }
+    }
+
+export interface BackfillRow {
+  contactId: string
+  name: string
+  company?: string
+  callCount: number
+  lastCallAt?: string
+  lastCallTitle?: string
+  answer?: BackfillAnswer
+  dealId?: string
+}
+
+export interface BackfillState {
+  rows: BackfillRow[]
+  answered: number
+  total: number
+  insight: Insight
 }

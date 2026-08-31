@@ -1725,6 +1725,38 @@ export async function setCallContact(
   })
 }
 
+/**
+ * M32 Stage 2 — the write side of the call→deal link.
+ *
+ * Deliberately the same three-way shape as `setCallContact` above, member for
+ * member: `null` clears, a safe id sets, anything else is a NO-OP that returns
+ * the call unchanged. That third branch is not defensive padding — it is what
+ * keeps a malformed id (a path, an object, an empty string arriving from an
+ * older renderer) out of a field that is later joined against and fed into
+ * analysis. Failing closed here means the link is missing, which is visible;
+ * failing open means the link is wrong, which is not.
+ */
+export async function setCallDeal(
+  dir: string,
+  callId: string,
+  dealId: unknown
+): Promise<Call | null> {
+  return withCallLock(callId, async () => {
+    const call = await getCall(dir, callId)
+    if (!call) return null
+    if (dealId === null) {
+      delete call.dealId
+    } else if (isSafeId(dealId)) {
+      call.dealId = dealId
+    } else {
+      return call // not a recognizable id and not an explicit clear — leave as-is
+    }
+    call.updatedAt = new Date().toISOString()
+    await writeCall(dir, call)
+    return call
+  })
+}
+
 const CALL_TYPES = new Set<CallType>(['cold-call', 'discovery', 'demo', 'closing', 'other'])
 
 /** M23 — the rep's manual call-type override (Workstream A1). Same shape as

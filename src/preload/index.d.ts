@@ -1388,6 +1388,11 @@ export interface Deal {
   /** Phase 5 Step 1 — the last AI risk assessment run on this deal, if any.
    *  Manually triggered, cached until re-run. */
   riskAssessment?: DealRiskAssessment
+  /** M32 Stage 2 — why the deal ended this way, in the user's own words.
+   *  Optional in the strongest sense: the prompt that fills it is skippable in
+   *  one action, never blocks, and stops asking after repeated skips. Captured
+   *  on WON deals too, so the record isn't one-armed. */
+  outcomeReason?: string
 }
 
 export interface DealCreateInput {
@@ -1406,6 +1411,7 @@ export interface DealUpdateInput {
   value?: number | null
   expectedCloseDate?: string | null
   notes?: string | null
+  outcomeReason?: string | null
 }
 
 export interface DealsApi {
@@ -1423,6 +1429,81 @@ export interface DealsApi {
 export interface DealStagesApi {
   get: () => Promise<DealStage[]>
   set: (stages: DealStage[]) => Promise<SetDealStagesResult>
+}
+
+/**
+ * M32 Stage 2 — a THIRD independent declaration of main's `BackfillAnswer`
+ * (main/deal-outcomes.ts). Same reason, and same hazard, as DealStageKind
+ * above: nothing makes the copies meet, so `deal-union-lockstep.test.ts`
+ * reads all three files as text and fails if they disagree.
+ */
+export type BackfillAnswer = 'won' | 'lost' | 'went-quiet' | 'dont-remember' | 'not-a-deal'
+
+export interface OutcomeCounts {
+  won: number
+  lost: number
+  wentQuiet: number
+  dontRemember: number
+  notADeal: number
+  unanswered: number
+}
+
+/**
+ * Whether anything may be said about outcomes yet.
+ *
+ * A discriminated union rather than a flag-plus-optional-numbers, and the
+ * `insufficient` arm carries **no analysis output at all** — no effect size,
+ * no direction, no percentage. A caveat next to a number gets read as a
+ * number, so at low N the number must not exist for the renderer to find.
+ */
+export type Insight =
+  | {
+      status: 'insufficient'
+      counts: OutcomeCounts
+      usable: { won: number; lost: number; wentQuiet: number }
+      needPerArm: number
+      bindingArm: 'won' | 'lost'
+      backfillUntrustworthy: boolean
+    }
+  | {
+      status: 'ready'
+      counts: OutcomeCounts
+      usable: { won: number; lost: number; wentQuiet: number }
+    }
+
+/** One row of the outcome backfill — everything needed to answer it without
+ *  opening the call it refers to. */
+export interface BackfillRow {
+  contactId: string
+  name: string
+  company?: string
+  callCount: number
+  lastCallAt?: string
+  lastCallTitle?: string
+  answer?: BackfillAnswer
+  dealId?: string
+}
+
+export interface BackfillState {
+  rows: BackfillRow[]
+  answered: number
+  total: number
+  insight: Insight
+}
+
+export interface BackfillAnswerResult {
+  ok: boolean
+  error?: 'unknown-contact' | 'no-stage-for-kind' | 'deal-failed'
+  /** The whole recomputed state, returned by the same call that wrote — so a
+   *  row's new answer and the counter above it can never be one click apart. */
+  state?: BackfillState
+}
+
+export interface DealBackfillApi {
+  state: () => Promise<BackfillState>
+  insight: () => Promise<Insight>
+  answer: (contactId: string, answer: BackfillAnswer) => Promise<BackfillAnswerResult>
+  clear: (contactId: string) => Promise<BackfillAnswerResult>
 }
 
 export type EventSyncState = 'local-only' | 'synced' | 'dirty' | 'deleted' | 'error'
@@ -2931,6 +3012,7 @@ declare global {
       contacts: ContactsApi
       deals: DealsApi
       dealStages: DealStagesApi
+      dealBackfill: DealBackfillApi
       events: EventsApi
       auth: AuthApi
       loopback: LoopbackApi

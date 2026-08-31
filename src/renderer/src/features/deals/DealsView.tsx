@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus,
   Handshake,
@@ -31,6 +31,16 @@ import { useDealStages } from './useDealStages'
 import { DealFormDialog, type DealFormValues } from './DealFormDialog'
 import { StageEditorDialog } from './StageEditorDialog'
 import { PipelineBoard } from './PipelineBoard'
+import { OutcomeInsightCard } from './OutcomeInsightCard'
+import { OutcomeBackfillDialog } from './OutcomeBackfillDialog'
+import type { BackfillState, DealStageKind } from './types'
+import { OutcomeReasonPrompt, OutcomeReasonRetiredNotice } from './OutcomeReasonPrompt'
+import {
+  noteAnswered,
+  noteSkip,
+  promptRetired,
+  shouldAnnounceStopping
+} from './outcomeReasonPref'
 import { DealDetail } from './DealDetail'
 import { isDealStale } from './staleness'
 import { StaleBadge } from './StaleBadge'
@@ -65,6 +75,19 @@ export function DealsView({
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Deal | null>(null)
   const [managingStages, setManagingStages] = useState(false)
+  const [backfilling, setBackfilling] = useState(false)
+  // The deal just moved into a closed stage, if the prompt is still being
+  // offered. Null the rest of the time — this is not a queue and it never
+  // accumulates: a second close replaces the first rather than stacking, so
+  // the page can never fill up with unanswered questions.
+  const [closedJustNow, setClosedJustNow] = useState<{
+    dealId: string
+    title: string
+    kind: Exclude<DealStageKind, 'open'>
+    stageLabel: string
+  } | null>(null)
+  const [retiredNotice, setRetiredNotice] = useState(false)
+  const [backfill, setBackfill] = useState<BackfillState | null>(null)
   const [viewingId, setViewingId] = useState<string | null>(initialViewDealId)
 
   const consumedRef = useRef(false)
@@ -84,6 +107,14 @@ export function DealsView({
       active = false
     }
   }, [])
+
+  const refreshBackfill = useCallback((): void => {
+    void window.api.dealBackfill.state().then(setBackfill)
+  }, [])
+
+  useEffect(() => {
+    refreshBackfill()
+  }, [refreshBackfill])
 
   const contactStats = useMemo(() => buildContactStats(calls), [calls])
   const stageLabel = useMemo(() => new Map(stages.map((s) => [s.id, s])), [stages])
@@ -111,6 +142,26 @@ export function DealsView({
 
   const moveStage = (dealId: string, stageId: string): void => {
     void update(dealId, { stageId })
+
+    // Offer the reason prompt when — and only when — the move lands the deal
+    // in a CLOSED stage. Deliberately keyed on the stage's kind rather than
+    // its label, so a pipeline whose last column is called "Signed" still
+    // counts and one called "Won — pending paperwork" doesn't fire twice.
+    const target = stages.find((s) => s.id === stageId)
+    const deal = deals.find((d) => d.id === dealId)
+    if (!target || !deal || target.kind === 'open') return
+    if (promptRetired()) {
+      // Say so once, then never again — rather than either nagging or going
+      // silently missing, which is indistinguishable from a bug.
+      if (shouldAnnounceStopping()) setRetiredNotice(true)
+      return
+    }
+    setClosedJustNow({
+      dealId,
+      title: deal.title,
+      kind: target.kind,
+      stageLabel: target.label
+    })
   }
 
   const viewing = viewingId ? deals.find((d) => d.id === viewingId) : undefined
@@ -222,6 +273,34 @@ export function DealsView({
         </div>
       )}
 
+      {retiredNotice && <OutcomeReasonRetiredNotice onDismiss={() => setRetiredNotice(false)} />}
+
+      {closedJustNow && (
+        <OutcomeReasonPrompt
+          key={closedJustNow.dealId}
+          dealTitle={closedJustNow.title}
+          kind={closedJustNow.kind}
+          stageLabel={closedJustNow.stageLabel}
+          onSave={(reason) => {
+            void update(closedJustNow.dealId, { outcomeReason: reason })
+            noteAnswered()
+            setClosedJustNow(null)
+          }}
+          onSkip={() => {
+            noteSkip()
+            setClosedJustNow(null)
+          }}
+        />
+      )}
+
+      {view === 'board' && backfill && !busy && (
+        <OutcomeInsightCard
+          insight={backfill.insight}
+          unansweredRows={backfill.total - backfill.answered}
+          onOpenBackfill={() => setBackfilling(true)}
+        />
+      )}
+
       {busy ? (
         <SkeletonRows rows={4} />
       ) : contacts.length === 0 ? (
@@ -300,6 +379,19 @@ export function DealsView({
           onSubmit={async (values: DealFormValues) => {
             await update(editing.id, values)
             setEditing(null)
+          }}
+        />
+      )}
+      {backfilling && (
+        <OutcomeBackfillDialog
+          onClose={() => {
+            setBackfilling(false)
+            refreshBackfill()
+            void refresh()
+          }}
+          onChanged={() => {
+            refreshBackfill()
+            void refresh()
           }}
         />
       )}

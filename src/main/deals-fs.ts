@@ -37,6 +37,22 @@ export interface Deal {
    *  duplicated as the last entry) — powers the contact-timeline feature.
    *  Absent/empty on deals that haven't changed stage since this was added. */
   stageHistory?: { stageId: string; changedAt: string }[]
+  /**
+   * M32 Stage 2 — why this deal ended the way it did, in the founder's own
+   * words, captured at the moment it was closed.
+   *
+   * OPTIONAL IN THE STRONGEST SENSE. The prompt that fills this is skippable
+   * in one action, never blocks anything, and stops asking once it has been
+   * skipped repeatedly. An empty value here is a legitimate final state, not a
+   * missing field to chase — a forced reason is a made-up reason, and a
+   * made-up reason is worse than a blank one because it later reads as
+   * evidence.
+   *
+   * Captured on WON deals as well as lost ones. Asking only on losses would
+   * build a record of what goes wrong with no matching record of what goes
+   * right, which is the same one-armed sample the gate exists to refuse.
+   */
+  outcomeReason?: string
 }
 
 export interface DealCreateInput {
@@ -57,6 +73,7 @@ export interface DealUpdateInput {
   value?: unknown
   expectedCloseDate?: unknown
   notes?: unknown
+  outcomeReason?: unknown
 }
 
 // Ids are used to build file paths, so they must be tightly constrained
@@ -66,6 +83,9 @@ const ID_RE = /^[A-Za-z0-9-]{1,64}$/
 const MAX_TITLE = 300
 const MAX_NOTES = 2000
 const MAX_VALUE = 1_000_000_000 // a generous ceiling against fat-finger/garbage input
+// Short on purpose. This is a sentence about why a deal ended, typed in a
+// one-line box during a prompt the user can dismiss — not a notes field.
+const MAX_OUTCOME_REASON = 500
 
 export function isSafeId(id: unknown): id is string {
   return typeof id === 'string' && ID_RE.test(id)
@@ -223,6 +243,7 @@ function sanitizeDealRecord(value: unknown): Deal | null {
     riskAssessment: sanitizeRiskAssessment(v.riskAssessment),
     riskAssessmentHistory: sanitizeRiskAssessmentHistory(v.riskAssessmentHistory),
     stageHistory: sanitizeStageHistory(v.stageHistory),
+    outcomeReason: sanitizeMultilineText(v.outcomeReason, MAX_OUTCOME_REASON),
     deleted: v.deleted === true ? true : undefined
   }
 }
@@ -401,6 +422,8 @@ async function updateDealUnlocked(
   if ('expectedCloseDate' in patch)
     deal.expectedCloseDate = sanitizeDateOnly(patch.expectedCloseDate)
   if ('notes' in patch) deal.notes = sanitizeMultilineText(patch.notes, MAX_NOTES)
+  if ('outcomeReason' in patch)
+    deal.outcomeReason = sanitizeMultilineText(patch.outcomeReason, MAX_OUTCOME_REASON)
 
   deal.updatedAt = new Date().toISOString()
 
