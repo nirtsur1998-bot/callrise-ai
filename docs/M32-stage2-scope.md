@@ -304,6 +304,56 @@ number.
 - **No retroactive analysis of the 96 unlinked calls.** They stay unlinked.
 - **No backfill of outcomes from before today**, beyond marking the 4 existing deals.
 
+## The single-arm question: asked, answered, DROPPED — with one candidate kept on the shelf
+
+The founder asked whether there is a version of this analysis that needs only won deals,
+since the *lost* arm is what binds. Considered properly, and the answer is no for the version
+as posed.
+
+### Why *"here's what your won calls have in common"* is the bad version
+
+**Base rates eat it.** If 80% of all calls sit near a 0.5 talk ratio, then 80% of the WON
+calls do too. Reporting that as a property of winning is **describing the founder's habits
+and calling it a strategy** — and with no comparison group there is no way to separate the
+two after the fact.
+
+**And wording cannot fix it.** A number with no claim attached still reads as a target.
+*"Your won calls averaged 42% talk ratio"* will be read as *"aim for 42%"*, because that is
+the only actionable reading available. This is exactly the problem Stage 1 solved by making
+the number **not exist**, and the same remedy applies: refuse the surface, not the phrasing.
+
+**So the version as posed is precisely the confident nonsense this stage exists to refuse.**
+
+### The one candidate worth designing, IF a low-N version is ever wanted
+
+**Within-deal trajectory — each deal as its own control.**
+
+> *"In your won deals, questions-per-call rose between the first call and the last."*
+
+That is a **paired** comparison: each deal measured against itself, so base rates cancel, and
+it needs far fewer deals because within-deal variance is much smaller than between-deal
+variance. It is a real technique rather than a dressed-up description.
+
+**Its ceiling, which must travel with it:** it describes **how won deals progressed**. It
+cannot say that is **why they closed** — losing deals might show the identical shape, and
+without them nobody will ever know. The honest claim is *"this is the shape of the deals that
+closed"*, which is genuinely narrower than *"this is what closes deals"*, and the difference
+is the whole point.
+
+### ⚠ THE PRESSURE THAT WOULD PRODUCE THE BAD VERSION, WRITTEN DOWN ON PURPOSE
+
+**Building a low-N analysis BECAUSE the real analysis is far away is exactly the pressure
+that produces the dishonest one.**
+
+The reasoning will not feel dishonest at the time. It will feel like pragmatism — *the
+founder has been waiting, the counter has not moved, surely something is better than
+nothing.* **Something is not better than nothing here.** A confident wrong claim about the
+founder's own selling is the failure mode this entire stage was scoped to prevent, and it
+arrives dressed as helpfulness, never as a shortcut.
+
+If the trajectory version is ever built, it should be because it is **independently worth
+building**, not because the gate has not opened.
+
 ## Open questions for the founder
 
 1. **The 8.** Approve, or raise it.
