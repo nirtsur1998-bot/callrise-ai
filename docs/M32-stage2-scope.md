@@ -4,6 +4,37 @@
 
 ---
 
+## ⛔ READ THIS NUMBER FIRST: it is **8 in EACH ARM**, never 16 between them
+
+The requirement is **8 won AND 8 lost** — two separate counts that must each be met.
+"16 deals" is the number a reader will take away, and **it is wrong**, because it hides that
+the binding constraint is almost always the *lost* arm.
+
+**So the deals you need scale with your win rate:**
+
+| Win rate | Closed deals needed to reach 8 lost |
+|---|---|
+| 50% | 16 |
+| 60% | 20 |
+| 70% | **27** |
+
+A 12-and-2 split is **2**, not 14. Every count in this document that looks like it is
+approaching a target should be read against the arm it belongs to.
+
+### And the consequence, which is bigger than this stage
+
+**At a normal win rate this analysis needs a volume of closed business that a solo founder
+testing their own product will not produce for a long time — possibly never at this scale.**
+
+That is not a reason to stop building it: the capture is the foundation, it is correct
+regardless, and a user with real pipeline volume gets the analysis the day their data
+supports it. **But it must be written down, because in six months a stuck counter will look
+like a bug or like capture failing, and it will be neither.**
+
+**The feature is designed for a user with pipeline volume. For this founder specifically it
+is expected to stay dormant**, and that expectation is the design working, not the product
+being broken.
+
 ## The finding that should shape this stage, before any design
 
 I counted what is actually on the founder's machine, rather than designing against the
@@ -187,10 +218,15 @@ those are different claims.
 
 **And a note for later, at the founder’s instruction:** if a long stretch passes — say a year
 — and the counter has genuinely not moved, **that is a signal about the product, not about
-the founder’s diligence.** It would mean either that deals are not being recorded (a capture
-problem this stage failed to solve) or that deals do not close often enough for a
-deal-outcome-based analysis to ever work (a premise problem, and the feature should be
-reconsidered rather than waited on). Check it deliberately; do not let it quietly wait
+the founder’s diligence.** Three possible causes, and the THIRD is the one to check first:
+
+1. deals are not being recorded — a capture problem this stage failed to solve;
+2. deals do not close often enough — a premise problem;
+3. **the threshold design assumed a pipeline volume this product's users do not have.**
+
+(3) is the likeliest and the easiest to mistake for (1). It would be a finding about the
+FEATURE, not about the data or the founder — and the remedy would be to redesign what the
+analysis needs, not to wait longer. Check it deliberately; do not let it quietly wait
 forever.
 
 ## The backfill: worth doing, and it will NOT cross the line. Both halves matter.
