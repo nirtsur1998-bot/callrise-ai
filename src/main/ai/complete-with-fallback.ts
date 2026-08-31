@@ -322,7 +322,7 @@ function bundledSteps(purpose: AIPurpose): ResolvedStep[] {
  * to end), so a substitute is never a slower class of model than the capped
  * prefix would have offered.
  */
-const SUBSTITUTE_POOL: Record<AIPurpose, string[]> = {
+export const CANDIDATE_POOL: Record<AIPurpose, string[]> = {
   ...DEFAULT_CATALOG_CHAIN,
   'coaching-cue': SPEED_CHAIN,
   'deal-tier1': SPEED_CHAIN
@@ -437,7 +437,7 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
     // can still earn its own restoration. It is not orphaned by being skipped
     // on a 6-second live path.
     if (!legacyDemoted) return [legacy]
-    const substitute = stepsFromIds(SUBSTITUTE_POOL[purpose]).filter(
+    const substitute = stepsFromIds(CANDIDATE_POOL[purpose]).filter(
       (s) => s.providerId !== legacy.providerId
     )[0]
     return substitute ? [{ ...substitute, fromImplicitTail: true }] : [legacy]

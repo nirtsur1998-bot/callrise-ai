@@ -3,7 +3,8 @@
 // and to assign a primary model per job.
 import { ipcMain } from 'electron'
 import { MODEL_CATALOG, catalogEntry, resolveCatalog } from './model-catalog'
-import { DEFAULT_CATALOG_CHAIN } from './complete-with-fallback'
+import { CANDIDATE_POOL } from './complete-with-fallback'
+import { providerHasCredentials } from './provider-credentials'
 import { loadAppSettings, saveAppSettings } from '../app-settings'
 import type { AIPurpose } from './types'
 
@@ -41,6 +42,56 @@ export function registerModelCatalog(): void {
     return resolveCatalog({ forceRefresh: forceRefresh === true })
   })
 
+/**
+ * BUG-149 — derive the chain stored behind a user's primary pick.
+ *
+ * WHAT WAS WRONG. This used to be `[pick, ...DEFAULT_CATALOG_CHAIN[purpose]]`,
+ * and for the two live purposes that list is ALREADY truncated by an ATTEMPTS
+ * cap — `SPEED_CHAIN.slice(0, CHAIN_BUDGET.maxChainLength)` — whose two
+ * survivors are both Groq. So whatever you picked for coaching-cue, the
+ * fallback derived behind it came from a Groq-only list: a user holding Groq
+ * AND Cerebras keys still got a single-provider chain, on the one path whose
+ * entire budget is a single attempt. Taxonomy species 58's headline: a cap on
+ * how many attempts we make is not a cap on which models are eligible.
+ *
+ * WHY SIMPLY READING THE UNCAPPED LANE IS NOT ENOUGH, checked rather than
+ * assumed. `sanitizeModelAssignments` applies that same cap on every LOAD
+ * (app-settings.ts), so a longer stored chain is truncated straight back to two
+ * on the way out. Reading the uncapped pool but leaving the order alone gives
+ * `[groq-8b, groq-70b]` again — the first two entries of SPEED_CHAIN are both
+ * Groq. The pool has to be REORDERED so the two that survive the cap are the
+ * two worth having.
+ *
+ * SO: different provider first, then same provider, then anything unkeyed.
+ * That is the ordering `resolveConfiguredChain` already applies to its own
+ * legacy tail ("Different providers FIRST, then at most ONE same-provider
+ * model"), reused rather than re-invented.
+ *
+ * KEY-AWARE, AND THAT IS A REAL LIMITATION worth stating rather than hiding:
+ * this reads `providerHasCredentials` at ASSIGN time, so a user who adds a
+ * second provider's key LATER does not gain the cross-provider fallback until
+ * they reassign the job. Unkeyed entries are kept at the tail rather than
+ * dropped, so nothing is lost — they simply sort last, and the runtime skips
+ * them anyway. The alternative (recomputing at read time) would silently
+ * rewrite a setting the user chose, which is exactly what BUG-148 was about.
+ */
+function deriveChain(purpose: AIPurpose, pick: string): string[] {
+  const pickProvider = catalogEntry(pick)?.providerId
+  const entries = CANDIDATE_POOL[purpose]
+    .filter((id) => id !== pick)
+    .map((id) => catalogEntry(id))
+    .filter((e): e is NonNullable<typeof e> => Boolean(e) && !e!.knownStale)
+
+  const keyed = entries.filter((e) => providerHasCredentials(e.providerId))
+  const unkeyed = entries.filter((e) => !providerHasCredentials(e.providerId))
+  const ordered = [
+    ...keyed.filter((e) => e.providerId !== pickProvider),
+    ...keyed.filter((e) => e.providerId === pickProvider),
+    ...unkeyed
+  ]
+  return [pick, ...ordered.map((e) => e.id)]
+}
+
   // V1 chain-editing scope (see docs/ai-providers.md's M20 addendum): the
   // user picks ONE primary model per job, and the chain is auto-derived as
   // [primary, ...DEFAULT_CATALOG_CHAIN[purpose] minus primary] - promoting
@@ -58,9 +109,7 @@ export function registerModelCatalog(): void {
       return loadAppSettings()
     }
     const p = purpose as AIPurpose
-    const rest = DEFAULT_CATALOG_CHAIN[p].filter((id) => id !== catalogId)
-    const chain = [catalogId, ...rest]
-    return saveAppSettings({ aiModelAssignments: { [p]: { chain } } })
+    return saveAppSettings({ aiModelAssignments: { [p]: { chain: deriveChain(p, catalogId) } } })
   })
 
   // The counterpart to assignPrimaryModel — clears a job back to an empty
