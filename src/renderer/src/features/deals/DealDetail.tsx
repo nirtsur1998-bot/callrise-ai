@@ -25,6 +25,7 @@ import { formatValue, formatCloseDate } from './format'
 import { isDealStale, createFollowUpTask } from './staleness'
 import { RiskAssessmentCard } from './RiskAssessmentCard'
 import { DealCallsSection } from './DealCallsSection'
+import { OutcomeReasonSection } from './OutcomeReasonSection'
 import type { Deal, DealStage } from './types'
 
 interface DealDetailProps {
@@ -144,6 +145,18 @@ export function DealDetail({
         </div>
         {deal.notes && <p className="mt-3 text-sm whitespace-pre-line text-muted">{deal.notes}</p>}
       </div>
+
+      {/* M32 Stage 2 — the reason, on closed deals. The board's banner asks
+          at close time; a deal closed through the edit dialog lands HERE, and
+          the retired notice explicitly promises this page can take a reason. */}
+      {stage && stage.kind !== 'open' && (
+        <OutcomeReasonSection
+          dealId={deal.id}
+          kind={stage.kind}
+          reason={deal.outcomeReason}
+          onChanged={onChanged}
+        />
+      )}
 
       {stale && (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/30 bg-warning-soft px-4 py-3">
