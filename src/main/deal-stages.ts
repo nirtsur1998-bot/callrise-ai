@@ -128,24 +128,110 @@ export function loadDealStages(): DealStage[] {
 /** Stage list + its last-modified stamp — the "newest wins" key for the cloud
  *  backup's single-row stage sync. Files written before the stamp existed
  *  read as EPOCH (any cloud copy wins over an unstamped local default). */
-export function loadDealStagesMeta(): { stages: DealStage[]; updatedAt: string } {
+/**
+ * M32 Stage 2 — one-time migrations applied to an EXISTING saved pipeline.
+ *
+ * FOUND BY DRIVING THE APP, not by a test. Adding 'went-quiet' to
+ * `DEFAULT_STAGES` made every unit test pass and put the column on screen for
+ * **nobody**: `DEFAULT_STAGES` is only consulted when no `deal-stages.json`
+ * exists, and every existing install has one. The feature was invisible to
+ * exactly the people it was built for, and the suite was fully green.
+ *
+ * A marker per migration, not a version number: the marker records that the
+ * app has OFFERED this stage once. If the founder then deletes "Went quiet"
+ * because they do not want it, it must stay deleted — re-adding it on the next
+ * launch would be principle 49's worst case, silently restoring something a
+ * person deliberately removed.
+ */
+const STAGE_MIGRATIONS = ['went-quiet-v1'] as const
+type StageMigration = (typeof STAGE_MIGRATIONS)[number]
+
+function sanitizeMigrations(value: unknown): StageMigration[] {
+  if (!Array.isArray(value)) return []
+  return STAGE_MIGRATIONS.filter((m) => value.includes(m))
+}
+
+export function loadDealStagesMeta(): {
+  stages: DealStage[]
+  updatedAt: string
+  migrations: StageMigration[]
+} {
   try {
     const parsed = JSON.parse(readFileSync(stagesPath(), 'utf8'))
     const updatedAt =
       typeof parsed?.updatedAt === 'string' && !Number.isNaN(Date.parse(parsed.updatedAt))
         ? parsed.updatedAt
         : EPOCH
-    return { stages: sanitizeStageList(parsed?.stages), updatedAt }
+    return {
+      stages: sanitizeStageList(parsed?.stages),
+      updatedAt,
+      migrations: sanitizeMigrations(parsed?.migrations)
+    }
   } catch {
-    return { stages: DEFAULT_STAGES, updatedAt: EPOCH }
+    // No file at all: the defaults already contain every stage, so every
+    // migration is vacuously done. Marking them prevents a first-run install
+    // from later "migrating" a pipeline that was never missing anything.
+    return { stages: DEFAULT_STAGES, updatedAt: EPOCH, migrations: [...STAGE_MIGRATIONS] }
   }
+}
+
+/**
+ * Add "Went quiet" to a saved pipeline that predates it — ONCE.
+ *
+ * Deliberately conservative in three ways:
+ *   - runs only if the marker is absent, so a deliberate deletion sticks;
+ *   - skips if the pipeline ALREADY has a stage of this kind under any label,
+ *     because the user may have made their own and a second one is clutter;
+ *   - marks itself done even when it adds nothing, so the check does not
+ *     re-run forever on installs that never needed it.
+ *
+ * Returns whether the stage list changed, so the caller can avoid a pointless
+ * write (and a pointless `updatedAt` bump, which would make this device claim
+ * "newest" against the cloud for a change nobody made).
+ */
+export function migrateDealStages(): boolean {
+  const meta = loadDealStagesMeta()
+  if (meta.migrations.includes('went-quiet-v1')) return false
+
+  const already = meta.stages.some((s) => s.kind === 'went-quiet')
+  const stages = already
+    ? meta.stages
+    : [...meta.stages, { id: 'went-quiet', label: 'Went quiet', kind: 'went-quiet' as const }]
+
+  writeStagesWithMigrations(stages, [...meta.migrations, 'went-quiet-v1'], meta.updatedAt, already)
+  return !already
 }
 
 function writeStages(stages: DealStage[], updatedAt = new Date().toISOString()): void {
   mkdirSync(join(app.getPath('userData')), { recursive: true })
   // Atomic: a torn write here silently reset the pipeline to the default
   // stages on next launch, orphaning every deal sitting in a custom stage.
-  writeJsonAtomicSync(stagesPath(), { stages, updatedAt })
+  // Migrations are carried through so an ordinary edit cannot drop the markers
+  // and cause a deleted stage to be re-added on the next launch.
+  writeJsonAtomicSync(stagesPath(), {
+    stages,
+    updatedAt,
+    migrations: loadDealStagesMeta().migrations
+  })
+}
+
+/** Used only by the migration, which must control the stamp itself. */
+function writeStagesWithMigrations(
+  stages: DealStage[],
+  migrations: StageMigration[],
+  previousUpdatedAt: string,
+  unchanged: boolean
+): void {
+  mkdirSync(join(app.getPath('userData')), { recursive: true })
+  // KEEP the old stamp when nothing actually changed. Restamping would make
+  // this device claim "newest" in the cloud's newest-wins comparison for a
+  // migration that added nothing — the same no-restamp rule
+  // applyPulledDealStages already follows.
+  writeJsonAtomicSync(stagesPath(), {
+    stages,
+    updatedAt: unchanged ? previousUpdatedAt : new Date().toISOString(),
+    migrations
+  })
 }
 
 /**
@@ -205,6 +291,17 @@ let registered = false
 export function registerDealStages(): void {
   if (registered) return
   registered = true
+
+  // M32 Stage 2 — run the one-time pipeline migration BEFORE the first
+  // `dealStages:get` can be served, so the renderer's very first read already
+  // includes "Went quiet". Wrapped: a migration failure must never stop the
+  // deal stages registering at all, which would take the whole Pipeline down
+  // over a config nicety.
+  try {
+    if (migrateDealStages()) console.log('[deal-stages] added "Went quiet" to the saved pipeline')
+  } catch (e) {
+    console.error('[deal-stages] migration failed, continuing with the saved pipeline:', e)
+  }
 
   ipcMain.handle('dealStages:get', (): DealStage[] => loadDealStages())
   ipcMain.handle('dealStages:set', (_event, input: unknown): SetStagesResult =>

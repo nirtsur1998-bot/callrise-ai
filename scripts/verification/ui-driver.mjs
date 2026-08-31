@@ -62,6 +62,28 @@ export async function openApp(port, { expect: expectBuild } = {}) {
     }
   }
   console.log(`[ui] driving ${isPackaged ? 'PACKAGED' : 'DEV'} build: ${url}`)
+
+  // RULE 7 — WAIT FOR THE APP TO BE PAINTED, not merely for CDP to answer.
+  //
+  // CDP is listening long before React has rendered anything. The first run of
+  // this driver connected, refused two deliberate self-checks correctly, then
+  // failed to find "Pipeline" — a control that was plainly there a moment
+  // later. Nothing was wrong with the locator; the app had not painted yet.
+  //
+  // That failure mode is nastier than it looks: it does not say "too early",
+  // it says "expected exactly 1 match, found 0", which reads exactly like a
+  // missing feature. A driver that can report a shipped control as absent is
+  // worse than one that is slow.
+  const readyBy = Date.now() + 30_000
+  for (;;) {
+    const len = await cdp.evaluate('document.body.innerText.length')
+    if (typeof len === 'number' && len > 200) break
+    if (Date.now() > readyBy) {
+      throw new Error('app never painted: body text stayed under 200 chars for 30s')
+    }
+    await sleep(400)
+  }
+  console.log('[ui] app painted')
   return wrap(cdp)
 }
 
@@ -119,8 +141,18 @@ function wrap(cdp) {
     await action()
     const after = await read()
     if (JSON.stringify(before) === JSON.stringify(after)) {
+      // TRUNCATED, DELIBERATELY. The natural thing to compare is the whole
+      // page, and the natural thing to print on failure is the value that did
+      // not change — which dumps the founder's real contacts, deal titles and
+      // call subjects into a log. It did exactly that twice before this line
+      // existed. **A verification tool must not become an exfiltration path
+      // for the data it verifies against.** Compare a hash where you can.
+      const shown = JSON.stringify(before).slice(0, 100)
       throw new Error(
-        `${label}: state did NOT change — the action was a no-op.\n  value stayed: ${JSON.stringify(before)}`
+        `${label}: state did NOT change — the action was a no-op.\n` +
+          `  compared value (truncated): ${shown}…\n` +
+          `  If what you compared is identical across screens — a sidebar, a shell\n` +
+          `  header, a leading slice — that is the bug, not the app.`
       )
     }
     return { before, after }
@@ -169,8 +201,26 @@ function wrap(cdp) {
     })()`)
   }
 
+  /** Poll until `read` satisfies `ok`, or refuse. For anything asynchronous
+   *  the app does after an action — a save round-trip, a list refresh. Never
+   *  a bare sleep: a sleep that is too short fails as "not there", which is
+   *  indistinguishable from a real absence. */
+  async function waitFor(label, read, ok, { timeout = 15_000 } = {}) {
+    const until = Date.now() + timeout
+    let last
+    for (;;) {
+      last = await read()
+      if (ok(last)) return last
+      if (Date.now() > until) {
+        throw new Error(`waitFor(${label}) timed out after ${timeout}ms; last value: ${JSON.stringify(last)}`)
+      }
+      await sleep(300)
+    }
+  }
+
   return {
     raw: cdp,
+    waitFor,
     page: cdp.page,
     locate,
     click,
