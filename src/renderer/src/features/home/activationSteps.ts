@@ -34,9 +34,22 @@ import type { SettingsPageId } from '@renderer/features/settings/settings-nav'
  *  plain snapshot rather than the live APIs: it makes every branch reachable
  *  from a test without mocking eight IPC channels. */
 export interface ActivationState {
-  /** DEEPGRAM_API_KEY configured — live transcription works at all. */
+  /**
+   * DEEPGRAM_API_KEY is PRESENT. **Not "transcription works"** — this said that
+   * until 2026-08-31 (M32/BUG-146) and it was never true: the value behind it
+   * is `Boolean(process.env.DEEPGRAM_API_KEY)`, and nothing on this path has
+   * ever checked the key. A wrong key satisfies it exactly as well as a right
+   * one.
+   *
+   * The step it drives is titled "Add a transcription key" and ticks when you
+   * have added one, which is honest. **Keep the claim at that height.** The
+   * Settings card is where a key can actually be checked (deepgram-key.ts);
+   * this checklist deliberately does not, because a Home screen that fires
+   * network probes on every render is its own bug.
+   */
   hasTranscriptionKey: boolean
-  /** Any text-AI provider key configured — summaries, coaching, everything. */
+  /** Any text-AI provider key is PRESENT — same limit as above: presence, not
+   *  health, and deliberately so. */
   hasAiKey: boolean
   /** Saved calls on disk. */
   callCount: number
