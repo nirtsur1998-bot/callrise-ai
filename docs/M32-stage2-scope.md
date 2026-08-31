@@ -294,6 +294,28 @@ distinct from an unanswered row. One entry point, findable, and **no reminders**
 founder does 10 and stops, the counter reflects what exists rather than prompting toward a
 number.
 
+## ⚠ RELEASE-ORDERING CONSTRAINT: whatever ships this must not be casually downgraded
+
+**Not a bug — a property of the change, and it needs saying in the release notes.**
+
+A stage with `kind: 'went-quiet'` read by **1.6.0 or earlier** is coerced to `'open'`, because
+`sanitizeKind` in those builds knows only `won`/`lost` and falls back to `open` for anything
+else. That fallback is correct — an unknown kind from a NEWER build should degrade to "still
+in play" rather than silently marking live deals closed — but it has a consequence:
+
+**A user who rolls back after this ships sees their closed "Went quiet" deals reappear in an
+OPEN column.** The deals are intact and the stage is still there; only its meaning is lost.
+Nothing is destroyed and nothing goes red.
+
+Three things follow:
+
+1. **The release carrying Stage 2 should be one people do not downgrade from casually**, and
+   the notes should say so plainly rather than leaving it to be discovered.
+2. **Do not "fix" the old fallback.** Coercing an unknown kind to `open` is the safe
+   direction; the alternative — guessing it is closed — would hide live deals.
+3. **Check this again for any future kind.** The same coercion will apply to the next one,
+   and the same rollback will produce the same surprise.
+
 ## What Stage 2 will NOT deliver, said now
 
 - **No insight, for months.** With 0 lost deals, the counter will read *"nothing can be

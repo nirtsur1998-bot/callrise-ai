@@ -207,3 +207,79 @@ exactly like success.
 Same family as *a click that reports success and does nothing* and *a target
 below the fold*: in all three the action never happened and nothing said so. The
 difference here is that the check itself supplied the false confirmation.
+
+## The driver's own rules, and two constraints that are not niceties
+
+`ui-driver.mjs` exists so these are behaviour rather than memory. Three of them
+were learned by breaking, one after the other, in a single afternoon.
+
+### Test the instrument's REFUSALS before trusting its results
+
+Every driver run should begin by asking it to locate something that does not
+exist, and confirming it **refuses**:
+
+```js
+for (const desc of [{ text: '__no_such_control__' }, { placeholder: '__no_such_field__' }]) {
+  try { await ui.locate(desc); console.log('*** FAILED TO REFUSE ***') }
+  catch { console.log('refused:', JSON.stringify(desc)) }
+}
+```
+
+**An instrument that has not been shown to fail is one you are taking on faith**
+(species 37, and the founder's standing property as of 2026-08-31). It costs two
+calls and it is the difference between "the check passed" and "the check ran".
+
+### WORKED EXAMPLE: the comparison that cannot tell the two states apart
+
+The rule *"assert the state CHANGED"* is not enough on its own — **what you
+compare has to be capable of changing.**
+
+Real sequence, same day the rule was written down:
+
+```js
+// WRONG — and it reported a successful navigation as a no-op
+() => ui.evaluate('document.body.innerText.slice(0, 120)')
+```
+
+The first ~120 characters of this app are the **sidebar**, which is byte-identical
+on every screen. The navigation had worked; the comparison could not see it. The
+inverse of the same mistake (comparing a slice that is identical across screens
+and concluding *nothing changed*) is what made an earlier pass report "changed:
+false" for a click that had landed.
+
+```js
+// RIGHT — compare the whole page, and compare a HASH of it (see below)
+const pageHash = async () => {
+  const t = await ui.evaluate('document.body.innerText')
+  let h = 0
+  for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) | 0
+  return `len${t.length}:h${h}`
+}
+```
+
+**Before using any before/after value, ask what it looks like on the OTHER screen.**
+If you cannot say, it is not a control.
+
+### CONSTRAINT, not a nicety: a verification tool must not become a place the data ends up
+
+**Compare hashes, never text. Never print page content on failure.**
+
+The natural implementation prints "the value that did not change" when an
+assertion fails — and on this app that is the founder's real contacts, deal
+titles and call subjects. **It did exactly that, into a log, twice**, before the
+truncation in `actAndExpectChange` existed.
+
+This is a standing constraint (founder, 2026-08-31): *anything that reads my data
+to verify it must not become a place my data ends up.* Practically:
+
+- compare a hash or a length, not the text itself;
+- when you must read text, read the smallest region that answers the question
+  (`cardText(placeholder)` rather than the whole body);
+- assume every error message you write will be pasted somewhere.
+
+### Wait for PAINT, not for the port
+
+`openApp` polls until the body has real content. CDP answers long before React
+renders, and a locator run too early reports **"expected exactly 1 match, found
+0"** — which reads exactly like a missing feature rather than an early call. A
+driver that can report a shipped control as absent is worse than a slow one.
