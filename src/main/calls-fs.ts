@@ -439,6 +439,25 @@ interface CallBase {
   /** The contact this call is linked to (manual, or confirmed from a calendar
    *  match) — the CRM foundation's call-history link. */
   contactId?: string
+  /**
+   * M32 Stage 2 — the DEAL this call belongs to. The join outcome tracking
+   * needs, and it did not exist: before this, the only path from a call to a
+   * deal was `call.contactId` → `deal.contactId`, which is **optional** (96 of
+   * 163 calls on the founder's machine have no contact at all) and
+   * **ambiguous** (a contact with two deals gives no way to say which).
+   *
+   * EXPLICIT, NEVER INFERRED. A guessed link is indistinguishable from a real
+   * one in every later analysis, and a wrong attribution does not announce
+   * itself — it just quietly moves a call's talk ratio into the wrong deal's
+   * column. Where the answer is unambiguous the app may OFFER the link; it
+   * never records one on the user's behalf.
+   *
+   * One field, two entry points: set from the call (*which deal is this?*) and
+   * from the deal (*which calls belong to this?*). The deal-side view is a
+   * query over this field rather than a second list, so the two surfaces
+   * cannot disagree.
+   */
+  dealId?: string
   /** M23 — cold-call/discovery/demo/closing, for call-type-aware benchmarks.
    *  Auto-detected from the title the first time the call is coached, then
    *  sticky: re-coaching never overwrites a value already set here, so a
@@ -670,6 +689,7 @@ export function toSummary(call: Call): CallSummary {
     speakerCount: call.speakerCount,
     preview: call.preview,
     contactId: isSafeId(call.contactId) ? call.contactId : undefined,
+    dealId: isSafeId(call.dealId) ? call.dealId : undefined,
     callType: call.callType,
     hasSummary: Boolean(call.summary),
     attachmentCount: Array.isArray(call.attachments) ? call.attachments.length : 0,
@@ -846,6 +866,9 @@ export const CALL_FIELD_RULES: { [K in keyof Required<Call>]: CallFieldRule } = 
   updatedAt: { cls: 'METADATA' },
   durationMs: { cls: 'METADATA' },
   contactId: { cls: 'METADATA' },
+  // Same class as contactId: a link, not content. Carries no buyer speech and
+  // nothing derived from it, so it survives every stripping rule intact.
+  dealId: { cls: 'METADATA' },
   callType: { cls: 'METADATA' },
   salesBrainExcluded: { cls: 'METADATA' },
 
@@ -1234,6 +1257,15 @@ export function callBackupPayload(call: Call): Record<string, unknown> {
     // means "explicitly unlinked", so old rows without the field can't wipe
     // a local link.
     contactId: call.contactId ?? null,
+    // M32 Stage 2 — the deal link travels for exactly the reasons the contact
+    // link does, and its absence here would have been worse than an oversight:
+    // the merge-on-read logic added alongside it would have been UNREACHABLE
+    // (`v.dealId` always absent), so a pull finding a newer cloud row would
+    // silently drop every call→deal link and the outcome analysis would lose
+    // its join without anything going red. Same `?? null` three-way contract:
+    // a string links, an explicit null unlinks, an ABSENT field (row written by
+    // a pre-Stage-2 build) preserves whatever this device already knows.
+    dealId: call.dealId ?? null,
     // Resolved/renamed speaker names — plain metadata like contactId, not
     // transcript content, so it's safe in the default (non-transcript) sync
     // scope too. Caller (listCallsForBackup) already ran applyConsentRetention
@@ -1494,6 +1526,20 @@ export async function importCall(
           ? undefined
           : current?.contactId
 
+    // The deal link takes the IDENTICAL three-way shape, deliberately: string
+    // links, explicit null unlinks, absent preserves. Every row pushed by a
+    // build older than M32 Stage 2 omits this field entirely, and that must
+    // read as "this device knows nothing about the deal link" rather than as
+    // "unlink it" — otherwise one sync from an old install silently detaches
+    // every call from its deal, which is exactly BUG-126's shape.
+    const dealId = deleted
+      ? undefined
+      : isSafeId(v.dealId)
+        ? v.dealId
+        : v.dealId === null
+          ? undefined
+          : current?.dealId
+
     let coaching = deleted ? undefined : (sanitizeCoaching(v.coaching, segments) ?? undefined)
     // Same report as the local one (identical creation stamp)? Keep the LOCAL
     // copy — it still has the evidence quotes the quote-free cloud projection
@@ -1528,6 +1574,7 @@ export async function importCall(
       attachments,
       consent: sanitizeConsent(v.consent),
       ...(contactId ? { contactId } : {}),
+      ...(dealId ? { dealId } : {}),
       ...(!deleted && (isoOrUndefined(v.objectionsMinedAt) ?? current?.objectionsMinedAt)
         ? { objectionsMinedAt: isoOrUndefined(v.objectionsMinedAt) ?? current?.objectionsMinedAt }
         : {}),

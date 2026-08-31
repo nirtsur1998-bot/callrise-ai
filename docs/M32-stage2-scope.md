@@ -168,6 +168,31 @@ The founder asked for this specifically, so it is a type-level property, not a g
 
 ---
 
+## ⚠ THE LINKING WORK DOES NOT UNLOCK THE ANALYSIS. READ THIS BEFORE PLANNING AROUND IT.
+
+**Stage 2’s honest output is “come back in some months.”**
+
+Measured, not estimated: 94 of the 96 contactless calls DO have transcripts, so most could be
+linked retroactively. **It changes nothing.** Only 21 of them carry coaching metrics, and
+more decisively — **the analysis counts DEALS, not calls.** The gate needs ~8 won and ~8
+lost. There are **4 deals, all won, zero lost.**
+
+Link every one of the 163 calls perfectly, backfill coaching on all of them, and the counter
+still reads *nothing to compare*: 4 data points in one arm, zero in the other.
+
+**So nobody should read the call→deal linking work as the thing standing between the founder
+and an insight.** It is what makes a future insight POSSIBLE. What makes it ARRIVE is closed
+deals, which only time and selling produce. The linking is necessary and insufficient, and
+those are different claims.
+
+**And a note for later, at the founder’s instruction:** if a long stretch passes — say a year
+— and the counter has genuinely not moved, **that is a signal about the product, not about
+the founder’s diligence.** It would mean either that deals are not being recorded (a capture
+problem this stage failed to solve) or that deals do not close often enough for a
+deal-outcome-based analysis to ever work (a premise problem, and the feature should be
+reconsidered rather than waited on). Check it deliberately; do not let it quietly wait
+forever.
+
 ## What Stage 2 will NOT deliver, said now
 
 - **No insight, for months.** With 0 lost deals, the counter will read *"nothing can be
@@ -181,7 +206,12 @@ The founder asked for this specifically, so it is a type-level property, not a g
 ## Open questions for the founder
 
 1. **The 8.** Approve, or raise it.
-2. **Where the counter lives** — Coaching, Rise, the Pipeline board, or the deal itself. My
+2. **Linking from the deal side — ANSWERED, and it needs no extra structure.** `call.dealId`
+   is one field with two entry points: from the call (*“which deal is this?”*) and from the
+   deal (*“which calls belong to this?”*). The deal-side view is a query for calls whose
+   `dealId` matches — no join table, no second source of truth, and the two surfaces cannot
+   disagree because they write the same field. Both will be built.
+3. **Where the counter lives** — Coaching, Rise, the Pipeline board, or the deal itself. My
    recommendation: **the Pipeline board**, because that is where an outcome gets recorded,
    so the progress bar sits next to the action that moves it.
 3. **`no-decision` wording** — "No decision", "Stalled", "Went quiet"? This is the founder's
