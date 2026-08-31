@@ -179,3 +179,31 @@ if (!(r.y > 0 && r.y < innerHeight)) return { err: 'off-screen after scrollIntoV
 Refusing matters as much as scrolling: a sticky header, a modal or a collapsed
 section can each leave the element unreachable, and clicking anyway is how a
 driver silently operates on the wrong thing.
+
+### Assert that your action CHANGED the state, never that the state matches
+
+Third instance of this family, and the cheapest one to prevent.
+
+M32's visual pass clicked **Light**, then asserted `/light/.test(rootClass)`. It passed.
+The app **was already in light theme** — the click changed nothing, the assertion
+confirmed a state that pre-existed it, and the run reported a successful theme
+switch. The consequence went further than the check: every screenshot shown to
+the founder up to that point was light, while both of us believed a two-theme
+pass was underway. **Dark had never been rendered.**
+
+```js
+const before = await rootClass()
+await click('Dark')
+const after = await rootClass()
+if (before === after) throw new Error('the click was a no-op')   // ← the control
+if (/(^|s)light(s|$)/.test(after)) throw new Error('still light: ' + after)
+```
+
+**Read the state, act, read it again, and assert on the DIFFERENCE.** Asserting
+the end state alone cannot tell "my action worked" from "it was already like
+that" — and the second is silent, plausible, and produces screenshots that look
+exactly like success.
+
+Same family as *a click that reports success and does nothing* and *a target
+below the fold*: in all three the action never happened and nothing said so. The
+difference here is that the check itself supplied the false confirmation.
