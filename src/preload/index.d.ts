@@ -1826,6 +1826,17 @@ export interface AiCatalogApi {
    *  default chain) every time this job runs. Returns the updated
    *  AppSettings, same shape as settings.update(). */
   resetToAutomatic: (purpose: AiPurpose) => Promise<AppSettings>
+  /**
+   * BUG-149 follow-up — assigned jobs whose stored chain is single-provider
+   * and WOULD cross providers if reassigned with the keys held right now.
+   *
+   * BUG-149's fix is future-only by design: stored chains are never migrated
+   * and credentials are read at assign time, both so the app cannot silently
+   * rewrite a setting the user made. This is the other half of that promise —
+   * "we will not touch it" was intended, "we will not mention it" was not.
+   * Empty for a healthy install.
+   */
+  chainsCouldImprove: () => Promise<AiPurpose[]>
 }
 
 export interface AiFallbackEventView {

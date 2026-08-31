@@ -34,6 +34,7 @@ const handlers: Handler[] = []
 
 const { registerModelCatalog } = await import('../catalog-ipc')
 const { CANDIDATE_POOL } = await import('../complete-with-fallback')
+const { chainCouldCrossProviders } = await import('../catalog-ipc')
 
 const ORIGINAL_ENV = { ...process.env }
 
@@ -125,5 +126,63 @@ describe('BUG-149: a second provider takes the slot behind the pick', () => {
     // added the key. Just never in front of something usable.
     expect(chain).toContain('cerebras-gpt-oss-120b')
     expect(chain?.indexOf('cerebras-gpt-oss-120b')).toBeGreaterThan(1)
+  })
+})
+
+describe('the nudge is NARROW — it must not fire on a healthy install', () => {
+  // The whole value of a notice like this is that seeing it means something.
+  // Each case below is a state where nothing is wrong, and firing there would
+  // train the user to ignore the one case where something is.
+  it('a job left on Automatic never nudges — nothing was assigned to improve', () => {
+    process.env.GROQ_API_KEY = 'g'
+    process.env.CEREBRAS_API_KEY = 'c'
+    expect(chainCouldCrossProviders('coaching-cue', [])).toBe(false)
+  })
+
+  it('an ALREADY cross-provider chain never nudges', () => {
+    process.env.GROQ_API_KEY = 'g'
+    process.env.CEREBRAS_API_KEY = 'c'
+    expect(
+      chainCouldCrossProviders('coaching-cue', [
+        'groq-llama-3.1-8b-instant',
+        'cerebras-gpt-oss-120b'
+      ])
+    ).toBe(false)
+  })
+
+  it('a single-provider chain does NOT nudge when no second provider is keyed', () => {
+    // Nothing the user can do about it, so saying anything is pure noise.
+    process.env.GROQ_API_KEY = 'g'
+    delete process.env.CEREBRAS_API_KEY
+    expect(
+      chainCouldCrossProviders('coaching-cue', [
+        'groq-llama-3.1-8b-instant',
+        'groq-llama-3.3-70b-versatile'
+      ])
+    ).toBe(false)
+  })
+
+  it('THE CASE IT EXISTS FOR: single-provider chain, second provider now keyed', () => {
+    process.env.GROQ_API_KEY = 'g'
+    process.env.CEREBRAS_API_KEY = 'c'
+    expect(
+      chainCouldCrossProviders('coaching-cue', [
+        'groq-llama-3.1-8b-instant',
+        'groq-llama-3.3-70b-versatile'
+      ])
+    ).toBe(true)
+  })
+
+  it('taking the suggestion silences it — the loop actually closes', () => {
+    // If reassigning did not clear the condition, the notice would be
+    // permanent and the button would look broken.
+    process.env.GROQ_API_KEY = 'g'
+    process.env.CEREBRAS_API_KEY = 'c'
+    const pick = 'groq-llama-3.1-8b-instant'
+    const before = ['groq-llama-3.1-8b-instant', 'groq-llama-3.3-70b-versatile']
+    expect(chainCouldCrossProviders('coaching-cue', before)).toBe(true)
+
+    const reassigned = (assign('coaching-cue', pick) ?? []).slice(0, before.length)
+    expect(chainCouldCrossProviders('coaching-cue', reassigned)).toBe(false)
   })
 })

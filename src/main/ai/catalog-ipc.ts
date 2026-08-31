@@ -65,20 +65,20 @@ const ASSIGNABLE_PURPOSES: AIPurpose[] = [
  * rewrite a setting the user chose, which is exactly what BUG-148 was about.
  */
 function deriveChain(purpose: AIPurpose, pick: string): string[] {
-const pickProvider = catalogEntry(pick)?.providerId
-const entries = CANDIDATE_POOL[purpose]
-  .filter((id) => id !== pick)
-  .map((id) => catalogEntry(id))
-  .filter((e): e is NonNullable<typeof e> => Boolean(e) && !e!.knownStale)
+  const pickProvider = catalogEntry(pick)?.providerId
+  const entries = CANDIDATE_POOL[purpose]
+    .filter((id) => id !== pick)
+    .map((id) => catalogEntry(id))
+    .filter((e): e is NonNullable<typeof e> => Boolean(e) && !e!.knownStale)
 
-const keyed = entries.filter((e) => providerHasCredentials(e.providerId))
-const unkeyed = entries.filter((e) => !providerHasCredentials(e.providerId))
-const ordered = [
-  ...keyed.filter((e) => e.providerId !== pickProvider),
-  ...keyed.filter((e) => e.providerId === pickProvider),
-  ...unkeyed
-]
-return [pick, ...ordered.map((e) => e.id)]
+  const keyed = entries.filter((e) => providerHasCredentials(e.providerId))
+  const unkeyed = entries.filter((e) => !providerHasCredentials(e.providerId))
+  const ordered = [
+    ...keyed.filter((e) => e.providerId !== pickProvider),
+    ...keyed.filter((e) => e.providerId === pickProvider),
+    ...unkeyed
+  ]
+  return [pick, ...ordered.map((e) => e.id)]
 }
 
 /**
@@ -103,22 +103,22 @@ return [pick, ...ordered.map((e) => e.id)]
  * nothing meaningful changed is one people learn to dismiss.
  */
 export function chainCouldCrossProviders(purpose: AIPurpose, chain: string[]): boolean {
-if (chain.length === 0) return false
-const providersOf = (ids: string[]): Set<string> =>
-  new Set(
-    ids
-      .map((id) => catalogEntry(id)?.providerId)
-      .filter((p): p is NonNullable<typeof p> => Boolean(p))
-  )
+  if (chain.length === 0) return false
+  const providersOf = (ids: string[]): Set<string> =>
+    new Set(
+      ids
+        .map((id) => catalogEntry(id)?.providerId)
+        .filter((p): p is NonNullable<typeof p> => Boolean(p))
+    )
 
-// Already spread across providers — nothing to say.
-if (providersOf(chain).size > 1) return false
+  // Already spread across providers — nothing to say.
+  if (providersOf(chain).size > 1) return false
 
-// Compare only the prefix that SURVIVES the cap, because that prefix is the
-// whole of what ever runs. `chain` is already capped (sanitizeModelAssignments
-// caps on every load), so its length is the live budget.
-const derived = deriveChain(purpose, chain[0]).slice(0, chain.length)
-return providersOf(derived).size > 1
+  // Compare only the prefix that SURVIVES the cap, because that prefix is the
+  // whole of what ever runs. `chain` is already capped (sanitizeModelAssignments
+  // caps on every load), so its length is the live budget.
+  const derived = deriveChain(purpose, chain[0]).slice(0, chain.length)
+  return providersOf(derived).size > 1
 }
 
 export function registerModelCatalog(): void {

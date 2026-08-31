@@ -519,7 +519,13 @@ const api = {
     // Clears a job back to "Automatic" — main picks the best available model
     // from whatever the user has keys for, same resolution completeWithFallback()
     // already uses when nothing's explicitly assigned.
-    resetToAutomatic: (purpose: string) => ipcRenderer.invoke('settings:resetToAutomatic', purpose)
+    resetToAutomatic: (purpose: string) => ipcRenderer.invoke('settings:resetToAutomatic', purpose),
+    // BUG-149 follow-up — which assigned jobs would gain a SECOND PROVIDER if
+    // reassigned with the keys held right now. Read-only: the fix is
+    // deliberately future-only, so this reports the gap instead of silently
+    // closing it. Taking the suggestion calls assignPrimaryModel with the SAME
+    // primary, so the user's own pick is never changed for them.
+    chainsCouldImprove: () => ipcRenderer.invoke('aiCatalog:chainsCouldImprove')
   },
   aiFallback: {
     recentEvents: () => ipcRenderer.invoke('aiFallback:recentEvents')
