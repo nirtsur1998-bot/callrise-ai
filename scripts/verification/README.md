@@ -44,6 +44,12 @@ Restoration as mechanism rather than memory. `withRestoredState(fn, opts)`:
 to touch. Anything outside that list appearing in the diff is reported as a
 failure — which is precisely the class of mistake the first incident was.
 
+It suppresses the FAILURE REPORT for those files; it does **not** leave them
+behind. Every key file is restored either way — a throwaway credential saved by
+a check is deleted on the way out, because cleaning it up by hand is exactly the
+"something I have to remember" this module exists to delete. (M32 did have to
+remember it, once, before the restore existed.)
+
 ```js
 import { withRestoredState } from './state-guard.mjs'
 
@@ -148,3 +154,28 @@ single-instance lock. A second instance calls `app.quit()` before `whenReady`.
 their REAL data.** Ask first — and snapshot `ai-keys/` with per-file hashes plus
 `app-settings.json` before anything, then verify byte-identity afterwards. Read
 only: no typing into a key field, no Save, no Remove, no toggles.
+
+### The target below the fold: a click that lands on nothing
+
+Third driving defect from the same session, and the easiest to miss because it
+produces **no error at all**.
+
+`getBoundingClientRect()` returns viewport coordinates. An element further down
+a scrolling page has a `y` **outside the window**, and
+`Input.dispatchMouseEvent` at that point hits nothing — no exception, no
+warning, and the next screenshot looks plausible. The API keys page has twelve
+cards; the ninth was nowhere near the viewport, so the click and the
+`Input.insertText` after it both went into the void. Only reading the input's
+`.value` back caught it.
+
+**Scroll first, measure second, and refuse if it is still not on screen:**
+
+```js
+el.scrollIntoView({ block: 'center' })
+const r = el.getBoundingClientRect()
+if (!(r.y > 0 && r.y < innerHeight)) return { err: 'off-screen after scrollIntoView' }
+```
+
+Refusing matters as much as scrolling: a sticky header, a modal or a collapsed
+section can each leave the element unreachable, and clicking anyway is how a
+driver silently operates on the wrong thing.
