@@ -74,6 +74,30 @@ describe('a closed deal with no measurable call does not count', () => {
     expect(g.usable).toEqual({ won: 0, lost: 0, wentQuiet: 0 })
   })
 
+  it('closed counts every closed deal; usable counts only the measurable ones', () => {
+    // The distinction the counter reads, and the reason it was added: four won
+    // deals with no linked coached call is "0 countable, 4 on the board", not
+    // "0 deals". Reporting those two situations identically is what sent the
+    // founder to a card that said 0 while their board said 4.
+    const g = evaluateGate(deals('won', 4, false), counts({ won: 4 }))
+    if (g.status !== 'insufficient') throw new Error('unreachable')
+    expect(g.closed.won, 'closed must see deals that carry no metrics').toBe(4)
+    expect(g.usable.won, 'usable must NOT see them').toBe(0)
+  })
+
+  it('closed is never what the gate opens on', () => {
+    // The load-bearing half. If the bar were ever read off `closed`, the gate
+    // would open on deals with nothing to compare and the analysis would run
+    // on an empty join — the exact promise-an-analysis-that-cannot-run failure
+    // `hasMetricCall` exists to prevent.
+    const plenty = [...deals('won', 20, false), ...deals('lost', 20, false)]
+    const g = evaluateGate(plenty, counts())
+    expect(g.status, 'the gate opened on deals with no measurable calls').toBe('insufficient')
+    if (g.status !== 'insufficient') throw new Error('unreachable')
+    expect(g.closed.won).toBe(20)
+    expect(g.usable.won).toBe(0)
+  })
+
   it('mixed: only the measurable ones are counted', () => {
     const mixed = [
       ...deals('won', MIN_PER_ARM, true),
@@ -176,7 +200,15 @@ describe('the insufficient arm carries NO analysis numbers — structurally', ()
     // asserted in prose: a new field slipping onto this arm fails here.
     const g = evaluateGate(deals('won', 4), counts({ won: 4 }))
     expect(Object.keys(g).sort()).toEqual(
-      ['backfillUntrustworthy', 'bindingArm', 'counts', 'needPerArm', 'status', 'usable'].sort()
+      [
+        'backfillUntrustworthy',
+        'bindingArm',
+        'closed',
+        'counts',
+        'needPerArm',
+        'status',
+        'usable'
+      ].sort()
     )
   })
 

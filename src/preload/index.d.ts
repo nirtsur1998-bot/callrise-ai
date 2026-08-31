@@ -1481,6 +1481,11 @@ export type Insight =
       status: 'insufficient'
       counts: OutcomeCounts
       usable: { won: number; lost: number; wentQuiet: number }
+      /** Deals in each arm regardless of whether any call is linked. Lets the
+       *  counter tell "no deals" apart from "no measurable calls on them" —
+       *  two situations needing opposite actions, which the first version of
+       *  the counter reported identically. */
+      closed: { won: number; lost: number; wentQuiet: number }
       needPerArm: number
       bindingArm: 'won' | 'lost'
       backfillUntrustworthy: boolean
@@ -1489,6 +1494,7 @@ export type Insight =
       status: 'ready'
       counts: OutcomeCounts
       usable: { won: number; lost: number; wentQuiet: number }
+      closed: { won: number; lost: number; wentQuiet: number }
     }
 
 /** One row of the outcome backfill — everything needed to answer it without

@@ -280,7 +280,14 @@ function BackfillRowItem({
               <span className="truncate text-[12px] text-faint">· {row.company}</span>
             )}
           </div>
-          <p className="mt-0.5 truncate text-[12px] text-faint">
+          {/* Truncates, and that is fine for the part that gets cut: the count
+              and the date are the memory jogs and always survive, the call
+              title is a bonus. Seen truncating to "Ben — …" in the rendered
+              app, so the full text is on hover rather than lost. */}
+          <p
+            className="mt-0.5 truncate text-[12px] text-faint"
+            title={row.lastCallTitle ?? undefined}
+          >
             {row.callCount} coached call{row.callCount === 1 ? '' : 's'}
             {row.lastCallAt && ` · last ${formatDate(row.lastCallAt)}`}
             {row.lastCallTitle && ` · ${row.lastCallTitle}`}

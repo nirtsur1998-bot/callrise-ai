@@ -46,7 +46,15 @@ export function OutcomeInsightCard({
   // card's whole job is what to say while there is nothing to say.
   if (insight.status !== 'insufficient') return null
 
-  const { usable, needPerArm, bindingArm, backfillUntrustworthy } = insight
+  const { usable, closed, needPerArm, bindingArm, backfillUntrustworthy } = insight
+
+  // THE GAP THIS EXISTS TO EXPLAIN, found by rendering the card against real
+  // data rather than by reading it. The founder's board showed four Won deals
+  // and this card said "You have 0 won and 0 lost" — both numbers correct
+  // (`usable` counts only deals with a linked, coached call), and together
+  // completely misleading: "you have no deals" and "your deals have no
+  // measurable calls" need opposite actions, and read identically.
+  const unmeasured = closed.won + closed.lost - (usable.won + usable.lost)
 
   return (
     <div className="mb-4 rounded-xl border border-line-soft bg-surface px-4 py-3.5">
@@ -62,7 +70,7 @@ export function OutcomeInsightCard({
             one linked call carrying coaching metrics.
           </p>
           <p className="mt-2 text-[13px] text-muted">
-            You have{' '}
+            Countable right now:{' '}
             <span className="font-medium tabular-nums text-positive">{usable.won} won</span> and{' '}
             <span className="font-medium tabular-nums text-danger">{usable.lost} lost</span>
             {usable.wentQuiet > 0 && (
@@ -78,6 +86,19 @@ export function OutcomeInsightCard({
               The {bindingArm} column is the one holding it back.
             </span>
           </p>
+          {unmeasured > 0 && (
+            <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-muted">
+              You do have{' '}
+              <strong className="font-medium tabular-nums text-ink">
+                {closed.won} won and {closed.lost} lost
+              </strong>{' '}
+              on the board — but {unmeasured === 1 ? 'one of them has' : `${unmeasured} of them have`}{' '}
+              no linked call carrying coaching metrics, so{' '}
+              {unmeasured === 1 ? 'it cannot' : 'they cannot'} be compared. Open a deal and link its
+              calls under <span className="text-ink">Calls on this deal</span>, or link from the call
+              itself.
+            </p>
+          )}
           {backfillUntrustworthy && (
             <p className="mt-2 max-w-xl rounded-lg bg-elevated px-2.5 py-2 text-[12px] leading-relaxed text-warning">
               Most of the rows you&apos;ve answered so far came back &ldquo;I don&apos;t

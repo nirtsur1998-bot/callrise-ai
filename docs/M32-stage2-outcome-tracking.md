@@ -121,7 +121,8 @@ rule below is a thing the obvious implementation gets wrong:
 | Gate reachability | `deal-union-lockstep.test.ts` — 2/2 planted bypasses caught and **named the offending file** |
 | Backfill writes | `deal-backfill.test.ts` — 10 tests against a real temp profile |
 | Three-way sync | `call-deal-link.test.ts` — absent preserves, null unlinks, malformed rejected, plus a control that the payload actually carries `dealId` |
-| Rendered surfaces | **See "Open" below** |
+| Rendered surfaces | Rendered in the running app, both themes, real data — see below |
+| Call-to-deal link | `call-deal-link.test.ts` — 4/4 `setCallDeal` mutations red |
 
 ### The dev-profile override
 
@@ -135,13 +136,84 @@ installed app, which shares that directory and was observed rewriting 178 call
 files mid-session (`touchAllCallsForRepush`, all carrying one identical
 `updatedAt`).
 
-### Open
+### Rendered in the running app — 2026-08-31
 
-The dev app against a fresh sandbox profile stops at the **login screen** —
-there is no session in a copied-data-only profile, and seeding one would mean
-copying a live auth token into a temp directory. So the three rendered surfaces
-have **not** been driven in a running app yet. That is stated here rather than
-implied away.
+The signed-in app was unreachable (a copied-data-only sandbox has no session,
+and seeding one meant copying an encryption key, which the permission layer
+correctly refused). So the components were rendered **in the real running app**
+a different way: imported through the Vite dev module server the app already
+serves, mounted into the live page, with the real stylesheet, the real theme
+tokens, the real preload bridge, and — for the backfill — **real rows** from
+`dealBackfill.state()`, which is main-process and needs no auth.
+
+`scripts/verification/render-surfaces.mjs`. What it confirmed:
+
+- The counter, the reason prompt (won + lost), and the retired notice render,
+  in **both themes**, with the founder's real numbers.
+- The backfill renders **15 rows** — not the 19 measured earlier: that figure
+  was "contacts with at least one coached call", and the backfill excludes
+  contacts who already have a deal.
+- Every row carries **all five answer buttons and a clear control**, read off
+  the DOM rather than off the source — the tenth-row rule verified as a fact
+  about the rendered page.
+
+**What it is not:** the components are mounted directly rather than reached by
+navigating a signed-in app. It says nothing about whether `DealsView` places
+them correctly, or about clicking an answer end to end. That half is covered by
+`deal-backfill.test.ts` against a real temp profile.
+
+### THE DEFECT ONLY RENDERING FOUND
+
+The counter said **"You have 0 won and 0 lost"** to someone whose Pipeline board
+plainly showed **four Won deals**.
+
+Both numbers were right. `usable` counts only deals with a linked call carrying
+coaching metrics, and none of the four had one. But the screen gave no way to
+tell *"you have no deals"* from *"your deals have no measurable calls"* — and
+those need opposite actions. Every test was green; the gate was correct; the
+copy was accurate about what it measured. It was still, on screen, wrong.
+
+Fixed by adding `closed` to the `Insight` type (a count of what is recorded,
+like `counts` — not analysis output, and pinned both by the key-enumeration
+test and by a new test that the gate never opens on it). The card now reads:
+
+> Countable right now: **0 won** and **0 lost**. The lost column is the one
+> holding it back.
+>
+> You do have **4 won and 0 lost** on the board — but 4 of them have no linked
+> call carrying coaching metrics, so they cannot be compared. Open a deal and
+> link its calls under *Calls on this deal*, or link from the call itself.
+
+### THREE VERIFICATION DEFECTS IN THE HARNESS ITSELF
+
+Recorded because each would have produced a confident false pass:
+
+1. **A body-text fallback that turned a blank render into a pass.** `Modal`
+   portals to `document.body`, so `host.innerText` read 0 chars for a dialog
+   that had rendered perfectly. Falling back to the whole body fixed that — and
+   made a genuinely blank host pass too, because the login screen underneath is
+   ~90 chars and cleared the 60-char threshold. A length check cannot tell "my
+   component" from "whatever was already on screen". Now compares against a
+   **baseline captured before the render**.
+2. **A theme check that asserted on a class and not on the pixels.** Three
+   errors stacked: there is no `dark` class (`useTheme` does
+   `classList.toggle('light', ...)`, so dark is the *absence* of one); the
+   substring test for `'light'` matched **`first-light`**, the design-preview
+   class; and the assertion then passed on the junk `dark` class it had just
+   added itself. Result: two byte-identical dark screenshots, reported as a
+   light/dark pass. Now asserts that
+   `getComputedStyle(document.body).backgroundColor` changes —
+   `rgb(13,12,10)` to `rgb(255,254,252)`.
+3. **Cleanup that did not clean up.** Removing the host `div` does not remove a
+   portal, so every run left its modal on `document.body`: the row count went
+   15 to 45 across three runs while every structural assertion kept passing on
+   the pile. Now unmounts the React root and **verifies afterwards** that no
+   stray answer buttons remain.
+
+An opaque host at `z-index: 99999` also sat on top of the very dialog it was
+meant to display — two byte-identical 7128-byte screenshots of a flat sheet,
+while `innerText` read the modal correctly. Comparing screenshot **hashes** is
+what caught it; the text assertion never would have.
 
 ---
 

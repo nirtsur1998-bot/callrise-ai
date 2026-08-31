@@ -124,6 +124,21 @@ export type Insight =
       counts: OutcomeCounts
       /** Deals in each arm that are actually usable (closed AND measurable). */
       usable: { won: number; lost: number; wentQuiet: number }
+      /**
+       * Deals in each arm REGARDLESS of whether any call is linked to them.
+       *
+       * Added 2026-08-31 after rendering the counter against real data: it
+       * said *"You have 0 won and 0 lost"* to someone whose board plainly
+       * showed four won deals. Both numbers were right — `usable` is zero
+       * because none of those four has a linked call carrying coaching
+       * metrics — but the screen gave no way to tell "you have no deals" from
+       * "your deals have no measurable calls", and those need opposite
+       * actions. Only rendering it found this; every test was green.
+       *
+       * Still not analysis output: a count of what is recorded, exactly like
+       * `counts` above.
+       */
+      closed: { won: number; lost: number; wentQuiet: number }
       needPerArm: number
       /** The arm furthest from the bar — what would actually have to change. */
       bindingArm: 'won' | 'lost'
@@ -135,6 +150,7 @@ export type Insight =
       status: 'ready'
       counts: OutcomeCounts
       usable: { won: number; lost: number; wentQuiet: number }
+      closed: { won: number; lost: number; wentQuiet: number }
     }
 
 export function countAnswers(answers: readonly BackfillAnswer[], listSize: number): OutcomeCounts {
@@ -174,6 +190,17 @@ export function evaluateGate(samples: readonly OutcomeSample[], counts: OutcomeC
     wentQuiet: usableOf('went-quiet')
   }
 
+  // Every closed deal, measurable or not. The gate does NOT use this — it
+  // gates on `usable` — but the counter needs it to tell "no deals" apart
+  // from "no measurable calls on them".
+  const closedOf = (kind: DealStageKind): number =>
+    samples.filter((s) => s.kind === kind).length
+  const closed = {
+    won: closedOf('won'),
+    lost: closedOf('lost'),
+    wentQuiet: closedOf('went-quiet')
+  }
+
   const answered = counts.won + counts.lost + counts.wentQuiet + counts.dontRemember + counts.notADeal
   const backfillUntrustworthy =
     answered > 0 && counts.dontRemember / answered > DONT_REMEMBER_DISTRUST_RATIO
@@ -185,6 +212,7 @@ export function evaluateGate(samples: readonly OutcomeSample[], counts: OutcomeC
       status: 'insufficient',
       counts,
       usable,
+      closed,
       needPerArm: MIN_PER_ARM,
       // The arm that is furthest away — what would actually have to change.
       // Reporting "8 of 16" would hide that 12-and-0 is not 12.
@@ -193,5 +221,5 @@ export function evaluateGate(samples: readonly OutcomeSample[], counts: OutcomeC
     }
   }
 
-  return { status: 'ready', counts, usable }
+  return { status: 'ready', counts, usable, closed }
 }
