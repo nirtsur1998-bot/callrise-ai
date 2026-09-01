@@ -239,3 +239,28 @@ back with no contact, and the candidate list was empty. Four tests failed at
 once, and the *first* of them was the control that says "the seed produced no
 backfill rows". Without that control, three assertions about linking would have
 passed vacuously against zero rows. Both fixture writes now check themselves.
+
+
+## Closed, 2026-09-01 — the call<->deal link, driven live
+
+Stated as an open gap after the review workflow: `CallDealPicker` and `DealCallsSection` had
+never been rendered or driven, only typechecked. This repo cannot unit-test component render
+output (BUG-140), so live driving was the only verification method available — closed by
+navigating to a real call and a real deal in the signed-in app and exercising both directions.
+
+**`DealCallsSection`, on a real Won deal:** empty state read correctly (0 linked, 3 candidates,
+each correctly tagged `coached`/`not coached`). Linked the COACHED candidate — the metrics line
+moved from `(no metrics line yet)` to `"1 of 1 carries coaching metrics — enough for this deal to
+count."` Unlinked — restored exactly. Both themes.
+
+**`CallDealPicker`, on the call that was just unlinked:** the select listed all 4 real Won deals.
+Linked it to a deal (this call is NOT coached) — the footnote moved to the OTHER species-62 branch,
+`"Linked — but this call has no coaching metrics yet, so it won't count toward outcome tracking
+until it's coached."` Reverted — footnote AND select value both restored. Both themes.
+
+Both round trips were verified on the ACTUAL FILE on disk afterward (`dealId` key absent
+entirely), not merely read back from the DOM.
+
+`scripts/verification/drive-call-deal-picker.mjs` — kept for reuse, with a stated precondition
+(must already be on an unlinked call's detail page) since the Calls → Past → row-click
+navigation path proved fragile enough across app states to not belong baked into the script.
