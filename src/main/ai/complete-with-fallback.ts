@@ -130,11 +130,42 @@ export class AllModelsExhaustedError extends Error {
   }
 }
 
+// BUG-154 (2026-09-01) — REORDERED AND WIDENED. This list was groq+cerebras
+// ONLY, and its first two entries were both confirmed-dead Groq ids. Because
+// it is also CANDIDATE_POOL for the two live purposes, a user holding keys for
+// any other provider had NO reachable coaching-cue or deal-tier1 model at all
+// — the feature was not degraded, it was absent. See the model-catalog entries
+// for anthropic/openai for the full account.
+//
+// ORDERING PRINCIPLE, stated because it is a cost decision and not obvious:
+// free-tier providers come FIRST and paid ones LAST. A fallback must never
+// silently escalate a user's bill when a free option would have served, but a
+// paid key must still be reachable rather than the feature dying — which is
+// exactly what happened here. Dead entries are kept (not deleted) so the
+// history and their knownStale evidence stay readable; they are filtered out
+// by stepsFromIds and now sit at the back where they cannot consume a cap.
 const SPEED_CHAIN = [
-  'groq-llama-3.1-8b-instant',
-  'groq-llama-3.3-70b-versatile',
   'groq-gpt-oss-120b',
   'cerebras-gpt-oss-120b',
+  'cloudflare-llama-3.1-8b-fast',
+  // Paid tier — reachable, but only after every free option above.
+  'anthropic-claude-haiku-4-5',
+  'openai-gpt-5.4-mini',
+  // LAST RESORT, and a deliberate lane violation — flagged as such rather than
+  // hidden. Z.ai and Hugging Face are catalogued as QUALITY lane (the HF entry
+  // says so explicitly: same weights as the Groq/Cerebras entries, but the
+  // router is not fast). They are here anyway because the alternative, found by
+  // this fix's own resolution test, is that a user holding ONLY one of those
+  // keys gets no live cue at all — which is the bug being fixed, one provider
+  // further down. A slow cue that the 6s CHAIN_BUDGET may cut off is strictly
+  // better than a guaranteed absent one, and the budget bounds the cost of
+  // being wrong about that. They sit behind every genuinely fast option, so a
+  // user with any other key never pays for this.
+  'zai-glm-4.5-flash',
+  'hf-gpt-oss-20b',
+  // knownStale, filtered by stepsFromIds; kept for provenance only.
+  'groq-llama-3.1-8b-instant',
+  'groq-llama-3.3-70b-versatile',
   'groq-llama-4-scout',
   'groq-qwen3-32b'
 ]
@@ -156,19 +187,37 @@ const QUALITY_CHAIN = [
   // is filtered out (it failed 28/39 real attempts on tool-call output); on
   // a plain-text purpose it remains the last-resort entry it always was.
   'openrouter-auto-free',
-  'groq-llama-3.3-70b-versatile',
   'groq-gpt-oss-120b',
-  'cerebras-gpt-oss-120b'
+  'cerebras-gpt-oss-120b',
+  // BUG-154 — the remaining free/allowance providers this app accepts keys
+  // for and which appeared in NO chain, so their keys were dead weight.
+  'zai-glm-4.7-flash',
+  'zai-glm-4.5-flash',
+  'hf-gpt-oss-120b',
+  'hf-gpt-oss-20b',
+  'cloudflare-gpt-oss-120b',
+  // BUG-154 — paid tier LAST, same cost principle as SPEED_CHAIN above: a
+  // free option is always tried first, but a paid key is reachable instead of
+  // the feature failing outright.
+  'anthropic-claude-sonnet-4-6',
+  'openai-gpt-5.4',
+  // knownStale, filtered by stepsFromIds; kept for provenance only.
+  'groq-llama-3.3-70b-versatile'
 ]
 
-const coachingCap = CHAIN_BUDGET['coaching-cue']?.maxChainLength ?? 2
-const dealTier1Cap = CHAIN_BUDGET['deal-tier1']?.maxChainLength ?? 2
+// BUG-154 — the two `SPEED_CHAIN.slice(0, cap)` constants that used to live
+// here are gone, and the cap moved into bundledSteps() below. Slicing the RAW
+// id list applied the cap BEFORE the liveness filter, so a cap of 2 whose
+// first two ids were knownStale resolved to ZERO usable models — a cap that
+// silently means "no attempts at all" rather than "at most two". The cap
+// answers "how many attempts may this purpose make"; only reachable steps can
+// be attempts, so it has to be applied to reachable steps.
 
 /** Bundled fallback ordering, only reached when a purpose has neither an
  *  explicit chain configured nor a legacy `aiProvider`+key. Not lane-
  *  restricted for the same reason QUALITY_CHAIN isn't - see above. */
 export const DEFAULT_CATALOG_CHAIN: Record<AIPurpose, string[]> = {
-  'coaching-cue': SPEED_CHAIN.slice(0, coachingCap),
+  'coaching-cue': SPEED_CHAIN,
   summary: QUALITY_CHAIN,
   scorecard: QUALITY_CHAIN,
   tasks: QUALITY_CHAIN,
@@ -186,7 +235,7 @@ export const DEFAULT_CATALOG_CHAIN: Record<AIPurpose, string[]> = {
   // M24 - same speed-lane precedent as coaching-cue (see CHAIN_BUDGET's doc
   // comment in types.ts): a live, latency-critical path gets the fast chain,
   // capped the same way.
-  'deal-tier1': SPEED_CHAIN.slice(0, dealTier1Cap),
+  'deal-tier1': SPEED_CHAIN,
   // M24 - quality-lane precedent, same as summary/scorecard/prep-brief; no
   // cap, since deal-tier2 has no CHAIN_BUDGET entry.
   'deal-tier2': QUALITY_CHAIN,
@@ -298,8 +347,12 @@ const LEGACY_TAIL_MAX: Record<AIPurpose, number> = {
  *  it. Unchanged logic: catalog-known, not knownStale, provider key present.
  *  The key check must stay read-fresh from process.env on every resolution —
  *  ai-keys.ts sets and deletes those vars mid-session. */
-function bundledSteps(purpose: AIPurpose): ResolvedStep[] {
-  return stepsFromIds(DEFAULT_CATALOG_CHAIN[purpose])
+export function bundledSteps(purpose: AIPurpose): ResolvedStep[] {
+  const steps = stepsFromIds(DEFAULT_CATALOG_CHAIN[purpose])
+  // BUG-154 — cap AFTER resolution, never before. See the note where the old
+  // `SPEED_CHAIN.slice(0, cap)` constants used to be defined.
+  const cap = CHAIN_BUDGET[purpose]?.maxChainLength
+  return cap === undefined ? steps : steps.slice(0, cap)
 }
 
 /**

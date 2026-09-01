@@ -46,8 +46,10 @@ export type ModelBrand =
   | 'zai'
   | 'mistral'
   | 'openrouter'
+  | 'anthropic'
 
 const BRAND_SVG: Partial<Record<ModelBrand, string>> = {
+  anthropic: claudeSvg,
   openai: openaiSvg,
   meta: metaSvg,
   qwen: qwenSvg,
@@ -87,7 +89,13 @@ const BRAND_LABEL: Record<ModelBrand, string> = {
   nvidia: 'NVIDIA',
   zai: 'Z.ai',
   mistral: 'Mistral',
-  openrouter: 'OpenRouter'
+  openrouter: 'OpenRouter',
+  // BUG-154 — Anthropic joined ModelBrand when the catalog gained Claude
+  // entries. The header note above refuses to widen ModelBrand for things that
+  // "are PROVIDERS, not model makers"; Anthropic makes Claude, so it meets
+  // that bar rather than bending it, and the CC0 Claude mark already imported
+  // for PROVIDER_SVG serves it directly.
+  anthropic: 'Claude'
 }
 
 export interface ModelLogoProps {

@@ -114,15 +114,40 @@ describe('resolveChain — a default provider no longer means "no fallback"', ()
     // chain' is just slower failure." One extra attempt on a DIFFERENT model
     // of the same key is justified (Groq/Gemini rate-limit per-model); a
     // parade of them is not.
+    //
+    // BUG-154 (2026-09-01) — REPOINTED FROM GROQ TO NVIDIA, and the reason is
+    // the finding itself rather than test convenience. Two Groq ids were
+    // confirmed dead and are now knownStale, which leaves Groq with exactly
+    // ONE live catalog entry whose modelId IS its legacy default. So for Groq
+    // there is no longer any "different model on the same key" to retry, and
+    // this test's premise is genuinely false for that provider — the tail is
+    // correctly empty. That is not a regression: the two entries it lost were
+    // guaranteed failures. NVIDIA is the fixture now because it actually has
+    // two live models in this chain.
+    //
+    // The premise is ASSERTED rather than assumed, matching the guard the
+    // sibling test above already carries: if NVIDIA ever drops to one live
+    // entry, this goes red naming that fact, instead of silently proving
+    // nothing the way a bare `tail.length` check would.
+    activeProviderId.current = 'nvidia'
+    delete process.env.GROQ_API_KEY
     delete process.env.GOOGLE_AI_API_KEY
     delete process.env.OPENROUTER_API_KEY
+    process.env.NVIDIA_API_KEY = 'nv'
+
+    const liveNvidia = MODEL_CATALOG.filter((e) => e.providerId === 'nvidia' && !e.knownStale)
+    expect(
+      liveNvidia.length,
+      'nvidia no longer has two live catalog entries, so "one same-provider retry" ' +
+        'cannot be distinguished from "no retry available" and this test proves nothing'
+    ).toBeGreaterThanOrEqual(2)
 
     const steps = resolveConfiguredChain('memory-extract')
     const tail = steps.slice(1)
 
     expect(tail.length).toBe(1)
-    expect(tail[0].providerId).toBe('groq')
-    expect(tail[0].modelId).not.toBe(PROVIDER_REGISTRY.groq.defaultModelId)
+    expect(tail[0].providerId).toBe('nvidia')
+    expect(tail[0].modelId).not.toBe(PROVIDER_REGISTRY.nvidia.defaultModelId)
   })
 
   it('only providers with a key configured are ever in the tail', () => {

@@ -30,6 +30,7 @@ export type ModelBrand =
   | 'zai'
   | 'mistral'
   | 'openrouter'
+  | 'anthropic'
 
 export type ModelLane = 'speed' | 'quality'
 
@@ -146,16 +147,25 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     //     the two stale verdicts already established from Groq's docs in July
     //     (llama-4-scout, qwen3-32b). It agreed with known-good answers before
     //     being trusted on unknown ones.
-    // DELIBERATELY NOT FLAGGED IN THIS RELEASE, though the evidence above now
-    // supports it. Flagging removes the entry from bundledSteps, and Groq is
-    // left with exactly ONE live catalog entry (gpt-oss-120b) — which breaks
-    // five tests that use these two ids as their "two models on one provider"
-    // fixture. Repointing those fixtures at a provider that still has two live
-    // entries is correct but it is not a one-line change, and it does not
-    // belong in a release that was already verified and awaiting authorisation.
-    // Queued as the immediate follow-up. The cost of waiting is two doomed
-    // attempts per Groq walk, which is what has been happening for weeks
-    // already; the cost of rushing it is a fixture rewrite nobody reviewed.
+    // NOW FLAGGED (BUG-154, 2026-09-01). The deferral above priced its own cost
+    // as "two doomed attempts per Groq walk". That estimate was wrong, and the
+    // error mattered: these two ids are the FIRST TWO ENTRIES OF SPEED_CHAIN,
+    // and SPEED_CHAIN is the entire candidate pool the coaching-cue substitute
+    // draws from (complete-with-fallback.ts, the tailMax === 0 branch). Live
+    // cues therefore had no reachable model at all once the pinned default was
+    // demoted — not a depth regression, a total loss of the feature, for every
+    // user on every machine regardless of how many keys they hold. The founder
+    // reported it from a machine with twelve keys including a paid Anthropic
+    // one; none could be reached, because Anthropic is not in SPEED_CHAIN and
+    // the substitute picked these corpses instead.
+    //
+    // Taxonomy species 16 again: the finding was written down, correctly, with
+    // the fix spelled out — and the deferral note is what made it look safe to
+    // leave. A cost estimate attached to a deferral is load-bearing; this one
+    // was never checked against what actually consumed the chain.
+    knownStale:
+      'Confirmed absent from the Groq live /models list on 2026-08-30 via resolveCatalog with a ' +
+      'real key and a passing control (openai/gpt-oss-120b). Re-checked on next key config.'
   },
   {
     id: 'groq-llama-3.3-70b-versatile',
@@ -179,16 +189,25 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     // 7 'model-not-found' rejections through 2026-08-23. Two code paths, one
     // dead string, the same dates. registry.ts now defaults Groq to
     // openai/gpt-oss-120b, which the same live check confirmed present.
-    // DELIBERATELY NOT FLAGGED IN THIS RELEASE, though the evidence above now
-    // supports it. Flagging removes the entry from bundledSteps, and Groq is
-    // left with exactly ONE live catalog entry (gpt-oss-120b) — which breaks
-    // five tests that use these two ids as their "two models on one provider"
-    // fixture. Repointing those fixtures at a provider that still has two live
-    // entries is correct but it is not a one-line change, and it does not
-    // belong in a release that was already verified and awaiting authorisation.
-    // Queued as the immediate follow-up. The cost of waiting is two doomed
-    // attempts per Groq walk, which is what has been happening for weeks
-    // already; the cost of rushing it is a fixture rewrite nobody reviewed.
+    // NOW FLAGGED (BUG-154, 2026-09-01). The deferral above priced its own cost
+    // as "two doomed attempts per Groq walk". That estimate was wrong, and the
+    // error mattered: these two ids are the FIRST TWO ENTRIES OF SPEED_CHAIN,
+    // and SPEED_CHAIN is the entire candidate pool the coaching-cue substitute
+    // draws from (complete-with-fallback.ts, the tailMax === 0 branch). Live
+    // cues therefore had no reachable model at all once the pinned default was
+    // demoted — not a depth regression, a total loss of the feature, for every
+    // user on every machine regardless of how many keys they hold. The founder
+    // reported it from a machine with twelve keys including a paid Anthropic
+    // one; none could be reached, because Anthropic is not in SPEED_CHAIN and
+    // the substitute picked these corpses instead.
+    //
+    // Taxonomy species 16 again: the finding was written down, correctly, with
+    // the fix spelled out — and the deferral note is what made it look safe to
+    // leave. A cost estimate attached to a deferral is load-bearing; this one
+    // was never checked against what actually consumed the chain.
+    knownStale:
+      'Confirmed absent from the Groq live /models list on 2026-08-30 via resolveCatalog with a ' +
+      'real key and a passing control (openai/gpt-oss-120b). Re-checked on next key config.'
   },
   {
     id: 'groq-gpt-oss-120b',
@@ -525,6 +544,84 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     // future improvement in OpenRouter's free routing surfaces as a stale
     // flag rather than staying invisible.
     supportsToolCalling: false
+  },
+  // ---- BUG-154 (2026-09-01): Anthropic and OpenAI, the two providers this
+  // app has accepted keys for since M16 and which had NO CATALOG ENTRY AT ALL.
+  //
+  // That absence was not cosmetic. Every fallback chain is built from catalog
+  // ids (see complete-with-fallback.ts's stepsFromIds), so a provider with no
+  // entry can NEVER serve a bundled step for ANY purpose — it is reachable
+  // only as the single pinned "default text AI provider". The founder hit
+  // exactly this: a machine holding twelve keys including a PAID Anthropic one
+  // saw live coaching cues dead, because coaching-cue's chain is one step
+  // (LEGACY_TAIL_MAX 0) and its substitute pool was SPEED_CHAIN — groq and
+  // cerebras only. The paid key could not be reached by any path.
+  //
+  // WHERE THE modelId STRINGS COME FROM — these are not new ids and were not
+  // looked up: they are read off MODEL_BY_PURPOSE in providers/anthropic.ts
+  // and providers/openai.ts, i.e. exactly the strings this app ALREADY sends
+  // to these two providers today on the legacy path. Adding an entry cannot
+  // introduce a dead id here the way an invented one would (see the two
+  // groq-llama entries above for what that costs).
+  //
+  // The plumbing already existed: both provider classes resolve their model as
+  // `req.model ?? MODEL_BY_PURPOSE[req.purpose]`, with an M20 comment saying
+  // "completeWithFallback() sets req.model explicitly when a catalog entry is
+  // driving this call." M20 built the seam; the entries were never added.
+  //
+  // contextWindow is a DELIBERATE CONSERVATIVE FLOOR, not a verified spec.
+  // It feeds budgetCharsFor() in assistant/prompt-budget.ts, so it gates
+  // prompt sizing: under-stating only shrinks prompts, over-stating produces
+  // hard context-overflow failures. Neither number was confirmed against a
+  // live endpoint, so each is set at or below the long-published figure. If
+  // that is ever verified, raise it then — do not raise it on inference.
+  {
+    id: 'anthropic-claude-haiku-4-5',
+    displayName: 'Claude Haiku 4.5',
+    brand: 'anthropic',
+    providerId: 'anthropic',
+    lane: 'speed',
+    modelId: 'claude-haiku-4-5',
+    contextWindow: 200_000,
+    retentionPosture: 'no-training',
+    retentionUrl: 'https://www.anthropic.com/legal/commercial-terms',
+    keyUrl: 'https://console.anthropic.com/settings/keys'
+  },
+  {
+    id: 'anthropic-claude-sonnet-4-6',
+    displayName: 'Claude Sonnet 4.6',
+    brand: 'anthropic',
+    providerId: 'anthropic',
+    lane: 'quality',
+    modelId: 'claude-sonnet-4-6',
+    contextWindow: 200_000,
+    retentionPosture: 'no-training',
+    retentionUrl: 'https://www.anthropic.com/legal/commercial-terms',
+    keyUrl: 'https://console.anthropic.com/settings/keys'
+  },
+  {
+    id: 'openai-gpt-5.4-mini',
+    displayName: 'GPT-5.4 mini',
+    brand: 'openai',
+    providerId: 'openai',
+    lane: 'speed',
+    modelId: 'gpt-5.4-mini',
+    contextWindow: 128_000,
+    retentionPosture: 'no-training',
+    retentionUrl: 'https://openai.com/policies/api-data-usage-policies',
+    keyUrl: 'https://platform.openai.com/api-keys'
+  },
+  {
+    id: 'openai-gpt-5.4',
+    displayName: 'GPT-5.4',
+    brand: 'openai',
+    providerId: 'openai',
+    lane: 'quality',
+    modelId: 'gpt-5.4',
+    contextWindow: 128_000,
+    retentionPosture: 'no-training',
+    retentionUrl: 'https://openai.com/policies/api-data-usage-policies',
+    keyUrl: 'https://platform.openai.com/api-keys'
   }
 ]
 
