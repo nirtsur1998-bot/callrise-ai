@@ -238,6 +238,11 @@ describe('the gate is only reachable through evaluateGate', () => {
   })
 
   it('nothing outside deal-outcomes.ts re-derives the per-arm bar', () => {
+    // STATED LIMIT (workflow finding, accepted): this scan sees only the
+    // NAME. A second gate written with the literal — usable.won >= 8 — is
+    // invisible to it, and no grep can distinguish that 8 from any other. The
+    // real defence is the review habit this comment plants: a hand-copied bar
+    // is two gates that disagree the moment one is edited.
     // MIN_PER_ARM may be READ anywhere — the counter prints it, and printing
     // the real constant is exactly right. What may not happen anywhere else is
     // a second COMPARISON against it: that is a second gate, and two gates
