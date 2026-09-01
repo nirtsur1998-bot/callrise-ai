@@ -588,8 +588,32 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
   // providers' default model IS a catalog entry's modelId — see
   // ProviderRegistryEntry.defaultModelId).
   const legacyModelId = PROVIDER_REGISTRY[legacy.providerId].defaultModelId
+  // BUG-154 (2026-09-01) — the dedupe must match on PROVIDER AND MODEL, not
+  // on model alone.
+  //
+  // The intent is right: never re-issue the identical request as a later
+  // "fallback". But identical means same provider AND same model. Several
+  // catalog entries are deliberately DUAL-HOMED -- the same open-weights model
+  // served by two different companies -- and model-catalog.ts says so outright:
+  // "Two entries can share a modelId+displayName on different providers (the
+  // dual-homed GPT-OSS 120B)".
+  //
+  // Matching on modelId alone therefore deleted a genuinely different provider,
+  // with its own account, endpoint and quota, from the chain. Concretely: Groq's
+  // legacy default model is openai/gpt-oss-120b, so cerebras-gpt-oss-120b was
+  // dropped from EVERY durable chain for any user whose default provider is
+  // Groq -- a configured, paid-for, perfectly healthy key that could never be
+  // reached. That is precisely the founder's report: "it needs to eventually
+  // try ALL the saved keys and APIs in the system if one fails FOR WHATEVER
+  // REASON." It never tried Cerebras at all.
+  //
+  // Found by bug154-eventually-tries-every-key.test.ts, which loops resolve-
+  // and-fail and names the providers that hold a key and were never attempted.
   const usable = bundledSteps(purpose).filter(
-    (s) => legacyModelId === undefined || s.modelId !== legacyModelId
+    (s) =>
+      legacyModelId === undefined ||
+      s.providerId !== legacy.providerId ||
+      s.modelId !== legacyModelId
   )
 
   // Different providers FIRST, then at most ONE same-provider model.

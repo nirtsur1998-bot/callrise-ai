@@ -54,6 +54,24 @@ const DetectionOverlay = lazy(() =>
 
 const isDetectionOverlay = window.location.hash.startsWith('#/detection-overlay')
 
+// The overlay window is `transparent: true` and loads THIS SAME index.html and
+// index.css, whose `body { background-color: var(--color-canvas) }` is opaque.
+// On a frameless transparent window that paints a solid rectangle filling the
+// entire window, behind DetectionOverlay's rounded glass card and across the
+// CARD_INSET padding that exists to give the card's shadow room -- which is
+// exactly the "black box around the call-detection box" the founder has
+// reported repeatedly.
+//
+// Worth being precise about why an earlier fix did not help: detection-overlay.ts
+// already removed Windows' `backgroundMaterial: 'acrylic'` for the same visible
+// symptom, and that WAS a real cause of a square backdrop -- at the OS
+// compositor level. This is a second, independent cause of the same symptom, in
+// our own stylesheet, which is why removing the first one left the box on screen.
+//
+// Set on the ROOT element rather than body so the CSS rule can key off it, and
+// set here rather than in a component effect so it lands before first paint.
+if (isDetectionOverlay) document.documentElement.dataset.window = 'overlay'
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     {/* null, not a spinner: the overlay window is transparent by design, and
