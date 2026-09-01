@@ -145,7 +145,22 @@ function createOverlayWindow(): BrowserWindow {
   // on -- that is what lets DetectionOverlay notice the pointer entering the
   // card and ask for input back. Without forwarding, the window would be
   // permanently click-through and its buttons unusable.
-  win.setIgnoreMouseEvents(true, { forward: true })
+  // INVERTED after driving it: the window starts INTERACTIVE and is only
+  // released once the renderer has positively established that the pointer is
+  // in the transparent inset.
+  //
+  // The first version started ignoring and relied on the renderer claiming the
+  // pointer back on mousemove. Hit-testing the real window proved both toggle
+  // directions work (WS_EX_TRANSPARENT set / cleared, WindowFromPoint agrees),
+  // but NOT that the claim reliably fires — a synthetic mousemove over the card
+  // recorded no call at all. If that trigger ever misses, ignore-by-default
+  // leaves the card unclickable: Start transcribing and Dismiss both dead.
+  //
+  // That failure is worse than the bug being fixed. Interactive-by-default
+  // makes the worst case identical to the old behaviour (the window swallows a
+  // scroll over its inset) and the best case the fix, with no state in between
+  // that breaks the buttons.
+  win.setIgnoreMouseEvents(false)
 
   // EXCLUDE THIS WINDOW FROM SCREEN CAPTURE. Not a nicety — the entire
   // live-coaching thesis dies the first time a rep's battlecard about the

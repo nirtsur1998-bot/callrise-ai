@@ -48,7 +48,10 @@ function OverlayShell({ children }: { children: ReactNode }): React.JSX.Element 
   // would be permanently dead. mousemove keeps arriving because of
   // forward:true, which is the whole reason that flag is set.
   const cardRef = useRef<HTMLDivElement | null>(null)
-  const interactiveRef = useRef(false)
+  // Starts TRUE to match the window's own starting state (main now creates it
+  // interactive). A wrong initial value here would make the first toggle a
+  // no-op through the dedupe below.
+  const interactiveRef = useRef(true)
   useEffect(() => {
     const setInteractive = (next: boolean): void => {
       if (interactiveRef.current === next) return // don't spam IPC on every pixel
@@ -64,14 +67,18 @@ function OverlayShell({ children }: { children: ReactNode }): React.JSX.Element 
     }
     // Leaving the window entirely must release too, or the pointer can exit
     // across the card's edge without a final mousemove inside the bounds.
-    const onLeave = (): void => setInteractive(false)
+    // Leaving the window entirely RECLAIMS rather than releases: once the
+    // pointer is outside the window there is nothing to pass through to, and
+    // being left in the released state is the one condition that breaks the
+    // card. Every path out of this component therefore ends interactive.
+    const onLeave = (): void => setInteractive(true)
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseleave', onLeave)
     return () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseleave', onLeave)
       // Never leave the window holding the pointer after unmount.
-      void window.api.detection.setOverlayInteractive(false)
+      void window.api.detection.setOverlayInteractive(true)
     }
   }, [])
 
