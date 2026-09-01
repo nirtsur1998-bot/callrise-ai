@@ -91,14 +91,13 @@ describe('every configured key is eventually attempted, whatever the failure', (
     expect(missed, `never attempted despite holding a key: ${missed.join(', ')}`).toEqual([])
   })
 
-  // KNOWN GAP, NOT YET FIXED -- see the branch note. A benched model still
-  // occupies one of a durable purpose's capped tail slots, so a provider
-  // sitting past the cap is never reached. Fixing it (filtering the tail by
-  // isUsableFor) works, and conflicts with nine modelCooldown tests that
-  // deliberately assert 'attempt nothing while everything is cooling'. That
-  // is a design decision for the founder, not a call to make silently, so
-  // this is marked failing-on-purpose rather than deleted or weakened.
-  it.fails('the same holds for a DURABLE purpose, which has a tail', () => {
+  // WAS a known gap, marked it.fails. CLOSED by BUG-159: a benched model used
+  // to hold one of the capped tail slots forever, so anything behind it was
+  // unreachable. The tail now PARTITIONS — attemptable steps compete for the
+  // slots, the rest are appended behind them so soonestExpiry and rescueSteps
+  // can still see them — which frees the slot without stripping information
+  // the wait-time message depends on.
+  it('the same holds for a DURABLE purpose, which has a tail', () => {
     const expected = new Set(KEYED.map(([p]) => p))
     const seen = new Set<string>()
     for (let attempt = 0; attempt < 60; attempt++) {

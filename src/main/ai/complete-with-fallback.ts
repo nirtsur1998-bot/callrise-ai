@@ -644,11 +644,45 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
   // One is kept because Groq and Gemini rate-limit PER-MODEL, so a different
   // model on the same key genuinely can succeed; only one, because if two
   // models on that key fail, the account is the problem, not the model.
-  const others = usable.filter((s) => s.providerId !== legacy.providerId)
-  const same = usable.filter((s) => s.providerId === legacy.providerId).slice(0, 1)
-  const tail = [...others, ...same]
-    .slice(0, tailMax)
-    .map((s) => ({ ...s, fromImplicitTail: true }))
+  // BUG-159 — the capped tail SLOTS go to steps that can actually be
+  // attempted, while every other step stays in the chain behind them.
+  //
+  // THE PROBLEM: a benched model held one of the 1-3 slots forever. The walk
+  // skips it at attempt time, so it never fails again in a way that would move
+  // it, and a usable model further down never entered the chain at all.
+  // Measured with four keys configured: coaching-cue "never attempted despite
+  // holding a key: anthropic, huggingface".
+  //
+  // WHY NOT SIMPLY FILTER THEM OUT, which is what three earlier attempts did:
+  // the walk ALREADY filters this chain by its own usability gate before
+  // attempting anything, so dropping them here buys nothing for attempts — and
+  // it strips them from `capable`, which two other consumers read:
+  //   * soonestExpiry(capable.map(...)) computes the ACTIONABLE WAIT TIME
+  //     ("try again in about an hour"). Without the cooling entries there is
+  //     nothing to compute it from, and the user gets the generic "every
+  //     configured model is unreachable" that M27 D records reaching a real
+  //     user once already.
+  //   * rescueSteps(capable, ...) needs the full picture to offer a
+  //     never-tried key.
+  //
+  // So: PARTITION, do not filter. Attemptable steps compete for the capped
+  // slots; the rest are appended behind them, where the walk will skip them
+  // and the other consumers can still see them. Attempt count is unchanged —
+  // it was always bounded by the walk's own gate and budget, never by this
+  // array's length.
+  const attemptableNow = (step: ResolvedStep): boolean =>
+    isUsableFor(step.catalogId, Date.now(), purposeTier(purpose), {
+      ignorePacing: true,
+      purpose
+    })
+  const ready = usable.filter(attemptableNow)
+  const notReady = usable.filter((s) => !attemptableNow(s))
+  const readyOthers = ready.filter((s) => s.providerId !== legacy.providerId)
+  const readySame = ready.filter((s) => s.providerId === legacy.providerId).slice(0, 1)
+  const tail = [...[...readyOthers, ...readySame].slice(0, tailMax), ...notReady].map((s) => ({
+    ...s,
+    fromImplicitTail: true
+  }))
 
   // BUG-148 — a provider that keeps rejecting our credential gives up its
   // place at the FRONT, and nothing else. Same steps, same length, same cost:

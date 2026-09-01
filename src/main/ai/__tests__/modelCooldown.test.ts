@@ -13,6 +13,28 @@ import { AIProviderError, type AIFailureClass } from '../types'
 
 const activeProviderId = { current: 'groq' as string | null }
 const built: string[] = []
+
+// BUG-159 — a second recorder at MODEL granularity, alongside `built`.
+//
+// `built` records PROVIDER ids while cooldowns are per MODEL, so several
+// assertions here could only express "the cooling model was not retried" as
+// "nothing at all was attempted". That was adequate while a chain could reach
+// one model per provider. It no longer is: the capped tail now partitions
+// rather than letting a benched model hold a slot, so a walk legitimately
+// reaches models the previous walk could not.
+//
+// Checked before changing any assertion, not assumed: recording provider/model
+// showed the attempts after the change were groq/openai/gpt-oss-120b and
+// openrouter/(provider default) — neither the model that had been cooled. The
+// guarantee held; the assertion was too blunt to see it. Same correction and
+// reasoning as deadProvidersPhase2's BUG-142 note ("CORRECTED, NOT RELAXED ...
+// the guarantee in its own title is about ONE PROVIDER").
+//
+// NEVER reset — each site marks its own offset, so it can ask "is anything
+// attempted after the mark also present before it". A shared reset helper was
+// tried and reverted: a blanket edit hit 39 call sites and broke five
+// unrelated pure-unit tests that never touch the chain walk.
+const builtModels: string[] = []
 const behavior = {
   throwCode: 'rate-limit' as 'rate-limit' | 'auth' | 'failed',
   retryAfterMs: undefined as number | undefined,
@@ -35,8 +57,9 @@ vi.mock('../registry', () => {
     defaultModelId,
     build: () => ({
       id,
-      complete: async () => {
+      complete: async (req) => {
         built.push(id)
+        builtModels.push(id + '/' + ((req && req.model) || '(provider default)'))
         if (built.length > behavior.failTimes) return { text: 'ok', model: 'm', usage: {} }
         throw new AIProviderError(behavior.throwCode, `${id} limited`, behavior.retryAfterMs, behavior.failureClass)
       }
@@ -130,6 +153,16 @@ beforeEach(() => {
   resetDemotionsForTests()
   resetPacingForTests()
   built.length = 0
+  // BUG-159 — reset the model recorder PER TEST, and only here.
+  //
+  // It deliberately survives the per-call `built.length = 0` resets inside a
+  // test, so a site can mark an offset and ask "was anything attempted after
+  // the mark also attempted before it". Across TESTS that persistence is a
+  // bug: attempts from an earlier test land in the "before" slice and make a
+  // first-ever attempt look like a retry. Caught exactly that way —
+  // groq/openai/gpt-oss-120b reported as "still cooling, got retried" when it
+  // had been attempted by a previous test entirely.
+  builtModels.length = 0
   behavior.throwCode = 'rate-limit'
   behavior.retryAfterMs = undefined
   behavior.failTimes = Infinity
@@ -255,6 +288,29 @@ describe('escalating backoff — repeated no-hint misses (BUG-057 Phase 4)', () 
   })
 })
 
+/** BUG-159 — drive calls until one attempts NOTHING, i.e. every model this
+ *  purpose can reach is cooling.
+ *
+ *  One call used to be enough, and several tests below were written that way.
+ *  It no longer is: the capped tail now PARTITIONS rather than letting a
+ *  benched model hold a slot, so a walk reaches models the previous walk never
+ *  could — which is the entire point of the change, and it takes two or three
+ *  passes to exhaust a real key set instead of one.
+ *
+ *  Returns the FIRST walk's attempts, which is what the callers assert on.
+ *  Throws rather than looping forever if it does not converge, so a future
+ *  change that breaks convergence fails loudly here instead of hanging. */
+async function driveUntilAllCooling(purpose = 'memory-extract'): Promise<string[]> {
+  let firstWalk: string[] | null = null
+  for (let i = 0; i < 12; i++) {
+    built.length = 0
+    await completeWithFallback({ purpose, messages: [] } as never).catch(() => undefined)
+    if (firstWalk === null) firstWalk = [...built]
+    if (built.length === 0) return firstWalk
+  }
+  throw new Error('chain never stopped attempting models — cooldowns are not sticking')
+}
+
 describe('escalating backoff, through the real chain walk', () => {
   it('a model that keeps missing with no hint waits longer each time it recovers and misses again', async () => {
     vi.useFakeTimers()
@@ -273,11 +329,21 @@ describe('escalating backoff, through the real chain walk', () => {
       expect(built.length).toBeGreaterThan(0)
 
       built.length = 0
+      const mark = builtModels.length
       vi.setSystemTime(new Date(Date.now() + DEFAULT_COOLDOWN_MS + 1_000)) // 60s later -- NOT past a 120s cooldown
       await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
       // Still cooling: if this were still the un-escalated 60s default, the
       // model would have recovered by now and been retried.
-      expect(built).toEqual([])
+      // SHARPENED, NOT RELAXED (BUG-159). This read expect(built).toEqual([]),
+      // i.e. NOTHING was attempted — the only way a provider-id list could
+      // express "the cooling model was not retried". The capped tail now
+      // partitions instead of letting a benched model hold a slot, so other
+      // models are legitimately reached here. The escalated model specifically is what this test's title is about.
+      const before = builtModels.slice(0, mark)
+      expect(
+        builtModels.slice(mark).filter((m) => before.includes(m)),
+        'a model that was still cooling got retried'
+      ).toEqual([])
     } finally {
       vi.useFakeTimers().clearAllTimers()
       vi.useRealTimers()
@@ -293,15 +359,37 @@ describe('the spiral, through the real chain walk', () => {
     expect(firstWalk.length).toBeGreaterThan(0)
 
     built.length = 0
+    const mark = builtModels.length
     await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
 
-    // Second call spends nothing: every model it would have tried is cooling.
-    expect(built).toEqual([])
+    // SHARPENED, NOT RELAXED (BUG-159). This read expect(built).toEqual([]),
+    // i.e. NOTHING was attempted — the only way a provider-id list could
+    // express "the cooling model was not retried". The capped tail now
+    // partitions instead of letting a benched model hold a slot, so other
+    // models are legitimately reached here. A rate-limited MODEL not being retried is the guarantee.
+    const before = builtModels.slice(0, mark)
+    expect(
+      builtModels.slice(mark).filter((m) => before.includes(m)),
+      'a model that was still cooling got retried'
+    ).toEqual([])
   })
 
   it('refuses with a WAIT TIME instead of a generic failure when everything is cooling', async () => {
     behavior.retryAfterMs = 20_000
-    await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
+    // BUG-159 — drive to convergence rather than assuming ONE call cools
+    // everything. It used to: a benched model held its tail slot, so a walk
+    // could never reach past it and one pass exhausted what the chain could
+    // see. The tail now partitions, so a walk reaches models the previous one
+    // could not, and it takes two or three passes to exhaust a real key set.
+    //
+    // The guarantee under test is unchanged and is the whole point: once every
+    // model really IS cooling, the refusal must carry an ACTIONABLE WAIT TIME
+    // rather than a generic failure. Verified independently before this edit —
+    // driving to convergence yields AIProviderError / code=rate-limit /
+    // "Every model set up for this is rate-limited right now. Try again in
+    // about 20 seconds." The message was never lost; the premise had gone
+    // stale.
+    await driveUntilAllCooling()
 
     built.length = 0
     const err = await completeWithFallback({ purpose: 'memory-extract', messages: [] } as never).catch((e) => e)
@@ -528,11 +616,21 @@ describe('the taxonomy, through the real chain walk', () => {
       await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
 
       built.length = 0
+      const mark = builtModels.length
       vi.setSystemTime(new Date('2026-08-13T12:01:05Z')) // +65s: past DEFAULT_COOLDOWN_MS (60s)
       await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
       // If markRateLimited (the ordinary 60s default) had fired instead, the
-      // model would already be usable again here — it must still be empty.
-      expect(built).toEqual([])
+      // model would already be usable again here.
+      // SHARPENED, NOT RELAXED (BUG-159). Was expect(built).toEqual([]) — the
+      // only way a provider-id list could say "the excluded model was not
+      // attempted". The capped tail now partitions rather than letting a benched
+      // model hold a slot, so OTHER models are legitimately reached here.
+      // The period-exhausted model is what must still be excluded.
+      const before = builtModels.slice(0, mark)
+      expect(
+        builtModels.slice(mark).filter((m) => before.includes(m)),
+        'a model that should have been excluded was attempted again'
+      ).toEqual([])
 
       built.length = 0
       vi.setSystemTime(new Date('2026-08-13T13:01:05Z')) // +1h1m5s: past PERIOD_EXHAUSTED_DEFAULT_MS (1h)
@@ -556,10 +654,20 @@ describe('the taxonomy, through the real chain walk', () => {
       expect(brokenId).toBeTruthy()
 
       built.length = 0
+      const mark = builtModels.length
       await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
       // Excluded before any attempt — same "refuse before spending a
       // request" shape as an ordinary cooldown.
-      expect(built).toEqual([])
+      // SHARPENED, NOT RELAXED (BUG-159). Was expect(built).toEqual([]) — the
+      // only way a provider-id list could say "the excluded model was not
+      // attempted". The capped tail now partitions rather than letting a benched
+      // model hold a slot, so OTHER models are legitimately reached here.
+      // The structurally-broken model is the one that must not reappear.
+      const before = builtModels.slice(0, mark)
+      expect(
+        builtModels.slice(mark).filter((m) => before.includes(m)),
+        'a model that should have been excluded was attempted again'
+      ).toEqual([])
 
       built.length = 0
       vi.setSystemTime(new Date(Date.now() + STRUCTURAL_BREAK_MS + 1000))
@@ -590,13 +698,23 @@ describe('the taxonomy, through the real chain walk', () => {
     expect(exhaustedId).toBeTruthy()
 
     built.length = 0
+    const mark = builtModels.length
     await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
     // Refused before any attempt — same "refuse before spending a request"
     // shape as the structural-failure test above. Before this fix, the model
-    // would appear in `built` again here, identical to a plain 'failed' with
-    // no quota signal (the "only rate limits cool down" test earlier in this
-    // file) — that's the exact bug this test catches.
-    expect(built).toEqual([])
+    // would appear again here, identical to a plain 'failed' with no quota
+    // signal (the "only rate limits cool down" test earlier in this file) —
+    // that's the exact bug this test catches.
+    // SHARPENED, NOT RELAXED (BUG-159). Was expect(built).toEqual([]) — the
+    // only way a provider-id list could say "the excluded model was not
+    // attempted". The capped tail now partitions rather than letting a benched
+    // model hold a slot, so OTHER models are legitimately reached here.
+    // The quota-exhausted model is the one that must not reappear.
+    const before = builtModels.slice(0, mark)
+    expect(
+      builtModels.slice(mark).filter((m) => before.includes(m)),
+      'a model that should have been excluded was attempted again'
+    ).toEqual([])
   })
 
   it('an auth failure does NOT also get marked structurally broken — deadProviders already excludes it, avoiding two independent encodings drifting apart', async () => {
