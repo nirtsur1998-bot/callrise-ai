@@ -2014,6 +2014,10 @@ export type SummaryLanguage =
 export interface BackupSyncScope {
   /** Buyer transcripts + coaching evidence quotes (normally stripped before backup). */
   transcripts: boolean
+  /** BUG-157 — Rise assistant conversations. Kept in lockstep with
+   *  main/app-settings.ts, which carries the full reasoning. OFF by default
+   *  like every category here. */
+  riseConversations: boolean
   /** Attached document blobs (Supabase Storage), not just their metadata. */
   attachments: boolean
   knowledgeBase: boolean

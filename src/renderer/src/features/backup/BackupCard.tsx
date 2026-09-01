@@ -12,7 +12,8 @@ import {
   BookOpen,
   SlidersHorizontal,
   Contact,
-  Brain
+  Brain,
+  Sparkles
 } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { cn } from '@renderer/lib/cn'
@@ -110,6 +111,13 @@ const OPTIONAL_ITEMS: { key: SyncScopeKey; icon: typeof ListChecks; label: strin
     label: 'App settings & personalization'
   },
   { key: 'contacts', icon: Contact, label: 'Contacts & deals' },
+  // BUG-157 — Rise conversations had NO backup path at all, so every thread
+  // was local-only and died with the machine. This row is not optional
+  // decoration: sync-scope-no-drift.test.ts fails the build for any scope key
+  // without one, because a key the renderer never writes can never be turned
+  // on (that is BUG-091, and it left both Sales Brain cloud paths unreachable
+  // while three bugs were 'fixed' inside functions nothing could call).
+  { key: 'riseConversations', icon: Sparkles, label: 'Rise conversations' },
   {
     key: 'salesBrain',
     icon: Brain,

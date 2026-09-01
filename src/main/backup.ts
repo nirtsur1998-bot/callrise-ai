@@ -41,6 +41,12 @@ import {
 } from './app-settings'
 import { writeJsonAtomic } from './atomic-write'
 import {
+  conversationsDir as assistantConversationsDir,
+  listConversations,
+  getConversation,
+  importConversation
+} from './assistant/conversations-fs'
+import {
   reconcileStore,
   ts,
   toServerMs,
@@ -737,6 +743,34 @@ export async function pushAll(): Promise<BackupResult> {
         reportBackupStep('knowledgePush', err)
       }
     }
+    // BUG-157 — Rise conversations. Same isolation discipline as every optional
+    // category: a missing backup_rise_conversations table must never fail the
+    // rest of the push, so this is its own try/catch and reports its own step.
+    if (syncScope.riseConversations) {
+      try {
+        const dir = assistantConversationsDir(app.getPath('userData'))
+        const metas = await listConversations(dir)
+        const convRows: BackupRow[] = []
+        for (const meta of metas) {
+          // listConversations returns a LIST PROJECTION without the message
+          // array — backing that up would sync titles and lose every word of
+          // the actual conversation, which is the whole thing being protected.
+          const full = await getConversation(dir, meta.id)
+          if (!full) continue
+          convRows.push({
+            id: full.id,
+            user_id: userId,
+            updated_at: full.updatedAt,
+            deleted: false, // no tombstone in this store — see importConversation
+            payload: full
+          })
+        }
+        await upsertRows(client, 'backup_rise_conversations', convRows, skewMs)
+      } catch (err) {
+        console.error('[backup] rise conversations push failed:', err)
+        reportBackupStep('riseConversationsPush', err)
+      }
+    }
     if (syncScope.settingsPersonalization) {
       try {
         const settings = loadAppSettings()
@@ -986,6 +1020,30 @@ export async function pullAll(): Promise<RestoreResult> {
     // discipline as the push side: a missing table/bucket must never fail the
     // core restore above.
     const syncScope = loadAppSettings().syncScope
+    // BUG-157 — Rise conversations, restored before the rest for no reason
+    // other than keeping this block next to nothing that depends on it.
+    if (syncScope.riseConversations) {
+      try {
+        const dir = assistantConversationsDir(app.getPath('userData'))
+        const convRows = await fetchAllRows(client, 'backup_rise_conversations', userId)
+        const localMetas = await listConversations(dir)
+        const convMap = new Map(
+          localMetas.map((m) => [m.id, { id: m.id, updatedAt: m.updatedAt }])
+        )
+        const convChanged = await reconcileStore(
+          dir,
+          convRows,
+          convMap,
+          (d, payload) => importConversation(d, payload, { onlyIfNewer: true }),
+          lastSyncAt,
+          skewMs
+        )
+        if (convChanged > 0) notifyDataChanged()
+      } catch (err) {
+        console.error('[backup] rise conversations restore failed:', err)
+        reportBackupStep('riseConversationsRestore', err)
+      }
+    }
     if (syncScope.knowledgeBase) {
       try {
         const knowledgeRows = await fetchAllRows(client, 'backup_knowledge', userId)

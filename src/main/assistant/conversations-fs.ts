@@ -396,6 +396,46 @@ export async function createConversation(
   return conversation
 }
 
+/** BUG-157 — write a conversation that arrived from the cloud.
+ *
+ *  Rise conversations had NO backup path at all: backup.ts syncs from the
+ *  database, and this store is deliberately flat JSON outside memory.db (see
+ *  the header) so chat survives with Sales Brain off. Nothing bridged the two,
+ *  so every thread was local-only and died with the machine.
+ *
+ *  Shaped to match backup-core.ts's reconcileStore contract, the same one the
+ *  calls/knowledge/contacts/deals importers satisfy: sanitize first, honour
+ *  onlyIfNewer against what is already on disk, return the record on write and
+ *  null when nothing changed (reconcileStore counts non-null as "changed").
+ *
+ *  sanitizeConversation is not optional here and not merely defensive: this
+ *  payload came off the network from another device, so it is the least
+ *  trusted input this module ever writes. It goes through exactly the same
+ *  validation as a hand-edited file on disk.
+ *
+ *  KNOWN LIMIT, stated rather than discovered later: this store has no
+ *  tombstone. deleteConversation() unlinks the file, so a deletion on one
+ *  machine does not propagate — the other device still holds its copy and will
+ *  push it back. Deleting everywhere needs a `deleted` flag on the record and
+ *  a sweep, which is a schema change, not something to smuggle in here.
+ */
+export async function importConversation(
+  dir: string,
+  payload: unknown,
+  opts?: { onlyIfNewer?: boolean }
+): Promise<AssistantConversation | null> {
+  const incoming = sanitizeConversation(payload)
+  if (!incoming) return null
+  if (opts?.onlyIfNewer !== false) {
+    const existing = await getConversation(dir, incoming.id)
+    // Strictly newer: an equal timestamp means the same version, and
+    // rewriting it would churn the file and its mtime for no reason.
+    if (existing && existing.updatedAt >= incoming.updatedAt) return null
+  }
+  await writeConversation(dir, incoming)
+  return incoming
+}
+
 export async function renameConversation(
   dir: string,
   id: string,
