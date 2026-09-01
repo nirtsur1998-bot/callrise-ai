@@ -19,7 +19,8 @@ let dir: string
 vi.mock('electron', () => ({ app: { getPath: () => dir } }))
 
 const { hasUsableAiCapacity, hasUsableCapacityForPurpose } = await import('../capacity')
-const { resolveChain } = await import('../complete-with-fallback')
+const { configuredStepsFor } = await import('../complete-with-fallback')
+const { MODEL_CATALOG } = await import('../model-catalog')
 const { markPeriodExhausted, markStructurallyBroken, resetCooldownsForTests } = await import(
   '../model-cooldown'
 )
@@ -50,7 +51,20 @@ afterEach(() => {
 /** The catalog ids this purpose will actually attempt, from the same
  *  resolution the real fallback walk uses — not a hand-listed guess. */
 function chainIds(): string[] {
-  return resolveChain(PURPOSE, { needsTool: true }).capable.map((s) => s.catalogId)
+  // BUG-159 — the CONFIGURED set, which is what hasUsableCapacityForPurpose now
+  // judges, not the walk's chain.
+  //
+  // These used to be the same list. Capacity read the walk's resolved chain,
+  // which coupled the "does this user have capacity" question to "what would
+  // this particular walk attempt" — and that coupling inverted the signal
+  // whenever anything shortened the chain (see docs/BUG-159-api-team-design.md;
+  // it cost three reverted attempts). Capacity now asks the configured set
+  // directly, so a test that cools "everything" has to cool that same set:
+  // cooling only what one walk reaches leaves the models beyond it usable, and
+  // capacity would be RIGHT to say so.
+  return configuredStepsFor(PURPOSE)
+    .filter((s) => MODEL_CATALOG.find((e) => e.id === s.catalogId)?.supportsToolCalling !== false)
+    .map((s) => s.catalogId)
 }
 
 describe('hasUsableCapacityForPurpose, against real cooldown state', () => {
