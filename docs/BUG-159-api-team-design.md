@@ -234,3 +234,63 @@ usable, and capacity would be RIGHT to say so.
    then reports "Expect test to fail".
 5. **Drive a real call** and read `ai-purpose-health.json`: `substituteSuccesses`
    rising with `consecutiveFailures` at 0 is the outcome that matters.
+
+---
+
+## CORRECTION to Attempt E: change 4 is NOT unblocked (2026-09-01, later)
+
+Attempt E said the capacity decoupling unblocked change 4, on the evidence that
+`capacityForPurpose` went 7/7 green with the filter applied. That was true and
+it was not sufficient. **There is a THIRD consumer of the same resolution, and
+the claim was made after separating one.**
+
+`completeWithFallback` refuses with an ACTIONABLE WAIT TIME on `chain.length === 0`:
+
+```js
+if (chain.length === 0) {
+  // Every model is in cooldown. Refusing here is the POINT: walking the chain
+  // anyway spends a doomed request on each one and pushes their limits out
+  // further, which is the spiral this fix exists to break.
+  const until = soonestExpiry(capable.map((s) => s.catalogId), ...)
+```
+
+The tail filter never touches the LEGACY step, so when everything is cooling the
+chain is `[legacy]`, not empty. That branch never fires, the walk spends a doomed
+request, and the user gets `AllModelsExhaustedError` ("every configured model is
+unreachable") instead of "try again in about an hour". `modelCooldown`'s M27 D
+comment records that a worse version of that exact message reached a real user.
+
+So filtering trades one user-visible regression for another.
+
+### The reconciliation the next attempt needs
+
+Two principles in this codebase currently contradict each other once a chain can
+be shortened:
+
+- **BUG-154 (mine):** keep the pinned default rather than returning an empty
+  chain — "no attempt is worse than a bad attempt", written for the case where
+  no other provider is keyed.
+- **modelCooldown / the spiral:** when everything is cooling, refuse with a wait
+  rather than spending a doomed request.
+
+They are not actually in conflict, because they describe different states:
+
+| state | correct chain |
+|---|---|
+| nothing usable at all (everything cooling) | **empty** → wait-time branch fires |
+| legacy unusable, a usable alternative exists | `[tail]` |
+| legacy usable | `[legacy, ...tail]` |
+| nothing else CONFIGURED (not merely cooling) | `[legacy]` — BUG-154's case |
+
+"Nothing usable" and "nothing configured" are different questions, and the code
+currently answers both by looking at chain length. Separating them is the same
+move that fixed capacity, applied to the exhaustion path — and it is what makes
+change 4 safe.
+
+### Honest estimate
+
+Three consumers found so far (capacity, wait-time messaging, and the walk
+itself). One separated. This is a focused refactor of how `resolveChain`'s
+result is consumed, not a filter tweak, and it should be started fresh rather
+than continued at the end of a long session. Everything needed to start is in
+this document.
