@@ -138,3 +138,48 @@ call record persists only the in-text markers — there is no per-call field for
 dropped seconds, reconnect count, device, or denoiser state. Persisting those
 four on the call record turns every future call into its own evidence, instead
 of this kind of archaeology across 341 JSON files.
+
+---
+
+## The next hypothesis (2026-09-01, founder's framing)
+
+The disproof IS the finding, and it narrows the search sharply:
+
+> Reconnects correlate with density loss, and the loss is **not the dropped
+> audio**. So something about the reconnect changes RECOGNITION QUALITY rather
+> than losing samples.
+
+Total shed across every affected call is 58 seconds; the deficit is 50–80% of
+the words. Whatever a reconnect costs, it is not the audio it discards.
+
+Candidate mechanisms, all of which change what Deepgram *does with* audio it
+successfully receives:
+
+1. **A new stream loses conversational context.** Deepgram's model carries state
+   within a connection. Every reconnect restarts it cold, so the first stretch
+   after each one is transcribed without the preceding context that would
+   disambiguate it. A call with 24 reconnects starts cold 24 times.
+2. **A restart mid-sentence.** Reconnects do not wait for an utterance boundary,
+   so each one plausibly truncates the in-flight utterance on both sides —
+   losing the tail of one and the head of the next, neither of which appears as
+   dropped audio because both were sent.
+3. **Format or parameter renegotiation.** Each connection re-sends encoding,
+   sample rate, channel layout and the mono(diarize)↔multichannel switch. A
+   mismatch that degrades rather than fails would look exactly like this: audio
+   arrives, words do not.
+
+**What would test it, without needing the field data.** Drive one call with the
+TTS rig and a known script, then force N reconnects mid-call and compare the
+transcript against the same script with zero reconnects. The script is known, so
+the comparison is word-level rather than statistical, and it separates the three
+candidates:
+
+- if the words lost cluster immediately AFTER each reconnect → (1) or (2)
+- if they cluster around the reconnect INSTANT, on both sides → (2)
+- if quality degrades uniformly for the whole post-reconnect stream → (3)
+
+This is a controlled experiment on one machine, not archaeology across 341 JSON
+files, and it is the cheapest next step by a wide margin.
+
+**Deliberately not chased now** (founder, 2026-09-01): "Write that as the next
+hypothesis with what would test it, and leave it."
