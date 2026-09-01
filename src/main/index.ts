@@ -62,7 +62,22 @@ writeCrashLog('imports resolved', 'all top-level imports completed without throw
 // keeps its original name so existing calls/tasks/settings/consent/Google
 // tokens aren't orphaned by the rename. Must run before app is ready.
 app.setName('CallRise AI')
-const userDataDir = join(app.getPath('appData'), 'sales-os')
+
+/**
+ * VERIFICATION SEAM — DEV BUILDS ONLY, AND UNREACHABLE IN A PACKAGED ONE.
+ *
+ * Ported from the M32 branch onto this bugfix branch, because the same need
+ * applies here: proving a fix means driving the app, and driving it against
+ * the founder's live profile would both mutate real data and race the
+ * installed app that shares this exact directory.
+ *
+ * The gate is `app.isPackaged`, not the presence of the variable: in a
+ * packaged build the env var is never read at all, so there is no environment
+ * on a real user's machine that can move their data directory.
+ */
+const devProfileOverride = app.isPackaged ? undefined : process.env['CALLRISE_USER_DATA_DIR']
+const userDataDir = devProfileOverride || join(app.getPath('appData'), 'sales-os')
+if (devProfileOverride) console.log(`[dev] userData overridden -> ${devProfileOverride}`)
 app.setPath('userData', userDataDir)
 
 registerCrashLogging()
