@@ -43,8 +43,19 @@ const { MODEL_CATALOG } = await import('../model-catalog')
  *  the whole failure mode being guarded. */
 const ALL_PURPOSES = Object.keys(LATENCY_POLICY) as Array<keyof typeof LATENCY_POLICY>
 
-/** Deliberately single-step, with the decision that made them so. */
-const SINGLE_STEP_BY_DESIGN = new Set(['coaching-cue', 'deal-tier1'])
+/** EMPTY, and that is the result this file was written to reach.
+ *
+ *  It held 'coaching-cue' and 'deal-tier1' — the two live purposes, pinned to a
+ *  single step by LEGACY_TAIL_MAX 0 (BUG-148 decision 5B) to protect the 6s
+ *  dead-air budget, and therefore the two features that died whenever their one
+ *  provider did. BUG-159 gave them the second attempt CHAIN_BUDGET had always
+ *  budgeted, so there is no longer any purpose that depends on one provider.
+ *
+ *  Kept as an empty set rather than deleted: the test below is what stops a new
+ *  single-provider purpose appearing, and the next person to need an exception
+ *  should have to add it here deliberately, with a reason, rather than quietly
+ *  loosening an assertion. */
+const SINGLE_STEP_BY_DESIGN = new Set<string>()
 
 const ORIGINAL_ENV = { ...process.env }
 beforeEach(() => {
@@ -79,19 +90,34 @@ describe('with four provider keys configured, no feature depends on one provider
     ).toEqual([])
   })
 
-  it('CONTROL: the documented exceptions really ARE single-provider', () => {
-    // Without this the test above could pass because the allowlist is wrong
-    // rather than because the exceptions are real. If either of these ever
-    // gains a second provider, remove it from SINGLE_STEP_BY_DESIGN — the
-    // failure message says so.
-    for (const p of SINGLE_STEP_BY_DESIGN) {
-      const providers = new Set(resolveConfiguredChain(p as never).map((s) => s.providerId))
-      expect(
-        providers.size,
-        `${p} now reaches ${providers.size} providers — drop it from SINGLE_STEP_BY_DESIGN`
-      ).toBe(1)
+  it('CONTROL: the assertion above can actually fail', () => {
+    // The exceptions list is now empty, so the old control ("the documented
+    // exceptions really ARE single-provider") has nothing to check and would
+    // pass vacuously. Replaced with the thing it was really protecting: that
+    // the assertion above is capable of failing at all.
+    //
+    // Configure ONE provider and the same computation must report every
+    // purpose as single-provider. If this comes back empty, the check above is
+    // inert and its green means nothing.
+    for (const k of Object.keys(process.env)) {
+      if (k.endsWith('_API_KEY') || k === 'CLOUDFLARE_ACCOUNT_ID') delete process.env[k]
     }
+    process.env['GROQ_API_KEY'] = 'k'
+    // The pinned default must be that same provider, or the mocked
+    // getActiveAIProvider (which returns an id without checking keys) leaves a
+    // legacy:huggingface step leading the chain and the count reads TWO
+    // providers from a single key.
+    activeProviderId.current = 'groq'
+    const singlePoint = ALL_PURPOSES.filter((p) => {
+      const providers = new Set(resolveConfiguredChain(p as never).map((s) => s.providerId))
+      return providers.size < 2
+    })
+    expect(
+      singlePoint.length,
+      'with one key configured, nothing reported as single-provider — the check above is inert'
+    ).toBeGreaterThan(0)
   })
+
 
   it('the paid provider is ELIGIBLE for every purpose, even where a single walk cannot reach it', () => {
     // CORRECTED, NOT RELAXED. The first version asserted the paid key appears

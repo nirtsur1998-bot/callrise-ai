@@ -212,14 +212,28 @@ describe('resolveChain — the caps', () => {
     expect(chain.length).toBeLessThanOrEqual(4)
   })
 
-  it('LIVE purposes are untouched — still exactly one attempt, no tail', () => {
-    // Achieved by exclusion, not budget arithmetic: chain.length stays 1, so
-    // the per-attempt budget split in completeWithFallback is bit-identical
-    // to today. This is what makes P1 provably zero-risk for M9's dead-air
-    // fix and M24's <=4s criterion.
-    expect(resolveConfiguredChain('coaching-cue')).toHaveLength(1)
-    expect(resolveConfiguredChain('deal-tier1')).toHaveLength(1)
+  it('LIVE purposes get the SECOND attempt their budget already paid for', () => {
+    // WAS "still exactly one attempt, no tail". BUG-159 (founder, 2026-09-01)
+    // reversed that: "I want all keys to work and if one fails for the system
+    // to direct the work to it and won't deny a job from the user."
+    //
+    // The original reasoning — keeping chain.length at 1 makes the per-attempt
+    // budget split "bit-identical to today", provably zero-risk for M9's
+    // dead-air fix and M24's <=4s criterion — is still exactly how the budget
+    // works, and is precisely why TWO attempts are safe: completeWithFallback
+    // divides remainingBudgetMs by the remaining entries, so they SHARE the six
+    // seconds rather than doubling them. CHAIN_BUDGET had declared
+    // maxChainLength 2 all along; only LEGACY_TAIL_MAX disagreed.
+    //
+    // The FIRST attempt is still the user's pinned default, so an existing
+    // install's first request is byte-identical to before.
+    expect(resolveConfiguredChain('coaching-cue')).toHaveLength(2)
+    expect(resolveConfiguredChain('deal-tier1')).toHaveLength(2)
     expect(resolveConfiguredChain('coaching-cue')[0].catalogId).toBe('legacy:groq')
+    // The second attempt is a DIFFERENT provider — retrying the same one would
+    // not survive the account-level failures this exists to route around.
+    const chain = resolveConfiguredChain('coaching-cue')
+    expect(chain[1].providerId).not.toBe(chain[0].providerId)
   })
 })
 
@@ -283,33 +297,47 @@ describe('BUG-154 — a live purpose substitutes when its pinned default cannot 
     process.env.CEREBRAS_API_KEY = 'c'
   })
 
-  it.each(LIVE)('%s: control — an untouched default IS used, and alone', (purpose) => {
+  it.each(LIVE)('%s: control — an untouched default is used FIRST', (purpose) => {
     // Without this the tests below cannot tell "substituted" from "never used
-    // the legacy step in the first place".
+    // the legacy step in the first place". Length is 2 since BUG-159 gave the
+    // live purposes the second attempt their budget already allowed; what this
+    // control asserts is that a healthy default still LEADS.
     const chain = resolveConfiguredChain(purpose)
-    expect(chain).toHaveLength(1)
+    expect(chain).toHaveLength(2)
     expect(chain[0].catalogId).toBe('legacy:groq')
   })
 
   it.each(LIVE)('%s: substitutes when the default is PERIOD-EXHAUSTED (the real case)', (purpose) => {
     markPeriodExhausted('legacy:groq', undefined, Date.now(), 'live')
     const chain = resolveConfiguredChain(purpose)
-    expect(chain).toHaveLength(1)
+    // Two steps since BUG-159. What matters is that the unusable default no
+    // longer LEADS: it is demoted behind a step that can actually answer, and
+    // deliberately still present so it can earn its place back with a success.
+    expect(chain).toHaveLength(2)
     expect(chain[0].providerId).not.toBe('groq')
+    expect(chain.map((s) => s.catalogId)).toContain('legacy:groq')
   })
 
   it.each(LIVE)('%s: substitutes when the default is STRUCTURALLY BROKEN', (purpose) => {
     markStructurallyBroken('legacy:groq', Date.now(), purpose)
     const chain = resolveConfiguredChain(purpose)
-    expect(chain).toHaveLength(1)
+    // Two steps since BUG-159. What matters is that the unusable default no
+    // longer LEADS: it is demoted behind a step that can actually answer, and
+    // deliberately still present so it can earn its place back with a success.
+    expect(chain).toHaveLength(2)
     expect(chain[0].providerId).not.toBe('groq')
+    expect(chain.map((s) => s.catalogId)).toContain('legacy:groq')
   })
 
   it.each(LIVE)('%s: substitutes when the default is RATE-LIMITED', (purpose) => {
     markRateLimited('legacy:groq', 60_000, Date.now(), 'live')
     const chain = resolveConfiguredChain(purpose)
-    expect(chain).toHaveLength(1)
+    // Two steps since BUG-159. What matters is that the unusable default no
+    // longer LEADS: it is demoted behind a step that can actually answer, and
+    // deliberately still present so it can earn its place back with a success.
+    expect(chain).toHaveLength(2)
     expect(chain[0].providerId).not.toBe('groq')
+    expect(chain.map((s) => s.catalogId)).toContain('legacy:groq')
   })
 
   it('a break recorded for ANOTHER purpose does not substitute this one', () => {
@@ -332,15 +360,28 @@ describe('BUG-154 — a live purpose substitutes when its pinned default cannot 
     markStructurallyBroken('cerebras-gpt-oss-120b', Date.now(), 'coaching-cue')
 
     const chain = resolveConfiguredChain('coaching-cue')
-    expect(chain).toHaveLength(1)
+    // ASSERTS ORDER, NOT LENGTH, since BUG-159. The tail now PARTITIONS rather
+    // than filtering: attemptable steps take the capped slots and the rest are
+    // appended behind them, because soonestExpiry and rescueSteps read this
+    // same list to compute the actionable wait time and to offer a never-tried
+    // key. So the chain is legitimately longer than the attempt cap — what
+    // matters is which step is FIRST, and the walk's own usability gate is what
+    // bounds attempts.
     expect(chain[0].providerId).not.toBe('groq') // the exhausted default
     expect(chain[0].providerId).not.toBe('cerebras') // the benched substitute
+    // Both are still present — demoted, never deleted, so either can earn its
+    // place back with a success.
+    expect(chain.map((s) => s.providerId)).toContain('groq')
   })
 
   it('with NO other provider keyed, it keeps the default rather than returning nothing', () => {
     // Degrading to an empty chain would turn a bad attempt into no attempt --
     // exactly the silent failure this bug produced in the field.
+    // BUG-159 added google and openrouter to the live lane, so those keys must
+    // go too for this to mean "no other provider" — the beforeEach sets them.
     delete process.env.CEREBRAS_API_KEY
+    delete process.env.GOOGLE_AI_API_KEY
+    delete process.env.OPENROUTER_API_KEY
     markPeriodExhausted('legacy:groq', undefined, Date.now(), 'live')
     const chain = resolveConfiguredChain('coaching-cue')
     expect(chain).toHaveLength(1)

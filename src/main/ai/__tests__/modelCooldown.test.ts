@@ -910,11 +910,21 @@ describe('tiered cooldown, through the real chain walk — the headline scenario
 
     await expect(completeWithFallback({ purpose: 'coaching-cue', messages: [] } as never)).rejects.toBeTruthy()
     built.length = 0
+    const mark = builtModels.length
 
     // Another live-tier call (coaching-cue again) must NOT bypass — only a
     // durable caller may.
     await expect(completeWithFallback({ purpose: 'coaching-cue', messages: [] } as never)).rejects.toBeTruthy()
-    expect(built).toEqual([])
+    // SHARPENED, NOT RELAXED (BUG-159). Was expect(built).toEqual([]) — the
+    // only way a provider-id list could say "the cooled model was not tried
+    // again". coaching-cue now has a second budgeted attempt, so it reaches a
+    // DIFFERENT model here, which is the point of that change and not a
+    // bypass. The claim is about the SHARED model specifically.
+    const before = builtModels.slice(0, mark)
+    expect(
+      builtModels.slice(mark).filter((m) => before.includes(m)),
+      'the cooled model itself was tried again — that WOULD be a bypass'
+    ).toEqual([])
   })
 
   it('a genuine account-wide limit (durable purpose fails first) still blocks coaching-cue too', async () => {
@@ -929,10 +939,20 @@ describe('tiered cooldown, through the real chain walk — the headline scenario
     // account-wide limit, per the sticky-durable-causation rule.
     await expect(completeWithFallback({ purpose: 'memory-extract', messages: [] } as never)).rejects.toBeTruthy()
     built.length = 0
+    const mark = builtModels.length
 
     // coaching-cue must NOT get a special pass just for being live-tier —
     // a durable-caused cooldown is bypassable by nobody.
     await expect(completeWithFallback({ purpose: 'coaching-cue', messages: [] } as never)).rejects.toBeTruthy()
-    expect(built).toEqual([])
+    // SHARPENED, NOT RELAXED (BUG-159). Was expect(built).toEqual([]) — the
+    // only way a provider-id list could say "the cooled model was not tried
+    // again". coaching-cue now has a second budgeted attempt, so it reaches a
+    // DIFFERENT model here, which is the point of that change and not a
+    // bypass. A durable-caused cooldown on that model binds coaching-cue too.
+    const before = builtModels.slice(0, mark)
+    expect(
+      builtModels.slice(mark).filter((m) => before.includes(m)),
+      'the cooled model itself was tried again — that WOULD be a bypass'
+    ).toEqual([])
   })
 })

@@ -164,6 +164,15 @@ const SPEED_CHAIN = [
   // user with any other key never pays for this.
   'zai-glm-4.5-flash',
   'hf-gpt-oss-20b',
+  // BUG-159 — google and openrouter were in NO live-lane chain at all, so a
+  // user holding only those keys had no cue fallback whatsoever: the same gap
+  // zai and huggingface had before BUG-154. Quality-lane models on a live path
+  // is a deliberate last resort, bounded by the 6s CHAIN_BUDGET — a slower
+  // answer that may be cut off beats a guaranteed absent one — and they sit
+  // behind every genuinely fast option, so nobody reaches them who does not
+  // need to.
+  'google-gemini-flash',
+  'openrouter-nemotron-3.5-lightning',
   // knownStale, filtered by stepsFromIds; kept for provenance only.
   'groq-llama-3.1-8b-instant',
   'groq-llama-3.3-70b-versatile',
@@ -315,8 +324,33 @@ function legacyStep(): ResolvedStep | null {
  * not the model.
  */
 const LEGACY_TAIL_MAX: Record<AIPurpose, number> = {
-  'coaching-cue': 0,
-  'deal-tier1': 0,
+  // BUG-159 (founder, 2026-09-01): "I want all keys to work and if one fails
+  // for the system to direct the work to it and won't deny a job from the
+  // user and have any failures (EVEN WITHOUT A PAID API)."
+  //
+  // 0 -> 1. This REVERSES BUG-148 decision 5B ("the chain stays exactly one
+  // step long", founder, 2026-08-31), recorded rather than quietly changed:
+  // 5B spent the 6s dead-air budget on a single attempt, and the founder has
+  // now weighed a missed cue as the worse outcome.
+  //
+  // THE BUDGET ALREADY PAID FOR IT. CHAIN_BUDGET declares maxChainLength 2 for
+  // both live purposes; LEGACY_TAIL_MAX 0 meant that whenever a default was
+  // pinned the chain was one step, so the second budgeted attempt could never
+  // be spent. The two tables disagreed and the stricter silently won.
+  //
+  // MEASURED COST OF THE DISAGREEMENT, driving real calls: reaching a working
+  // provider took SIX failed attempts over ~50s before the tail partition, and
+  // still FOUR over ~32s after it — each provider needing three strikes to
+  // bench before the next is tried, one model per attempt. Every one of those
+  // is a cue the rep never saw.
+  //
+  // LATENCY IS UNCHANGED, and that was checked rather than assumed:
+  // completeWithFallback divides remainingBudgetMs by the remaining entries,
+  // so two attempts SHARE the six seconds instead of doubling them. Two is
+  // also the ceiling — going past it needs CHAIN_BUDGET raised, which is a
+  // real dead-air trade-off and a separate decision.
+  'coaching-cue': 1,
+  'deal-tier1': 1,
   other: 1,
   'coaching-chat': 1,
   // M28 - REVERSED from the original 1 (which copied coaching-chat's "human
@@ -629,7 +663,22 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
   //
   // Found by bug154-eventually-tries-every-key.test.ts, which loops resolve-
   // and-fail and names the providers that hold a key and were never attempted.
-  const usable = bundledSteps(purpose).filter(
+  // BUG-159 — the tail draws from the UNCAPPED pool.
+  //
+  // bundledSteps() applies CHAIN_BUDGET's maxChainLength, which for the live
+  // purposes is 2 — so a tail built from it could only ever reach the first two
+  // live entries of SPEED_CHAIN, and the founder's paid Anthropic key (further
+  // down the lane) was unreachable however often the ones ahead failed. Caught
+  // by bug154-eventually-tries-every-key: "never attempted despite holding a
+  // key: anthropic, huggingface".
+  //
+  // CANDIDATE_POOL is the same list without the ATTEMPTS cap, and its own doc
+  // comment already draws the distinction this fix rests on: the cap answers
+  // "how many attempts may this purpose make", which is a different question
+  // from "which models are eligible". The attempts cap is still enforced — by
+  // tailMax just below, and by the walk's own budget — so this widens
+  // eligibility, never cost.
+  const usable = stepsFromIds(CANDIDATE_POOL[purpose]).filter(
     (s) =>
       legacyModelId === undefined ||
       s.providerId !== legacy.providerId ||
@@ -696,7 +745,28 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
   //
   // If the tail is empty there is nothing to demote behind, and [legacy] is
   // returned unchanged rather than an empty chain.
-  if (legacyDemoted && tail.length > 0) return [...tail, legacy]
+  // BUG-159 — an UNUSABLE default gives up the front too, not only an
+  // auth-demoted one.
+  //
+  // The substitution BUG-154 added for the live purposes lived inside the
+  // `tailMax === 0` branch above. Raising LEGACY_TAIL_MAX to 1 skips that
+  // branch entirely, so without this an exhausted, cooling or structurally-
+  // broken default would silently lead the chain again.
+  //
+  // Demotion stays PROVIDER-scoped (an auth rejection condemns the key) while
+  // usability is STEP-scoped (a cooldown condemns one model), so both are
+  // consulted rather than one derived from the other.
+  //
+  // Reordered, never removed: the default stays in the chain so it can still
+  // earn its place back with a success — a step never attempted can never
+  // produce the evidence that would restore it.
+  const legacyLeads =
+    !legacyDemoted &&
+    isUsableFor(legacy.catalogId, Date.now(), purposeTier(purpose), {
+      ignorePacing: true,
+      purpose
+    })
+  if (!legacyLeads && tail.length > 0) return [...tail, legacy]
   return [legacy, ...tail]
 }
 
