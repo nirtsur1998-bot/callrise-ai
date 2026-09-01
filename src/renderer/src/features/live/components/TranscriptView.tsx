@@ -15,6 +15,10 @@ interface TranscriptViewProps {
    *  saved callId) — self-intro is the only source that can name someone
    *  DURING a call in progress. */
   identities?: SpeakerIdentities
+  /** BUG-158 — pixels to keep clear at the top so the floating Deal
+   *  Intelligence panel never sits on top of transcript text. 0 when that
+   *  panel is not mounted, which is the common case. */
+  reservedTopPx?: number
 }
 
 /** Scrollable live transcript: speaker-labeled finalized turns + faint interim. */
@@ -23,7 +27,8 @@ export function TranscriptView({
   interimText,
   repSpeaker = null,
   paused = false,
-  identities
+  identities,
+  reservedTopPx = 0
 }: TranscriptViewProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -63,6 +68,21 @@ export function TranscriptView({
         ref={scrollRef}
         onScroll={handleScroll}
         className="h-full overflow-y-auto rounded-2xl border border-line-soft bg-surface px-7 py-6"
+        // BUG-158 — keep the transcript out from under the Live Deal
+        // Intelligence panel, which floats over this column's top-left corner
+        // (LiveView mounts it `absolute top-3 left-4 w-80`).
+        //
+        // Measured during a driven call before this existed: the panel covered
+        // 1 of 7 visible transcript lines, and it GREW from 37px to 91px tall
+        // within that same call as nudges accumulated — so the number of
+        // hidden lines scales with it. The founder circled exactly this.
+        //
+        // PADDING, not a margin or a shorter container: the card's border and
+        // background must still run the full height (the panel floats over the
+        // card, not over a gap), and padding-top is inside the scroll region so
+        // the reserved strip scrolls away with the content instead of pinning a
+        // permanent blank band. Added to py-6's 24px rather than replacing it.
+        style={reservedTopPx > 0 ? { paddingTop: reservedTopPx + 24 } : undefined}
       >
         {isEmpty ? (
           <div className="flex h-full flex-col items-center justify-center gap-2.5">

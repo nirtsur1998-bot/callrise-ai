@@ -467,6 +467,48 @@ export function LiveView({
   const [checklist, setChecklist] = useState(emptyChecklistState)
 
   const idleWatcherRef = useRef(new IdleStopWatcher())
+  // BUG-158 — how much of the transcript column the floating Live Deal
+  // Intelligence panel is currently covering.
+  //
+  // MEASURED, not assumed: the panel is mounted `absolute top-3 left-4 w-80`
+  // over this same column, and its height is not a constant — driving one call
+  // showed it grow from 37px to 91px as nudges accumulated, covering more
+  // transcript as it went. A hard-coded reservation would be wrong within
+  // seconds of a real call starting.
+  //
+  // The hook is unconditional on purpose. Putting it behind
+  // `dealIntelligenceEnabled` would change the hook order the moment the beta
+  // flag flips mid-session.
+  // A CALLBACK REF, not useRef + useEffect, and the difference is the whole
+  // reason this works.
+  //
+  // The first version kept a plain ref and observed it from an effect keyed on
+  // `dealIntelligenceEnabled`. That effect runs while the panel is still
+  // UNMOUNTED — the wrapper only appears once a call is running — so it read a
+  // null ref, set 0, and never re-ran, because the flag it depended on had not
+  // changed. Verified against the live app: the transcript kept
+  // `padding-top: 24px` with no inline style at all, i.e. the reservation was
+  // silently zero the entire time.
+  //
+  // A callback ref is invoked by React exactly when the node attaches and
+  // again with null when it detaches, so the observer is wired at the only
+  // moment it can be, without depending on anything else being right.
+  const [dealPanelHeight, setDealPanelHeight] = useState(0)
+  const dealPanelObserver = useRef<ResizeObserver | null>(null)
+  const dealPanelRef = useCallback((el: HTMLDivElement | null) => {
+    dealPanelObserver.current?.disconnect()
+    dealPanelObserver.current = null
+    if (!el) {
+      setDealPanelHeight(0)
+      return
+    }
+    const update = (): void => setDealPanelHeight(el.getBoundingClientRect().height)
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    dealPanelObserver.current = ro
+  }, [])
+
   const [autoStopNotice, setAutoStopNotice] = useState<string | null>(null)
   /** What the rep never asked, captured at the moment they hang up. */
   const [hangupWarning, setHangupWarning] = useState<string | null>(null)
@@ -1137,6 +1179,9 @@ export function LiveView({
           repSpeaker={repSpeaker}
           paused={status === 'paused'}
           identities={liveIdentities}
+          // 12px for the panel's own `top-3` offset, plus 8px so a line never
+          // sits flush against its lower edge.
+          reservedTopPx={dealPanelHeight > 0 ? dealPanelHeight + 20 : 0}
         />
         {/* Two independent channels (§4.3), one column.
             They stay logically independent — a suggestion can never delay,
@@ -1158,7 +1203,10 @@ export function LiveView({
             an empty pointer-events-none node in the DOM when the beta
             feature is off, matching the cue column's own conditional above. */}
         {dealIntelligenceEnabled && (
-          <div className="pointer-events-none absolute top-3 left-4 z-40 flex w-80 flex-col items-start">
+          <div
+            ref={dealPanelRef}
+            className="pointer-events-none absolute top-3 left-4 z-40 flex w-80 flex-col items-start"
+          >
             <DealIntelligencePanel
               enabled={dealIntelligenceEnabled}
               status={dealIntelligenceStatus}
