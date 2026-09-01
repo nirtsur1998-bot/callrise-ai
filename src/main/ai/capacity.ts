@@ -39,7 +39,7 @@
 import { MODEL_CATALOG } from './model-catalog'
 import { providerHasCredentials } from './provider-credentials'
 import { isUsableFor } from './model-cooldown'
-import { purposeTier, resolveChain } from './complete-with-fallback'
+import { configuredStepsFor, purposeTier, resolveChain } from './complete-with-fallback'
 import type { AIPurpose } from './types'
 
 /** Every catalog model whose provider currently has a key configured. Read
@@ -95,10 +95,24 @@ export function hasUsableAiCapacity(now: number): boolean {
  * no-key error instead of surfacing it.
  */
 export function hasUsableCapacityForPurpose(purpose: AIPurpose, now: number): boolean {
-  const { capable } = resolveChain(purpose, { needsTool: true })
-  if (capable.length === 0) return true
+  // BUG-159 — "is anything configured?" is asked of the CONFIGURED set, not of
+  // the walk's chain.
+  //
+  // These were the same call, and that coupling made the signal fragile in the
+  // worst direction: any change that shortened the chain (filtering out cooling
+  // steps, say) emptied it exactly when everything was cooling, hit the
+  // empty-means-setup-state branch, and answered "capacity exists" when there
+  // was none. Deferral would stop and background jobs would hammer the
+  // providers. Asking configuredStepsFor() instead makes the empty case mean
+  // what it says: no keys.
+  const configured = configuredStepsFor(purpose)
+  if (configured.length === 0) return true
   const tier = purposeTier(purpose)
-  return capable.some((step) =>
+  // Usability is still judged over the steps this purpose would actually
+  // attempt, which is the narrower, correct set for THAT question.
+  const { capable } = resolveChain(purpose, { needsTool: true })
+  const judged = capable.length > 0 ? capable : configured
+  return judged.some((step) =>
     isUsableFor(step.catalogId, now, tier, { ignorePacing: true, purpose })
   )
 }

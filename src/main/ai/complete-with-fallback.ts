@@ -348,6 +348,26 @@ const LEGACY_TAIL_MAX: Record<AIPurpose, number> = {
  *  it. Unchanged logic: catalog-known, not knownStale, provider key present.
  *  The key check must stay read-fresh from process.env on every resolution —
  *  ai-keys.ts sets and deletes those vars mid-session. */
+/** BUG-159 — the CONFIGURED set for a purpose: every catalog step whose
+ *  provider has credentials and which is not knownStale, ignoring cooldowns,
+ *  quota and structural breaks entirely, uncapped and unordered.
+ *
+ *  This exists because one resolution was being asked two different questions.
+ *  The WALK wants unusable steps demoted or dropped; the CAPACITY check wants
+ *  the complete set, because its "is this user set up at all?" branch keys off
+ *  an EMPTY result. Sharing one view meant any change that shortened the chain
+ *  silently inverted the capacity signal — a filtered chain empties exactly
+ *  when everything is cooling, which capacity then read as "nothing
+ *  configured, so capacity exists". Background jobs would stop deferring and
+ *  hammer the very providers the user is trying to spread load across.
+ *
+ *  Deliberately NOT capped by CHAIN_BUDGET: an attempts budget answers "how
+ *  many tries may this make", which has nothing to do with "how many models is
+ *  this user set up with". */
+export function configuredStepsFor(purpose: AIPurpose): ResolvedStep[] {
+  return stepsFromIds(CANDIDATE_POOL[purpose] ?? DEFAULT_CATALOG_CHAIN[purpose])
+}
+
 export function bundledSteps(purpose: AIPurpose): ResolvedStep[] {
   const steps = stepsFromIds(DEFAULT_CATALOG_CHAIN[purpose])
   // BUG-154 — cap AFTER resolution, never before. See the note where the old

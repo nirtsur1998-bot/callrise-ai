@@ -146,3 +146,46 @@ credentialed, non-stale step ignoring cooldowns, used by `capacity.ts`; and
 4. Drive a real call afterwards and read `ai-purpose-health.json` —
    `substituteSuccesses` rising with `consecutiveFailures` at 0 is the outcome
    that matters, not a green suite.
+
+---
+
+## Attempt D — separate the two views (2026-09-01, partially landed)
+
+The design above was implemented as far as it goes, and the useful half is now
+on the branch:
+
+**LANDED, green:** `configuredStepsFor(purpose)` in complete-with-fallback.ts —
+the full credentialed, non-stale set for a purpose, uncapped and unordered,
+ignoring cooldowns entirely. `hasUsableCapacityForPurpose` now asks IT the
+"is this user set up at all?" question, instead of asking the walk's chain. That
+decoupling is correct on its own terms and is a prerequisite for change 4;
+capacity + jobs suites: 137 passed.
+
+**STILL BLOCKED:** applying change 4 on top of it STILL turns
+`capacityForPurpose` red. The design missed a layer.
+
+    const judged = capable.length > 0 ? capable : configured
+
+`capable` never actually goes empty, because **the tail filter does not touch
+the LEGACY step** — `resolveChain` always returns at least `[legacy]` when a
+default provider is pinned. So the `configured` fallback never fires, and
+capacity judges usability over a one-element list containing a step the filter
+never examined.
+
+**What the next attempt must handle.** The legacy step is outside every
+filtering decision in this function — `tailMax === 0`'s substitution, the tail
+construction, and now change 4 all reason about `usable`/`tail` while `legacy`
+is spliced on afterwards. Any "the chain contains only attemptable steps"
+invariant has to include it, or the emptiness test that capacity depends on can
+never be reached. Either:
+
+- give capacity a third question ("is any configured step usable right now")
+  that never consults the walk's chain at all — simplest, and arguably what it
+  always meant; or
+- bring the legacy step inside the same filter, which changes what
+  `resolveChain` returns for every purpose and needs its own pass.
+
+Three attempts have now been reverted for the same underlying reason, in three
+different disguises. The reason is not the filter. It is that `resolveChain` is
+load-bearing for two callers with incompatible needs, and only one of them has
+been separated so far.
