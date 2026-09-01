@@ -79,6 +79,9 @@ interface UseTranscription {
    *  reason as getSessionId: always the freshest value, not a stale render. */
   getCallId: () => string | null
   stop: () => Promise<void>
+  /** BUG-152 — clear a finished call off the Live screen and return to idle.
+   *  Saves first; only ever called from a terminal status. */
+  dismissFinishedCall: () => void
   togglePause: () => void
   /** Begin capturing the other party (call from a user gesture — opens
    *  getDisplayMedia). Re-checks consent after the async permission prompt. */
@@ -704,6 +707,29 @@ export function useTranscription(
     }
   }, [beginSession])
 
+  /**
+   * BUG-152 — leave a finished call's screen.
+   *
+   * A call that ends WITHOUT the rep pressing Stop (the watchdog's
+   * onCaptureLost sets 'no-device') leaves the transcript on screen with only
+   * a "Reconnect" button, which starts a NEW call. LiveView's
+   * `if (!hasTranscript)` gate skips every full-screen state once a transcript
+   * exists, so there is no route back to the start screen at all.
+   *
+   * flushPendingSave FIRST, always: the whole reason the transcript is kept on
+   * screen after a call is that the save may still be pending, and clearing
+   * before it lands would destroy the call. This only ever runs from a
+   * terminal status (see post-call-exit.ts), so nothing is being captured.
+   */
+  const dismissFinishedCall = useCallback(() => {
+    flushPendingSave()
+    setSegments([])
+    setInterimText('')
+    setSavedNotice(false)
+    setErrorMessage(null)
+    setPhase('idle')
+  }, [flushPendingSave])
+
   const getSessionId = useCallback(() => sessionIdRef.current, [])
   const getCallId = useCallback(() => mirrorCallIdRef.current, [])
 
@@ -957,6 +983,7 @@ export function useTranscription(
     getSessionId,
     getCallId,
     stop,
+    dismissFinishedCall,
     togglePause,
     enableOtherParty,
     disableOtherParty

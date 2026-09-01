@@ -90,7 +90,7 @@ export async function openApp(port, { expect: expectBuild } = {}) {
 function wrap(cdp) {
   /** Locate exactly one element, scrolled into view, or refuse. */
   async function locate(desc) {
-    const { text, exact = true, selector = 'button, a, [role="button"], [role="tab"]', placeholder, within } = desc
+    const { text, exact = true, selector = 'button, a, [role="button"], [role="tab"]', placeholder, within, aria } = desc
     const box = await cdp.evaluate(`(() => {
       const byPlaceholder = ${placeholder ? 'true' : 'false'}
       let scope = document
@@ -99,6 +99,21 @@ function wrap(cdp) {
       if (!anchor) return { err: 'scope anchor not found: ' + ${JSON.stringify(within)} }
       scope = anchor.closest('div[class*="rounded"]') || anchor.parentElement
       ` : ''}
+      // RULE 8 — ICON-ONLY BUTTONS. Many controls here have empty textContent
+      // and carry their name only in aria-label ("Start live transcription" is
+      // a 24x24 mic button). Matching on text alone reported "found 0" for a
+      // control that was plainly on screen and clickable.
+      const byAria = ${aria ? 'true' : 'false'}
+      if (byAria) {
+        const hits = [...scope.querySelectorAll('button, a, [role="button"]')]
+          .filter(e => e.getAttribute('aria-label') === ${JSON.stringify(aria ?? '')})
+        if (hits.length !== 1) return { err: 'aria-label matched ' + hits.length + ', expected 1' }
+        const el2 = hits[0]
+        el2.scrollIntoView({ block: 'center' })
+        const r2 = el2.getBoundingClientRect()
+        if (!(r2.y > 0 && r2.y < innerHeight && r2.width > 0)) return { err: 'off-screen after scrollIntoView' }
+        return { x: r2.x + r2.width / 2, y: r2.y + r2.height / 2 }
+      }
       const all = byPlaceholder
         ? [...scope.querySelectorAll('input, textarea')].filter(i => i.placeholder === ${JSON.stringify(placeholder ?? '')})
         : [...scope.querySelectorAll(${JSON.stringify(selector)})].filter(e => {

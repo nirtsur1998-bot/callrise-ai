@@ -34,6 +34,7 @@ import type { CalendarEvent } from '@renderer/features/calendar/types'
 import { PrepBriefModal, type PrepBriefMeeting } from '@renderer/features/prep-brief/PrepBriefModal'
 import { Waveform } from './components/Waveform'
 import { TranscriptView } from './components/TranscriptView'
+import { shouldOfferPostCallExit } from './post-call-exit'
 import { CueCard } from './components/CueCard'
 import { SuggestionRail } from './components/SuggestionRail'
 import { CueControls } from './components/CueControls'
@@ -209,6 +210,7 @@ export function LiveView({
     getSessionId,
     getCallId,
     stop,
+    dismissFinishedCall,
     togglePause,
     enableOtherParty,
     disableOtherParty
@@ -1101,6 +1103,28 @@ export function LiveView({
             className="no-drag shrink-0 rounded-lg bg-warning-soft px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/20"
           >
             Reconnect
+          </button>
+        </InlineBanner>
+      )}
+      {/* BUG-152 — THE WAY OUT.
+          LiveView gates every full-screen state behind `if (!hasTranscript)`,
+          so once a call has produced a transcript there is no route back to
+          the start screen. Pressing Stop is fine — that saves and navigates
+          away — but a call that ends on its own (the watchdog's onCaptureLost
+          sets 'no-device') leaves this layout up with "Reconnect" as its only
+          control, and Reconnect starts a NEW call. The founder's words: "I
+          can't get past it."
+          Deliberately NOT shown mid-call: a second stop-shaped button next to
+          Stop is a way to lose a call in progress. */}
+      {shouldOfferPostCallExit(status, segments.length > 0) && (
+        <InlineBanner tone="positive">
+          <span>This call has ended. Its transcript is saved to Past Calls.</span>
+          <button
+            type="button"
+            onClick={dismissFinishedCall}
+            className="no-drag shrink-0 rounded-lg bg-elevated px-3 py-1.5 text-xs font-semibold text-ink hover:bg-surface"
+          >
+            Done
           </button>
         </InlineBanner>
       )}
