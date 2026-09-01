@@ -3,8 +3,16 @@
 // teach the Sales Brain, and that "don't learn from this" actually stops it.
 //
 // Three properties, each a standing rule from the milestone brief:
-//   1. contactId is null UNCONDITIONALLY — a global chat can never store
-//      client-scoped memories (structural, not behavioral).
+//   1. contactId comes from the CONVERSATION'S OWN SCOPE. A global chat
+//      (no scope) passes null and can never store client-scoped memories;
+//      a chat scoped to a client passes THAT client's id, so what the rep
+//      tells Rise about them is actually learned.
+//
+//      This was originally written as "null UNCONDITIONALLY", and the test
+//      below pinned it — which is how BUG-151 survived: every client fact
+//      the founder told Rise about a selected client was extracted, then
+//      dropped at extraction.ts:149 (`expectedKind === 'client' && !contactId`),
+//      silently, while Rise's reply said "I've added a new memory for Andre".
 //   2. Permissions (master flag + the conversation's own exclusion) are read
 //      FRESH at execution: flipping either before the hook runs stops it.
 //   3. Evidence uses the `assistant:<conversationId>` callId convention, so
@@ -120,12 +128,50 @@ beforeEach(() => {
 })
 
 describe('runMemoryExtractionForAssistantMessage — consent invariants', () => {
-  it('extracts with contactId null UNCONDITIONALLY and the assistant: callId convention', async () => {
+  it('an UNSCOPED conversation extracts with contactId null', async () => {
+    // A global chat still cannot mint client-scoped memories — there is no
+    // client to attach them to, and guessing one would file a fact under the
+    // wrong person. This half of the original rule was right.
     await runMemoryExtractionForAssistantMessage('conv-1', 'msg-9', 'we use HubSpot')
     expect(state.extractCalls).toEqual([
       { callId: 'assistant:conv-1', chatMessageId: 'msg-9', contactId: null }
     ])
     expect(state.consolidated).toHaveLength(1)
+  })
+
+  it('BUG-151: a conversation SCOPED to a client passes that client\'s id', async () => {
+    // The founder selected Andre in Rise, said "Andre has a house worth 1M
+    // AUD", and Rise replied "Got it — I've added a new memory for Andre".
+    // Nothing was saved. The hook passed contactId: null unconditionally, so
+    // the client-fact candidate was built and then dropped by
+    // verifyAndBuild's `expectedKind === 'client' && !contactId` guard —
+    // one line from being stored, with no error anywhere.
+    //
+    // The conversation record already carries the id: the hook loads the
+    // conversation two lines earlier to check salesBrainExcluded, and that
+    // same object has scope.contactId on it.
+    state.conversation = {
+      id: 'conv-1',
+      salesBrainExcluded: undefined,
+      scope: { contactId: 'contact-andre', contactName: 'Andre' }
+    }
+    await runMemoryExtractionForAssistantMessage('conv-1', 'msg-9', 'Andre owns a house')
+    expect(state.extractCalls).toEqual([
+      { callId: 'assistant:conv-1', chatMessageId: 'msg-9', contactId: 'contact-andre' }
+    ])
+  })
+
+  it('BUG-151 control: a malformed scope falls back to null, never to a guess', async () => {
+    // Fail CLOSED. A scope object without a usable id must not become an
+    // empty-string contactId — that would satisfy verifyAndBuild's truthiness
+    // check in some shapes and file a client fact under no client at all.
+    state.conversation = {
+      id: 'conv-1',
+      salesBrainExcluded: undefined,
+      scope: { contactName: 'Andre' }
+    }
+    await runMemoryExtractionForAssistantMessage('conv-1', 'msg-9', 'Andre owns a house')
+    expect(state.extractCalls[0].contactId).toBeNull()
   })
 
   it('an excluded conversation never reaches extraction (permission read fresh)', async () => {
