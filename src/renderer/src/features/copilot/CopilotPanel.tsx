@@ -40,6 +40,34 @@ interface CopilotPanelProps {
  * Live Calls' cue sensitivity) — this is a second surface for them, not a
  * duplicate store.
  */
+/**
+ * BUG-153 — keep this panel's own controls out from under the Windows caption
+ * buttons.
+ *
+ * The Voice AI panel is the RIGHTMOST column, and `titleBarOverlay` has
+ * Windows draw minimise/maximise/close into a region at the window's top
+ * right — over our chrome, not beside it. The panel's collapse/expand chevron
+ * sits at the top right of its own 56px header, which put it 20px from the
+ * window edge and squarely underneath those buttons at EVERY window width
+ * measured (1536, 1366, 1280, 1100). The founder: "The right sidebar's close
+ * button is gone."
+ *
+ * Measured in the running app rather than assumed: the Window Controls
+ * Overlay reports a titlebar area of 1144px in a 1280px window — a 136px
+ * caption strip, 40px tall.
+ *
+ * `env(titlebar-area-width)` is the width Windows leaves US. Everything to
+ * the right of it belongs to the OS. The fallback makes this exactly 0 on
+ * macOS and Linux, where the variable does not exist.
+ */
+const CAPTION_SAFE_RIGHT: React.CSSProperties = {
+  // + 1.25rem keeps the header's own px-5 gutter. Without it the chevron sits
+  // flush against the caption strip with zero gap: correct by measurement
+  // (fromRight === captionW) but one rounding error from being back
+  // underneath, and visibly cramped against the OS buttons.
+  paddingRight: 'calc(100vw - env(titlebar-area-width, 100vw) + 1.25rem)'
+}
+
 export function CopilotPanel({
   collapsed,
   onToggleCollapsed
@@ -68,6 +96,11 @@ export function CopilotPanel({
   if (collapsed) {
     return (
       <div className="flex h-full flex-col items-center py-3">
+        {/* BUG-153 — the collapsed rail is only 64px wide and sits hard against
+            the window's right edge, so its expand chevron is entirely inside
+            the 136px caption strip. Push it down BELOW the 40px overlay rather
+            than sideways: there is no horizontal room left in a 64px rail. */}
+        <div style={{ height: 'env(titlebar-area-height, 0px)' }} aria-hidden="true" />
         <button
           type="button"
           onClick={onToggleCollapsed}
@@ -131,7 +164,10 @@ export function CopilotPanel({
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
-      <div className="drag flex h-14 shrink-0 items-center justify-between border-b border-line-soft px-5">
+      <div
+        className="drag flex h-14 shrink-0 items-center justify-between border-b border-line-soft px-5"
+        style={CAPTION_SAFE_RIGHT}
+      >
         <span className="text-sm font-medium">Voice AI</span>
         <button
           type="button"

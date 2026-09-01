@@ -429,3 +429,40 @@ Three things to know before reaching for it:
 
 This found a real defect on its first outing — see `docs/M32-stage2-outcome-tracking.md`,
 "THE DEFECT ONLY RENDERING FOUND". `render-surfaces.mjs` is the worked example.
+
+---
+
+## SILENT REGEX CORRUPTION IN EVALUATED CODE — 2026-09-01
+
+**Backslashes are eaten passing through a template literal into CDP, and the
+result usually still RUNS.** That is what makes it dangerous: a syntax error
+announces itself, a corrupted-but-valid regex does not.
+
+Observed, in one session:
+
+| written | arrived as | effect |
+|---|---|---|
+| `/s+/g` | `/s+/g` | stripped every letter **s** — `"Calls"` became `"call"`, `"Past"` became `"pa t"`, `"Settings"` became `"setting"`. Every comparison silently failed and the driver reported "found 0" for controls plainly on screen. |
+| `/[ 	
+]+/g` | `/[ tnr]+/g` … then unparseable | `SyntaxError: Invalid regular expression` — the loud, harmless version |
+| `.` inside a class | `.` | class matches far more than intended |
+
+The first row cost the most: it produced a **plausible wrong answer**, not an
+error. A driver that says "found 0" reads exactly like a missing feature.
+
+**Rules for anything inside an `evaluate()` template:**
+
+1. **No regex literals at all.** Use `indexOf`, `startsWith`, `===` on
+   lowercased strings. Substring matching needs no escapes.
+2. If a regex is unavoidable, build it with `new RegExp` from a string
+   assembled via `String.fromCharCode` — never a literal with backslashes.
+3. **No `?.` or `??`** either — both have been mangled the same way, turning
+   `React.default?.createElement` into a silent undefined.
+4. When a selector reports **0 matches for something you can see on screen**,
+   suspect the escaping before suspecting the app. Print the raw strings the
+   page actually holds and read them: `"ri e"` and `"pa t"` in a button list
+   are the fingerprint.
+
+Sibling to the "assert on the outcome, not the mechanism" rule: here the
+mechanism (the regex) is silently different from the one you wrote, so every
+assertion built on it is describing a different question than the one asked.
