@@ -6,6 +6,7 @@ import { listEntries } from './knowledge-fs'
 import { assembleKnowledgeContext } from './knowledge-context'
 import { listCustomTrackers, saveCustomTrackers } from './custom-trackers'
 import { isSelfIntroExtractionAllowed } from './app-settings'
+import { modelStringOrNull } from './ai/model-placeholders'
 import { consentPermitsCapture } from './consent-gate'
 import { repProfileSection } from './memory/profile-injection'
 
@@ -527,7 +528,14 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
     // resolved once and kept for the rest of the call — see useLiveCues.ts).
     let buyerName: string | null = null
     let buyerSpeaker: number | null = null
-    if (includeBuyerName && typeof raw?.buyerName === 'string' && raw.buyerName.trim()) {
+    // BUG-163 — `buyerName` is `type: ['string','null']` AND required, so a
+    // provider that coerces a required field to its primary type answers the
+    // STRING "null" rather than the literal. That string passed every guard
+    // from here to the CRM and produced "Create contact for null" on screen.
+    // modelStringOrNull() reads any of the model's ways of saying "nothing"
+    // as nothing; a real name that merely contains one ("Nunes") is kept.
+    const claimedName = modelStringOrNull(raw?.buyerName)
+    if (includeBuyerName && claimedName) {
       const candidateSpeaker =
         typeof raw?.buyerSpeaker === 'number' && Number.isFinite(raw.buyerSpeaker)
           ? Math.trunc(raw.buyerSpeaker)
@@ -538,7 +546,7 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
         observedSpeakers.has(candidateSpeaker) &&
         candidateSpeaker !== repSpeaker
       ) {
-        buyerName = raw.buyerName.trim().slice(0, 200)
+        buyerName = claimedName
         buyerSpeaker = candidateSpeaker
       }
     }

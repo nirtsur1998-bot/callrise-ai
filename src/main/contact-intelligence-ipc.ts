@@ -30,6 +30,7 @@
 // snapshot, matching the M11 consent-retention invariant elsewhere in this
 // codebase.
 import { app, ipcMain, Notification, BrowserWindow } from 'electron'
+import { isAbsenceAnswer } from './ai/model-placeholders'
 import { join } from 'node:path'
 import { getCall, setCallContact, setSpeakerIdentity, speechSegments } from './calls-fs'
 import { getContactIntelligenceMode, isSelfIntroExtractionAllowed } from './app-settings'
@@ -200,6 +201,15 @@ export async function maybeAutoCreateContact(callId: string): Promise<void> {
 
   const identity = call.speakerIdentities?.[other.key]
   if (!identity?.name) return
+  // BUG-163, third line of defence and the one that matters most — this is
+  // the only path that writes to the rep's CRM with no human in the loop.
+  // With the string "null" as a name it created a contact called null and
+  // auto-linked the call to it; on the machine this was found on, NINETEEN
+  // calls had been silently merged under that one fictional person. The
+  // identity can no longer BE a placeholder (setSpeakerIdentity refuses to
+  // write one, getCall drops the ones already on disk), so this is belt and
+  // braces — but it guards the irreversible write, so it earns its keep.
+  if (isAbsenceAnswer(identity.name)) return
 
   const lockKey = normalizeNameForLock(identity.name)
   const attachedName = await withAutoCreateLock(lockKey, async () => {
