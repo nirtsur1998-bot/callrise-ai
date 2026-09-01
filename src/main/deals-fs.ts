@@ -356,15 +356,33 @@ export async function importDeal(
   const deal = sanitizeDealRecord(payload)
   if (!deal) return null
   return withDealLock(deal.id, async () => {
-    if (opts?.onlyIfNewer) {
-      try {
-        const raw = await fs.readFile(join(dir, `${deal.id}.json`), 'utf8')
-        const current = sanitizeDealRecord(JSON.parse(raw))
-        if (current && Date.parse(current.updatedAt) >= Date.parse(deal.updatedAt)) return null
-      } catch {
-        /* no current record (or unreadable) — proceed with the import */
-      }
+    let current: Deal | null = null
+    try {
+      const raw = await fs.readFile(join(dir, `${deal.id}.json`), 'utf8')
+      current = sanitizeDealRecord(JSON.parse(raw))
+    } catch {
+      /* no current record (or unreadable) */
     }
+    if (opts?.onlyIfNewer && current) {
+      if (Date.parse(current.updatedAt) >= Date.parse(deal.updatedAt)) return null
+    }
+
+    // THREE-WAY outcomeReason, mirroring importCall's dealId contract:
+    // an explicit null in the payload CLEARS, an explicit string SETS, and a
+    // payload with NO key at all — every row pushed by a build older than
+    // M32 Stage 2 — PRESERVES what this machine has. Without this, one pull
+    // of an older build's newer row (they edit a title over there, sync wins
+    // on updatedAt) silently stripped every reason the founder had typed.
+    // sanitizeDealRecord cannot express the difference (it drops empties),
+    // so the raw payload is consulted directly.
+    const hasKey =
+      !!payload &&
+      typeof payload === 'object' &&
+      Object.prototype.hasOwnProperty.call(payload, 'outcomeReason')
+    if (!hasKey && current?.outcomeReason) {
+      deal.outcomeReason = current.outcomeReason
+    }
+
     await ensureDir(dir)
     try {
       await writeDeal(dir, deal)

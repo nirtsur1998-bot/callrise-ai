@@ -145,7 +145,10 @@ describe('the gate is only reachable through evaluateGate', () => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name)
       if (entry.isDirectory()) out.push(...walk(full))
-      else if (/\.(ts|tsx)$/.test(entry.name)) out.push(full)
+      // .js/.mjs/.cjs too — three plain-JS files already live under src and
+      // electron-vite bundles them like any other module. An extension filter
+      // that admits only TypeScript is a door the scan never watches.
+      else if (/\.(ts|tsx|js|mjs|cjs)$/.test(entry.name)) out.push(full)
     }
     return out
   }
@@ -179,7 +182,13 @@ describe('the gate is only reachable through evaluateGate', () => {
   // statements. That is a deliberate trade — those three forms are how a
   // shortcut actually gets written, and a looser pattern re-flags the two
   // declarations it took this comment to exclude.
-  const CONSTRUCTS_READY = /(?:return|=>?)\s*\(?\s*\{[^}]*status:\s*'ready'/
+  // [\s\S]{0,400}? rather than [^}]*: the original stopped at the first
+  // closing brace, so a literal whose NESTED object came before the status
+  // key — return { usable: { won: 8 }, status: 'ready' } — slipped through.
+  // Double quotes accepted for the same reason. The declaration shapes stay
+  // excluded because a union arm is preceded by '|', which none of the
+  // construction openers here match. Workflow finding on the test itself.
+  const CONSTRUCTS_READY = /(?:return|=>?)\s*\(?\s*\{[\s\S]{0,400}?status:\s*['"]ready['"]/
 
   it("nothing outside deal-outcomes.ts constructs a 'ready' insight", () => {
     const offenders = files.filter(
@@ -191,6 +200,20 @@ describe('the gate is only reachable through evaluateGate', () => {
     ).toEqual([])
   })
 
+  it('the pattern matches the ONE real construction site, exactly once', () => {
+    // Ties the pattern to the live discriminant. Without this, renaming
+    // 'ready' in deal-outcomes.ts would leave the offenders scan matching
+    // nothing anywhere, permanently green, with its string-fixture control
+    // still passing — a scan of the whole tree for a word the tree no longer
+    // contains. Workflow finding: the control never touched the real site.
+    const src = readFileSync(join(SRC, 'main', 'deal-outcomes.ts'), 'utf8')
+    const matches = src.match(new RegExp(CONSTRUCTS_READY.source, 'g')) ?? []
+    expect(
+      matches.length,
+      "deal-outcomes.ts's own ready-construction no longer matches the pattern — the scan is blind"
+    ).toBe(1)
+  })
+
   it('...and that pattern really does recognise a constructed one', () => {
     // The control for the check itself. Without it, a pattern tightened until
     // it matched nothing would look exactly like a clean tree — which is the
@@ -200,6 +223,12 @@ describe('the gate is only reachable through evaluateGate', () => {
       true
     )
     expect(CONSTRUCTS_READY.test("const f = () => ({ status: 'ready', counts, usable })")).toBe(true)
+    // The two evasions the first pattern missed:
+    expect(
+      CONSTRUCTS_READY.test("return { usable: { won: 8, lost: 8 }, status: 'ready' }"),
+      'a nested object before the status key evaded the scan'
+    ).toBe(true)
+    expect(CONSTRUCTS_READY.test('return { status: "ready", counts }')).toBe(true)
     // ...and does NOT flag the union declaration the mirrors are required to have.
     expect(
       CONSTRUCTS_READY.test(

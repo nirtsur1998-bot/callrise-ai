@@ -132,11 +132,19 @@ export interface BackfillRow {
   lastCallTitle?: string
   answer?: BackfillAnswer
   dealId?: string
+  /** How many calls the answer ACTUALLY linked — not the row's call total.
+   *  The two differ when a call was already linked elsewhere or a write
+   *  failed, and the row's confirmation line must report the real number. */
+  linkedCallCount?: number
 }
 
 export interface BackfillState {
   rows: BackfillRow[]
   answered: number
   total: number
+  /** Contacts with at least one coached call, BEFORE the has-a-deal exclusion
+   *  — so an empty list can say which of its two causes applies (species 62:
+   *  "everyone's covered" and "nothing is linked yet" need opposite actions). */
+  coachedContactTotal: number
   insight: Insight
 }

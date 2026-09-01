@@ -19,7 +19,7 @@
 //  3. AN UNDO THAT UNLINKS SOMEONE ELSE'S CALLS. Clearing a row must put back
 //     exactly what that answer touched, not everything currently pointing at
 //     the deal.
-import { mkdtemp, rm, readFile } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -215,6 +215,101 @@ describe('the backfill write path', () => {
     expect(await readAnswers()).toHaveLength(0)
   })
 
+  it('TWO CONCURRENT answers both survive — the file write is serialized', async () => {
+    // WORKFLOW FINDING (confirmed, high): recordAnswer was an unlocked
+    // read-modify-write of the whole answers file, and the dialog's rule 6
+    // deliberately keeps every button live while a save is in flight. Two
+    // overlapping answers each read the same array, each wrote it back, and
+    // the last rename silently dropped the other contact's record — while its
+    // deal and call links persisted, orphaned and unreachable by undo.
+    const ada = await seedContactWithCoachedCalls('Ada', 1)
+    const grace = await seedContactWithCoachedCalls('Grace', 1)
+    const [r1, r2] = await Promise.all([recordAnswer(ada, 'won'), recordAnswer(grace, 'lost')])
+    expect(r1.ok && r2.ok).toBe(true)
+    const answers = await readAnswers()
+    expect(
+      answers.map((a) => a.contactId).sort(),
+      'a concurrent answer was silently dropped from the file'
+    ).toEqual([ada, grace].sort())
+    expect(await listDeals(join(USER_DATA, 'deals'))).toHaveLength(2)
+  })
+
+  it('a concurrent DOUBLE-CLICK on one row yields exactly one deal, not two', async () => {
+    // The same race on a single row: neither call saw the other as "prior",
+    // so undo was skipped and createDeal ran twice — one contact contributing
+    // two deals to the arms, the exact double-count the design says it
+    // prevents.
+    const ada = await seedContactWithCoachedCalls('Ada', 2)
+    await Promise.all([recordAnswer(ada, 'won'), recordAnswer(ada, 'lost')])
+    const deals = await listDeals(join(USER_DATA, 'deals'))
+    expect(deals, 'a racing double-click minted two deals for one contact').toHaveLength(1)
+    const answers = await readAnswers()
+    expect(answers).toHaveLength(1)
+    // Whichever answer won the race, the record and the deal must AGREE.
+    expect(answers[0].dealId).toBe(deals[0].id)
+  })
+
+  it('a FAILED correction leaves the prior answer fully intact', async () => {
+    // WORKFLOW FINDING (confirmed, high): the old order ran undoRecord(prior)
+    // BEFORE validating the new answer. A Won -> Lost correction with no Lost
+    // stage destroyed the Won deal — including any value/notes/reason typed
+    // onto it — returned an error saying nothing was recorded, and left the
+    // answers file still claiming the Won deal existed. Validation now runs
+    // first; nothing is undone until the replacement can actually be built.
+    const ada = await seedContactWithCoachedCalls('Ada', 2)
+    await recordAnswer(ada, 'won')
+    const dealBefore = (await listDeals(join(USER_DATA, 'deals')))[0]
+
+    // Remove the Lost stage, making 'lost' unrecordable.
+    expect(setDealStages([STAGES[0], STAGES[1]]).ok).toBe(true)
+
+    const result = await recordAnswer(ada, 'lost')
+    expect(result.ok).toBe(false)
+    expect(result.error).toBe('no-stage-for-kind')
+
+    const dealsAfter = await listDeals(join(USER_DATA, 'deals'))
+    expect(dealsAfter, 'the failed correction destroyed the prior deal').toHaveLength(1)
+    expect(dealsAfter[0].id).toBe(dealBefore.id)
+    const calls = await listCalls(join(USER_DATA, 'calls'))
+    expect(
+      calls.map((c) => c.dealId),
+      'the failed correction unlinked the prior calls'
+    ).toEqual([dealBefore.id, dealBefore.id])
+    const answers = await readAnswers()
+    expect(answers).toHaveLength(1)
+    expect(answers[0].answer).toBe('won')
+    expect(answers[0].dealId).toBe(dealBefore.id)
+  })
+
+  it('measurability is keyed on call.dealId, NOT on the contact', async () => {
+    // WORKFLOW FINDING (confirmed, medium): every fixture linked calls and
+    // deal through the same contact, so a contact-keyed implementation — the
+    // exact one gateFrom's comment forbids — would have passed every test.
+    // This is the discriminating state: the coached call belongs to Ada, the
+    // deal it is LINKED to belongs to Grace.
+    const adaId = await seedContactWithCoachedCalls('Ada', 1)
+    await seedContactWithCoachedCalls('Grace', 1)
+    await recordAnswer(adaId, 'won') // Ada's deal, Ada's call linked
+
+    // Grace's deal, created by answering — then re-link ADA's call to it.
+    const graceRow = (await buildState()).rows.find((r) => r.name === 'Grace')!
+    await recordAnswer(graceRow.contactId, 'lost')
+    const deals = await listDeals(join(USER_DATA, 'deals'))
+    const graceDeal = deals.find((d) => d.contactId === graceRow.contactId)!
+    const adaCall = (await listCalls(join(USER_DATA, 'calls'))).find(
+      (c) => c.contactId === adaId
+    )!
+    await setCallDeal(join(USER_DATA, 'calls'), adaCall.id, graceDeal.id)
+
+    const { insight } = await buildState()
+    if (insight.status !== 'insufficient') throw new Error('unreachable at N=2')
+    // Ada's deal lost its only measurable call; Grace's deal gained one that
+    // belongs to another contact. dealId-keyed: won=0, lost=1 (+ Grace's own
+    // call still linked -> lost stays 1). Contact-keyed would report won=1.
+    expect(insight.usable.won, 'a contact-keyed gate would count the unlinked deal').toBe(0)
+    expect(insight.usable.lost).toBe(1)
+  })
+
   it('the answers file survives a reload and is valid JSON on disk', async () => {
     const contactId = await seedContactWithCoachedCalls('Ada', 1)
     await recordAnswer(contactId, 'went-quiet')
@@ -222,7 +317,12 @@ describe('the backfill write path', () => {
     const parsed = JSON.parse(raw) as { version: number; answers: unknown[] }
     expect(parsed.version).toBe(1)
     expect(parsed.answers).toHaveLength(1)
-    // ...and no leftover temp file from the write-then-rename.
-    await expect(readFile(join(USER_DATA, 'deal-backfill.json.tmp'), 'utf8')).rejects.toThrow()
+    // ...and no leftover temp artifacts — by ENUMERATING the directory, not
+    // by probing one hardcoded name. The write path now uses writeJsonAtomic
+    // (unique uuid-suffixed temps); a filename probe pinned to the old
+    // '.tmp' scheme would pass vacuously forever against names that can no
+    // longer exist. Absence tests enumerate the container.
+    const leftovers = (await readdir(USER_DATA)).filter((f) => /\.tmp/.test(f))
+    expect(leftovers, 'temp artifacts survived the atomic write').toEqual([])
   })
 })

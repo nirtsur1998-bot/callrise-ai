@@ -39,10 +39,14 @@ describe('CALLRISE_USER_DATA_DIR is unreachable in a packaged build', () => {
   })
 
   it('the packaged path is still the real profile directory', () => {
-    // The control. Every assertion above would pass on a file that had gutted
-    // the fallback — the gate would be intact and pointing at nothing.
-    expect(src).toContain("join(app.getPath('appData'), 'sales-os')")
-    expect(src).toMatch(/const userDataDir = devProfileOverride \|\| join\(/)
+    // ONE regex anchoring the WHOLE expression — the first version paired a
+    // toContain for the join(...) string with a separate toMatch for the
+    // assignment head, and nothing tied them to the same line: a fallback
+    // pointing somewhere new, with the old string quoted in a nearby comment,
+    // passed both. Workflow finding on this test.
+    expect(src).toMatch(
+      /const userDataDir = devProfileOverride \|\| join\(app\.getPath\('appData'\), 'sales-os'\)/
+    )
   })
 
   it('...and the assertions above are anchored to text that really is present', () => {

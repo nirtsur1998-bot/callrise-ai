@@ -1005,6 +1005,7 @@ export function CallDetail({
             callId={callId}
             value={call.dealId}
             contactId={call.contactId}
+            hasCoaching={Boolean(call.coaching)}
             onChanged={notifyChanged}
           />
         </Card>

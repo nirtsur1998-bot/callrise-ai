@@ -141,27 +141,30 @@ export function DealsView({
   const busy = loading || stagesLoading
 
   const moveStage = (dealId: string, stageId: string): void => {
-    void update(dealId, { stageId })
-
-    // Offer the reason prompt when — and only when — the move lands the deal
-    // in a CLOSED stage. Deliberately keyed on the stage's kind rather than
-    // its label, so a pipeline whose last column is called "Signed" still
-    // counts and one called "Won — pending paperwork" doesn't fire twice.
     const target = stages.find((s) => s.id === stageId)
     const deal = deals.find((d) => d.id === dealId)
-    if (!target || !deal || target.kind === 'open') return
-    if (promptRetired()) {
-      // Say so once, then never again — rather than either nagging or going
-      // silently missing, which is indistinguishable from a bug.
-      if (shouldAnnounceStopping()) setRetiredNotice(true)
-      return
-    }
-    setClosedJustNow({
-      dealId,
-      title: deal.title,
-      kind: target.kind,
-      stageLabel: target.label
-    })
+    void (async () => {
+      // The banner used to appear synchronously, BEFORE the update could
+      // fail — and a failed update here is silent by contract. "Acme moved to
+      // Won. What won it?" over a deal that never moved is the app narrating
+      // something that did not happen. Workflow finding: gate the banner on
+      // the write's own result.
+      const saved = await update(dealId, { stageId })
+      if (!saved) return
+      if (!target || !deal || target.kind === 'open') return
+      if (promptRetired()) {
+        // Say so once, then never again — rather than either nagging or going
+        // silently missing, which is indistinguishable from a bug.
+        if (shouldAnnounceStopping()) setRetiredNotice(true)
+        return
+      }
+      setClosedJustNow({
+        dealId,
+        title: deal.title,
+        kind: target.kind,
+        stageLabel: target.label
+      })
+    })()
   }
 
   const viewing = viewingId ? deals.find((d) => d.id === viewingId) : undefined

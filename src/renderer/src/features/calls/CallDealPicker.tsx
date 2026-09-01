@@ -32,6 +32,10 @@ interface CallDealPickerProps {
   value?: string
   /** The call's linked contact, used to sort and to find the safe suggestion. */
   contactId?: string
+  /** Whether this call carries coaching metrics — decides which truth the
+   *  footnote can tell. An uncoached call's metrics cannot "count toward"
+   *  anything, and the footnote used to claim they did. */
+  hasCoaching?: boolean
   onChanged: () => void | Promise<void>
 }
 
@@ -39,6 +43,7 @@ export function CallDealPicker({
   callId,
   value,
   contactId,
+  hasCoaching,
   onChanged
 }: CallDealPickerProps): React.JSX.Element | null {
   const [deals, setDeals] = useState<Deal[] | null>(null)
@@ -112,6 +117,14 @@ export function CallDealPicker({
         aria-label="Link this call to a deal"
       >
         <option value="">Not linked to a deal</option>
+        {/* A link to a DELETED deal must stay visible as what it is. Deleting
+            a deal tombstones it without clearing call.dealId, and a select
+            whose value matches no option silently renders its first option —
+            so the call read as "Not linked" while the footnote below claimed
+            it counted toward a deal that no longer exists. Species 62. */}
+        {value && deals !== null && !deals.some((d) => d.id === value) && (
+          <option value={value}>(a deal that no longer exists)</option>
+        )}
         {ordered.map((d) => (
           <option key={d.id} value={d.id}>
             {d.title}
@@ -133,9 +146,16 @@ export function CallDealPicker({
       )}
 
       <p className="mt-1.5 text-[11px] text-faint">
-        {value
-          ? "This call's coaching metrics count toward that deal's outcome."
-          : 'Only linked calls count toward outcome tracking. Nothing is linked automatically.'}
+        {/* Which truth applies depends on state the first version ignored:
+            an uncoached call has no metrics to count, and a link to a deleted
+            deal counts toward nothing. Say the one that is actually true. */}
+        {value && deals !== null && !deals.some((d) => d.id === value)
+          ? 'This call points at a deal that was deleted — clear the link, or pick a live one.'
+          : value && hasCoaching
+            ? "This call's coaching metrics count toward that deal's outcome."
+            : value
+              ? "Linked — but this call has no coaching metrics yet, so it won't count toward outcome tracking until it's coached."
+              : 'Only linked calls count toward outcome tracking. Nothing is linked automatically.'}
       </p>
     </div>
   )

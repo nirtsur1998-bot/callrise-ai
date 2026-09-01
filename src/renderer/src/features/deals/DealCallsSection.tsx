@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { PhoneCall, Link2, Unlink, BarChart3 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import type { CallSummary } from '@renderer/features/calls/types'
+import type { DealStageKind } from './types'
 
 /**
  * "Which calls belong to this deal?" — the deal-side half of the call↔deal
@@ -34,6 +35,9 @@ interface DealCallsSectionProps {
   dealId: string
   contactId: string
   contactName?: string
+  /** The deal's stage KIND — the gate only ever counts closed deals, so the
+   *  metrics line must not say "enough to count" about an open one. */
+  stageKind?: DealStageKind
   /** Bumped by the parent when something else changes the underlying calls. */
   refreshKey?: number
 }
@@ -47,6 +51,7 @@ export function DealCallsSection({
   dealId,
   contactId,
   contactName,
+  stageKind,
   refreshKey = 0
 }: DealCallsSectionProps): React.JSX.Element {
   const [split, setSplit] = useState<Split | null>(null)
@@ -100,9 +105,16 @@ export function DealCallsSection({
         // without leaving the screen.
         <p className="mb-2.5 flex items-center gap-1.5 text-[12px] text-faint">
           <BarChart3 className="h-3.5 w-3.5" />
+          {/* "Enough to count" was claimed on OPEN deals too — which the
+              gate never counts, so a founder who linked a coached call to an
+              open deal read "enough" and watched the counter not move.
+              Workflow finding (species 62). The open-deal sentence carries
+              its own qualifier instead. */}
           {measurable === 0
             ? 'None of these carry coaching metrics yet, so this deal cannot be compared.'
-            : `${measurable} of ${linked.length} carr${measurable === 1 ? 'ies' : 'y'} coaching metrics — enough for this deal to count.`}
+            : stageKind === 'open'
+              ? `${measurable} of ${linked.length} carr${measurable === 1 ? 'ies' : 'y'} coaching metrics — this deal will count once it closes.`
+              : `${measurable} of ${linked.length} carr${measurable === 1 ? 'ies' : 'y'} coaching metrics — enough for this deal to count.`}
         </p>
       )}
 
@@ -112,7 +124,12 @@ export function DealCallsSection({
         </p>
       ) : linked.length === 0 ? (
         <p className="rounded-xl border border-line-soft bg-surface px-4 py-6 text-center text-sm text-muted">
-          No calls linked to this deal yet. Link one below, or from the call itself.
+          {/* "Link one below" pointed at a list that is not rendered when the
+              contact has no unlinked calls — an instruction naming a control
+              that did not exist in exactly that state. */}
+          {candidates.length > 0
+            ? 'No calls linked to this deal yet. Link one below, or from the call itself.'
+            : `No calls linked to this deal yet${contactName ? `, and ${contactName} has no unlinked calls to offer` : ''}. Link from a call's own page — the Deal picker sits under its contact.`}
         </p>
       ) : (
         <ul className="space-y-1.5">

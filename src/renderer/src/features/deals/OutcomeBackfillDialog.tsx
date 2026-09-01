@@ -113,8 +113,15 @@ export function OutcomeBackfillDialog({
   const seqRef = useRef(0)
 
   const load = useCallback(async (): Promise<void> => {
+    // Claim a seq BEFORE the await and honour it after — the first version
+    // bumped seqRef after its await and setState unconditionally, so the
+    // error-path reload could land ON TOP of a newer optimistic answer and
+    // then mark itself newest, discarding that answer's own response when it
+    // arrived. Workflow finding: the guard existed and the recovery path
+    // bypassed it.
+    const mySeq = ++seqRef.current
     const next = await window.api.dealBackfill.state()
-    seqRef.current += 1
+    if (mySeq !== seqRef.current) return
     setState(next)
     setLoading(false)
   }, [])
@@ -145,7 +152,17 @@ export function OutcomeBackfillDialog({
       return rest
     })
 
-    const result = await window.api.dealBackfill.answer(contactId, value)
+    // try/catch, not just result.ok: an IPC REJECTION (main threw — a locked
+    // answers file now fails loudly instead of clobbering) previously escaped
+    // through the void call, leaving the optimistic row looking saved forever.
+    // "Answers save as you go" has to be true on that path too, by showing
+    // that this one did not.
+    let result: Awaited<ReturnType<typeof window.api.dealBackfill.answer>>
+    try {
+      result = await window.api.dealBackfill.answer(contactId, value)
+    } catch {
+      result = { ok: false }
+    }
     onChanged?.()
     if (!result.ok) {
       // Failure surfaces ON THE ROW and the optimistic answer is rolled back,
@@ -174,8 +191,23 @@ export function OutcomeBackfillDialog({
           }
         : prev
     )
-    const result = await window.api.dealBackfill.clear(contactId)
+    // A failed clear was completely silent — the row showed unanswered while
+    // the record (and its deal) still existed. Same treatment as answer().
+    let result: Awaited<ReturnType<typeof window.api.dealBackfill.clear>>
+    try {
+      result = await window.api.dealBackfill.clear(contactId)
+    } catch {
+      result = { ok: false }
+    }
     onChanged?.()
+    if (!result.ok) {
+      setRowErrors((prev) => ({
+        ...prev,
+        [contactId]: 'That answer could not be cleared — it is still recorded.'
+      }))
+      await load()
+      return
+    }
     if (mySeq !== seqRef.current) return
     if (result.state) setState(result.state)
   }
@@ -211,8 +243,8 @@ export function OutcomeBackfillDialog({
     >
       <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
         <p className="max-w-3xl text-[13px] leading-relaxed text-muted">
-          Every contact you&apos;ve had a coached call with is listed below —{' '}
-          <strong className="font-medium text-ink">all of them, not a selection</strong>. That is
+          Every contact you&apos;ve had a coached call with — and no deal for yet — is listed
+          below, <strong className="font-medium text-ink">all of them, not a selection</strong>. That is
           deliberate: answering only the ones that come to mind would record the memorable deals
           rather than the typical ones, and how a deal ended is exactly the sort of thing that makes
           it memorable.{' '}
@@ -247,9 +279,11 @@ export function OutcomeBackfillDialog({
         {loading ? (
           <p className="px-1 py-8 text-center text-sm text-muted">Loading your call history…</p>
         ) : total === 0 ? (
+          // Species 62: an empty list has two causes needing opposite actions.
           <p className="rounded-xl border border-line-soft bg-surface px-4 py-8 text-center text-sm text-muted">
-            Nothing to record — every contact you&apos;ve had a coached call with already has a
-            deal.
+            {state && state.coachedContactTotal > 0
+              ? "Nothing to record — every contact you've had a coached call with already has a deal."
+              : 'Nothing to record yet — no coached call is linked to a contact. Link calls to contacts first; rows appear here once a contact has a coached call and no deal.'}
           </p>
         ) : (
           // -my-1 px-1: the scroll container clips focus rings at its edges
@@ -361,8 +395,15 @@ function BackfillRowItem({
       </div>
 
       {row.dealId && (
+        // linkedCallCount, NOT callCount: the row's call total and the number
+        // actually linked can differ (a call already linked elsewhere is
+        // skipped, a write can fail). Saying "linked 3" when 2 linked is a
+        // small lie in exactly the place this feature promises bookkeeping.
         <p className="mt-1.5 text-[11px] text-faint">
-          Created a deal and linked {row.callCount} call{row.callCount === 1 ? '' : 's'} to it.
+          Created a deal
+          {typeof row.linkedCallCount === 'number'
+            ? ` and linked ${row.linkedCallCount} call${row.linkedCallCount === 1 ? '' : 's'} to it.`
+            : '.'}
         </p>
       )}
       {error && (

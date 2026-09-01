@@ -219,6 +219,7 @@ export function DealDetail({
           dealId={deal.id}
           contactId={deal.contactId}
           contactName={contact?.name}
+          stageKind={stage?.kind}
         />
 
         <div className="mt-6 border-t border-line-soft pt-5">

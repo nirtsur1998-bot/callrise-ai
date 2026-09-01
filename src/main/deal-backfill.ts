@@ -28,7 +28,9 @@
 // `linkedCallIds` records exactly what was touched so undo can put it back.
 import { app, ipcMain } from 'electron'
 import { join } from 'node:path'
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
+import { mkdir, readFile, rename } from 'node:fs/promises'
+import { writeJsonAtomic } from './atomic-write'
+import { scheduleBackup } from './backup'
 import { listCalls, setCallDeal, type CallSummary } from './calls-fs'
 import { listContacts } from './contacts-fs'
 import { listDeals, createDeal, deleteDeal } from './deals-fs'
@@ -77,12 +79,20 @@ export interface BackfillRow {
   lastCallTitle?: string
   answer?: BackfillAnswer
   dealId?: string
+  /** How many calls the answer ACTUALLY linked — not the row's call total.
+   *  The two differ when a call was already linked elsewhere or a write
+   *  failed, and the row's confirmation line must report the real number. */
+  linkedCallCount?: number
 }
 
 export interface BackfillState {
   rows: BackfillRow[]
   answered: number
   total: number
+  /** Contacts with at least one coached call, BEFORE the has-a-deal exclusion
+   *  — so an empty list can say which of its two causes applies (species 62:
+   *  "everyone's covered" and "nothing is linked yet" need opposite actions). */
+  coachedContactTotal: number
   insight: Insight
 }
 
@@ -109,12 +119,24 @@ function isAnswer(v: unknown): v is BackfillAnswer {
 }
 
 export async function readAnswers(): Promise<BackfillAnswerRecord[]> {
+  // ONLY a missing file means "no answers yet". The first version caught
+  // everything — so a locked file (EBUSY from an AV scanner) or a corrupt one
+  // read as an empty history, and the very next write then REPLACED the real
+  // file with a one-record array, permanently discarding every prior record
+  // and all of their undo metadata. Workflow finding, confirmed: the
+  // catch-all converted a transient read error into silent total data loss.
+  let raw: string
   try {
-    const raw = await readFile(backfillFile(), 'utf8')
+    raw = await readFile(backfillFile(), 'utf8')
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw e // EBUSY/EPERM/etc: fail the operation loudly rather than clobber
+  }
+  try {
     const parsed = JSON.parse(raw) as unknown
-    if (!parsed || typeof parsed !== 'object') return []
+    if (!parsed || typeof parsed !== 'object') throw new Error('not an object')
     const answers = (parsed as BackfillFile).answers
-    if (!Array.isArray(answers)) return []
+    if (!Array.isArray(answers)) throw new Error('answers is not an array')
     return answers.filter(
       (a): a is BackfillAnswerRecord =>
         !!a &&
@@ -123,19 +145,48 @@ export async function readAnswers(): Promise<BackfillAnswerRecord[]> {
         isAnswer((a as BackfillAnswerRecord).answer)
     )
   } catch {
-    return [] // no file yet — not an error
+    // Corrupt content: move the evidence ASIDE instead of leaving it to be
+    // overwritten — the records are unrecoverable by code but not by a human
+    // reading the file. Then, and only then, treat the history as empty.
+    const aside = backfillFile() + '.corrupt-' + Date.now()
+    try {
+      await rename(backfillFile(), aside)
+      console.error('[deal-backfill] answers file was corrupt; preserved at ' + aside)
+    } catch {
+      /* if even the rename fails, the next write's tmp+rename replaces it */
+    }
+    return []
   }
 }
 
 async function writeAnswers(answers: BackfillAnswerRecord[]): Promise<void> {
   const dir = app.getPath('userData')
   await mkdir(dir, { recursive: true })
-  const file = backfillFile()
   const body: BackfillFile = { version: 1, answers }
-  // Write-then-rename: a half-written answers file would read as "nothing was
-  // ever answered" and silently re-open all 19 rows.
-  await writeFile(file + '.tmp', JSON.stringify(body, null, 2), 'utf8')
-  await rename(file + '.tmp', file)
+  // The repo's atomic writer, not a hand-rolled tmp+rename: unique temp name
+  // (two writers cannot clobber each other's temp), verify-parse before the
+  // rename, and an fsync so a crash cannot publish an empty file — the exact
+  // hazards atomic-write.ts's own header names, found sitting beside it.
+  await writeJsonAtomic(backfillFile(), body)
+}
+
+// ── The write lock ─────────────────────────────────────────────────────────
+// recordAnswer and clearAnswer are read-modify-write over ONE file, and the
+// dialog deliberately keeps every row clickable while a save is in flight
+// (its rule 6). Unserialized, two overlapping answers each read the same
+// array and the last write silently dropped the other's record — while its
+// deal and call links persisted, orphaned and invisible to undo. Same idiom
+// as calls-fs's withCallLock, which exists for exactly this bug class; one
+// global chain (not per-contact) because the file is global.
+let backfillChain: Promise<unknown> = Promise.resolve()
+
+function withBackfillLock<T>(fn: () => Promise<T>): Promise<T> {
+  const result = backfillChain.then(fn, fn)
+  backfillChain = result.then(
+    () => {},
+    () => {}
+  )
+  return result
 }
 
 /** Coached calls, grouped by the contact they are linked to. Calls with no
@@ -188,7 +239,8 @@ export async function buildState(): Promise<BackfillState> {
       lastCallAt: contactCalls[0]?.createdAt,
       lastCallTitle: contactCalls[0]?.title,
       answer: recorded?.answer,
-      dealId: recorded?.dealId
+      dealId: recorded?.dealId,
+      linkedCallCount: recorded?.linkedCallIds?.length
     })
   }
 
@@ -202,6 +254,7 @@ export async function buildState(): Promise<BackfillState> {
     rows,
     answered: rows.filter((r) => r.answer).length,
     total: rows.length,
+    coachedContactTotal: byContact.size,
     insight: gateFrom(calls, deals, stages, answers, rows.length)
   }
 }
@@ -258,14 +311,15 @@ export async function recordAnswer(contactId: unknown, answer: unknown): Promise
   if (typeof contactId !== 'string' || !contactId || !isAnswer(answer)) {
     return { ok: false, error: 'unknown-contact' }
   }
+  return withBackfillLock(() => recordAnswerLocked(contactId, answer as BackfillAnswer))
+}
 
+async function recordAnswerLocked(
+  contactId: string,
+  answer: BackfillAnswer
+): Promise<AnswerResult> {
   const existing = await readAnswers()
-  // Re-answering: undo the previous one first so a Won→Lost correction does
-  // not leave the Won deal behind. Nineteen rows in one sitting means at
-  // least one misclick, and a correction that silently doubles the sample is
-  // worse than the misclick.
   const prior = existing.find((a) => a.contactId === contactId)
-  if (prior) await undoRecord(prior)
 
   const kind = OUTCOME_ANSWER_KINDS[answer]
   const record: BackfillAnswerRecord = {
@@ -275,6 +329,14 @@ export async function recordAnswer(contactId: unknown, answer: unknown): Promise
   }
 
   if (kind) {
+    // ── VALIDATE AND BUILD BEFORE UNDOING ANYTHING ───────────────────────
+    //
+    // The first version undid the prior answer FIRST, then validated the new
+    // one — so a Won-to-Lost correction in a pipeline whose Lost stage had
+    // been deleted destroyed the Won deal (with any value/notes/reason the
+    // founder had put on it), returned an error implying nothing changed, and
+    // left the answers file pointing at a tombstone. Workflow finding,
+    // confirmed. Nothing here may be torn down until its replacement exists.
     const [contacts, stages, calls] = await Promise.all([
       listContacts(contactsDir()),
       loadDealStages(),
@@ -289,23 +351,51 @@ export async function recordAnswer(contactId: unknown, answer: unknown): Promise
     // stage happens to be first.
     if (!stage) return { ok: false, error: 'no-stage-for-kind' }
 
+    // Eligible calls include the ones the PRIOR answer linked — after the
+    // undo below they are unlinked again, and a correction must carry them
+    // to the corrected deal rather than stranding them.
+    const priorDealId = prior?.dealId
+    const toLink = calls.filter(
+      (c) =>
+        c.contactId === contactId &&
+        c.hasCoaching &&
+        (!c.dealId || (priorDealId !== undefined && c.dealId === priorDealId))
+    )
+
     const deal = await createDeal(dealsDir(), {
       title: contact.company || contact.name,
       contactId,
       stageId: stage.id,
       notes: 'Recorded from past calls.'
     })
-    if (!deal) return { ok: false, error: 'deal-failed' }
+    if (!deal) return { ok: false, error: 'deal-failed' } // prior untouched
 
-    const toLink = calls.filter((c) => c.contactId === contactId && c.hasCoaching && !c.dealId)
+    // The replacement exists — NOW retire the prior answer's artifacts.
+    if (prior) await undoRecord(prior)
+
+    // Per-call try/catch so one failed write cannot leave the record lying
+    // about the rest: linkedCallIds holds what was ACTUALLY linked.
+    const linked: string[] = []
     for (const call of toLink) {
-      await setCallDeal(callsDir(), call.id, deal.id)
+      try {
+        const r = await setCallDeal(callsDir(), call.id, deal.id)
+        if (r?.dealId === deal.id) linked.push(call.id)
+      } catch {
+        /* recorded by omission — the record carries only real links */
+      }
     }
     record.dealId = deal.id
-    record.linkedCallIds = toLink.map((c) => c.id)
+    record.linkedCallIds = linked
+  } else if (prior) {
+    // A non-outcome answer replacing an outcome one still needs the undo —
+    // it just runs after the (trivial) validation above it has passed.
+    await undoRecord(prior)
   }
 
   await writeAnswers([...existing.filter((a) => a.contactId !== contactId), record])
+  // The answer may have created a deal and rewritten call records — the same
+  // mutations every sibling IPC handler follows with a backup schedule.
+  scheduleBackup()
   return { ok: true, state: await buildState() }
 }
 
@@ -322,11 +412,14 @@ export async function clearAnswer(contactId: unknown): Promise<AnswerResult> {
   if (typeof contactId !== 'string' || !contactId) {
     return { ok: false, error: 'unknown-contact' }
   }
-  const existing = await readAnswers()
-  const prior = existing.find((a) => a.contactId === contactId)
-  if (prior) await undoRecord(prior)
-  await writeAnswers(existing.filter((a) => a.contactId !== contactId))
-  return { ok: true, state: await buildState() }
+  return withBackfillLock(async () => {
+    const existing = await readAnswers()
+    const prior = existing.find((a) => a.contactId === contactId)
+    if (prior) await undoRecord(prior)
+    await writeAnswers(existing.filter((a) => a.contactId !== contactId))
+    scheduleBackup()
+    return { ok: true, state: await buildState() }
+  })
 }
 
 export function registerDealBackfill(): void {

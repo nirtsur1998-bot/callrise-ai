@@ -82,8 +82,16 @@ export function OutcomeInsightCard({
               </>
             )}
             .{' '}
+            {/* Three states, three sentences — "the one holding it back"
+                asserted a single blocker, false when both arms are short and
+                false when the counts are met but the backfill's distrust is
+                the real gate. Workflow finding (species 62's shape again). */}
             <span className="text-faint">
-              The {bindingArm} column is the one holding it back.
+              {usable.won < needPerArm && usable.lost < needPerArm
+                ? `Both columns are short — ${bindingArm} is further behind.`
+                : usable.won >= needPerArm && usable.lost >= needPerArm
+                  ? '' // counts met; the distrust note below is the blocker
+                  : `The ${bindingArm} column is the one holding it back.`}
             </span>
           </p>
           {unmeasured > 0 && (

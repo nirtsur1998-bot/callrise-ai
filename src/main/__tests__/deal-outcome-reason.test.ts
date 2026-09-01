@@ -72,6 +72,42 @@ describe('outcomeReason on the deal record', () => {
     expect((await getDeal(dir, id))?.outcomeReason).toHaveLength(500)
   })
 
+  it("THE SYNC ONE: a pulled row WITHOUT the key preserves this machine's reason", async () => {
+    // Every deal row pushed by a build older than M32 Stage 2 lacks the key
+    // entirely. Sync is whole-record newest-wins, so before this contract one
+    // pull of such a row (they fix a title over there; their updatedAt wins)
+    // silently stripped every reason the founder had typed. Absent preserves;
+    // null clears; a string sets — importCall's dealId contract, on deals.
+    const id = await makeDeal()
+    await updateDeal(dir, id, { outcomeReason: 'the committee liked the pilot' })
+    const deal = await getDeal(dir, id)
+
+    const oldBuildRow = { ...deal, title: 'Acme (edited elsewhere)', updatedAt: new Date(Date.now() + 60_000).toISOString() } as Record<string, unknown>
+    delete oldBuildRow.outcomeReason
+
+    await importDeal(dir, oldBuildRow, { onlyIfNewer: true })
+    const after = await getDeal(dir, id)
+    expect(after?.title, 'the newer edit must land').toBe('Acme (edited elsewhere)')
+    expect(
+      after?.outcomeReason,
+      "an old-build row stripped the founder's reason — absent must preserve"
+    ).toBe('the committee liked the pilot')
+  })
+
+  it('...and an EXPLICIT null in a pulled row does clear it', async () => {
+    // The other half, or "absent preserves" degrades to "nothing ever clears
+    // across machines" and a deliberate clear elsewhere never propagates.
+    const id = await makeDeal()
+    await updateDeal(dir, id, { outcomeReason: 'to be cleared' })
+    const deal = await getDeal(dir, id)
+    await importDeal(
+      dir,
+      { ...deal, outcomeReason: null, updatedAt: new Date(Date.now() + 60_000).toISOString() },
+      { onlyIfNewer: true }
+    )
+    expect((await getDeal(dir, id))?.outcomeReason).toBeUndefined()
+  })
+
   it('survives the import path — a synced deal keeps its reason', async () => {
     const id = await makeDeal()
     await updateDeal(dir, id, { outcomeReason: 'price, and budget went elsewhere' })

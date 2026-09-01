@@ -46,6 +46,7 @@ export function OutcomeReasonSection({
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(reason ?? '')
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState(false)
 
   // A refetched deal (risk run, sync) must not clobber an edit in progress —
   // only re-seed the draft while the field is closed.
@@ -55,14 +56,26 @@ export function OutcomeReasonSection({
 
   const save = async (): Promise<void> => {
     setSaving(true)
+    setSaveError(false)
     try {
       const trimmed = text.trim()
       // Empty clears rather than storing '' — "there was no reason" and "not
       // answered" are different claims, and the analysis must only ever see
       // the second.
-      await window.api.deals.update(dealId, { outcomeReason: trimmed || null })
+      //
+      // deals.update resolves NULL on failure rather than rejecting (missing
+      // deal, disk error). Treating that as success closed the editor and
+      // silently discarded the typed text — workflow finding. Null keeps the
+      // editor open with the draft intact and says so.
+      const saved = await window.api.deals.update(dealId, { outcomeReason: trimmed || null })
+      if (!saved) {
+        setSaveError(true)
+        return
+      }
       onChanged()
       setEditing(false)
+    } catch {
+      setSaveError(true)
     } finally {
       setSaving(false)
     }
@@ -88,7 +101,8 @@ export function OutcomeReasonSection({
       </div>
 
       {editing ? (
-        <div className="mt-2 flex items-center gap-2">
+        <div className="mt-2">
+        <div className="flex items-center gap-2">
           <input
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -115,6 +129,12 @@ export function OutcomeReasonSection({
           >
             Save
           </button>
+        </div>
+        {saveError && (
+          <p className="mt-1.5 text-[12px] text-danger">
+            Couldn&apos;t save — your text is still here. Try again, or copy it somewhere safe.
+          </p>
+        )}
         </div>
       ) : reason ? (
         <p className="mt-1.5 text-sm text-muted">{reason}</p>
