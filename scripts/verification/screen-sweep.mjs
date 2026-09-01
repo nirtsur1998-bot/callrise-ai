@@ -58,7 +58,12 @@ const DEFECT_PROBE = [
 // looks right — species 53, and the reason the README opens the way it does.
 const CLICK = [
   '(function(){',
-  '  var label=window.__SWEEP_LABEL__, mode=window.__SWEEP_MODE__, n=window.__SWEEP_N__||0;',
+  // A label left over from an earlier script is worse than no label: it makes
+  // this helper click the wrong thing and report a plausible "matched 0" that
+  // reads exactly like a clean screen. Refuse loudly, and consume on read.
+  '  if (typeof window.__SWEEP_LABEL__ === "undefined") return "NO LABEL SET - refusing";',
+  '  var label=window.__SWEEP_LABEL__, mode=window.__SWEEP_MODE__||"exact", n=window.__SWEEP_N__||0;',
+  '  delete window.__SWEEP_LABEL__;',
   '  var all=[].slice.call(document.querySelectorAll(\'button, a, [role="button"]\'));',
   '  var hits=all.filter(function(x){',
   '    var t=(x.textContent||"").trim();',
@@ -69,7 +74,7 @@ const CLICK = [
   '    if (hits.length<=n) return "only "+hits.length+" rows";',
   '    hits[n].click(); return "clicked row "+n+" of "+hits.length;',
   '  }',
-  '  if (hits.length!==1) return "matched "+hits.length;',
+  '  if (hits.length!==1) return "matched "+hits.length+" for \\""+label+"\\"";',
   '  hits[0].click(); return "clicked";',
   '})()'
 ].join('\n')
