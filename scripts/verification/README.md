@@ -466,3 +466,42 @@ error. A driver that says "found 0" reads exactly like a missing feature.
 Sibling to the "assert on the outcome, not the mechanism" rule: here the
 mechanism (the regex) is silently different from the one you wrote, so every
 assertion built on it is describing a different question than the one asked.
+
+## `screen-sweep.mjs` — the broad question
+
+Every other probe in this directory asks a narrow question and answers it well.
+`screen-sweep.mjs` asks the one that caught **BUG-163**: *does this screen look
+right?*
+
+It walks 27 states (every top-level screen, two call detail pages, all nineteen
+settings sub-pages) and reports two things per state: text a user should never
+see (`null`, `undefined`, `NaN`, `[object Object]`, an unrendered `{{template}}`)
+and any console error or exception.
+
+```
+node scripts/verification/screen-sweep.mjs
+```
+
+Exit 0 = clean; 1 = something was found; 2 = no app; **3 = it refused to
+report**.
+
+That exit 3 is the point of the script. BUG-163 was a contact literally named
+`null`, auto-created and auto-linked to nineteen calls, sitting at the top of
+the CRM — and it was found by a human looking at a screenshot taken to check
+something else, while every automated probe reported success. So this script
+does not trust itself either. Before it reports anything it:
+
+- plants a `console.error` and refuses unless its own hook sees it;
+- plants five known defects **and three innocent lookalikes** — `Cannula
+  supplier`, `Annulment notes`, `Nunes Holdings`, all of which a substring
+  match would eat — and refuses unless it catches exactly the five and none of
+  the three;
+- refuses if it cannot clean up its own canary nodes afterwards.
+
+**A probe reporting zero is a claim about the probe until proven otherwise**
+(species 66). A row of zeros from a sweep that never navigated anywhere looks
+exactly like a clean app; the first version of this script produced one,
+because Settings replaces the sidebar and every later click matched nothing.
+Hence the `SKIP` marker, the `states visited` count, and the `Back` at the top.
+
+It only ever READS. It clicks navigation and nothing that writes.
