@@ -12,15 +12,40 @@ import { cn } from '@renderer/lib/cn'
  * someone adds a long page; attaching to the containers means a new page
  * inherits it without knowing this component exists.
  *
- * It renders NOTHING unless there is somewhere to go. A control that is always
- * present and sometimes inert teaches people to ignore it, and the threshold
- * below is deliberately much larger than "not exactly at the bottom": this is
- * for pages long enough that scrolling is a chore, not for the last inch.
+ * It renders NOTHING when there is nowhere to go — but "nowhere to go" now
+ * means "already at the bottom", not "within a screen of it".
+ *
+ * BUG-156 (founder, 2026-09-01), OVERRIDING THIS FILE'S ORIGINAL REASONING,
+ * quoted here because the trade-off is real and someone should be able to see
+ * it was considered rather than missed:
+ *
+ *     "It renders NOTHING unless there is somewhere to go. A control that is
+ *      always present and sometimes inert teaches people to ignore it, and the
+ *      threshold below is deliberately much larger than 'not exactly at the
+ *      bottom': this is for pages long enough that scrolling is a chore, not
+ *      for the last inch."
+ *
+ * That optimises for the control not becoming noise. The founder stated the
+ * opposite priority directly: "this go down arrow should be possible to click
+ * on no matter which point of the page I am at — top/middle — like you have
+ * here in Claude. THIS IS THE REAL FIX."
+ *
+ * And the original reasoning had a cost it did not price: a control that is
+ * USUALLY present and sometimes silently absent is worse than one that is
+ * always present. The first teaches people it is unreliable; the second only
+ * that it is occasionally redundant. At a full screen of tolerance the button
+ * disappeared for the entire last screen of every page — measured, at
+ * scrollTop 600 with 128px remaining — which reads as broken, not restrained.
  */
 
-/** Only offer the jump when this much scrolling remains — roughly a screen.
- *  Below it, dragging is faster than reaching for a button. */
-const MIN_REMAINING_PX = 240
+/** Offer the jump whenever the user is not effectively AT the bottom.
+ *
+ *  Not zero: sub-pixel layout, fractional device pixels and momentum scrolling
+ *  routinely leave a few pixels of remainder at the true bottom, so a literal
+ *  "greater than nothing" test would leave the button flickering on at rest.
+ *  A small tolerance is "at the bottom" in every sense a user has, while being
+ *  far below the one-screen gap that made it vanish where it was wanted. */
+const MIN_REMAINING_PX = 16
 
 export function ScrollToEnd({
   targetRef,
