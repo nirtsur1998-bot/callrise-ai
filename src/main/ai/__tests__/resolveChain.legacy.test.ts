@@ -22,6 +22,8 @@ const { loadAppSettings } = await import('../../app-settings')
 const { resolveConfiguredChain } = await import('../complete-with-fallback')
 const { PROVIDER_REGISTRY } = await import('../registry')
 const { MODEL_CATALOG } = await import('../model-catalog')
+const { markPeriodExhausted, markStructurallyBroken, markRateLimited, resetCooldownsForTests } =
+  await import('../model-cooldown')
 
 const ALL_PURPOSES: AIPurpose[] = [
   'coaching-cue',
@@ -250,5 +252,81 @@ describe('memory-extract is no longer single-lane', () => {
     const steps = resolveConfiguredChain('memory-extract')
     const providers = new Set(steps.map((s) => s.providerId))
     expect(providers.size).toBeGreaterThanOrEqual(2)
+  })
+})
+
+
+// BUG-154 follow-up (2026-09-01) — the live purposes must not starve when the
+// pinned default cannot answer.
+//
+// FOUND BY DRIVING A REAL CALL, twice, not by reading the code. The founder
+// reported dead live cues on a machine with twelve keys. The first fix made
+// the catalog reachable; cues stayed dead, because coaching-cue has
+// LEGACY_TAIL_MAX 0 and its only escape was BUG-148's demotion, which is
+// AUTH-ONLY. The second fix added structural breaks; cues stayed dead, because
+// the pinned provider had hit QUOTA, which is period-exhaustion — so nothing
+// substituted, the walk skipped its single step, and it attempted nothing at
+// all. Silent failure, not fixed failure.
+//
+// Each test below marks a DIFFERENT unavailability and asserts the same two
+// things: a substitute is chosen, and the chain is STILL EXACTLY ONE STEP
+// (the founder's latency constraint from BUG-148 decision 5B is untouched --
+// only which single attempt it buys changes).
+describe('BUG-154 — a live purpose substitutes when its pinned default cannot answer', () => {
+  const LIVE: AIPurpose[] = ['coaching-cue', 'deal-tier1']
+
+  beforeEach(() => {
+    resetCooldownsForTests()
+    activeProviderId.current = 'groq'
+    vi.mocked(loadAppSettings).mockReturnValue(allEmpty())
+    process.env.GROQ_API_KEY = 'g'
+    process.env.CEREBRAS_API_KEY = 'c'
+  })
+
+  it.each(LIVE)('%s: control — an untouched default IS used, and alone', (purpose) => {
+    // Without this the tests below cannot tell "substituted" from "never used
+    // the legacy step in the first place".
+    const chain = resolveConfiguredChain(purpose)
+    expect(chain).toHaveLength(1)
+    expect(chain[0].catalogId).toBe('legacy:groq')
+  })
+
+  it.each(LIVE)('%s: substitutes when the default is PERIOD-EXHAUSTED (the real case)', (purpose) => {
+    markPeriodExhausted('legacy:groq', undefined, Date.now(), 'live')
+    const chain = resolveConfiguredChain(purpose)
+    expect(chain).toHaveLength(1)
+    expect(chain[0].providerId).not.toBe('groq')
+  })
+
+  it.each(LIVE)('%s: substitutes when the default is STRUCTURALLY BROKEN', (purpose) => {
+    markStructurallyBroken('legacy:groq', Date.now(), purpose)
+    const chain = resolveConfiguredChain(purpose)
+    expect(chain).toHaveLength(1)
+    expect(chain[0].providerId).not.toBe('groq')
+  })
+
+  it.each(LIVE)('%s: substitutes when the default is RATE-LIMITED', (purpose) => {
+    markRateLimited('legacy:groq', 60_000, Date.now(), 'live')
+    const chain = resolveConfiguredChain(purpose)
+    expect(chain).toHaveLength(1)
+    expect(chain[0].providerId).not.toBe('groq')
+  })
+
+  it('a break recorded for ANOTHER purpose does not substitute this one', () => {
+    // Structural breaks are purpose-scoped and must stay that way: a provider
+    // that cannot serve summaries may serve cues perfectly well.
+    markStructurallyBroken('legacy:groq', Date.now(), 'summary')
+    const chain = resolveConfiguredChain('coaching-cue')
+    expect(chain[0].catalogId).toBe('legacy:groq')
+  })
+
+  it('with NO other provider keyed, it keeps the default rather than returning nothing', () => {
+    // Degrading to an empty chain would turn a bad attempt into no attempt --
+    // exactly the silent failure this bug produced in the field.
+    delete process.env.CEREBRAS_API_KEY
+    markPeriodExhausted('legacy:groq', undefined, Date.now(), 'live')
+    const chain = resolveConfiguredChain('coaching-cue')
+    expect(chain).toHaveLength(1)
+    expect(chain[0].catalogId).toBe('legacy:groq')
   })
 })

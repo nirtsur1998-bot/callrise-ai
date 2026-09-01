@@ -222,7 +222,9 @@ export class AnthropicProvider implements AIProvider {
         if (!block || block.type !== 'tool_use') {
           throw new AIProviderError(
             'failed',
-            'The model did not return the expected structured output.'
+            'The model did not return the expected structured output.',
+            undefined,
+            classifyFailureClass('failed', { message: 'The model did not return the expected structured output.' })
           )
         }
         return { text: '', toolInput: block.input as Record<string, unknown>, model, usage }

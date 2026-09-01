@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { CHAIN_BUDGET, LATENCY_POLICY } from '../types'
-import { DEFAULT_CATALOG_CHAIN, bundledSteps } from '../complete-with-fallback'
+import { bundledSteps } from '../complete-with-fallback'
 import { sanitizeModelAssignments } from '../model-assignments'
 
 // M20's fallback chain walks multiple models sequentially. Without a cap,

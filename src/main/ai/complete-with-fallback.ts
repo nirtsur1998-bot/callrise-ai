@@ -465,6 +465,30 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
   // Read once, here, so the two branches below cannot disagree about it.
   const legacyDemoted = isDemoted(legacy.providerId, Date.now())
 
+  // BUG-154 follow-up (2026-09-01) — demotion is AUTH-ONLY, and that was the
+  // whole remaining hole in the live path.
+  //
+  // 5B replaces a demoted legacy step on the two tailMax-0 purposes. But
+  // noteAuthRejection() is only reached on reason === 'auth', so a default
+  // provider failing for ANY OTHER persistent reason never demotes, never gets
+  // replaced, and — having no tail to fall through to — is retried forever.
+  //
+  // Measured on the founder's machine: huggingface pinned as default, every
+  // coaching-cue attempt failing with 'the model did not return the expected
+  // structured output' every ~7 seconds for an entire call, logged as
+  // 'legacy:huggingface -> null' each time. The same provider, failing the
+  // same way in the same second, fell back correctly for the 'other' purpose,
+  // which has a tail. Only the live purposes starved.
+  //
+  // A structural break is the right second trigger and not a new concept: it
+  // is already recorded from real failures, already PURPOSE-SCOPED (so a
+  // provider that cannot serve cues can still serve summaries), and already
+  // self-heals on its own TTL. Reading it here costs one map lookup on a path
+  // that re-resolves every few seconds.
+  //
+  // The founder's constraint is untouched: the chain is still EXACTLY ONE
+  // step. Only which single attempt it buys changes.
+
   // Computed before bundledSteps() so the live paths do no extra work at all:
   // coaching-cue re-resolves this every few seconds mid-call.
   if (tailMax === 0) {
@@ -489,7 +513,48 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
     // demoted step at the back of their chains, so it is still attempted and
     // can still earn its own restoration. It is not orphaned by being skipped
     // on a 6-second live path.
-    if (!legacyDemoted) return [legacy]
+  // COMPUTED INSIDE THIS BRANCH, NOT ABOVE IT, AND THAT IS LOAD-BEARING.
+  //
+  // isStructurallyBroken() MUTATES: an entry whose window has closed is
+  // deleted on read. Hoisting this beside legacyDemoted (which is where it
+  // first went, mirroring that constant's 'read once so the branches cannot
+  // disagree' comment) therefore ran a purging lookup on EVERY purpose's
+  // resolution, including the ones that never consult it.
+  //
+  // capacityForPurpose.test.ts caught it immediately: that suite records
+  // breaks against a fixed fake clock, the hoisted read used the real
+  // Date.now(), every such break read as long expired, and the lookup DELETED
+  // the state the test had just written — so 'counts a structural break as
+  // unusable' went green-to-red for a reason that had nothing to do with the
+  // behaviour under test. In production the clocks agree and this would have
+  // been invisible; it would still have been a resolution path quietly
+  // clearing another purpose's evidence.
+  //
+  // Reading it only where it is used is both correct and cheaper.
+  // WIDENED from isStructurallyBroken() to isUsableFor(), after the narrow
+  // version was driven on a real call and did not fix the bug.
+  //
+  // A structural break is only ONE of the ways the pinned default can be
+  // unavailable. Driving a live call with huggingface pinned showed the next
+  // one immediately: its account hit quota, so it was marked PERIOD-EXHAUSTED
+  // rather than broken, the substitution never triggered, and the walk simply
+  // skipped its only step and attempted nothing at all — cues failed silently
+  // instead of failing loudly, which is worse, not better.
+  //
+  // isUsableFor() is the codebase's own single gate for 'can this step be
+  // attempted right now': cooldown, period-exhaustion and structural break,
+  // one answer, no second encoding to drift (its own doc comment makes that
+  // the point of the flag it takes). Demotion stays separate because it is
+  // provider-scoped rather than catalog-id-scoped.
+  //
+  // ignorePacing: true deliberately. Pacing is OUR own 2-6s spacing, not the
+  // provider refusing us; substituting on it would swap providers during any
+  // ordinary burst and spend a different key for no reason.
+    const legacyUsable = isUsableFor(legacy.catalogId, Date.now(), purposeTier(purpose), {
+      ignorePacing: true,
+      purpose
+    })
+    if (!legacyDemoted && legacyUsable) return [legacy]
     const substitute = stepsFromIds(CANDIDATE_POOL[purpose]).filter(
       (s) => s.providerId !== legacy.providerId
     )[0]

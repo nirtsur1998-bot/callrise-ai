@@ -150,12 +150,22 @@ function toToolChoice(
 function parseToolInput(message: OpenAI.Chat.ChatCompletionMessage): Record<string, unknown> {
   const call = message.tool_calls?.[0]
   if (!call || call.type !== 'function') {
-    throw new AIProviderError('failed', 'The model did not return the expected structured output.')
+    throw new AIProviderError(
+      'failed',
+      'The model did not return the expected structured output.',
+      undefined,
+      classifyFailureClass('failed', { message: 'The model did not return the expected structured output.' })
+    )
   }
   try {
     return JSON.parse(call.function.arguments) as Record<string, unknown>
   } catch {
-    throw new AIProviderError('failed', 'The model returned malformed structured output.')
+    throw new AIProviderError(
+      'failed',
+      'The model returned malformed structured output.',
+      undefined,
+      classifyFailureClass('failed', { message: 'The model returned malformed structured output.' })
+    )
   }
 }
 
