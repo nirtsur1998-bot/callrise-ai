@@ -352,6 +352,58 @@ export function isUsableFor(
   return callerTier === 'durable' && entry.causedBy === 'live'
 }
 
+/** BUG-154 follow-up (2026-09-01) — a transient failure that never stops
+ *  being transient.
+ *
+ *  openai-compatible.ts classifies Groq's `tool_use_failed` as TRANSIENT on
+ *  purpose, and the reasoning is good: malformed generation is sampling-
+ *  dependent, so one flaky answer must not bench a whole link in an already-
+ *  thin free-tier chain (BUG-066/B2). Nothing, however, counted repetitions,
+ *  and 'usually resolves on retry' that never resolves is indistinguishable
+ *  from a hard failure nobody is measuring.
+ *
+ *  MEASURED: driving live calls on the founder's machine produced this exact
+ *  error twelve times in a row across two separate calls, same model, same
+ *  purpose, zero successes — gpt-oss-120b on Groq cannot satisfy the cue
+ *  prompt's forced tool choice at all. Live cues retried it every ~7 seconds
+ *  forever and showed the user nothing.
+ *
+ *  So repetition itself becomes the evidence, rather than reclassifying the
+ *  error and throwing away the sampling argument. THREE consecutive failures
+ *  on the same model FOR THE SAME PURPOSE, with no success in between, is no
+ *  longer a hiccup. Three rather than two: the neighbouring auth demotion
+ *  uses two because a 401 is deterministic, whereas this genuinely can
+ *  succeed on a retry, so it is given one more chance than a credential is.
+ *
+ *  PURPOSE-SCOPED, like the break it escalates into: a model that cannot emit
+ *  one purpose's tool shape may serve another's perfectly well. Cleared by
+ *  any success (see clearCooldown below), so a model that recovers is asked
+ *  again immediately rather than serving out the break's TTL. */
+export const TRANSIENT_ESCALATION_THRESHOLD = 3
+
+const transientFailures = new Map<string, number>()
+
+/** Records one transient failure. Returns true if THIS call escalated it into
+ *  a structural break, so the caller can log the escalation rather than
+ *  leaving a silent state change. */
+export function noteTransientFailure(
+  catalogId: string,
+  now: number,
+  purpose: AIPurpose
+): boolean {
+  const key = breakKey(purpose, catalogId)
+  const n = (transientFailures.get(key) ?? 0) + 1
+  transientFailures.set(key, n)
+  if (n < TRANSIENT_ESCALATION_THRESHOLD) return false
+  markStructurallyBroken(
+    catalogId,
+    now,
+    purpose,
+    `${n} consecutive transient failures with no success in between`
+  )
+  return true
+}
+
 /** A success proves the limit lifted early — trust the evidence over the
  *  estimate. Matters most when the default 60s guess was too pessimistic.
  *  Clears ALL THREE maps: a success is proof regardless of what class the
@@ -371,6 +423,9 @@ export function clearCooldown(catalogId: string, purpose: AIPurpose): void {
   structuralBreaks.delete(breakKey(purpose, catalogId))
   structuralBreakReasons.delete(breakKey(purpose, catalogId))
   transientStreak.delete(catalogId)
+  // BUG-154 follow-up — the consecutive-transient counter is purpose-scoped,
+  // like the break it escalates into, so it is cleared with the same key.
+  transientFailures.delete(breakKey(purpose, catalogId))
 }
 
 /** The soonest moment any of these models is worth trying again — FOR THIS
@@ -403,4 +458,5 @@ export function resetCooldownsForTests(): void {
   cooldowns.clear()
   structuralBreaks.clear()
   transientStreak.clear()
+  transientFailures.clear()
 }

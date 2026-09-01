@@ -25,6 +25,7 @@ import {
   markPeriodExhausted,
   markRateLimited,
   markStructurallyBroken,
+  noteTransientFailure,
   soonestExpiry
 } from './model-cooldown'
 import { isDemoted, noteAuthRejection, clearDemotion } from './provider-demotion'
@@ -555,9 +556,28 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
       purpose
     })
     if (!legacyDemoted && legacyUsable) return [legacy]
-    const substitute = stepsFromIds(CANDIDATE_POOL[purpose]).filter(
-      (s) => s.providerId !== legacy.providerId
-    )[0]
+    // The substitute must ALSO be usable, and leaving that out was the last
+    // hole in this fix -- found by driving a third live call.
+    //
+    // stepsFromIds() filters knownStale and missing credentials. It does NOT
+    // filter cooldowns, quota exhaustion or structural breaks. So once the
+    // pinned default became unusable and substitution finally started firing,
+    // it handed back the SAME first candidate every few seconds -- a Groq
+    // model returning 400 'Tool choice is required, but model did not call a
+    // tool', which is structural and was already recorded as such. The step
+    // that had just been benched was re-picked immediately, eight times in a
+    // row, because nothing consulted the bench.
+    //
+    // Same gate as the legacy check above, for the same reason: one encoding
+    // of 'can this be attempted right now', not two.
+    const substitute = stepsFromIds(CANDIDATE_POOL[purpose])
+      .filter((s) => s.providerId !== legacy.providerId)
+      .filter((s) =>
+        isUsableFor(s.catalogId, Date.now(), purposeTier(purpose), {
+          ignorePacing: true,
+          purpose
+        })
+      )[0]
     return substitute ? [{ ...substitute, fromImplicitTail: true }] : [legacy]
   }
 
@@ -1456,6 +1476,29 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
         // failureClass (which would also say 'structural' for auth), avoids
         // two independent encodings of the same exclusion drifting apart.
         markStructurallyBroken(step.catalogId, Date.now(), purpose, detail ? `${reason}: ${detail}` : reason)
+      } else if (failureClass === 'transient' && reason !== 'auth') {
+        // BUG-154 follow-up — repetition IS the evidence.
+        //
+        // A transient class means "this might work next time", and for a
+        // sampling-dependent malformed generation that is true. It stops being
+        // true after the third identical failure with no success in between,
+        // and until this branch existed nothing counted them: Groq's
+        // tool_use_failed is deliberately transient (openai-compatible.ts), so
+        // live cues retried the same model every ~7s indefinitely and showed
+        // the user nothing. Measured at twelve consecutive failures across two
+        // real calls before this was added.
+        //
+        // noteTransientFailure escalates to a purpose-scoped structural break
+        // at its threshold and returns whether IT did, so the escalation is
+        // logged rather than being a silent state change. Any success clears
+        // the streak (clearCooldown), so a model that recovers is asked again
+        // at once instead of serving out the break.
+        // The escalation is self-describing without a logger: the reason string
+        // passed to markStructurallyBroken surfaces verbatim in the exhaustion
+        // report the user actually reads ("benched up to 4h by a STRUCTURAL
+        // BREAK after..."), which is this file's existing convention — it
+        // imports no logger on purpose.
+        void noteTransientFailure(step.catalogId, Date.now(), purpose)
       }
       attempts.push({
         catalogId: step.catalogId,
@@ -1958,6 +2001,29 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
         } else if (failureClass === 'structural' && reason !== 'auth') {
           markStructurallyBroken(step.catalogId, Date.now(), purpose, detail ? `${reason}: ${detail}` : reason)
+        } else if (failureClass === 'transient' && reason !== 'auth') {
+          // BUG-154 follow-up — repetition IS the evidence.
+          //
+          // A transient class means "this might work next time", and for a
+          // sampling-dependent malformed generation that is true. It stops being
+          // true after the third identical failure with no success in between,
+          // and until this branch existed nothing counted them: Groq's
+          // tool_use_failed is deliberately transient (openai-compatible.ts), so
+          // live cues retried the same model every ~7s indefinitely and showed
+          // the user nothing. Measured at twelve consecutive failures across two
+          // real calls before this was added.
+          //
+          // noteTransientFailure escalates to a purpose-scoped structural break
+          // at its threshold and returns whether IT did, so the escalation is
+          // logged rather than being a silent state change. Any success clears
+          // the streak (clearCooldown), so a model that recovers is asked again
+          // at once instead of serving out the break.
+          // The escalation is self-describing without a logger: the reason string
+          // passed to markStructurallyBroken surfaces verbatim in the exhaustion
+          // report the user actually reads ("benched up to 4h by a STRUCTURAL
+          // BREAK after..."), which is this file's existing convention — it
+          // imports no logger on purpose.
+          void noteTransientFailure(step.catalogId, Date.now(), purpose)
         }
         attempts.push({
           catalogId: step.catalogId,

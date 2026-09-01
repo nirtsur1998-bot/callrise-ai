@@ -320,6 +320,23 @@ describe('BUG-154 — a live purpose substitutes when its pinned default cannot 
     expect(chain[0].catalogId).toBe('legacy:groq')
   })
 
+  it('does not hand back a substitute that is ITSELF benched', () => {
+    // The third live call found this: once substitution started firing it
+    // returned the same first candidate every few seconds, because
+    // stepsFromIds() filters knownStale and credentials but knows nothing
+    // about cooldowns or structural breaks. The step that had just been
+    // benched for returning a 400 was re-picked immediately, eight times.
+    process.env.CLOUDFLARE_API_KEY = 'cf'
+    process.env.CLOUDFLARE_ACCOUNT_ID = 'acct'
+    markPeriodExhausted('legacy:groq', undefined, Date.now(), 'live')
+    markStructurallyBroken('cerebras-gpt-oss-120b', Date.now(), 'coaching-cue')
+
+    const chain = resolveConfiguredChain('coaching-cue')
+    expect(chain).toHaveLength(1)
+    expect(chain[0].providerId).not.toBe('groq') // the exhausted default
+    expect(chain[0].providerId).not.toBe('cerebras') // the benched substitute
+  })
+
   it('with NO other provider keyed, it keeps the default rather than returning nothing', () => {
     // Degrading to an empty chain would turn a bad attempt into no attempt --
     // exactly the silent failure this bug produced in the field.
