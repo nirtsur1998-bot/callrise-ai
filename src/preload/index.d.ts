@@ -2360,6 +2360,10 @@ export interface SupportApi {
  */
 export interface DetectionApi {
   getState: () => Promise<DetectorState | undefined>
+  /** BUG-155 — the detection overlay window is click-through by default so it
+   *  cannot swallow scrolls over the transparent inset around its card; the
+   *  card claims the pointer back while it is underneath it. */
+  setOverlayInteractive: (interactive: boolean) => Promise<void>
   /** Ack a `onStartCapture` command once the renderer has actually started recording. */
   captureStarted: (payload: { callId: string; sessionId: string }) => Promise<void>
   /** Tell main the renderer couldn't start recording (mic busy, permission denied, …). */

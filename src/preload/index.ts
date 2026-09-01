@@ -619,6 +619,11 @@ const api = {
   },
   detection: {
     getState: () => ipcRenderer.invoke('detection:getState') as Promise<DetectorState | undefined>,
+    /** BUG-155 — the overlay window is click-through by default so it cannot
+     *  eat scrolls over the transparent inset around its card; the card asks
+     *  for the pointer back while it is underneath it. */
+    setOverlayInteractive: (interactive: boolean) =>
+      ipcRenderer.invoke('detection:setOverlayInteractive', interactive),
     captureStarted: (payload: { callId: string; sessionId: string }) =>
       ipcRenderer.invoke('detection:captureStarted', payload),
     captureFailed: (payload: { callId: string }) =>
