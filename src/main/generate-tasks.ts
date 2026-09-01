@@ -1,4 +1,5 @@
 import { AIProviderError, type AITool } from './ai'
+import { modelStringOrNull } from './ai/model-placeholders'
 import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
 import type { TaskPriority, TaskType } from './tasks-fs'
 
@@ -128,8 +129,14 @@ function toProposedTask(value: unknown): ProposedTask | null {
     typeof v.priority === 'string' && ALLOWED_PRIORITIES.has(v.priority as TaskPriority)
       ? (v.priority as TaskPriority)
       : 'medium'
-  const clientRaw = typeof v.clientName === 'string' ? v.clientName.trim().slice(0, 200) : ''
-  const noteRaw = typeof v.note === 'string' ? v.note.trim().slice(0, 1000) : ''
+  // BUG-163 — both fields are in `required` while the prompt tells the model
+  // to leave them empty when there is nothing to say ("Empty string if
+  // unknown" / "Empty string if none"). A model that reaches for "null",
+  // "N/A" or "unknown" instead put the WORD on the rep's calendar: clientName
+  // is rendered as a task's subtitle. Same defect as buyerName, smaller blast
+  // radius — no CRM write here, just something wrong in front of the user.
+  const clientRaw = modelStringOrNull(v.clientName, 200) ?? ''
+  const noteRaw = modelStringOrNull(v.note, 1000) ?? ''
   return {
     title,
     type,
