@@ -189,3 +189,48 @@ Three attempts have now been reverted for the same underlying reason, in three
 different disguises. The reason is not the filter. It is that `resolveChain` is
 load-bearing for two callers with incompatible needs, and only one of them has
 been separated so far.
+
+---
+
+## Attempt E — the blocker is removed (2026-09-01)
+
+`hasUsableCapacityForPurpose` no longer consults `resolveChain` at all. It asks
+`configuredStepsFor(purpose)` — the full credentialed, non-stale set, uncapped,
+unordered, cooldown-blind — and applies the tool-capability filter itself.
+
+**This unblocks change 4, verified rather than argued:** with the benched-model
+tail filter applied on top, `capacityForPurpose` went **7/7 green**, which it did
+not do across attempts A, B or D. "Goes false for an exhausted chain" passes, so
+the signal can still go false — that is the safety property, and it was
+red-checked rather than assumed.
+
+`capacityForPurpose.test.ts`'s `chainIds()` helper moved to the configured set
+for the same reason: cooling only what one walk reaches leaves models beyond it
+usable, and capacity would be RIGHT to say so.
+
+### What is left, in order
+
+1. **Apply change 4** (filter unusable steps out of the tail). Already known to
+   leave capacity green.
+2. **Sharpen six `modelCooldown` assertions** from `expect(built).toEqual([])`
+   to "no model attempted before the reset is attempted again". `built` records
+   PROVIDER ids while cooldowns are per MODEL, which is the whole reason those
+   assertions had to be so blunt.
+
+   **A blanket scripted edit of this file went wrong and was reverted.**
+   Replacing every `built.length = 0` with a helper hit 39 sites and broke five
+   unrelated pure-unit tests ("honours the provider's own retry hint" and
+   friends) that never touch the chain walk. Do the six sites individually and
+   read the diff before running anything. The additive shape is right — a second
+   `builtModels` recorder alongside `built`, so no existing provider-level
+   assertion changes — only the blanket application was wrong.
+
+3. **Changes 1–3** (LEGACY_TAIL_MAX 0→1; unusable default gives up the front;
+   google + openrouter into SPEED_CHAIN). Each was implemented and verified in
+   isolation this session; changes 1 and 2 together require the twelve
+   contract tests listed under Attempt C.
+4. **Un-mark** `it.fails` on "the same holds for a DURABLE purpose" in
+   bug154-eventually-tries-every-key — change 4 closes that gap, and the marker
+   then reports "Expect test to fail".
+5. **Drive a real call** and read `ai-purpose-health.json`: `substituteSuccesses`
+   rising with `consecutiveFailures` at 0 is the outcome that matters.
