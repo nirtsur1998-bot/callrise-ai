@@ -19,6 +19,12 @@ interface TranscriptViewProps {
    *  Intelligence panel never sits on top of transcript text. 0 when that
    *  panel is not mounted, which is the common case. */
   reservedTopPx?: number
+  /** BUG-165 — pixels to keep clear on the RIGHT so the floating coaching-cue
+   *  column never sits on top of transcript text. 0 when no cue is showing,
+   *  which is most of a call. Same mechanism as reservedTopPx: it pads the
+   *  PARENT, shrinking the scroll viewport, so the rail occupies space the
+   *  transcript can never occupy at any scroll offset. */
+  reservedRightPx?: number
 }
 
 /** Scrollable live transcript: speaker-labeled finalized turns + faint interim. */
@@ -28,7 +34,8 @@ export function TranscriptView({
   repSpeaker = null,
   paused = false,
   identities,
-  reservedTopPx = 0
+  reservedTopPx = 0,
+  reservedRightPx = 0
 }: TranscriptViewProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -220,7 +227,14 @@ export function TranscriptView({
       // auto-scroll cannot hide Deal Intelligence, because the panel is pinned
       // to this box's top edge and the transcript now scrolls entirely beneath
       // it rather than through it.
-      style={reservedTopPx > 0 ? { paddingTop: reservedTopPx } : undefined}
+      style={
+        reservedTopPx > 0 || reservedRightPx > 0
+          ? {
+              ...(reservedTopPx > 0 ? { paddingTop: reservedTopPx } : {}),
+              ...(reservedRightPx > 0 ? { paddingRight: reservedRightPx } : {})
+            }
+          : undefined
+      }
     >
       <div
         ref={scrollRef}

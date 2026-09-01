@@ -509,6 +509,40 @@ export function LiveView({
     dealPanelObserver.current = ro
   }, [])
 
+  // BUG-165 — the same defect as BUG-158, on the other axis and the other
+  // element. The coaching-cue column is mounted `absolute top-3 right-4
+  // bottom-4 w-64` OVER this transcript. Its own comment says the two cue
+  // channels "share a single bottom-anchored stack so they cannot COLLIDE" —
+  // true, and about each other. Nothing considered the transcript underneath.
+  //
+  // At 1280px the text column is wide enough that lines stop short of the
+  // rail, which is why it looked fine. Measured on a driven call at narrower
+  // widths, with elementFromPoint at each line's centre: 4 transcript lines
+  // unreachable at 1100px, 3 at 980px, 1 at 860px and 720px. On screen the
+  // cue and the transcript render THROUGH each other and neither is legible.
+  // 1100px is an ordinary window, not an edge case.
+  //
+  // Reserved by MEASURED width for the same reason the panel above is
+  // measured by height: the rail is `w-64` today, but a reservation that
+  // hard-codes 256 is a second source of truth that goes stale silently the
+  // first time that class changes. Callback ref, not useRef + effect — see
+  // the note on dealPanelRef for what that mistake cost.
+  const [cueRailWidth, setCueRailWidth] = useState(0)
+  const cueRailObserver = useRef<ResizeObserver | null>(null)
+  const cueRailRef = useCallback((el: HTMLDivElement | null) => {
+    cueRailObserver.current?.disconnect()
+    cueRailObserver.current = null
+    if (!el) {
+      setCueRailWidth(0)
+      return
+    }
+    const update = (): void => setCueRailWidth(el.getBoundingClientRect().width)
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    cueRailObserver.current = ro
+  }, [])
+
   const [autoStopNotice, setAutoStopNotice] = useState<string | null>(null)
   /** What the rep never asked, captured at the moment they hang up. */
   const [hangupWarning, setHangupWarning] = useState<string | null>(null)
@@ -1182,6 +1216,11 @@ export function LiveView({
           // 12px for the panel's own `top-3` offset, plus 8px so a line never
           // sits flush against its lower edge.
           reservedTopPx={dealPanelHeight > 0 ? dealPanelHeight + 20 : 0}
+          // 16px for the rail's own `right-4` offset, plus 8px so a line
+          // never sits flush against a cue's edge. 0 whenever no cue is
+          // showing, which is most of a call — the transcript gets its full
+          // width back the moment the last cue is dismissed or expires.
+          reservedRightPx={cueRailWidth > 0 ? cueRailWidth + 24 : 0}
         />
         {/* Two independent channels (§4.3), one column.
             They stay logically independent — a suggestion can never delay,
@@ -1191,7 +1230,10 @@ export function LiveView({
             until a cue wraps to three lines; this cannot overlap at all.
             The interrupt sits lowest, nearest the eye. */}
         {(cue || suggestions.length > 0) && (
-          <div className="pointer-events-none absolute top-3 right-4 bottom-4 z-40 flex w-64 flex-col items-end justify-end gap-2">
+          <div
+            ref={cueRailRef}
+            className="pointer-events-none absolute top-3 right-4 bottom-4 z-40 flex w-64 flex-col items-end justify-end gap-2"
+          >
             <SuggestionRail suggestions={suggestions} onDismiss={dismissSuggestion} />
             {cue && <CueCard key={cue.id} cue={cue} onDismiss={dismiss} />}
           </div>
