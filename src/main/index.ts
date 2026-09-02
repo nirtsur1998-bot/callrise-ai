@@ -143,7 +143,18 @@ if (!app.isPackaged && process.platform === 'win32') {
 // second, blank window instead of focusing the existing one and showing the
 // brief. A second launch loses this race and hands its argv to the first via
 // 'second-instance' below, then exits.
-const gotSingleInstanceLock = app.requestSingleInstanceLock()
+// BUG-168 — a `--diagnose` run must NOT participate in the single-instance
+// lock. It never opens a window, and the whole point of it (see the comment
+// at the whenReady handler) is that it still answers on a machine where
+// something else is wrong. But the lock is requested here, at module load:
+// with the app already running — which is the NORMAL state when someone is
+// asked to run this — the second process loses the lock, calls app.quit(),
+// and `ready` never fires, so the report is never built. The tester gets an
+// empty stdout and **exit 0**, which reads as "it worked and found nothing".
+//
+// Short-circuits, so a diagnose run never even asks for the lock and cannot
+// disturb the instance that holds it.
+const gotSingleInstanceLock = wantsDiagnose() || app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) {
   // Calling quit() before whenReady() has resolved aborts this instance's
   // startup entirely (Electron never fires 'ready' for it) — nothing below
