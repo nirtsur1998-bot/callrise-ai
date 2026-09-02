@@ -52,6 +52,7 @@ import {
   InlineBanner
 } from './components/LiveStates'
 import { sessionHealthNotice } from './session-health-notice'
+import { lowCaptureNotice } from './low-capture-notice'
 
 /** BUG-172 — how long to wait for the call id before giving up and SAYING SO.
  *  Measured on a cold launch: the id lands within a few hundred ms of the
@@ -1025,6 +1026,23 @@ export function LiveView({
         </div>
       </div>
 
+      {/* BUG-176 — near-total capture loss, said DURING the call.
+        *
+        * Deliberately NOT folded into the small health indicator above: that
+        * indicator is gated on `latencyMs !== null`, and latencyMs is only ever
+        * set when transcript text arrives (useTranscription: `if (text) {`).
+        * So the one readout that could report 'nothing is arriving' is hidden
+        * exactly when nothing arrives. A banner, on its own gate. */}
+      {status === 'listening' &&
+        (() => {
+          const low = lowCaptureNotice({ health, segmentCount: segments.length })
+          if (!low) return null
+          return (
+            <InlineBanner tone="warning">
+              <span>{low.title}</span>
+            </InlineBanner>
+          )
+        })()}
       {/* Inline banners — keep the transcript visible underneath. */}
       {otherPartyError && (
         <InlineBanner tone={otherPartyError === 'interrupted' ? 'warning' : 'danger'}>
