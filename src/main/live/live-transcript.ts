@@ -302,6 +302,20 @@ export function endCall(opts: { saved: boolean }): void {
   const call = current
   current = null
 
+  // BUG-164 — report how much microphone echo this call carried, so the rate
+  // is MEASURED across real calls rather than inferred from the one machine it
+  // was found on. Silent when there was none, which is the case for anyone on
+  // a headset, so this never becomes noise in a normal log.
+  const echoDropped = call?.acc.getEchoDroppedCount() ?? 0
+  if (echoDropped > 0) {
+    const total = (call?.acc.length ?? 0) + echoDropped
+    const pct = total > 0 ? Math.round((echoDropped / total) * 100) : 0
+    console.log(
+      `[echo] dropped ${echoDropped} microphone echo segment(s) this call ` +
+        `(~${pct}% of ${total}) — the rep's mic was picking up the other party`
+    )
+  }
+
   // 1.2.6 hotfix (privacy) — THE CALL'S CONSENT DIES WITH THE CALL.
   //
   // Buyer-capture consent was previously cleared only at app start, on an
