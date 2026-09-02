@@ -177,6 +177,23 @@ export interface Call extends CallBase {
 export type SummaryResult =
   { ok: true; summary: Summary } | { ok: false; error: 'no-key' | 'failed'; message?: string }
 
+/**
+ * The date from which a segment's `channel` means anything.
+ *
+ * Before this, the app did not attribute turns to a channel at all, so a call
+ * with no channel on any segment is indistinguishable from one that captured
+ * both sides perfectly -- the attribution simply did not exist yet. Measured,
+ * not guessed: across 271 local call records the earliest call carrying any
+ * channel is 2026-07-29, and calls WITHOUT channel data appear in every month
+ * after it (7 in July, 11 in August, 2 in September), so absence is meaningful
+ * after this date and meaningless before it.
+ *
+ * The asymmetry is deliberate. Missing a marking leaves a user no worse off
+ * than before v1.8.0; a false marking tells someone their recording failed
+ * when it did not. We take the first.
+ */
+export const CHANNEL_ATTRIBUTION_SINCE = '2026-07-29'
+
 /** BUG-172 — did this call PROMISE to record the other party and then not do
  *  it? True only when the app committed (`consent.recordOtherParty === true`)
  *  and NO segment carries a channel at all, which is the signature of the
@@ -189,9 +206,13 @@ export type SummaryResult =
  *  explained by a quiet buyer.
  *
  *  DERIVED AT READ TIME, never stored: it is a fact about the recording, so
- *  every call already on disk gets the marker with no migration. Thirteen
- *  calls on the founder's machine qualified, the oldest from 2026-07-27 — six
- *  weeks of transcripts that read as though the buyer barely spoke.
+ *  every call already on disk gets the marker with no migration.
+ *
+ *  COUNT, measured 2026-09-02 against 271 local call records: NINE calls
+ *  qualify, seven once CHANNEL_ATTRIBUTION_SINCE excludes the two the app
+ *  cannot judge. An earlier comment here said thirteen; that number was never
+ *  measured against this store and was wrong. Weeks of transcripts that read
+ *  as though the buyer barely spoke.
  *
  *  Lives here, in the renderer, because the banner is its only consumer. A
  *  second copy in main would be a second source of truth for a rule about
@@ -199,8 +220,13 @@ export type SummaryResult =
 export function otherPartyPromisedButMissing(call: {
   consent?: { recordOtherParty?: boolean } | null
   segments?: { channel?: number; kind?: string }[]
+  createdAt?: string | number | null
 }): boolean {
   if (call.consent?.recordOtherParty !== true) return false
+  // Cannot judge a call from before channel attribution existed.
+  const created = call.createdAt == null ? null : new Date(call.createdAt)
+  if (created == null || Number.isNaN(created.getTime())) return false
+  if (created.toISOString().slice(0, 10) < CHANNEL_ATTRIBUTION_SINCE) return false
   const speech = (call.segments ?? []).filter((s) => s.kind !== 'gap')
   if (speech.length === 0) return false
   return !speech.some((s) => s.channel === 0 || s.channel === 1)
