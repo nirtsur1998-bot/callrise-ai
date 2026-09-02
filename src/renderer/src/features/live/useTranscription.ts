@@ -739,6 +739,12 @@ export function useTranscription(
     setPaused((prev) => {
       const next = !prev
       recorder.setPaused(next)
+      // BUG-111 — main cannot infer this. Pause simply stops handing chunks to
+      // sendAudio, which from main's side is indistinguishable from the
+      // microphone dying, and after noAudioMs its liveness watchdog declared
+      // capture-dead — which ended and SAVED the call and dropped the rep on
+      // "Microphone disconnected". Telling main explicitly is the whole fix.
+      window.api.transcription.setPaused(next, producerIdRef.current ?? undefined)
       return next
     })
   }, [])

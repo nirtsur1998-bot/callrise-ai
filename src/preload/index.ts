@@ -41,6 +41,13 @@ const api = {
      *  shows up as a gap marker instead of words that silently never existed. */
     reportAudioDropped: (frames: number, producerId?: number) =>
       ipcRenderer.send('transcription:audioDropped', frames, producerId),
+    /** BUG-111 — tell main the rep paused/resumed capture. Without this, a
+     *  pause looks exactly like a dead microphone from main's side and the
+     *  liveness watchdog ends the call. Producer-scoped like sendAudio, because
+     *  this one DISARMS a watchdog and an orphaned recorder must not be able to
+     *  do that to the call that is actually running. */
+    setPaused: (paused: boolean, producerId?: number) =>
+      ipcRenderer.send('transcription:setPaused', paused, producerId),
     stop: () => ipcRenderer.invoke('transcription:stop'),
     // M26 4.3 — "is there a call in progress, and what is it?". Asked on every
     // mount, because the renderer no longer holds the transcript and cannot

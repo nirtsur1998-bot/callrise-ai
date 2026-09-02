@@ -572,7 +572,14 @@ function healthTickBody(s: Session): void {
   if (sleptMs > 0) {
     const dropped = s.queue.clear()
     queueShed(s, dropped.droppedSec + sleptMs / 1000, 'sleep')
+    // BUG-111 — start() clears the paused flag, which is right for a NEW
+    // session and wrong here: this is the same live call, and the rep's pause
+    // outlives a lid-close. Without carrying it across, waking up would re-arm
+    // capture-dead against a renderer that is still deliberately silent, and
+    // the call would end ~10s later — the original bug, one sleep removed.
+    const wasCapturePaused = s.liveness.isCapturePaused()
     s.liveness.start(at)
+    if (wasCapturePaused) s.liveness.setCapturePaused(true, at)
     resetToLiveEdge(s, 'sleep')
     return
   }
@@ -1242,6 +1249,30 @@ export function registerTranscription(): void {
     }
     if (typeof frames !== 'number' || !Number.isFinite(frames) || frames <= 0) return
     queueShed(s, frames / s.sampleRate, 'shed')
+  })
+
+  // BUG-111 — the rep pressed Pause (or resumed). Pause is renderer-local: it
+  // just stops handing chunks to `transcription:audio`, which from here is
+  // indistinguishable from the microphone dying. Without this signal the
+  // liveness watchdog declared 'capture-dead' after noAudioMs and the renderer
+  // ended and SAVED the call, telling the rep their mic was disconnected.
+  //
+  // Guarded exactly like the audio path above, and for a sharper reason: this
+  // message DISARMS a watchdog. An orphaned recorder from a previous call must
+  // not be able to switch off capture-dead detection for the call that is
+  // actually running, so a mismatched producer is rejected rather than ignored.
+  ipcMain.on('transcription:setPaused', (event, paused: unknown, producerId?: unknown) => {
+    const s = session
+    if (!s) return
+    if (BrowserWindow.fromWebContents(event.sender) !== s.window) return
+    if (s.producerId !== null && producerId !== s.producerId) {
+      s.rejectedProducerFrames++
+      return
+    }
+    if (typeof paused !== 'boolean') return
+    // The same clock ingestAudioBody stamps lastAudioMs with — a rebase off any
+    // other clock would be worse than no rebase at all.
+    s.liveness.setCapturePaused(paused, s.timeline.elapsedMs())
   })
 
   registerAudioPort()
