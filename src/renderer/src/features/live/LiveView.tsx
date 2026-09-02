@@ -1043,7 +1043,7 @@ export function LiveView({
         * exactly when nothing arrives. A banner, on its own gate. */}
       {status === 'listening' &&
         (() => {
-          const low = lowCaptureNotice({ health, segmentCount: segments.length })
+          const low = lowCaptureNotice({ health, segments })
           if (!low) return null
           return (
             <InlineBanner tone="warning">
