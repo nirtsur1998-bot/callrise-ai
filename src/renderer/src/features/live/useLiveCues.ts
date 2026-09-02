@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CueLatencyTracker, type CueLatencyReport } from './cue-latency'
 import { BattlecardMatcher, type Battlecard } from './battlecards/match'
 import { STARTER_TRIGGERS } from './battlecards/library'
+import { otherPartyObservable } from './other-party-capture'
 import { MonologueTracker, type MonologueState } from './monologue'
 import { speakerKey } from './segments'
 
@@ -111,7 +112,7 @@ const GAP_DECAY = 0.85 // per-step recency decay — the most recent gap counts 
 const QUESTION_IDEAL_RATIO = 0.3 // ~30%+ of turns being questions reads as fully engaged
 const MIN_TURNS_FOR_ENGAGEMENT = 4 // too little signal before this — stay null
 
-interface Turn {
+export interface Turn {
   speaker: number
   text: string
   t: number
@@ -152,8 +153,31 @@ function countWords(text: string): number {
  * This is a rough proxy for engagement, not sentiment or call quality — it
  * only counts words, question marks, and timestamps already in the buffer.
  */
-function computeEngagementScore(turns: Turn[], repSpeaker: number | null): number | null {
+export function computeEngagementScore(turns: Turn[], repSpeaker: number | null): number | null {
   if (turns.length < MIN_TURNS_FOR_ENGAGEMENT) return null
+
+  // Stage 3a FINDING 1 (HIGH) — talk-balance is 40% of this score and it is the
+  // rep's SHARE OF WORDS. On a call whose other side was never captured every
+  // word is the rep's, so the share is 100% and balance scores 0. Measured on
+  // identical rep audio: 81 two-sided, 57 one-sided. The rep is shown a worse
+  // engagement reading because the APP failed to record the buyer.
+  //
+  // No caveat, no footnote, no number. A number with a caveat gets read as a
+  // number — the same reasoning as the outcome-tracking gate.
+  if (!otherPartyObservable(turns)) return null
+
+  // Stage 3a FINDING 3 (MEDIUM) — 3b-2. The old fallback, when the rep was not
+  // yet identified, scored 'whichever speaker is more talkative', calling it
+  // 'a symmetric stand-in'. It is symmetric arithmetically and NOT in meaning:
+  // a rep dominating is a pitch and a real problem, a buyer dominating is the
+  // rep listening and the goal of a discovery call. Both scored the same, so a
+  // buyer-dominant call read 37 (balance 18) at the moment it was going best.
+  //
+  // MONOLOGUE_TUNING already states the correct principle one file away: 'a
+  // discovery call SHOULD be buyer-heavy, and a meter that complains about
+  // listening would be worse than none.' Guessing symmetrically is still
+  // guessing, so when the rep cannot be identified this declines instead.
+  if (repSpeaker === null) return null
 
   const recent = turns.slice(-ENGAGEMENT_WINDOW)
 
@@ -166,11 +190,10 @@ function computeEngagementScore(turns: Turn[], repSpeaker: number | null): numbe
   }
   let dominantShare = 0
   if (totalWords > 0) {
-    if (repSpeaker !== null && wordsBySpeaker.has(repSpeaker)) {
-      dominantShare = (wordsBySpeaker.get(repSpeaker) ?? 0) / totalWords
-    } else {
-      dominantShare = Math.max(...wordsBySpeaker.values()) / totalWords
-    }
+    // repSpeaker is non-null past the guard above, and a rep with no words in
+    // the window scores a 0 share — which is the buyer-heavy case, and full
+    // credit, exactly as intended.
+    dominantShare = (wordsBySpeaker.get(repSpeaker) ?? 0) / totalWords
   }
   const balanceScore = Math.max(0, 100 - Math.max(0, dominantShare - 0.5) * 200)
 
