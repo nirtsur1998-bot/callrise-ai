@@ -11,13 +11,29 @@ interface ModalProps {
   title?: string
   labelledBy?: string
   /** Max width of the panel. */
-  size?: 'sm' | 'md' | 'lg' | 'xl'
+  /** Derived from SIZE below rather than hand-written, so adding a size to
+   *  the map cannot leave the prop type behind — the exact silent divergence
+   *  DealStageKind hit across three files this milestone. */
+  size?: keyof typeof SIZE
   /** Skip auto-focusing the first field (dialogs with their own autoFocus). */
   initialFocus?: boolean
   className?: string
 }
 
-const SIZE = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-2xl' } as const
+// '2xl' added for the outcome backfill: a fifteen-row work surface, not a
+// confirmation. At max-w-2xl each row's five answer buttons wrapped onto a
+// second line, tripling row height and cutting the visible rows from ~8 to
+// ~3 — which turns one sitting into a scroll-click-scroll-click sitting.
+// Density is a tenth-row concern, so the container has to give the row a
+// single line. (cn() is a plain join with no tailwind-merge, so overriding
+// max-w from the caller's className would be order-dependent and silent.)
+const SIZE = {
+  sm: 'max-w-sm',
+  md: 'max-w-md',
+  lg: 'max-w-lg',
+  xl: 'max-w-2xl',
+  '2xl': 'max-w-4xl'
+} as const
 
 /**
  * The one modal shell — owns the scrim, centered panel, backdrop-close, and

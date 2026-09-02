@@ -29,19 +29,22 @@ interface PipelineBoardProps {
 const KIND_HEADER_TEXT: Record<DealStage['kind'], string> = {
   open: 'text-ink',
   won: 'text-positive',
-  lost: 'text-danger'
+  lost: 'text-danger',
+  'went-quiet': 'text-muted'
 }
 
 const KIND_RULE: Record<DealStage['kind'], string> = {
   open: 'border-t-line',
   won: 'border-t-positive',
-  lost: 'border-t-danger'
+  lost: 'border-t-danger',
+  'went-quiet': 'border-t-line-strong'
 }
 
 const KIND_COUNT_PILL: Record<DealStage['kind'], string> = {
   open: 'text-faint',
   won: 'rounded-full bg-positive-soft px-1.5 py-0.5 text-positive',
-  lost: 'rounded-full bg-danger-soft px-1.5 py-0.5 text-danger'
+  lost: 'rounded-full bg-danger-soft px-1.5 py-0.5 text-danger',
+  'went-quiet': 'rounded-full bg-elevated px-1.5 py-0.5 text-muted'
 }
 
 /** A simple kanban: columns = stages (in configured order), cards = deals.

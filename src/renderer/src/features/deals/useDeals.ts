@@ -12,7 +12,9 @@ export interface UseDeals {
   loading: boolean
   refresh: () => Promise<void>
   create: (input: DealCreateInput) => Promise<Deal | null>
-  update: (id: string, patch: DealUpdateInput) => Promise<void>
+  /** Resolves the updated deal, or null when the write failed — callers
+   *  gating follow-on UI (the reason banner) need the distinction. */
+  update: (id: string, patch: DealUpdateInput) => Promise<Deal | null>
   /** Optimistically hides the deal and schedules the actual delete after a
    *  short undo window — call `undoDelete` within that window to cancel it. */
   remove: (id: string) => void
@@ -87,9 +89,13 @@ export function useDeals(): UseDeals {
   )
 
   const update = useCallback(
-    async (id: string, patch: DealUpdateInput) => {
-      await window.api.deals.update(id, patch)
+    async (id: string, patch: DealUpdateInput): Promise<Deal | null> => {
+      // Returns the updated deal (or null on failure) so callers can gate
+      // follow-on UI on the write actually having happened — the reason
+      // banner used to appear for stage moves that silently failed.
+      const updated = await window.api.deals.update(id, patch)
       await refresh()
+      return updated
     },
     [refresh]
   )

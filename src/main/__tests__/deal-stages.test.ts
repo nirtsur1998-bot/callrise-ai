@@ -41,7 +41,13 @@ describe('loadDealStages / loadDealStagesMeta', () => {
       'proposal',
       'negotiating',
       'won',
-      'lost'
+      'lost',
+      // M32 Stage 2 — a DELIBERATE addition to the default pipeline, not drift.
+      // 'went-quiet' is a distinct outcome from 'lost': the founder's framing is
+      // that these deals fade rather than end, and merging the two would poison
+      // the comparison Stage 2 exists to make. Kept as an exact toEqual so the
+      // next addition is also a decision rather than a surprise.
+      'went-quiet'
     ])
   })
 
@@ -50,7 +56,11 @@ describe('loadDealStages / loadDealStagesMeta', () => {
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, 'deal-stages.json'), '{ not json')
     const { loadDealStages } = await freshModule()
-    expect(loadDealStages()).toHaveLength(6)
+    // 7 since M32 Stage 2 added 'went-quiet' to the default pipeline. Asserting
+    // the COUNT rather than the ids is the point of this test — it is about
+    // "corrupt input still yields the full default set", not about which stages
+    // those are (the test above pins those exactly).
+    expect(loadDealStages()).toHaveLength(7)
   })
 
   it('reads updatedAt back as EPOCH for a file saved before the field existed', async () => {

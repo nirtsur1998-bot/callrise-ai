@@ -24,6 +24,8 @@ import { recordRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import { formatValue, formatCloseDate } from './format'
 import { isDealStale, createFollowUpTask } from './staleness'
 import { RiskAssessmentCard } from './RiskAssessmentCard'
+import { DealCallsSection } from './DealCallsSection'
+import { OutcomeReasonSection } from './OutcomeReasonSection'
 import type { Deal, DealStage } from './types'
 
 interface DealDetailProps {
@@ -144,6 +146,18 @@ export function DealDetail({
         {deal.notes && <p className="mt-3 text-sm whitespace-pre-line text-muted">{deal.notes}</p>}
       </div>
 
+      {/* M32 Stage 2 — the reason, on closed deals. The board's banner asks
+          at close time; a deal closed through the edit dialog lands HERE, and
+          the retired notice explicitly promises this page can take a reason. */}
+      {stage && stage.kind !== 'open' && (
+        <OutcomeReasonSection
+          dealId={deal.id}
+          kind={stage.kind}
+          reason={deal.outcomeReason}
+          onChanged={onChanged}
+        />
+      )}
+
       {stale && (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/30 bg-warning-soft px-4 py-3">
           <div className="flex items-center gap-2.5">
@@ -194,19 +208,34 @@ export function DealDetail({
         </div>
       )}
 
-      {/* Call history — the linked contact's full history, same as Phase 1 */}
+      {/* M32 Stage 2 — THIS DEAL's calls, from `call.dealId`.
+          What used to be here was the CONTACT's full history, which for a
+          contact with two deals showed an identical list under both. It was
+          not wrong about anything it claimed; it simply was not answering the
+          question its heading asked. The contact's other calls are still
+          right below, as candidates to link — which is what they are. */}
       <div className="flex-1 overflow-y-auto pb-2">
-        <div className="mb-3 flex items-center gap-2">
-          <PhoneCall className="h-4 w-4 text-accent" />
-          <h3 className="text-sm font-semibold">Call history</h3>
-          {!loading && <span className="text-[11px] text-faint">{linked.length}</span>}
-        </div>
-
-        <CallHistoryList
-          loading={loading}
-          linked={linked}
-          emptyMessage={`No calls linked to ${contact?.name ?? 'this contact'} yet. Open a saved call and link it there.`}
+        <DealCallsSection
+          dealId={deal.id}
+          contactId={deal.contactId}
+          contactName={contact?.name}
+          stageKind={stage?.kind}
         />
+
+        <div className="mt-6 border-t border-line-soft pt-5">
+          <div className="mb-3 flex items-center gap-2">
+            <PhoneCall className="h-4 w-4 text-faint" />
+            <h3 className="text-sm font-semibold text-muted">
+              Everything with {contact?.name ?? 'this contact'}
+            </h3>
+            {!loading && <span className="text-[11px] text-faint">{linked.length}</span>}
+          </div>
+          <CallHistoryList
+            loading={loading}
+            linked={linked}
+            emptyMessage={`No calls linked to ${contact?.name ?? 'this contact'} yet. Open a saved call and link it there.`}
+          />
+        </div>
       </div>
     </div>
   )

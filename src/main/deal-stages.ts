@@ -10,7 +10,33 @@ import { writeJsonAtomicSync } from './atomic-write'
 import { listDealsUsingStage } from './deals-fs'
 import { scheduleBackup } from './backup'
 
-export type DealStageKind = 'open' | 'won' | 'lost'
+/**
+ * M32 Stage 2 — 'went-quiet' is NEW, and it is a distinct OUTCOME, not a
+ * flavour of 'lost'.
+ *
+ * The founder's words: *"these deals don't end, they fade."* Before this, a
+ * deal that simply stopped answering had to be filed under Lost, which merges
+ * two different things — "they decided no" and "it evaporated" — into one
+ * bucket. That merge would have quietly poisoned every later comparison,
+ * because the behaviours that precede a refusal and the behaviours that precede
+ * a fade are not the same behaviours, and the whole point of Stage 2 is to
+ * learn which is which.
+ *
+ * Recorded now even though nothing analyses it yet, precisely BECAUSE nothing
+ * analyses it yet: the data has to be collected correctly before it is worth
+ * collecting at all, and a distinction not captured today cannot be recovered
+ * later from deals that have already closed.
+ */
+export type DealStageKind = 'open' | 'won' | 'lost' | 'went-quiet'
+
+/** Every kind that means the deal is CLOSED — i.e. it has an outcome. Derived
+ *  once here so a fifth kind cannot be added while some caller keeps its own
+ *  hand-written list of "the closed ones" (the AI_KEY_NAMES lesson). */
+export const CLOSED_STAGE_KINDS: readonly DealStageKind[] = ['won', 'lost', 'went-quiet']
+
+export function isClosedKind(kind: DealStageKind): boolean {
+  return CLOSED_STAGE_KINDS.includes(kind)
+}
 
 export interface DealStage {
   id: string
@@ -33,7 +59,11 @@ const DEFAULT_STAGES: DealStage[] = [
   { id: 'proposal', label: 'Proposal', kind: 'open' },
   { id: 'negotiating', label: 'Negotiating', kind: 'open' },
   { id: 'won', label: 'Won', kind: 'won' },
-  { id: 'lost', label: 'Lost', kind: 'lost' }
+  { id: 'lost', label: 'Lost', kind: 'lost' },
+  // Founder's wording, chosen over "No decision": *"that's what actually
+  // happens and it's what I'd say out loud. 'No decision' sounds like a formal
+  // outcome; these deals don't end, they fade."*
+  { id: 'went-quiet', label: 'Went quiet', kind: 'went-quiet' }
 ]
 
 function stagesPath(): string {
@@ -45,7 +75,10 @@ function dealsDir(): string {
 }
 
 function sanitizeKind(value: unknown): DealStageKind {
-  return value === 'won' || value === 'lost' ? value : 'open'
+  // Unknown/absent falls back to 'open', NOT to a closed kind. A stage file
+  // written by a NEWER build (one that knows a kind this build does not) must
+  // degrade to "still in play" rather than silently marking live deals closed.
+  return value === 'won' || value === 'lost' || value === 'went-quiet' ? value : 'open'
 }
 
 function sanitizeLabel(value: unknown): string {
@@ -95,24 +128,110 @@ export function loadDealStages(): DealStage[] {
 /** Stage list + its last-modified stamp — the "newest wins" key for the cloud
  *  backup's single-row stage sync. Files written before the stamp existed
  *  read as EPOCH (any cloud copy wins over an unstamped local default). */
-export function loadDealStagesMeta(): { stages: DealStage[]; updatedAt: string } {
+/**
+ * M32 Stage 2 — one-time migrations applied to an EXISTING saved pipeline.
+ *
+ * FOUND BY DRIVING THE APP, not by a test. Adding 'went-quiet' to
+ * `DEFAULT_STAGES` made every unit test pass and put the column on screen for
+ * **nobody**: `DEFAULT_STAGES` is only consulted when no `deal-stages.json`
+ * exists, and every existing install has one. The feature was invisible to
+ * exactly the people it was built for, and the suite was fully green.
+ *
+ * A marker per migration, not a version number: the marker records that the
+ * app has OFFERED this stage once. If the founder then deletes "Went quiet"
+ * because they do not want it, it must stay deleted — re-adding it on the next
+ * launch would be principle 49's worst case, silently restoring something a
+ * person deliberately removed.
+ */
+const STAGE_MIGRATIONS = ['went-quiet-v1'] as const
+type StageMigration = (typeof STAGE_MIGRATIONS)[number]
+
+function sanitizeMigrations(value: unknown): StageMigration[] {
+  if (!Array.isArray(value)) return []
+  return STAGE_MIGRATIONS.filter((m) => value.includes(m))
+}
+
+export function loadDealStagesMeta(): {
+  stages: DealStage[]
+  updatedAt: string
+  migrations: StageMigration[]
+} {
   try {
     const parsed = JSON.parse(readFileSync(stagesPath(), 'utf8'))
     const updatedAt =
       typeof parsed?.updatedAt === 'string' && !Number.isNaN(Date.parse(parsed.updatedAt))
         ? parsed.updatedAt
         : EPOCH
-    return { stages: sanitizeStageList(parsed?.stages), updatedAt }
+    return {
+      stages: sanitizeStageList(parsed?.stages),
+      updatedAt,
+      migrations: sanitizeMigrations(parsed?.migrations)
+    }
   } catch {
-    return { stages: DEFAULT_STAGES, updatedAt: EPOCH }
+    // No file at all: the defaults already contain every stage, so every
+    // migration is vacuously done. Marking them prevents a first-run install
+    // from later "migrating" a pipeline that was never missing anything.
+    return { stages: DEFAULT_STAGES, updatedAt: EPOCH, migrations: [...STAGE_MIGRATIONS] }
   }
+}
+
+/**
+ * Add "Went quiet" to a saved pipeline that predates it — ONCE.
+ *
+ * Deliberately conservative in three ways:
+ *   - runs only if the marker is absent, so a deliberate deletion sticks;
+ *   - skips if the pipeline ALREADY has a stage of this kind under any label,
+ *     because the user may have made their own and a second one is clutter;
+ *   - marks itself done even when it adds nothing, so the check does not
+ *     re-run forever on installs that never needed it.
+ *
+ * Returns whether the stage list changed, so the caller can avoid a pointless
+ * write (and a pointless `updatedAt` bump, which would make this device claim
+ * "newest" against the cloud for a change nobody made).
+ */
+export function migrateDealStages(): boolean {
+  const meta = loadDealStagesMeta()
+  if (meta.migrations.includes('went-quiet-v1')) return false
+
+  const already = meta.stages.some((s) => s.kind === 'went-quiet')
+  const stages = already
+    ? meta.stages
+    : [...meta.stages, { id: 'went-quiet', label: 'Went quiet', kind: 'went-quiet' as const }]
+
+  writeStagesWithMigrations(stages, [...meta.migrations, 'went-quiet-v1'], meta.updatedAt, already)
+  return !already
 }
 
 function writeStages(stages: DealStage[], updatedAt = new Date().toISOString()): void {
   mkdirSync(join(app.getPath('userData')), { recursive: true })
   // Atomic: a torn write here silently reset the pipeline to the default
   // stages on next launch, orphaning every deal sitting in a custom stage.
-  writeJsonAtomicSync(stagesPath(), { stages, updatedAt })
+  // Migrations are carried through so an ordinary edit cannot drop the markers
+  // and cause a deleted stage to be re-added on the next launch.
+  writeJsonAtomicSync(stagesPath(), {
+    stages,
+    updatedAt,
+    migrations: loadDealStagesMeta().migrations
+  })
+}
+
+/** Used only by the migration, which must control the stamp itself. */
+function writeStagesWithMigrations(
+  stages: DealStage[],
+  migrations: StageMigration[],
+  previousUpdatedAt: string,
+  unchanged: boolean
+): void {
+  mkdirSync(join(app.getPath('userData')), { recursive: true })
+  // KEEP the old stamp when nothing actually changed. Restamping would make
+  // this device claim "newest" in the cloud's newest-wins comparison for a
+  // migration that added nothing — the same no-restamp rule
+  // applyPulledDealStages already follows.
+  writeJsonAtomicSync(stagesPath(), {
+    stages,
+    updatedAt: unchanged ? previousUpdatedAt : new Date().toISOString(),
+    migrations
+  })
 }
 
 /**
@@ -172,6 +291,17 @@ let registered = false
 export function registerDealStages(): void {
   if (registered) return
   registered = true
+
+  // M32 Stage 2 — run the one-time pipeline migration BEFORE the first
+  // `dealStages:get` can be served, so the renderer's very first read already
+  // includes "Went quiet". Wrapped: a migration failure must never stop the
+  // deal stages registering at all, which would take the whole Pipeline down
+  // over a config nicety.
+  try {
+    if (migrateDealStages()) console.log('[deal-stages] added "Went quiet" to the saved pipeline')
+  } catch (e) {
+    console.error('[deal-stages] migration failed, continuing with the saved pipeline:', e)
+  }
 
   ipcMain.handle('dealStages:get', (): DealStage[] => loadDealStages())
   ipcMain.handle('dealStages:set', (_event, input: unknown): SetStagesResult =>

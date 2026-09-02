@@ -169,6 +169,8 @@ const api = {
     postCallBrief: (callId: string) => ipcRenderer.invoke('calls:postCallBrief', callId),
     setContact: (callId: string, contactId: string | null) =>
       ipcRenderer.invoke('calls:setContact', callId, contactId),
+    setDeal: (callId: string, dealId: string | null) =>
+      ipcRenderer.invoke('calls:setDeal', callId, dealId),
     setCallType: (callId: string, callType: string | null) =>
       ipcRenderer.invoke('calls:setCallType', callId, callType),
     addBookmark: (callId: string, atMs: number, text: string) =>
@@ -369,6 +371,13 @@ const api = {
   dealStages: {
     get: () => ipcRenderer.invoke('dealStages:get'),
     set: (stages: unknown) => ipcRenderer.invoke('dealStages:set', stages)
+  },
+  dealBackfill: {
+    state: () => ipcRenderer.invoke('dealBackfill:state'),
+    insight: () => ipcRenderer.invoke('dealBackfill:insight'),
+    answer: (contactId: string, answer: string) =>
+      ipcRenderer.invoke('dealBackfill:answer', contactId, answer),
+    clear: (contactId: string) => ipcRenderer.invoke('dealBackfill:clear', contactId)
   },
   events: {
     list: () => ipcRenderer.invoke('events:list'),

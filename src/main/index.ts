@@ -66,14 +66,19 @@ app.setName('CallRise AI')
 /**
  * VERIFICATION SEAM — DEV BUILDS ONLY, AND UNREACHABLE IN A PACKAGED ONE.
  *
- * Ported from the M32 branch onto this bugfix branch, because the same need
- * applies here: proving a fix means driving the app, and driving it against
- * the founder's live profile would both mutate real data and race the
- * installed app that shares this exact directory.
+ * The standing rule since 2026-08-31 is that anything with a visible surface
+ * gets driven and checked in the running app before it is called done. For
+ * read-only screens that is free. For the ones that WRITE it is not: the
+ * outcome backfill creates deals and rewrites call records, so verifying it
+ * against the live profile would mean mutating real data in order to test it —
+ * and would race the installed app, which shares this exact directory and was
+ * observed rewriting 178 call files mid-session.
  *
- * The gate is `app.isPackaged`, not the presence of the variable: in a
- * packaged build the env var is never read at all, so there is no environment
- * on a real user's machine that can move their data directory.
+ * So a dev build can be pointed at a COPY of the profile instead. The gate is
+ * `app.isPackaged`, not the presence of the variable: in a packaged build the
+ * env var is never read at all, so there is no environment on a real user's
+ * machine that can move their data directory. Pinned by
+ * `dev-profile-override.test.ts`, which reads this file as text.
  */
 const devProfileOverride = app.isPackaged ? undefined : process.env['CALLRISE_USER_DATA_DIR']
 const userDataDir = devProfileOverride || join(app.getPath('appData'), 'sales-os')
@@ -242,6 +247,7 @@ import { registerAuth } from './auth'
 import { registerDealTier1 } from './deal-tier1'
 import { registerDealTier2 } from './deal-tier2'
 import { registerDealFeedback } from './deal-feedback-fs'
+import { registerDealBackfill } from './deal-backfill'
 import { registerEvents } from './events'
 import { registerLiveCue } from './live-cue'
 import { registerLoopbackCapture } from './loopback'
@@ -670,6 +676,7 @@ app.whenReady().then(async () => {
   registerDealTier1()
   registerDealTier2()
   registerDealFeedback()
+  registerDealBackfill()
   registerEvents()
   registerLiveCue()
   registerLoopbackCapture()

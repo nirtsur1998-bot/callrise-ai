@@ -858,6 +858,20 @@ interface CallBase {
   /** The contact this call is linked to (manual, or confirmed from a calendar
    *  match) — the CRM foundation's call-history link. */
   contactId?: string
+  /**
+   * M32 Stage 2 — the DEAL this call belongs to, and the join outcome
+   * tracking runs on.
+   *
+   * EXPLICIT, NEVER INFERRED. `contactId` above is not a substitute: it is
+   * optional (96 of 163 calls on the founder's machine have none) and
+   * ambiguous (a contact with two deals gives no way to say which). A guessed
+   * link is indistinguishable from a real one in every later analysis.
+   *
+   * Set from either side — `calls.setDeal` on the call, or the deal's own
+   * "Calls on this deal" list. The deal side is a QUERY over this field
+   * rather than a second stored list, so the two surfaces cannot disagree.
+   */
+  dealId?: string
   /** M23 — sticky call-type classification, auto-detected then overridable. */
   callType?: CallType
 }
@@ -1091,6 +1105,12 @@ export interface CallsApi {
   postCallBrief: (callId: string) => Promise<PostCallBriefEvent>
   /** Link (contactId) or clear (null) the contact this call belongs to. */
   setContact: (callId: string, contactId: string | null) => Promise<Call | null>
+  /** M32 Stage 2 — link (or clear, with `null`) the DEAL this call belongs to.
+   *  Separate from setContact because a contact can have two deals, and which
+   *  one a call belongs to is exactly the question the contact route cannot
+   *  answer. Always explicit; the app may OFFER an unambiguous link but never
+   *  records one on the user's behalf. */
+  setDeal: (callId: string, dealId: string | null) => Promise<Call | null>
   /** M23 — override (or clear, with `null`) this call's auto-detected type. */
   setCallType: (callId: string, callType: CallType | null) => Promise<Call | null>
   /** Bookmark a moment mid-call ("clip this") — atMs from call start, plus the
@@ -1343,7 +1363,12 @@ export interface ContactIntelligenceApi {
   detectName: (callId: string) => Promise<{ ok: boolean; jobId?: string }>
 }
 
-export type DealStageKind = 'open' | 'won' | 'lost'
+/** THIRD independent declaration of this union (main/deal-stages.ts and
+ *  renderer/features/deals/types.ts are the others) — the preload bridge is
+ *  ambient and cannot import either. `deal-stage-kind-lockstep.test.ts` reads
+ *  all three files and fails if they disagree; adding 'went-quiet' to only one
+ *  of them left the typecheck fully green on 2026-08-31. */
+export type DealStageKind = 'open' | 'won' | 'lost' | 'went-quiet'
 
 export interface DealStage {
   id: string
@@ -1385,6 +1410,11 @@ export interface Deal {
   /** Phase 5 Step 1 — the last AI risk assessment run on this deal, if any.
    *  Manually triggered, cached until re-run. */
   riskAssessment?: DealRiskAssessment
+  /** M32 Stage 2 — why the deal ended this way, in the user's own words.
+   *  Optional in the strongest sense: the prompt that fills it is skippable in
+   *  one action, never blocks, and stops asking after repeated skips. Captured
+   *  on WON deals too, so the record isn't one-armed. */
+  outcomeReason?: string
 }
 
 export interface DealCreateInput {
@@ -1403,6 +1433,7 @@ export interface DealUpdateInput {
   value?: number | null
   expectedCloseDate?: string | null
   notes?: string | null
+  outcomeReason?: string | null
 }
 
 export interface DealsApi {
@@ -1420,6 +1451,95 @@ export interface DealsApi {
 export interface DealStagesApi {
   get: () => Promise<DealStage[]>
   set: (stages: DealStage[]) => Promise<SetDealStagesResult>
+}
+
+/**
+ * M32 Stage 2 — a THIRD independent declaration of main's `BackfillAnswer`
+ * (main/deal-outcomes.ts). Same reason, and same hazard, as DealStageKind
+ * above: nothing makes the copies meet, so `deal-union-lockstep.test.ts`
+ * reads all three files as text and fails if they disagree.
+ */
+export type BackfillAnswer = 'won' | 'lost' | 'went-quiet' | 'dont-remember' | 'not-a-deal'
+
+export interface OutcomeCounts {
+  won: number
+  lost: number
+  wentQuiet: number
+  dontRemember: number
+  notADeal: number
+  unanswered: number
+}
+
+/**
+ * Whether anything may be said about outcomes yet.
+ *
+ * A discriminated union rather than a flag-plus-optional-numbers, and the
+ * `insufficient` arm carries **no analysis output at all** — no effect size,
+ * no direction, no percentage. A caveat next to a number gets read as a
+ * number, so at low N the number must not exist for the renderer to find.
+ */
+export type Insight =
+  | {
+      status: 'insufficient'
+      counts: OutcomeCounts
+      usable: { won: number; lost: number; wentQuiet: number }
+      /** Deals in each arm regardless of whether any call is linked. Lets the
+       *  counter tell "no deals" apart from "no measurable calls on them" —
+       *  two situations needing opposite actions, which the first version of
+       *  the counter reported identically. */
+      closed: { won: number; lost: number; wentQuiet: number }
+      needPerArm: number
+      bindingArm: 'won' | 'lost'
+      backfillUntrustworthy: boolean
+    }
+  | {
+      status: 'ready'
+      counts: OutcomeCounts
+      usable: { won: number; lost: number; wentQuiet: number }
+      closed: { won: number; lost: number; wentQuiet: number }
+    }
+
+/** One row of the outcome backfill — everything needed to answer it without
+ *  opening the call it refers to. */
+export interface BackfillRow {
+  contactId: string
+  name: string
+  company?: string
+  callCount: number
+  lastCallAt?: string
+  lastCallTitle?: string
+  answer?: BackfillAnswer
+  dealId?: string
+  /** How many calls the answer ACTUALLY linked — not the row's call total.
+   *  The two differ when a call was already linked elsewhere or a write
+   *  failed, and the row's confirmation line must report the real number. */
+  linkedCallCount?: number
+}
+
+export interface BackfillState {
+  rows: BackfillRow[]
+  answered: number
+  total: number
+  /** Contacts with at least one coached call, BEFORE the has-a-deal exclusion
+   *  — so an empty list can say which of its two causes applies (species 62:
+   *  "everyone's covered" and "nothing is linked yet" need opposite actions). */
+  coachedContactTotal: number
+  insight: Insight
+}
+
+export interface BackfillAnswerResult {
+  ok: boolean
+  error?: 'unknown-contact' | 'no-stage-for-kind' | 'deal-failed'
+  /** The whole recomputed state, returned by the same call that wrote — so a
+   *  row's new answer and the counter above it can never be one click apart. */
+  state?: BackfillState
+}
+
+export interface DealBackfillApi {
+  state: () => Promise<BackfillState>
+  insight: () => Promise<Insight>
+  answer: (contactId: string, answer: BackfillAnswer) => Promise<BackfillAnswerResult>
+  clear: (contactId: string) => Promise<BackfillAnswerResult>
 }
 
 export type EventSyncState = 'local-only' | 'synced' | 'dirty' | 'deleted' | 'error'
@@ -2935,6 +3055,7 @@ declare global {
       contacts: ContactsApi
       deals: DealsApi
       dealStages: DealStagesApi
+      dealBackfill: DealBackfillApi
       events: EventsApi
       auth: AuthApi
       loopback: LoopbackApi

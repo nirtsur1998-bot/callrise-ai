@@ -18,6 +18,7 @@ import {
   setCallDealIntelligence,
   setCallTitle,
   setCallContact,
+  setCallDeal,
   setCallCallType,
   setCallTypeIfUnset,
   setCallObjectionsMined,
@@ -566,6 +567,20 @@ export function registerCalls(): void {
     // already has a summary or transcript to work from — the executor's own
     // gating decides that, same as before.
     if (call && contactId) enqueueCascadeJob(AUTO_CRM_NOTE_JOB_TYPE, callId)
+    return call
+  })
+
+  // --- M32 Stage 2: link this call to a DEAL -------------------------------
+  //
+  // A separate handler from setContact rather than a field on it, because the
+  // two links answer different questions and are set at different times: the
+  // contact is "who was this with", the deal is "which pursuit does this
+  // belong to". A contact can have two deals, which is exactly the ambiguity
+  // this field exists to resolve — folding it into setContact would put the
+  // answer back inside the question.
+  ipcMain.handle('calls:setDeal', async (_event, callId: string, dealId: string | null) => {
+    const call = await setCallDeal(callsDir(), callId, dealId)
+    scheduleBackup() // the link is metadata like a title edit, same as setContact
     return call
   })
 

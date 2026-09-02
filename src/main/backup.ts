@@ -829,7 +829,13 @@ export async function pushAll(): Promise<BackupResult> {
           user_id: userId,
           updated_at: d.updatedAt,
           deleted: d.deleted === true,
-          payload: d
+          // outcomeReason travels EXPLICITLY, null when there is none — the
+          // stored record drops the key when empty, so a bare payload cannot
+          // distinguish "cleared on this machine" from "written by an older
+          // build that has never heard of the field". importDeal reads the
+          // difference: null clears, ABSENT preserves. Same three-way
+          // contract callBackupPayload uses for a call's dealId, same reason.
+          payload: { ...d, outcomeReason: d.outcomeReason ?? null }
         }))
         await upsertRows(client, 'backup_deals', dealRows, skewMs)
       } catch (err) {
