@@ -535,3 +535,29 @@ sits over content — the jump-to-bottom chevron is the example, and it is over
 content on purpose (the founder asked for the Claude-style button that stays
 reachable from any scroll position). Read the hits; do not treat a non-zero
 count as a defect count.
+
+## `purge-test-data.mjs` — undo what driving the app costs
+
+Driving the app against the real profile is the only way some bugs get found —
+BUG-163 through BUG-167 all came from it. It is not free. One overnight session
+left **48 synthetic calls and 24 auto-learned memories** on the founder's
+profile, and they were not inert:
+
+- the top row of **Coaching → Scorecards**, i.e. "your most recent
+  performance", was a synthetic 49-second call scored 33;
+- **Your Trend**'s *"Down 7 points from your first tracked week to your
+  latest"* was measuring the latest week against test data;
+- **Performance** reported *"237 calls … you're picking up the pace lately"*,
+  and the pace was the test harness.
+
+```
+node scripts/verification/purge-test-data.mjs --since 2026-09-01T18:00:00.000Z
+node scripts/verification/purge-test-data.mjs --since 2026-09-01T18:00:00.000Z --apply
+```
+
+**There is no default cutoff, and it exits 2 without one.** Guessing which of
+someone's data is disposable is not a decision a script gets to make. Dry run
+unless `--apply`, and it prints everything it would touch first. Calls are
+tombstoned (`deleted: true`) the way the app itself deletes them rather than
+unlinked, so nothing referencing them breaks; memories are matched on
+`created_at` only, so anything written before the cutoff is untouched.
