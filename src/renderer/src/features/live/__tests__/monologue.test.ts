@@ -8,7 +8,17 @@ import {
 } from '../monologue'
 
 const words = (n: number): string => Array.from({ length: n }, () => 'word').join(' ')
-const turn = (speaker: number, n: number, t: number): Turn => ({ speaker, text: words(n), t })
+// Stage 3b — a real turn on a multichannel call carries a channel, and the
+// meter now DECLINES when it cannot observe the other side at all (one voice,
+// no channels: nothing distinguishes a silent buyer from an unrecorded one).
+// These fixtures therefore carry channel 0, which is what production looks
+// like; the decline behaviour has its own describe block below.
+const turn = (speaker: number, n: number, t: number): Turn => ({
+  speaker,
+  text: words(n),
+  t,
+  channel: speaker === 0 ? 0 : 1
+})
 
 describe('computeTalkRatio', () => {
   // A gauge reading "100% you" because the rep said hello first is a gauge the

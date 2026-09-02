@@ -1,3 +1,5 @@
+import { otherPartyObservable } from './other-party-capture'
+
 // Monologue meter + passive talk-ratio gauge (§4.2).
 //
 // The research disagrees with itself about this one, and the disagreement is
@@ -21,6 +23,10 @@ export interface Turn {
   text: string
   /** Monotonic-ish ms when the turn was last appended to. */
   t: number
+  /** Stage 3b — present only on a genuinely buyer-attributed turn. This type
+   *  did not carry it, which is why the meter could not tell a monologue from
+   *  a call whose other side was never recorded. See other-party-capture.ts. */
+  channel?: number
 }
 
 export const MONOLOGUE_TUNING = {
@@ -109,6 +115,22 @@ export class MonologueTracker {
    * and the tracker deliberately says nothing.
    */
   update(turns: Turn[], repSpeaker: number | null, nowMs: number): MonologueState {
+    // Stage 3a FINDING 2 (HIGH) — without this, a call whose other side was
+    // never captured has no non-rep turn to walk back to, so the run starts at
+    // the FIRST turn and the meter reads the WHOLE CALL in red under the label
+    // "you, uninterrupted". Measured: 0:00 on a healthy call, 1:57 and climbing
+    // on the identical rep audio with the buyer missing. That is a specific
+    // accusation about the rep's conduct, derived from our own capture bug, on
+    // a screen watched under stress. Seven of the founder's calls on
+    // 2026-09-01 alone were in that state.
+    //
+    // Declining is the honest output, and it is not a new behaviour: this
+    // method already returns a neutral zero whenever it cannot attribute a run.
+    if (!otherPartyObservable(turns)) {
+      this.startedAtMs = null
+      this.lastMs = 0
+      return { ms: 0, tone: 'neutral', nudging: false }
+    }
     if (repSpeaker === null || turns.length === 0) {
       this.startedAtMs = null
       this.lastMs = 0
