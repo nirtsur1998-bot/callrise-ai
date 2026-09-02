@@ -108,6 +108,10 @@ async function recordPushResult(
       await setEventSync(eventsDir(), id, {
         sync: { state: res.retryable ? 'dirty' : 'error', lastError: res.error }
       })
+      // BUG-169 — only the NON-retryable class surfaces. A 'dirty' push is
+      // offline or a transient 5xx: reconcile will pick it up and there is
+      // nothing for the rep to do, so raising a failure there would be noise.
+      if (!res.retryable) reportPushFailure(id, res.error)
     }
     return res.ok
   })
@@ -186,6 +190,65 @@ async function syncPush(id: string): Promise<boolean> {
 /** M26 Batch 5 — the reconcile drain's job type. */
 const RECONCILE_JOB_TYPE = 'calendar:reconcile'
 
+/** BUG-169 — a calendar push that fails NON-transiently becomes a job so that
+ *  it fails VISIBLY.
+ *
+ *  Founder's decision, 2026-09-02: "a failed calendar push needs to surface
+ *  where I'd look: on the event itself, and once in the Activity feed as a
+ *  failure. Failures always surface, per the feed rule we already set. Retry
+ *  manually, don't auto-retry silently."
+ *
+ *  Before this, the failure was recorded on disk (`sync.state = 'error'`) and
+ *  read by nothing: across the entire renderer `sync` and `lastError` appeared
+ *  exactly once, in a type declaration. So the event sat in the CallRise
+ *  calendar looking completely normal while it was absent from the rep's real
+ *  calendar and their phone, and no reminder fired. They found out by missing
+ *  the meeting.
+ *
+ *  Deliberately NOT making the ordinary push a job — the two surviving reasons
+ *  in schedulePush's own comment still hold (it is fast, and it already
+ *  survives navigation). Only the FAILURE becomes one, which is the moment
+ *  there is finally something for a human to do. The Activity Center already
+ *  offers Retry on any failed job (canRetry = state === 'failed'), so the
+ *  manual-retry half needs no new affordance. */
+const PUSH_FAILED_JOB_TYPE = 'calendar:pushFailed'
+
+/** One feed row per failing event, not one per attempt.
+ *
+ *  "Surface it ONCE" is the founder's word and it is load-bearing: an edit
+ *  loop or a reconcile pass can call schedulePush repeatedly for the same
+ *  event, and a feed that fills with the same failure is one the rep learns to
+ *  scroll past — which is how the original silence gets recreated with extra
+ *  steps. A row already queued, running, or sitting failed for this event is
+ *  the row; another attempt does not add a second one.
+ *
+ *  Never throws: this is a reporting path hanging off a fire-and-forget push,
+ *  and a failure to REPORT a failure must not take anything else down. */
+function reportPushFailure(eventId: string, reason: string): void {
+  void (async () => {
+    try {
+      const manager = getJobManager()
+      const already = manager
+        .list()
+        .find(
+          (j: Job) =>
+            j.type === PUSH_FAILED_JOB_TYPE &&
+            (j.input as { eventId?: string } | undefined)?.eventId === eventId &&
+            (j.state === 'queued' || j.state === 'running' || j.state === 'failed')
+        )
+      if (already) return
+      const ev = await getEvent(eventsDir(), eventId)
+      manager.enqueue(PUSH_FAILED_JOB_TYPE, {
+        eventId,
+        title: ev?.title?.trim() || 'Untitled event',
+        reason
+      })
+    } catch {
+      // Reporting is best-effort by construction.
+    }
+  })()
+}
+
 /** Queue a push for one event and refresh the calendar if the outcome changed.
  *
  *  M26 Batch 5 — DELIBERATELY NOT a job, unlike the reconcile drain below.
@@ -238,8 +301,23 @@ async function reconcile(): Promise<void> {
       // side, so retrying can never succeed until the user changes something.
       // Skip it (mirroring how syncPush special-cases the delete-path 403)
       // instead of silently retrying forever.
-      if (state === 'error' && e.sync?.lastError === 'forbidden') continue
-      if (state === 'deleted' || state === 'dirty' || state === 'error') {
+      // BUG-169 — 'error' is NO LONGER retried here at all, not just the
+      // 'forbidden' case. Founder's decision, 2026-09-02: "failures always
+      // surface, per the feed rule we already set. Retry manually, don't
+      // auto-retry silently."
+      //
+      // A silent retry loop over a non-transient failure is the worst of both:
+      // it never succeeds, and because it never surfaces, the rep believes the
+      // event is on their real calendar. It is not — it is not on their phone
+      // either, and no reminder fires. They find out by missing the meeting.
+      //
+      // 'dirty' still auto-retries, and should: that is the RETRYABLE class
+      // (offline, a transient 5xx), where retrying is the correct answer and
+      // there is nothing for the rep to act on. The split already existed at
+      // the write site — `res.retryable ? 'dirty' : 'error'` — and this is the
+      // first code to respect it.
+      if (state === 'error') continue
+      if (state === 'deleted' || state === 'dirty') {
         if (await enqueuePush(e.id, () => syncPush(e.id))) changed = true
       }
     }
@@ -381,6 +459,33 @@ export function registerEvents(): void {
   //
   // reconcile()'s own `reconciling` single-flight flag still guards it, so
   // overlapping triggers collapse exactly as before.
+  getJobManager().registerType<{ eventId: string; title: string; reason: string }, string>({
+    type: PUSH_FAILED_JOB_TYPE,
+    lane: 'MAINTENANCE',
+    aiPurpose: NO_AI_PURPOSE,
+    titleFor: (input) => `Calendar sync failed: ${input.title}`,
+    cancellable: false,
+    // NOT silent. The whole point is that it is seen.
+    silent: false,
+    executor: {
+      kind: 'inline-async',
+      run: async (input) => {
+        // Retrying is what the Retry button does, so this handler attempts the
+        // push once and reports honestly. On the first run it has just failed,
+        // so it fails again and lands in the feed as a failure — which is the
+        // surface being created. On a manual retry it may well succeed.
+        const ok = await enqueuePush(input.eventId, () => syncPush(input.eventId))
+        const fresh = await getEvent(eventsDir(), input.eventId)
+        if (fresh?.sync?.state === 'synced') return 'Synced to your calendar.'
+        throw new Error(
+          `Could not put "${input.title}" on your calendar (${fresh?.sync?.lastError ?? input.reason}). ` +
+            `It is saved in CallRise but is NOT on your real calendar or your phone, so no reminder will fire.`
+        )
+        void ok
+      }
+    }
+  })
+
   getJobManager().registerType<Record<string, never>, string>({
     type: RECONCILE_JOB_TYPE,
     lane: 'MAINTENANCE',

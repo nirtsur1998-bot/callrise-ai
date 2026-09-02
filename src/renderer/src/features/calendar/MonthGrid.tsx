@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { startOfMonth, startOfWeek, addDays, isSameMonth, isToday, format } from 'date-fns'
-import { Plus, PhoneCall } from 'lucide-react'
+import { Plus, PhoneCall, CloudOff } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import type { CalendarEvent, CalendarItem } from './types'
 import { ITEM_STYLES, RISK_DOT, BRIEF_DOT, itemsOnDay, sortForDay } from './items'
@@ -195,8 +195,21 @@ function Chip({
   // deliberately two glyphs and the contact's name, never a second line: the
   // richer treatment belongs in the week view, where a block has height.
   // Everything is additive — a chip with no context renders exactly as before.
+  // BUG-169 — the event's own surface for a failed push. `sync.state` has been
+  // written on every failure since the feature shipped and read by NOTHING:
+  // across the whole renderer `sync` and `lastError` appeared exactly once, in
+  // a type declaration. So an event that never reached Google looked completely
+  // normal here, while it was absent from the rep's real calendar and their
+  // phone and no reminder fired.
+  //
+  // 'dirty' is deliberately NOT shown: that is the retryable class (offline, a
+  // transient 5xx) which reconcile picks up on its own, and there is nothing
+  // for the rep to do about it.
+  const syncFailed = item.event?.sync?.state === 'error'
+
   const title = [
     item.title,
+    syncFailed && 'NOT on your real calendar — sync failed, retry from Activity',
     ctx?.contactName && `with ${ctx.contactName}`,
     ctx?.dealStage && `${ctx.dealStage} stage`,
     ctx?.risk && `${ctx.risk} risk`,
@@ -237,7 +250,10 @@ function Chip({
           the same person become indistinguishable — the chip would be
           hiding what the meeting IS. Contact/stage live in the tooltip here
           and on their own line in the week view, where there's room. */}
-      <span className="truncate">{item.title}</span>
+      {syncFailed && (
+        <CloudOff aria-hidden className="h-2.5 w-2.5 shrink-0 text-warning" />
+      )}
+      <span className={cn('truncate', syncFailed && 'text-warning')}>{item.title}</span>
       {ctx?.callId ? (
         // Outcome beats plan on the same chip: once a call exists, the brief
         // dot has nothing left to offer (the meeting already happened), so

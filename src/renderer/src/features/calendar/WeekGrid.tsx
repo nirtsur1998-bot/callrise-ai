@@ -131,7 +131,17 @@ export function WeekGrid({
             >
               {allDay.map((item) => {
                 const editable = Boolean(item.event) // editable events open the dialog; tasks/read-only don't
-                const title = item.subtitle ? `${item.title} · ${item.subtitle}` : item.title
+                // BUG-169 — same marker as the month view: an event whose push
+                // failed non-transiently is NOT on the rep's real calendar, and
+                // until now nothing anywhere said so.
+                const syncFailed = item.event?.sync?.state === 'error'
+                const title = [
+                  item.title,
+                  item.subtitle,
+                  syncFailed && 'NOT on your real calendar — sync failed, retry from Activity'
+                ]
+                  .filter(Boolean)
+                  .join(' · ')
                 const className = cn(
                   'block w-full truncate rounded px-1.5 py-0.5 text-left text-[11px] leading-tight',
                   ITEM_STYLES[item.kind].chip,
