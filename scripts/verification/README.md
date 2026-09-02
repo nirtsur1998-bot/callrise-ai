@@ -561,3 +561,70 @@ unless `--apply`, and it prints everything it would touch first. Calls are
 tombstoned (`deleted: true`) the way the app itself deletes them rather than
 unlinked, so nothing referencing them breaks; memories are matched on
 `created_at` only, so anything written before the cutoff is untouched.
+
+---
+
+# THE THIRD RULE — added 2026-09-02
+
+## "Is this branch superseded?" — the obvious command answers a different question
+
+Deleting a stale branch is routine, and the check people reach for is:
+
+```
+git diff main...branch          # ← WRONG QUESTION
+```
+
+Three dots means *"what did this branch change since the merge base."* That is
+**not** "what does main lack." The two look like the same question and are not:
+
+- A branch whose fix reached main **by another route** — cherry-picked,
+  rebuilt, rewritten under a different branch name — still shows its whole diff.
+  You read that as "unique content" and keep a branch that is genuinely dead.
+- Worse, the reverse: the command tells you **nothing** about content main is
+  missing, so a branch you think is empty can be holding files nobody else has.
+
+Both happened here on 2026-09-02 in a single check, on four branches:
+
+- `hotfix/telemetry-anon-upsert-rpc` showed a 147-line diff including a whole
+  SQL file. Main already had all of it (`68fc1d0`, PR #8, from a differently
+  named branch). It was safe to delete and the command said otherwise.
+- `claude/overnight-audit` was reported to the founder as superseded. It held
+  **802 lines of audit findings, two recorded decisions and a handoff that
+  existed nowhere else.** Deleting on that report would have destroyed them.
+
+### Ask the right question
+
+```
+git cherry -v main origin/<branch>     # '+' = change NOT in main, '-' = already there
+git diff --diff-filter=A --name-only main origin/<branch>   # files ONLY on the branch
+```
+
+`git cherry` compares **changes**, not commits, so a cherry-picked or rebased
+commit is correctly reported as already present. The `--diff-filter=A` listing
+is the other half: it names files that exist on the branch and not on main,
+which is the thing that actually gets destroyed by a delete.
+
+### And `git cherry` is not the last word either
+
+It compares patch **text**. Two independent fixes to the same defect, written
+differently, both read as unique. `fix/rescue-steps-unhandled-rejection` was
+reported as one unique commit; main already had a working fix for that exact
+leak, written by someone else eleven days earlier. Only reading the conflict
+settled it.
+
+**So: `git cherry` to narrow, then read what is actually different.** A count
+is a filter, never a verdict.
+
+## The same check, one line later: a substring match is not a file check
+
+In the same investigation, `git ls-tree -r --name-only main | grep -ci handoff`
+returned 1 and was read as "main has `docs/HANDOFF.md`." It had matched
+`docs/M27-tier1-recorder-handoff.md`. Main did not have the file.
+
+```
+git ls-tree -r --name-only main | grep -cx 'docs/HANDOFF.md'    # -x, anchored
+```
+
+Two bad instruments inside one check, both caught only by looking at what they
+matched. That is the whole thesis of this directory: **an instrument's output is
+a claim about the instrument until you have seen what it looked at.**
