@@ -19,6 +19,29 @@ import { completeWithFallback } from '../ai/complete-with-fallback'
 import { speechSegments, type CallSegment } from '../calls-fs'
 import { MEMORY_CATEGORIES, CATEGORY_SCOPE_KIND, clientScope, type MemoryCandidate, type MemoryCategory } from './types'
 
+/** BUG-167 — the outcome the model never had.
+ *
+ *  Every candidate was forced into rep, business or client by
+ *  CATEGORY_SCOPE_KIND, so anything the model found interesting became a claim
+ *  about the user or their company. There was no "not relevant" answer other
+ *  than returning nothing at all, and the model does not reach for nothing.
+ *
+ *  What that produced, in the founder's real store at confidence 1.0:
+ *    [rep/communication-style]     "Speaker 0 speaks first."
+ *    [business/product-or-service] "The deal intelligence panel sits on top of
+ *                                   the transcript."
+ *  The second is the app learning a bug report about ITSELF as a fact about
+ *  the founder's product, because a driven call happened to discuss the
+ *  BUG-158 overlap out loud.
+ *
+ *  Deliberately NOT added to MEMORY_CATEGORIES: it is a way of declining, not
+ *  a thing to store. verifyAndBuild already rejects any category outside that
+ *  list, so a candidate marked this way is dropped by the existing gate — the
+ *  change here is that the model finally has somewhere honest to put it.
+ *  Counted, so "how often does it decline" is answerable. */
+const NOT_RELEVANT = 'not-relevant'
+
+
 const MAX_CANDIDATES_PER_PASS = 5
 const MIN_QUOTE_WORDS = 3
 const MAX_TRANSCRIPT_CHARS = 100_000
@@ -63,8 +86,14 @@ const EXTRACT_TOOL: AITool = {
             },
             category: {
               type: 'string',
-              enum: [...MEMORY_CATEGORIES],
-              description: `Must be exactly one of: ${CATEGORY_LIST}. Never invent a category outside this list.`
+              enum: [...MEMORY_CATEGORIES, NOT_RELEVANT],
+              description:
+                `Must be exactly one of: ${CATEGORY_LIST}. Never invent a category outside this list. ` +
+                `If something is interesting but is NOT a durable fact about the rep, their business ` +
+                `or their client — an observation about the recording, the transcript's own speaker ` +
+                `labels, the CallRise app, or anything else that does not belong to the DEAL — use ` +
+                `"${NOT_RELEVANT}". That is a real, expected answer and it is always better than ` +
+                `forcing something into a category that does not fit.`
             },
             statement: {
               type: 'string',
@@ -103,6 +132,7 @@ HARD RULES, never break these:
 - NEVER extract inferences about mental or emotional state, health, family, or personal life — even if it's visible in the transcript. If someone mentions being tired, stressed, sick, or anything personal, do NOT record it as a memory, no matter how it might seem useful.
 - Only extract what is actually, clearly stated or clearly demonstrated — never guess, infer, or extrapolate beyond what's said.
 - A single occurrence of a behavior (e.g. "talked over the client once") is NOT enough to state it as a settled pattern — phrase single-occurrence observations tentatively, as something noticed this one time, not as an established fact.
+- If something is interesting but is not a durable fact about the rep, their business or their client, mark its category "not-relevant" rather than bending it into a category that does not fit. Declining is a real answer and is always the right one when nothing fits.
 - If nothing in the source text clearly fits the allowed categories, return an empty candidates array. An empty result is completely normal and expected — most short exchanges have nothing worth extracting.
 - NEVER extract anything about the RECORDING ITSELF rather than the business: how the transcript is labelled, who spoke first, what the speakers sound like, or the CallRise app and its interface. Those are artifacts of how the conversation was captured, not facts about the rep, their company or their client. If a call happens to discuss the tool, that is still not a fact about their business.
 - Every candidate's quote must be copied VERBATIM from the source text — not paraphrased, not summarized, not assembled from multiple places.
