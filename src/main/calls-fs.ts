@@ -435,6 +435,14 @@ interface CallBase {
    *  calls saved before this field existed. */
   updatedAt: string
   durationMs: number
+  /** BUG-178 — wall-clock moment the call ended, recorded at save. `durationMs`
+   *  is what the app BELIEVES the call lasted; this is what the clock said, so
+   *  the two can be compared. Nothing recorded it before 2026-09-02, which is
+   *  why a live-capture hypothesis could not be tested against a single saved
+   *  call. Mirrors the renderer's own Call type — this file carries its own
+   *  copy (one of the repo's known duplicated types), so both must be edited.
+   *  Absent on every call saved before it existed. */
+  endedAt?: string
   speakerCount: number
   preview: string
   /** The contact this call is linked to (manual, or confirmed from a calendar
@@ -546,6 +554,9 @@ export interface Call extends CallBase {
 export interface CallSaveInput {
   startedAt: string
   durationMs: number
+  /** BUG-178 — the renderer's wall-clock moment of flush. Optional so an older
+   *  renderer, or a save path that does not know the call is over, still saves. */
+  endedAt?: string
   segments: CallSegment[]
   /** Optional consent captured during the live session; defaulted if absent. */
   consent?: ConsentRecord
@@ -866,6 +877,8 @@ export const CALL_FIELD_RULES: { [K in keyof Required<Call>]: CallFieldRule } = 
   createdAt: { cls: 'METADATA' },
   updatedAt: { cls: 'METADATA' },
   durationMs: { cls: 'METADATA' },
+  // A clock reading, not content: carries no speech and nothing derived from it.
+  endedAt: { cls: 'METADATA' },
   contactId: { cls: 'METADATA' },
   // Same class as contactId: a link, not content. Carries no buyer speech and
   // nothing derived from it, so it survives every stripping rule intact.
@@ -1078,6 +1091,13 @@ export async function saveCall(dir: string, input: CallSaveInput): Promise<CallS
     createdAt: createdDate.toISOString(),
     updatedAt: createdDate.toISOString(), // equals createdAt at birth; bumped on edits
     durationMs,
+    // The renderer's own moment of flush is closer to the real hangup than
+    // anything main can observe, but a missing or unparseable value must never
+    // cost us the field — fall back to now, which is within a second of it.
+    endedAt:
+      typeof input?.endedAt === 'string' && !Number.isNaN(Date.parse(input.endedAt))
+        ? new Date(input.endedAt).toISOString()
+        : new Date().toISOString(),
     speakerCount: countSpeakers(segments),
     preview: transcriptText.slice(0, 160),
     segments,

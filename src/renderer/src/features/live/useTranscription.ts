@@ -260,6 +260,10 @@ export function useTranscription(
         {
           startedAt: startedAtRef.current,
           durationMs: durationMsRef.current,
+          // BUG-178 — the clock reading, alongside the app's own belief about
+          // how long the call ran. Sent from here rather than stamped in main
+          // because this is the moment the call actually stopped.
+          endedAt: new Date().toISOString(),
           segments: captured,
           // Consent captured during the session; the main process re-sanitizes it
           // and enforces the "no consent = no capture" invariant on save.

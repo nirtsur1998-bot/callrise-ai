@@ -108,6 +108,20 @@ interface CallBase {
   createdAt: string
   updatedAt: string
   durationMs: number
+  /** BUG-178 — wall-clock moment the call actually ended, recorded at save.
+   *
+   *  Added because M33 needed it and it did not exist. `durationMs` is what the
+   *  app BELIEVES the call lasted; nothing anywhere recorded what the clock
+   *  said. Three candidate substitutes were tried and all three were wrong:
+   *  `updatedAt` is last-touched (background jobs bump it), file mtime is
+   *  local sync time, and segments carry no timestamps at all. So the obvious
+   *  test of a live-hypothesis — does recorded duration disagree with elapsed
+   *  time? — could not be run on a single saved call.
+   *
+   *  With this, `Date.parse(endedAt) - Date.parse(createdAt)` is the true
+   *  elapsed time and `durationMs` is the claim, and the two can be compared.
+   *  Absent on every call saved before 2026-09-02. */
+  endedAt?: string
   speakerCount: number
   preview: string
   /** The contact this call is linked to, if any. */

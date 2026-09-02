@@ -989,11 +989,19 @@ export function LiveView({
           )}
           <StatusBadge status={status} />
           <div className="flex min-w-[70px] items-center gap-1.5 text-[13px]">
-            {latencyMs !== null &&
-              (status === 'listening' || status === 'paused') &&
+            {(status === 'listening' || status === 'paused') &&
               (() => {
                 const notice = sessionHealthNotice(health)
-                const tone = notice ? 'danger' : latencyMs < 500 ? 'positive' : 'warning'
+                // BUG-177 — this block used to be gated on `latencyMs !== null`,
+                // and latencyMs is only ever set when transcript text arrives
+                // (useTranscription: `if (text) {`). So an indicator whose whole
+                // job is to report 'No audio' and 'Reconnecting…' could not draw
+                // on a call that never produced text — it could report health
+                // only while healthy. The notice needs `health`, never latency,
+                // so it now renders on its own; the millisecond READING still
+                // requires a number to show, and falls back to the notice.
+                if (!notice && latencyMs === null) return null
+                const tone = notice ? 'danger' : (latencyMs as number) < 500 ? 'positive' : 'warning'
                 return (
                   <>
                     <span
