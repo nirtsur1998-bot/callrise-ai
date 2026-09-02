@@ -52,6 +52,7 @@ import {
   InlineBanner
 } from './components/LiveStates'
 import { sessionHealthNotice } from './session-health-notice'
+import { lowCaptureNotice } from './low-capture-notice'
 
 /** BUG-172 — how long to wait for the call id before giving up and SAYING SO.
  *  Measured on a cold launch: the id lands within a few hundred ms of the
@@ -988,11 +989,19 @@ export function LiveView({
           )}
           <StatusBadge status={status} />
           <div className="flex min-w-[70px] items-center gap-1.5 text-[13px]">
-            {latencyMs !== null &&
-              (status === 'listening' || status === 'paused') &&
+            {(status === 'listening' || status === 'paused') &&
               (() => {
                 const notice = sessionHealthNotice(health)
-                const tone = notice ? 'danger' : latencyMs < 500 ? 'positive' : 'warning'
+                // BUG-177 — this block used to be gated on `latencyMs !== null`,
+                // and latencyMs is only ever set when transcript text arrives
+                // (useTranscription: `if (text) {`). So an indicator whose whole
+                // job is to report 'No audio' and 'Reconnecting…' could not draw
+                // on a call that never produced text — it could report health
+                // only while healthy. The notice needs `health`, never latency,
+                // so it now renders on its own; the millisecond READING still
+                // requires a number to show, and falls back to the notice.
+                if (!notice && latencyMs === null) return null
+                const tone = notice ? 'danger' : (latencyMs as number) < 500 ? 'positive' : 'warning'
                 return (
                   <>
                     <span
@@ -1025,6 +1034,23 @@ export function LiveView({
         </div>
       </div>
 
+      {/* BUG-176 — near-total capture loss, said DURING the call.
+        *
+        * Deliberately NOT folded into the small health indicator above: that
+        * indicator is gated on `latencyMs !== null`, and latencyMs is only ever
+        * set when transcript text arrives (useTranscription: `if (text) {`).
+        * So the one readout that could report 'nothing is arriving' is hidden
+        * exactly when nothing arrives. A banner, on its own gate. */}
+      {status === 'listening' &&
+        (() => {
+          const low = lowCaptureNotice({ health, segmentCount: segments.length })
+          if (!low) return null
+          return (
+            <InlineBanner tone="warning">
+              <span>{low.title}</span>
+            </InlineBanner>
+          )
+        })()}
       {/* Inline banners — keep the transcript visible underneath. */}
       {otherPartyError && (
         <InlineBanner tone={otherPartyError === 'interrupted' ? 'warning' : 'danger'}>

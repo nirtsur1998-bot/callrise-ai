@@ -928,6 +928,10 @@ export interface Call extends CallBase {
 export interface CallSaveInput {
   startedAt: string
   durationMs: number
+  /** BUG-178 — wall-clock moment of flush, so elapsed time can be compared
+   *  against the durationMs the app believes. Optional: an older renderer
+   *  omits it and main falls back to its own clock. */
+  endedAt?: string
   segments: CallSegment[]
   consent?: ConsentRecord
 }
