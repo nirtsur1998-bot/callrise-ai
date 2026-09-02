@@ -82,14 +82,28 @@ function assignments(chain: string[]): ReturnType<typeof loadAppSettings> {
 const ORIGINAL_ENV = { ...process.env }
 const NOW = Date.now()
 
-// Test-hygiene fix (2026-08-28): streamWithFallback()'s returned `.final` is
-// a SEPARATE promise from the async generator itself (complete-with-fallback.ts
-// rejects both on every error path). A caller that only iterates the
-// generator — as every test here does via `for await` — leaves `.final`
-// rejected and unobserved, which Node reports as an unhandled rejection even
-// though every assertion in the file passes; production callers already
-// guard against exactly this (assistant-ipc.ts: "Always settle .final —
-// even on the error path — to avoid an unhandled..."). Same guard here.
+// Test-hygiene fix (2026-08-28): the unhandled-rejection leak this file used
+// to have, and its fix.
+//
+// streamWithFallback() returns the async-iterable stream PLUS a SEPARATE
+// `.final` promise that settles in parallel with the generator — resolving on
+// success, rejecting on the SAME error the generator itself throws on
+// exhaustion. Every real caller already knows this and guards it
+// (assistant-ipc.ts: "Always settle .final — even on the error path — to avoid
+// an unhandled..."). This helper only ever consumed the generator, so whenever
+// a test here exercised the exhaustion path, `.final` rejected with nothing
+// attached to it.
+//
+// That produced exactly the failure shape that made it hard to find: every
+// assertion in the file still passed (the generator's own throw was caught fine
+// by `.rejects.toThrow()`), while Node reported an unhandled rejection on a
+// LATER, unrelated test — because `.final` rejects on a microtask tick after the
+// generator's throw is already being handled elsewhere, so the warning fires
+// wherever that tick happens to land, not synchronously with the test that
+// caused it. A failure that accuses the wrong file, non-deterministically.
+//
+// The `finally` matters: it settles `.final` on the throwing path too, which is
+// the only path that ever leaked.
 async function drain(stream: StreamWithFallbackResult): Promise<string> {
   let out = ''
   try {
