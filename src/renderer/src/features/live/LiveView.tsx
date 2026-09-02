@@ -53,6 +53,20 @@ import {
 } from './components/LiveStates'
 import { sessionHealthNotice } from './session-health-notice'
 
+/** BUG-172 — how long to wait for the call id before giving up and SAYING SO.
+ *  Measured on a cold launch: the id lands within a few hundred ms of the
+ *  socket reporting 'listening'. Ten tries at 250ms is 2.5 seconds, which is
+ *  generous against that and still short enough that a rep who genuinely
+ *  cannot capture the buyer is told at the START of the call rather than
+ *  discovering it in the transcript afterwards. */
+const BUYER_CALLID_RETRY_MS = 250
+/** Wall-clock, not attempts. The call id arrives with the FIRST TRANSCRIPT
+ *  PATCH — i.e. when somebody first speaks — so the wait has to cover a rep
+ *  who presses Start and then greets the buyer, which is the normal way a call
+ *  begins. 30s is generous against that and still bounded, so a machine that
+ *  genuinely cannot capture is told rather than waiting forever. */
+const BUYER_CALLID_MAX_WAIT_MS = 30_000
+
 interface LiveViewProps {
   /** AI Note Taker's "auto-open meeting page" — called with the saved call's
    *  id right after a successful save. Optional so LiveView still works
@@ -198,6 +212,7 @@ export function LiveView({
     savedNotice,
     otherPartyLive,
     otherPartyError,
+    setOtherPartyNotReady,
     micPrompting,
     briefCopied,
     buyerSilentWarning,
@@ -383,13 +398,63 @@ export function LiveView({
   // legitimately fail. When it does, `otherPartyError` renders the existing
   // recovery banner, whose "Try again" IS a gesture and always works. Retrying
   // in a loop here would just spam a prompt that cannot succeed.
+  /** BUG-173 — "is a call actually on screen right now". Named once rather
+   *  than re-derived per element, because the Deal Intelligence panel was
+   *  missing exactly this check and nothing made that visible. */
+  const liveSurfaceVisible =
+    status === 'listening' || status === 'connecting' || status === 'reconnecting' || status === 'paused'
+
   const autoBuyerAttemptedRef = useRef(false)
+  /** BUG-172 — how many times we have waited for the call id this call, and a
+   *  tick that re-runs the effect when it might have arrived. getCallId() reads
+   *  a REF by design and can never itself trigger a re-render, so without this
+   *  there is nothing to bring the effect back. */
+  const buyerWaitStartRef = useRef(0)
+  const [buyerRetryTick, setBuyerRetryTick] = useState(0)
   useEffect(() => {
-    if (status === 'idle') autoBuyerAttemptedRef.current = false
+    if (status === 'idle') {
+      autoBuyerAttemptedRef.current = false
+      buyerWaitStartRef.current = 0
+    }
   }, [status])
-  useEffect(() => {
-    if (autoBuyerAttemptedRef.current) return
-    if (status !== 'listening' || !canRecordOther || otherPartyLive || otherPartyError) return
+  useEffect((): undefined | (() => void) => {
+    if (autoBuyerAttemptedRef.current) return undefined
+    if (status !== 'listening' || !canRecordOther || otherPartyLive || otherPartyError) return undefined
+
+    // BUG-172 — THE CALL ID MAY NOT EXIST YET, AND THAT IS NOT A FAILURE.
+    //
+    // This effect fires the moment the socket reports 'listening'. On a cold
+    // launch that happens BEFORE the call record is written, so getCallId()
+    // is still null, consent.persist is handed an empty id and returns false.
+    // The old code had already set autoBuyerAttemptedRef above this point, so
+    // the one attempt per call was spent on a precondition that simply had
+    // not arrived yet — and because nothing set otherPartyError, the recovery
+    // banner never appeared either. The call then recorded ONLY THE REP for
+    // its entire duration while consent.recordOtherParty said true.
+    //
+    // The id arrives milliseconds later, so this is a WINDOW, not a state:
+    // wait for it rather than burning the attempt. The founder confirmed the
+    // shape from the outside — 1st call one-sided, 3rd call both sides.
+    const callIdNow = getCallId()
+    if (!callIdNow) {
+      // TIME, not attempt count. The counter used to increment on every effect
+      // RUN, and the effect re-runs whenever any dependency changes — so ten
+      // "waits" were once observed burning in four milliseconds, exhausting the
+      // budget before a single timer fired. Only the timer advances the clock.
+      if (buyerWaitStartRef.current === 0) buyerWaitStartRef.current = Date.now()
+      if (Date.now() - buyerWaitStartRef.current >= BUYER_CALLID_MAX_WAIT_MS) {
+        // It never arrived. Say so BEFORE the call ends, never after: a call
+        // that silently records half of what it promised is worse than one
+        // that admits it cannot.
+        autoBuyerAttemptedRef.current = true
+        setOtherPartyNotReady()
+        return undefined
+      }
+      const t = setTimeout(() => setBuyerRetryTick((n) => n + 1), BUYER_CALLID_RETRY_MS)
+      return () => clearTimeout(t)
+    }
+
+    // Only NOW is this a real attempt.
     autoBuyerAttemptedRef.current = true
     // Standing consent still has to be written before capture can be armed —
     // the gate does not care WHERE the consent came from, only that a record
@@ -406,8 +471,17 @@ export function LiveView({
     // mono<->multichannel restart; sessionId does not — that was BUG-063),
     // and 1.2.6 supplies the GUARD. Taking either side wholesale would have
     // silently dropped the other.
-    if (!window.api.consent.persist(getCallId() ?? '', consent.recordRef.current)) return
+    // callIdNow, not getCallId() again: the value validated a few lines above
+    // is the one this attempt is FOR. Re-reading invites the same class of bug
+    // this fix exists for.
+    if (!window.api.consent.persist(callIdNow, consent.recordRef.current)) {
+      // The id existed and the write still failed — that is a real refusal, not
+      // a timing window, and it must not be silent either.
+      setOtherPartyNotReady()
+      return undefined
+    }
     void enableOtherParty()
+    return undefined
   }, [
     status,
     canRecordOther,
@@ -415,6 +489,8 @@ export function LiveView({
     otherPartyError,
     enableOtherParty,
     getCallId,
+    buyerRetryTick,
+    setOtherPartyNotReady,
     consent.recordRef
   ])
 
@@ -959,7 +1035,13 @@ export function LiveView({
                 : "Couldn't record the other party — screen & system-audio recording was blocked."
               : otherPartyError === 'no-audio'
                 ? "Couldn't record the other party — no system audio came through."
-                : 'The other party’s audio stopped — continuing with your mic only.'}
+                : otherPartyError === 'not-ready'
+                  ? // BUG-172 — said DURING the call, not discovered in the
+                    // transcript afterwards. This is the whole point of the
+                    // state: the app promised to record both sides and could
+                    // not, and a rep who knows can still act on it.
+                    'Only your side is being recorded — the other party could not be captured for this call. Press Try again to attach it.'
+                  : 'The other party’s audio stopped — continuing with your mic only.'}
           </span>
           <span className="flex shrink-0 gap-2">
             {otherPartyError === 'denied' && isMac && (
@@ -1244,7 +1326,13 @@ export function LiveView({
             `enabled` internally too; gating the wrapper here as well avoids
             an empty pointer-events-none node in the DOM when the beta
             feature is off, matching the cue column's own conditional above. */}
-        {dealIntelligenceEnabled && (
+        {/* BUG-173 — gated on the CALL, not just the setting. This read
+            `{dealIntelligenceEnabled && (…)}` alone, so the panel rendered
+            whenever the feature was switched on — including after the call had
+            ended, sitting under the "This call has ended" banner still saying
+            "Watching" with a live health score. Every other live element here
+            checks `status`; this one did not. */}
+        {dealIntelligenceEnabled && liveSurfaceVisible && (
           <div
             ref={dealPanelRef}
             className="pointer-events-none absolute top-3 left-4 z-40 flex w-80 flex-col items-start"
