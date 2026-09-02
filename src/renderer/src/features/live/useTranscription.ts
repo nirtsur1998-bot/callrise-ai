@@ -30,7 +30,16 @@ const MIC_PROMPT_MS = 250
  *  not just within one. See StartOptions.producerId in main/transcription.ts. */
 let nextProducerId = 1
 
-export type OtherPartyError = 'denied' | 'no-audio' | 'interrupted' | null
+/** BUG-172 — 'not-ready' is the state that had no name, and that is why the
+ *  failure was silent for six weeks. The auto-attach effect fires the moment
+ *  the socket says 'listening', which on a COLD LAUNCH is before the call
+ *  record exists — so `getCallId()` is still null, `consent.persist` is handed
+ *  an empty id and returns false, and the effect returned having already spent
+ *  its one attempt per call. No error was set, so no banner offered a retry,
+ *  and the call recorded ONLY THE REP for its whole duration while
+ *  `consent.recordOtherParty` said true. Nineteen calls on the founder's
+ *  machine back to 2026-07-17. */
+export type OtherPartyError = 'denied' | 'no-audio' | 'interrupted' | 'not-ready' | null
 
 interface UseTranscription {
   status: LiveStatus
@@ -44,6 +53,9 @@ interface UseTranscription {
   otherPartyLive: boolean
   /** Last buyer-capture problem, if any (drives a recovery banner). */
   otherPartyError: OtherPartyError
+  /** BUG-172 — set when the call id never arrived, so the rep is told the
+   *  buyer is not being captured rather than finding out from the transcript. */
+  setOtherPartyNotReady: () => void
   /** 1Hz session-health snapshot, or null before the first tick. */
   health: TranscriptionHealthEvent | null
   /** True only while the OS microphone permission prompt is actually showing. */
@@ -983,6 +995,10 @@ export function useTranscription(
     dismissBuyerSilentWarning: useCallback(() => setBuyerSilentWarning(false), []),
     crossTalkWarning,
     dismissCrossTalkWarning: useCallback(() => setCrossTalkWarning(false), []),
+    /** BUG-172 — LiveView calls this when the call id never arrived, so the
+     *  rep is told the buyer is not being captured instead of finding out from
+     *  the transcript afterwards. */
+    setOtherPartyNotReady: useCallback(() => setOtherPartyError('not-ready'), []),
     multichannelFallbackNotice,
     dismissMultichannelFallbackNotice: useCallback(() => setMultichannelFallbackNotice(false), []),
     start,
