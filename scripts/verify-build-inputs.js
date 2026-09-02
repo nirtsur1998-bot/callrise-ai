@@ -50,10 +50,22 @@ const { join, resolve } = require('node:path')
  */
 const REQUIRED_INPUTS = {
   win32: {
-    label: 'Windows Tier 1 noise-cancellation engine',
+    label: 'Windows Tier 1 noise-cancellation engine + call-detection addon',
     // Relative to the repo root. Sourced from inside the repo on purpose —
     // see the extraResources comment for why a sibling path was rejected.
-    paths: ['build/virtualmic-win/kern_bridge.exe', 'build/virtualmic-win/DeepFilterNet3_onnx.tar.gz'],
+    paths: [
+      'build/virtualmic-win/kern_bridge.exe',
+      'build/virtualmic-win/DeepFilterNet3_onnx.tar.gz',
+      // BUG-170 — the same unguarded shape as the denoiser, on a third file.
+      // electron-builder packs this via the GLOB `native/*/build/Release/*.node`
+      // (electron-builder.yml:51), and a glob that matches nothing does not
+      // fail a build any more than a missing extraResources source does.
+      // build-native.js runs node-gyp and never checks that a binary came out
+      // the other side. At runtime loadNativeAddon() catches the missing
+      // require and returns null, so the app starts perfectly and call
+      // detection simply never works — no error, nothing in the UI.
+      'native/win-audio-sessions/build/Release/win_audio_sessions.node'
+    ],
     remedy:
       'These are committed to this repo. If they are missing, your checkout is\n' +
       '  incomplete — try `git checkout -- build/virtualmic-win/`.'
