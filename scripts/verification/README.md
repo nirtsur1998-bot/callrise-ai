@@ -505,3 +505,33 @@ because Settings replaces the sidebar and every later click matched nothing.
 Hence the `SKIP` marker, the `states visited` count, and the `Back` at the top.
 
 It only ever READS. It clicks navigation and nothing that writes.
+
+## `occlusion-sweep.mjs` — is anything drawn on top of the words?
+
+Two real bugs in this repo were exactly this, and both survived review:
+**BUG-158** (the Live Deal Intelligence panel mounted over the transcript) and
+**BUG-165** (the coaching-cue rail drawn THROUGH transcript text at every
+window width below 1280). In both, every element was inside the viewport and
+the layout probe reported the screen clean. **Bounds are not occupancy.**
+
+```
+node scripts/verification/occlusion-sweep.mjs [--width 1280]
+```
+
+Exit 0 = nothing occluded, 1 = something is, 2 = no app, **3 = it refused**.
+It plants a div that genuinely covers a sentence and refuses to report unless
+it finds it, then cleans up and refuses if it cannot.
+
+**The false positive it exists to avoid.** A naive version flagged three
+elements on the Calls screen as "covered by `<header>`". They were not — they
+were half-scrolled past the top edge of a scrolling container.
+`getBoundingClientRect` does **not** clip to an overflow ancestor, so a
+partly-scrolled row reports a rect whose centre lands in the window's drag
+strip, and `elementFromPoint` dutifully returns the header. Every candidate is
+now intersected with the visible box of each scrolling ancestor first.
+
+**What it still flags that is fine.** A floating affordance that deliberately
+sits over content — the jump-to-bottom chevron is the example, and it is over
+content on purpose (the founder asked for the Claude-style button that stays
+reachable from any scroll position). Read the hits; do not treat a non-zero
+count as a defect count.
