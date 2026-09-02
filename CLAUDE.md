@@ -132,6 +132,41 @@ docs/
 - **Nothing is ever published without the founder saying so explicitly.** Releases are theirs alone, including tagging. Building an installer locally with `--publish=never` to verify is fine; anything that produces a public artifact is not.
 - **End with a doc-only CLAUDE.md commit whenever something CLAUDE.md-worthy ships** (a milestone, or a feature substantial enough that a future session would need to know it exists). Do this by default, without being asked — it's what keeps the Progress section from drifting out of sync with the actual commit history, which happened badly once (multiple parallel worktree sessions shipped M15, M16, CRM, Knowledge Base, Settings, and the Windows port with no matching doc update, so the doc silently froze at M14 for ~50 commits).
 
+## Built vs shipped — run this at the START of every session (standing step)
+
+```
+node scripts/unshipped-report.mjs
+```
+
+**Report the oldest three from section B, every time, unprompted.** A branch over
+**three days old either merges or gets a written reason it is waiting** — in the
+Bug Tracker entry, not in a chat message that scrolls away.
+
+**Why this is a standing step and not a nicety.** On 2026-09-02 this report was
+run once, on a hunch, and found **two serious defects sitting fixed on branches
+for seven days while the founder used the app daily**:
+
+- `BUG-111` — pausing a live call for ten seconds ENDED it. A weekly-hit bug.
+- `BUG-117` — the app could still ship with **no denoiser**, the feature the
+  product is named for, which had already happened to every Windows user once.
+
+Plus a security fix (the raw `ipcRenderer` bridge exposed to the renderer) and
+`BUG-114` (Regenerate billing for an AI call and returning the rejected draft).
+
+That is **the exact failure the report was built to catch** — it exists because
+BUG-095 was fixed, reported fixed, and then sat unmerged while the founder hit
+it daily. It only caught these because someone happened to run it. Running it
+by habit is the whole point.
+
+**Two things that make the report lie if you let them.** It cannot see refs that
+were never pushed, so run it LOCALLY, not only in CI. And if a fix reaches main
+as a **cherry-pick** rather than a branch merge, git does not know the branch is
+done and it will keep appearing — after cherry-picking, verify the content is in
+main's tree and then **retire the branch**, or the alarm trains you to ignore it.
+
+**"Fixed", "merged" and "shipped" are three different claims**, and merging is
+the one most easily spoken as if it were the third.
+
 ## How we verify (read this before claiming anything passes)
 
 **The single most valuable document this project has produced is the hollow-green taxonomy** — 15 catalogued ways a test, gate, or guard reports success while proving nothing, each one found live in *this* codebase, plus three closing principles. It lives in the Obsidian vault:
