@@ -53,6 +53,20 @@ import {
 } from './components/LiveStates'
 import { sessionHealthNotice } from './session-health-notice'
 
+/** BUG-165 — below this the coaching-cue column stops floating over the
+ *  transcript and stacks beneath it instead.
+ *
+ *  Measured, not picked: the floating rail is `w-64` and reserves 280px
+ *  (256 + a 24px gutter). The live column is the window minus the sidebar and
+ *  the Voice AI panel, so at a 1100px window it is roughly 560px — reserving
+ *  280 of that leaves under 300px of text, which rendered as two or three
+ *  words a line. 620 is the width below which the reservation costs more than
+ *  it buys, and it is expressed in COLUMN width rather than window width
+ *  because the sidebar and side panel both take from it: two windows of the
+ *  same width can leave very different room here. */
+const CUE_STACK_MIN_WIDTH = 620
+
+
 interface LiveViewProps {
   /** AI Note Taker's "auto-open meeting page" — called with the saved call's
    *  id right after a successful save. Optional so LiveView still works
@@ -527,6 +541,39 @@ export function LiveView({
   // hard-codes 256 is a second source of truth that goes stale silently the
   // first time that class changes. Callback ref, not useRef + effect — see
   // the note on dealPanelRef for what that mistake cost.
+  // BUG-165, second half — the founder's decision, 2026-09-02: "below 1100px,
+  // stack, don't float. A cramped column beats text drawn through text, and
+  // stacking is honest about the constraint."
+  //
+  // Reserving the rail's width stopped the overlap but cost 280px of an
+  // already-narrow column: at 1100px the transcript was down to two or three
+  // words a line. Below the threshold the rail leaves the floating layer
+  // entirely and sits in normal flow UNDER the transcript, so both surfaces
+  // get their full width and neither is drawn through the other.
+  //
+  // Keyed on the LIVE COLUMN's width, not the window's: the sidebar and the
+  // Voice AI panel both take from it, so two windows of the same width can
+  // leave very different room here. Measuring the thing that actually
+  // collides is the whole lesson of this bug.
+  const [liveColumnWidth, setLiveColumnWidth] = useState(0)
+  const liveColumnObserver = useRef<ResizeObserver | null>(null)
+  const liveColumnRef = useCallback((el: HTMLDivElement | null) => {
+    liveColumnObserver.current?.disconnect()
+    liveColumnObserver.current = null
+    if (!el) {
+      setLiveColumnWidth(0)
+      return
+    }
+    const update = (): void => setLiveColumnWidth(el.getBoundingClientRect().width)
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    liveColumnObserver.current = ro
+  }, [])
+  /** 0 while unmeasured, which must not read as "narrow" — an unmeasured
+   *  column would otherwise stack on the very first paint of every call. */
+  const stackCues = liveColumnWidth > 0 && liveColumnWidth < CUE_STACK_MIN_WIDTH
+
   const [cueRailWidth, setCueRailWidth] = useState(0)
   const cueRailObserver = useRef<ResizeObserver | null>(null)
   const cueRailRef = useCallback((el: HTMLDivElement | null) => {
@@ -1205,8 +1252,9 @@ export function LiveView({
         </InlineBanner>
       )}
 
-      {/* Transcript + the floating cue card (kept above the Ask-coach bar). */}
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      {/* Transcript + the cue column — floating beside it when there is room,
+          stacked beneath it when there is not (BUG-165). */}
+      <div ref={liveColumnRef} className="relative flex min-h-0 flex-1 flex-col">
         <TranscriptView
           segments={segments}
           interimText={interimText}
@@ -1220,7 +1268,7 @@ export function LiveView({
           // never sits flush against a cue's edge. 0 whenever no cue is
           // showing, which is most of a call — the transcript gets its full
           // width back the moment the last cue is dismissed or expires.
-          reservedRightPx={cueRailWidth > 0 ? cueRailWidth + 24 : 0}
+          reservedRightPx={!stackCues && cueRailWidth > 0 ? cueRailWidth + 24 : 0}
         />
         {/* Two independent channels (§4.3), one column.
             They stay logically independent — a suggestion can never delay,
@@ -1232,7 +1280,14 @@ export function LiveView({
         {(cue || suggestions.length > 0) && (
           <div
             ref={cueRailRef}
-            className="pointer-events-none absolute top-3 right-4 bottom-4 z-40 flex w-64 flex-col items-end justify-end gap-2"
+            className={
+              stackCues
+                ? // STACKED. In normal flow, full width, under the transcript —
+                  // no absolute positioning, so there is no layer to draw
+                  // through anything and nothing to reserve space for.
+                  'mt-2 flex w-full shrink-0 flex-col gap-2'
+                : 'pointer-events-none absolute top-3 right-4 bottom-4 z-40 flex w-64 flex-col items-end justify-end gap-2'
+            }
           >
             <SuggestionRail suggestions={suggestions} onDismiss={dismissSuggestion} />
             {cue && <CueCard key={cue.id} cue={cue} onDismiss={dismiss} />}
