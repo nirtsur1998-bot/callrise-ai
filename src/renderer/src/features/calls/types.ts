@@ -176,3 +176,32 @@ export interface Call extends CallBase {
 
 export type SummaryResult =
   { ok: true; summary: Summary } | { ok: false; error: 'no-key' | 'failed'; message?: string }
+
+/** BUG-172 — did this call PROMISE to record the other party and then not do
+ *  it? True only when the app committed (`consent.recordOtherParty === true`)
+ *  and NO segment carries a channel at all, which is the signature of the
+ *  loopback never attaching: the socket ran mono, so neither side got a
+ *  channel assignment.
+ *
+ *  Deliberately NOT "channel 1 has no segments" — a buyer who simply said
+ *  little produces that too, and telling a rep their recording failed when it
+ *  did not is its own harm. An entirely channel-less transcript cannot be
+ *  explained by a quiet buyer.
+ *
+ *  DERIVED AT READ TIME, never stored: it is a fact about the recording, so
+ *  every call already on disk gets the marker with no migration. Thirteen
+ *  calls on the founder's machine qualified, the oldest from 2026-07-27 — six
+ *  weeks of transcripts that read as though the buyer barely spoke.
+ *
+ *  Lives here, in the renderer, because the banner is its only consumer. A
+ *  second copy in main would be a second source of truth for a rule about
+ *  someone's recording. */
+export function otherPartyPromisedButMissing(call: {
+  consent?: { recordOtherParty?: boolean } | null
+  segments?: { channel?: number; kind?: string }[]
+}): boolean {
+  if (call.consent?.recordOtherParty !== true) return false
+  const speech = (call.segments ?? []).filter((s) => s.kind !== 'gap')
+  if (speech.length === 0) return false
+  return !speech.some((s) => s.channel === 0 || s.channel === 1)
+}

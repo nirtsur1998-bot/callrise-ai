@@ -23,6 +23,8 @@ import {
   Radar,
   UserSearch,
   Loader2
+,
+  MicOff
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { ScrollToEnd } from '@renderer/components/ScrollToEnd'
@@ -71,6 +73,7 @@ import { formatDate, formatDuration, formatBytes } from './format'
 import { PracticeMode } from './PracticeMode'
 import { RadarReport } from '@renderer/features/deal-intelligence/ui/RadarReport'
 import type { Attachment, Call, Commitment } from './types'
+import { otherPartyPromisedButMissing } from './types'
 import type { DetectNameResult } from '../../../../preload/index.d'
 
 /** mm:ss relative to call start — bookmarks store `atMs` as milliseconds. */
@@ -130,6 +133,9 @@ export function CallDetail({
   const [call, setCall] = useState<Call | null>(null)
   const [summaryError, setSummaryError] = useState<string | null>(null)
   const [noKey, setNoKey] = useState(false)
+  // BUG-172 — this call promised to record the other party and did not. See
+  // the banner below; derived, never stored, so old calls get it too.
+  const otherPartyMissing = call ? otherPartyPromisedButMissing(call) : false
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -906,6 +912,30 @@ export function CallDetail({
         className="relative flex-1 space-y-4 overflow-y-auto pb-2"
       >
         {noKey && <NoKeyBanner />}
+
+        {/* BUG-172 — this call promised to record the other party and did not.
+            Said HERE, on the transcript itself, because this is where someone
+            reads it back weeks later and concludes the buyer barely spoke. The
+            loopback never attached, the socket ran mono, and only the rep's
+            microphone was captured for the whole call. */}
+        {otherPartyMissing && (
+          <div className="rounded-xl border border-warning/40 bg-warning-soft/40 p-4">
+            <div className="flex items-start gap-2.5">
+              <MicOff className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+              <div>
+                <p className="text-[13px] font-medium text-ink">
+                  Only your side of this call was recorded.
+                </p>
+                <p className="mt-0.5 text-[12px] text-muted">
+                  The other party&rsquo;s audio was never captured, so this transcript is one half
+                  of the conversation &mdash; they may have said a great deal that is not here.
+                  This was a bug in CallRise, fixed on 2 September 2026, affecting some calls
+                  started very soon after the app launched. Nothing you did caused it.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── WHO ────────────────────────────────────────────────────────
             Founder call, and the right one: "who was this with" precedes
