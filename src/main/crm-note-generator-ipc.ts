@@ -146,14 +146,14 @@ export function registerCrmNoteGenerator(): void {
       // show that rather than silently re-running — and re-billing — two
       // AI calls. "Regenerate" passes force:true to bypass this.
       if (!force) {
-        const already = manager
-          .list()
-          .find(
-            (j: Job) =>
-              j.type === GENERATE_JOB_TYPE &&
-              j.targetRef === contactId &&
-              (j.state === 'running' || j.state === 'queued' || j.state === 'succeeded')
-          )
+        // BUG-114 — findLatest, not list().find(): list() is oldest-first, so
+        // after a Regenerate the old draft would win here forever.
+        const already = manager.findLatest(
+          (j: Job) =>
+            j.type === GENERATE_JOB_TYPE &&
+            j.targetRef === contactId &&
+            (j.state === 'running' || j.state === 'queued' || j.state === 'succeeded')
+        )
         if (already) return { ok: true, jobId: already.id }
       }
 

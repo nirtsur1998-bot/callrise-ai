@@ -809,3 +809,62 @@ describe('BUG-060 — cancellable defaults to FALSE', () => {
     manager.dispose()
   })
 })
+
+// BUG-114 — "Regenerate" left the OLD draft winning every later lookup.
+//
+// `list()` walks `this.order`, which is push-only, so it is oldest-first. Both
+// retainUntilConsumed adapters (tasks.ts, crm-note-generator-ipc.ts) and the
+// screen's own adopt-on-mount used `.find()` over it — which takes the FIRST
+// match, i.e. the OLDEST. Regenerate correctly enqueues a second job and bills
+// a second AI call, but nothing dismissed the first, so reopening the dialog
+// showed the pre-Regenerate proposals the rep had just rejected. Saving them
+// again duplicated tasks the rep had already saved.
+//
+// findLatest exists so callers stop having to know that `.find()` means
+// "oldest here". The ordering knowledge belongs where `this.order` lives.
+describe('findLatest (BUG-114)', () => {
+  it('returns the NEWEST match, where list().find() returns the oldest', async () => {
+    const { JobManager } = await freshManager()
+    const manager = new JobManager([])
+    manager.registerType<{ ref: string }, string>({
+      type: 'test:regen',
+      lane: 'BATCH',
+      titleFor: () => 'Regen',
+      targetRefFor: (input) => input.ref,
+      executor: { kind: 'inline-async', run: async () => 'done' }
+    })
+
+    const first = manager.enqueue('test:regen', { ref: 'call-1' })
+    const second = manager.enqueue('test:regen', { ref: 'call-1' })
+    const other = manager.enqueue('test:regen', { ref: 'call-2' })
+
+    const matches = (j: Job): boolean => j.type === 'test:regen' && j.targetRef === 'call-1'
+
+    // The two must genuinely disagree, or this test proves nothing.
+    expect(first.id).not.toBe(second.id)
+    expect(manager.list().find(matches)?.id).toBe(first.id)
+    expect(manager.findLatest(matches)?.id).toBe(second.id)
+
+    // ...and it must still respect the predicate rather than just grabbing the tail.
+    expect(manager.findLatest((j) => j.targetRef === 'call-2')?.id).toBe(other.id)
+
+    manager.dispose()
+  })
+
+  it('returns null when nothing matches, rather than the newest job overall', async () => {
+    const { JobManager } = await freshManager()
+    const manager = new JobManager([])
+    manager.registerType<{ ref: string }, string>({
+      type: 'test:regen2',
+      lane: 'BATCH',
+      titleFor: () => 'Regen',
+      targetRefFor: (input) => input.ref,
+      executor: { kind: 'inline-async', run: async () => 'done' }
+    })
+    manager.enqueue('test:regen2', { ref: 'call-1' })
+
+    expect(manager.findLatest((j) => j.targetRef === 'nope')).toBeNull()
+
+    manager.dispose()
+  })
+})

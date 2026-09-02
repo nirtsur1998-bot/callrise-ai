@@ -71,9 +71,19 @@ export function useJobByTarget(
     const adoptStates = optsRef.current.adoptStates ?? DEFAULT_ADOPT_STATES
     void window.api.jobs.list().then((jobs) => {
       if (!mounted) return
-      const active = jobs.find(
-        (j) => j.type === jobType && j.targetRef === targetRef && adoptStates.includes(j.state)
-      )
+      // BUG-114 — scan BACKWARDS. jobs.list() preserves main's push order, so
+      // a plain .find() adopts the OLDEST match: after a Regenerate that is the
+      // draft the rep just rejected, and saving it duplicates work they already
+      // saved. Mirrors JobManager.findLatest on the main side — see its doc
+      // comment for why the ordering is easy to read past.
+      let active: (typeof jobs)[number] | undefined
+      for (let i = jobs.length - 1; i >= 0; i--) {
+        const j = jobs[i]
+        if (j.type === jobType && j.targetRef === targetRef && adoptStates.includes(j.state)) {
+          active = j
+          break
+        }
+      }
       if (active) adopt(active)
     })
     return () => {

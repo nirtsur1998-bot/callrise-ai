@@ -95,6 +95,61 @@ describe('useJobByTarget', () => {
     container.remove()
   })
 
+  // BUG-114 — after "Regenerate" there are TWO succeeded jobs for the same
+  // target: the draft the rep rejected, and the one they just paid for.
+  // main's list() preserves push order (oldest first) and this hook used a
+  // plain .find(), so reopening the dialog adopted the OLD one. The rep saw
+  // the proposals they had explicitly rejected, and saving them duplicated
+  // tasks they had already saved.
+  //
+  // This is the call site, not the helper: JobManager.findLatest has its own
+  // unit test, but it cannot see whether the renderer scans the right way.
+  it('adopts the NEWEST matching job, not the first one in list order', async () => {
+    listResult = [
+      makeJob({
+        id: 'before-regenerate',
+        type: 'tasks:generate',
+        targetRef: 'call-1',
+        state: 'succeeded'
+      }),
+      makeJob({
+        id: 'after-regenerate',
+        type: 'tasks:generate',
+        targetRef: 'call-1',
+        state: 'succeeded'
+      })
+    ]
+
+    await render('tasks:generate', 'call-1', ['succeeded'])
+
+    // Both are eligible, so the ONLY thing separating them is scan direction —
+    // which is exactly what this asserts.
+    expect(lastResult?.job?.id).toBe('after-regenerate')
+  })
+
+  // The mirror case: scanning backwards must not become "always take the last
+  // job in the list" — a non-matching newer job must be skipped over.
+  it('skips a newer job that does not match, rather than taking the tail', async () => {
+    listResult = [
+      makeJob({
+        id: 'mine',
+        type: 'tasks:generate',
+        targetRef: 'call-1',
+        state: 'succeeded'
+      }),
+      makeJob({
+        id: 'someone-elses',
+        type: 'tasks:generate',
+        targetRef: 'call-2',
+        state: 'succeeded'
+      })
+    ]
+
+    await render('tasks:generate', 'call-1', ['succeeded'])
+
+    expect(lastResult?.job?.id).toBe('mine')
+  })
+
   it('adopts an already-running job for the same target on mount', async () => {
     listResult = [
       makeJob({ id: 'existing', type: 'calls:summarize', targetRef: 'call-1', state: 'running' })
