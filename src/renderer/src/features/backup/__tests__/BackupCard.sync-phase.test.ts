@@ -13,8 +13,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Job } from '../../../../../preload/index.d'
 
-// platform.ts reads window.electron.process at module load, which the
-// preload bridge supplies in the real app but nothing does here.
+// platform.ts reads window.api.platform at module load, which the preload
+// bridge supplies in the real app but nothing does here.
 vi.mock('@renderer/lib/platform', () => ({ isMac: false, isWindows: true }))
 
 const { BackupCard } = await import('../BackupCard')

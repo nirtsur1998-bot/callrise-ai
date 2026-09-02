@@ -38,7 +38,7 @@ vi.mock('../audio/recorder', () => ({
   startRecorder: vi.fn(async () => fakeRecorder)
 }))
 
-// platform.ts reads window.electron.process at module-load time (the real
+// platform.ts reads window.api.platform at module-load time (the real
 // preload bridge, not present under happy-dom) — stubbed rather than
 // exercised, since which OS this "is" has no bearing on this bug.
 vi.mock('@renderer/lib/platform', () => ({
