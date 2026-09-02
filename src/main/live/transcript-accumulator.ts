@@ -31,6 +31,15 @@
 /** Mirrors renderer/features/calls/types.ts and main/calls-fs.ts. */
 export type SpeakerRole = 'rep' | 'other' | 'unknown'
 
+/** BUG-164 — how far back to look for the loopback copy of an incoming mic
+ *  segment. Both copies of an echo arrive together (measured at a 0ms offset),
+ *  so this only needs to span the jitter between the two channels' finals. */
+const ECHO_LOOKBACK = 8
+
+/** Below this, an identical string on both channels is more likely to be two
+ *  people saying "yes" than an echo. */
+const ECHO_MIN_CHARS = 24
+
 export interface AccumulatedSegment {
   speaker: number
   text: string
@@ -210,6 +219,10 @@ export class TranscriptAccumulator {
       ]
     }
 
+    // Both orders, because on a real machine the microphone final lands first.
+    this.dropEarlierMicEcho(runs)
+    runs = this.dropMicEcho(runs)
+
     if (runs.length > 0) {
       if (this.speakerBoundary) {
         this.speakerBoundary = false
@@ -218,6 +231,109 @@ export class TranscriptAccumulator {
         this.segments = mergeSegments(this.segments, runs)
       }
     }
+  }
+
+  /** BUG-164 — the rep's microphone hearing the OTHER PARTY through their
+   *  speakers, and the transcript recording it as something the rep said.
+   *
+   *  Measured on a real call: 38% of segments byte-identical on both channels
+   *  at a ZERO millisecond offset. `echoCancellation: true` is requested and
+   *  cannot help — Chromium only cancels what CHROMIUM rendered, and the far
+   *  end is played by Zoom/Teams, a different process entirely.
+   *
+   *  WHY DROPPING THE CHANNEL-0 COPY IS SAFE, and not a coin flip. Channel 0
+   *  is the microphone; channel 1 is the system loopback, which carries only
+   *  what the machine PLAYS. The rep's own voice is never played back by the
+   *  machine, so it can never appear on channel 1. Text present on BOTH
+   *  channels therefore came from the far end without exception, and the
+   *  channel-0 copy is always the echo. There is no symmetric case to get
+   *  wrong.
+   *
+   *  Why it matters more than a messy transcript: talk-to-listen ratio is a
+   *  headline coaching metric with a health band ("your share of words ·
+   *  healthy 40-55%"), and the echo inflates the rep's share by construction.
+   *  A rep on speakers was being told they talk too much when they do not.
+   *
+   *  Counted, not just dropped — `echoDropped` is how we find out how common
+   *  this is in the field rather than guessing from one machine. */
+  private echoDropped = 0
+
+  private static echoKey(text: string): string {
+    return text.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim()
+  }
+
+  /** The OTHER ORDER, and the one that actually happens on a real machine.
+   *
+   *  dropMicEcho only fires when the loopback copy is already stored. Driving
+   *  a real call showed the microphone's final arrives FIRST — the mic is
+   *  local, the loopback lags — so there was nothing to match against and the
+   *  dedupe was a no-op in the field while passing every unit test. (The unit
+   *  test that encoded the mic-first order asserted the mic copy is KEPT,
+   *  which is exactly the case this handles.)
+   *
+   *  So when a loopback run lands, look BACK for a mic segment saying the same
+   *  thing and remove that instead. Only ever removes channel 0 — a loopback
+   *  segment is never a candidate, for the same reason the whole fix is safe. */
+  private dropEarlierMicEcho(runs: AccumulatedSegment[]): void {
+    const incoming = runs.filter((r) => r.kind !== 'gap' && r.channel === 1)
+    if (incoming.length === 0) return
+    const keys = incoming.map((r) => TranscriptAccumulator.echoKey(r.text)).filter((k) => k.length >= ECHO_MIN_CHARS)
+    if (keys.length === 0) return
+    const cutoff = Math.max(0, this.segments.length - ECHO_LOOKBACK)
+    const next: AccumulatedSegment[] = []
+    let dropped = false
+    for (let i = 0; i < this.segments.length; i++) {
+      const seg = this.segments[i]
+      if (i >= cutoff && seg.kind !== 'gap' && seg.channel === 0) {
+        const k = TranscriptAccumulator.echoKey(seg.text)
+        if (k.length >= ECHO_MIN_CHARS && keys.some((inc) => inc === k || inc.endsWith(' ' + k))) {
+          this.echoDropped += 1
+          dropped = true
+          continue
+        }
+      }
+      next.push(seg)
+    }
+    if (dropped) this.segments = next
+  }
+
+  private dropMicEcho(runs: AccumulatedSegment[]): AccumulatedSegment[] {
+    if (runs.length === 0) return runs
+    // Only the recent tail can be an echo of the same moment: both copies
+    // arrive together (0ms apart when measured), so an unbounded search would
+    // only add ways to delete a genuine repetition minutes later.
+    const recent = this.segments.slice(-ECHO_LOOKBACK)
+    const loopbackText = recent
+      .filter((s) => s.channel === 1 && s.kind !== 'gap')
+      .map((s) => TranscriptAccumulator.echoKey(s.text))
+    if (loopbackText.length === 0) return runs
+    const kept = runs.filter((r) => {
+      if (r.kind === 'gap' || r.channel !== 0) return true
+      const key = TranscriptAccumulator.echoKey(r.text)
+      // A very short utterance ("yes", "okay") genuinely gets said by both
+      // people seconds apart. Only dedupe something long enough that the
+      // coincidence is not plausible.
+      if (key.length < ECHO_MIN_CHARS) return true
+      // ENDS-WITH, not equality. Dropping an echo makes the surrounding
+      // loopback runs consecutive, so mergeSegments joins them and the stored
+      // loopback text keeps GROWING — by the second echo it reads
+      // "<first line> <second line>" while the mic still delivers one line at
+      // a time. Equality matched the first echo and missed every one after it.
+      // A suffix match is still safe for the same reason the whole fix is: the
+      // rep's voice cannot reach channel 1, so anything of theirs found inside
+      // a loopback segment came from the far end.
+      if (!loopbackText.some((t) => t === key || t.endsWith(' ' + key))) return true
+      this.echoDropped += 1
+      return false
+    })
+    return kept
+  }
+
+  /** How many microphone-echo segments were dropped this session. Read by the
+   *  save path so the rate can be measured across real calls instead of
+   *  inferred from one machine. */
+  getEchoDroppedCount(): number {
+    return this.echoDropped
   }
 
   /** Audio that will never be transcribed. Recorded inline so the transcript
