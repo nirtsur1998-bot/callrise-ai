@@ -612,6 +612,22 @@ reported as one unique commit; main already had a working fix for that exact
 leak, written by someone else eleven days earlier. Only reading the conflict
 settled it.
 
+
+**And when you do read it, resolve on which half cannot be regenerated.** Both
+fixes to that leak were correct and equivalent; main's sat in a `finally`, the
+branch's at function entry. The code was the interchangeable half. What the
+branch had and main did not was the explanation of the FAILURE SHAPE — every
+assertion passing while Node reports an unhandled rejection on a later,
+unrelated test, because `.final` rejects a microtask after the generator's throw
+is already handled. A failure that accuses the wrong file, non-deterministically.
+Someone can rewrite the fix in a minute. Nobody is going to rediscover that.
+
+So the merge kept main's implementation and took the branch's comment — and
+rewrote the comment's last line, which described settling `.final` at function
+entry, because main does it in a `finally`. **A comment describing an
+implementation that is not there is the exact gap this directory is about**, and
+it is easy to import one while congratulating yourself for preserving knowledge.
+
 **So: `git cherry` to narrow, then read what is actually different.** A count
 is a filter, never a verdict.
 
