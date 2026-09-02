@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs'
+import { isAbsenceAnswer } from './ai/model-placeholders'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from './atomic-write'
@@ -1106,6 +1107,31 @@ export async function listCalls(
   return summaries
 }
 
+/** BUG-163 — an identity whose NAME is a model's way of saying "nothing"
+ *  describes nobody, so it is not an identity. Dropped on read rather than
+ *  migrated on disk: a migration would have to run once per install and be
+ *  remembered, while this is correct on every read forever, including for a
+ *  file restored from an old backup.
+ *
+ *  A 'manual' name is never touched — the rep typed it. An entry carrying a
+ *  `contactId` is never touched either: something real linked that speaker
+ *  to a contact record, and throwing the link away to tidy a bad display
+ *  name would destroy more than it fixes. (Not observed in the wild; left
+ *  alone deliberately rather than guessed at.) */
+function dropPlaceholderIdentities(call: Call): void {
+  if (!call.speakerIdentities) return
+  const next: Record<string, SpeakerIdentityRecord> = {}
+  let dropped = false
+  for (const [k, rec] of Object.entries(call.speakerIdentities)) {
+    if (rec && rec.source !== 'manual' && !rec.contactId && isAbsenceAnswer(rec.name)) {
+      dropped = true
+      continue
+    }
+    next[k] = rec
+  }
+  if (dropped) call.speakerIdentities = next
+}
+
 export async function getCall(dir: string, id: string): Promise<Call | null> {
   if (!isSafeId(id)) return null
   try {
@@ -1124,6 +1150,13 @@ export async function getCall(dir: string, id: string): Promise<Call | null> {
     call.consent = sanitizeConsent(call.consent)
     // ...and drop the other party's turns if recording them isn't consented.
     applyConsentRetention(call)
+    // BUG-163 — same "normalize on READ" reasoning as consent above, for the
+    // records that were already written before setSpeakerIdentity started
+    // refusing them. Without this the fix would only help calls recorded
+    // AFTER the update, and every existing user would keep seeing "Detected
+    // null on this call" on calls they already have. Read-only: it drops a
+    // name that says nothing, and can never invent or restore one.
+    dropPlaceholderIdentities(call)
     return call
   } catch {
     return null
@@ -1823,6 +1856,16 @@ export async function setSpeakerIdentity(
     const source = SOURCES.includes(patch.source as SpeakerIdentitySource)
       ? (patch.source as SpeakerIdentitySource)
       : 'manual'
+    // BUG-163 — the LAST gate before a model's answer becomes a person.
+    // Every automatic writer lands here (live self-intro via calls.ts, the
+    // post-hoc scan via contact-intelligence-ipc.ts, the resolution
+    // cascade), so one check covers all of them and any future one. A
+    // required `type: ['string','null']` field comes back from some
+    // providers as the STRING "null", which is truthy, survived every guard
+    // above, and put "Create contact for null" on the call-detail screen.
+    // 'manual' is exempt on purpose: a name the rep typed themselves is
+    // ground truth, and it is not this function's place to argue with it.
+    if (source !== 'manual' && isAbsenceAnswer(name)) return call
     const confidence = CONFIDENCES.includes(patch.confidence as SpeakerIdentityConfidence)
       ? (patch.confidence as SpeakerIdentityConfidence)
       : 'high' // a manual rename IS the ground truth

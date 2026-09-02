@@ -138,7 +138,20 @@ const TOOL: AITool = {
               type: 'string',
               enum: ['rep', 'other'],
               description:
-                'Who said the evidenceQuote — the rep/salesperson, or the other party (buyer/prospect).'
+                // BUG-162 — every ALLOWED value is quoted, and every concept is
+                // bound to one. The old wording named the concepts without the
+                // tokens: "the rep/salesperson, or the other party
+                // (buyer/prospect)". A model reading that emits "buyer", Groq's
+                // strict tool-call validation rejects the WHOLE call, and Live
+                // Deal Intelligence produces nothing — 4 of 8 deal-tier1 events
+                // in the founder's log were exactly this rejection, and all 8
+                // were failures.
+                //
+                // Same shape commitments.ts already uses successfully:
+                // '"rep" is the salesperson, "prospect" is the person they are
+                // selling to.' Quote the token, explain the concept — never the
+                // reverse.
+                'Who said the evidenceQuote. Use "rep" for the salesperson, and "other" for the buyer or prospect. These are the only two allowed values.'
             },
             suggestedCue: {
               type: 'string',

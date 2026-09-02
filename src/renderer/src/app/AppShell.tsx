@@ -55,22 +55,36 @@ export default function AppShell({
         >
           {headerActions && <div className="no-drag flex items-center gap-2">{headerActions}</div>}
         </header>
-        {/* `relative` so ScrollToEnd can anchor to this column, and the ref
-            so it can measure it. Attached HERE rather than per page: every
-            ordinary screen scrolls inside this one element, so a new long
-            page inherits the control without knowing it exists. Full-bleed
-            screens own their own scroller and attach their own (CallDetail
-            does). */}
-        <div
-          ref={mainScrollRef}
-          className={cn(
-            'relative',
-            fullBleed
-              ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
-              : 'flex-1 overflow-y-auto px-8 py-7'
-          )}
-        >
-          {children}
+        {/* BUG-156 — the jump-to-bottom control is a SIBLING of the scroller,
+            not a child of it, and that is the whole fix.
+            
+            An `absolute` element inside an `overflow-y-auto` box is positioned
+            against that box's CONTENT, so it scrolls away with it. Measured on
+            the running app before this change: the button sat 20px above the
+            viewport bottom at scrollTop 0, and 420px above it after scrolling
+            400px — it slid up the screen and came to rest on top of whatever
+            card happened to be underneath, which is what the founder reported
+            ("only stays in the page in one spot at all pages").
+            
+            This wrapper is positioned and does NOT scroll, so `bottom-5` now
+            means "above the bottom edge of the visible column" — the same
+            anchoring every other app gives this affordance. The scroller keeps
+            its own `relative` because page content still positions against it.
+            
+            The ref stays on the element that actually scrolls; ScrollToEnd
+            measures through it and never needed to be inside it. */}
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div
+            ref={mainScrollRef}
+            className={cn(
+              'relative',
+              fullBleed
+                ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+                : 'flex-1 overflow-y-auto px-8 py-7'
+            )}
+          >
+            {children}
+          </div>
           {/* Not on full-bleed screens: there the scroller is a child, so
               this element never scrolls and the button would never show —
               worse, it would look like the feature is missing. */}

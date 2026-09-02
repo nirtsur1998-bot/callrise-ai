@@ -15,6 +15,7 @@ import { getMemoryDb } from './memory-runtime'
 import { extractMemoriesFromCall, extractMemoriesFromChatMessage } from './extraction'
 import { consolidateNewCandidate, runLightConsolidation } from './consolidation'
 import { forgetCallContribution } from './memories-store'
+import { logError, logInfo } from '../log'
 import type { MemoryScope } from './types'
 
 function callsDir(): string {
@@ -197,11 +198,55 @@ export async function runMemoryExtractionForAssistantMessage(
   const conversation = await getConversation(convDir, conversationId)
   if (!conversation || conversation.salesBrainExcluded) return
 
-  const { candidates } = await extractMemoriesFromChatMessage(
+  // BUG-151 — the contactId comes from the CONVERSATION'S OWN SCOPE.
+  //
+  // This was `null` unconditionally, and it silently threw away every client
+  // fact the rep told Rise about a client they had explicitly selected. The
+  // path: extraction builds the candidate, then verifyAndBuild drops it at
+  // `expectedKind === 'client' && !contactId` (extraction.ts) — correct on its
+  // own terms, since a client fact with no client is unattachable. The defect
+  // was upstream: this call had the id available and did not pass it. The
+  // conversation is already loaded two lines above to read salesBrainExcluded,
+  // and that same object carries scope.contactId.
+  //
+  // Observed on the founder's machine 2026-09-01: they selected Andre, wrote
+  // "ANDRE HAS A HOUSE THAT IS WORTH 1 MILLION AUD", and Rise replied "Got
+  // it — I've added a new memory for Andre". Zero memories in the database
+  // had an `assistant:` source; the newest row was two days old. The reply
+  // text is the LLM narrating a plausible action, not a report of a write
+  // that happened — which is this milestone's own thesis, arriving through
+  // the assistant's mouth.
+  //
+  // An UNSCOPED conversation still passes null, deliberately: a global chat
+  // has no client to attach a client-scoped fact to, and guessing one would
+  // file it under the wrong person. Fails closed on a malformed scope for the
+  // same reason.
+  const scopedContactId =
+    typeof conversation.scope?.contactId === 'string' && conversation.scope.contactId
+      ? conversation.scope.contactId
+      : null
+
+  const { candidates, aiFailed, failureReason } = await extractMemoriesFromChatMessage(
     message,
     `assistant:${conversationId}`,
     messageId,
-    null
+    scopedContactId
+  )
+  // BUG-151 (second half). `aiFailed` existed and NOTHING in the live path
+  // read it — only backfill.ts did. This file's own extraction.ts documents
+  // why that matters, from a previous incident: "that is precisely how 205
+  // failed extractions read as healthy 'nothing to learn' runs for two days."
+  // The lesson was applied to the backfill and never to the live hook, so a
+  // failing extraction here was indistinguishable from a quiet one — and the
+  // caller wraps this whole function in `.catch(() => {})`, so a THROW was
+  // invisible too. At minimum it is now in the log with the reason.
+  if (aiFailed) {
+    logError('memory/assistant-extract', failureReason ?? 'unknown', { conversationId, messageId })
+    return
+  }
+  logInfo(
+    'memory/assistant-extract',
+    `conversation=${conversationId} contactId=${scopedContactId ?? 'none'} candidates=${candidates.length}`
   )
   const touchedScopes = new Set<MemoryScope>()
   for (const candidate of candidates) {
@@ -241,6 +286,9 @@ export async function runMemoryExtractionForChatMessage(
   chatMessageId: string,
   message: string
 ): Promise<void> {
+  // Same observability gap as the assistant hook above — fixed together
+  // rather than one-at-a-time, because they are the same defect and finding
+  // the second one later would cost the same investigation twice.
   if (!isSalesBrainEnabled()) return
   const db = getMemoryDb()
   if (!db) return

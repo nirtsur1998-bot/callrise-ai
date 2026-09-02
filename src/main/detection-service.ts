@@ -21,6 +21,7 @@ import {
   loadAppSettings,
   setDetectionEnabledChangedListener
 } from './app-settings'
+import { setOverlayInteractive } from './detection-overlay'
 import { CONFERENCING_APPS } from './detection/appRegistry'
 import { CallDetector } from './detection/CallDetector'
 import { MacAdapter } from './detection/adapters/MacAdapter'
@@ -346,6 +347,11 @@ export function registerDetectionService(): void {
   ipcMain.handle('detection:snooze', (_event, minutes: number) => snoozeDetection(minutes))
 
   ipcMain.handle('detection:getState', () => detector?.getState())
+  // BUG-155 — the overlay is click-through except while the pointer is
+  // actually over its visible card. See detection-overlay.ts.
+  ipcMain.handle('detection:setOverlayInteractive', (_event, interactive: unknown) =>
+    setOverlayInteractive(interactive === true)
+  )
 
   // For Settings' per-app override editor - id+displayName only, so the
   // renderer (which can't import main/detection/appRegistry.ts directly,

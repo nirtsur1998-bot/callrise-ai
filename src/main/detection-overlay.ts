@@ -39,6 +39,17 @@ let overlayActions: OverlayActions | null = null
 let savePositionTimer: ReturnType<typeof setTimeout> | undefined
 let shortcutsRegistered = false
 
+/** BUG-155 — called from the overlay renderer as the pointer enters and
+ *  leaves the visible card. Guarded on the live window: the renderer can
+ *  emit one last 'release' as the window is being destroyed.
+ *
+ *  Exported for detection-service.ts to register, keeping every ipcMain
+ *  handler in the one module that already owns them. */
+export function setOverlayInteractive(interactive: boolean): void {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  overlayWindow.setIgnoreMouseEvents(!interactive, { forward: true })
+}
+
 function positionPath(): string {
   return join(app.getPath('userData'), 'detection-banner-position.json')
 }
@@ -115,6 +126,41 @@ function createOverlayWindow(): BrowserWindow {
     }
   })
   win.setAlwaysOnTop(true, 'screen-saver')
+
+  // BUG-155 (founder, 2026-09-01): "while you are navigating the app and
+  // there is the in-app CallRise call-detecting symbol asking if the user
+  // wants to start recording, the user cannot scroll in the app at all".
+  //
+  // This window is always-on-top at screen-saver level and had no mouse
+  // policy at all, so it swallowed every click and wheel event across its
+  // FULL RECT -- which is larger than anything visible, because the card is
+  // inset by CARD_INSET on all four sides to give its shadow room. The user
+  // sees empty desktop, the OS sees a window, and the scroll goes nowhere.
+  //
+  // The in-app banner was measured and ruled out first: 45px tall, 5% of the
+  // viewport, and elementFromPoint at mid-screen returns the scroll
+  // container, so it is not the cause.
+  //
+  // forward: true keeps mousemove flowing to the renderer while ignoring is
+  // on -- that is what lets DetectionOverlay notice the pointer entering the
+  // card and ask for input back. Without forwarding, the window would be
+  // permanently click-through and its buttons unusable.
+  // INVERTED after driving it: the window starts INTERACTIVE and is only
+  // released once the renderer has positively established that the pointer is
+  // in the transparent inset.
+  //
+  // The first version started ignoring and relied on the renderer claiming the
+  // pointer back on mousemove. Hit-testing the real window proved both toggle
+  // directions work (WS_EX_TRANSPARENT set / cleared, WindowFromPoint agrees),
+  // but NOT that the claim reliably fires — a synthetic mousemove over the card
+  // recorded no call at all. If that trigger ever misses, ignore-by-default
+  // leaves the card unclickable: Start transcribing and Dismiss both dead.
+  //
+  // That failure is worse than the bug being fixed. Interactive-by-default
+  // makes the worst case identical to the old behaviour (the window swallows a
+  // scroll over its inset) and the best case the fix, with no state in between
+  // that breaks the buttons.
+  win.setIgnoreMouseEvents(false)
 
   // EXCLUDE THIS WINDOW FROM SCREEN CAPTURE. Not a nicety — the entire
   // live-coaching thesis dies the first time a rep's battlecard about the

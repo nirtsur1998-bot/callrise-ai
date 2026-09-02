@@ -25,6 +25,7 @@ import {
   markPeriodExhausted,
   markRateLimited,
   markStructurallyBroken,
+  noteTransientFailure,
   soonestExpiry
 } from './model-cooldown'
 import { isDemoted, noteAuthRejection, clearDemotion } from './provider-demotion'
@@ -130,11 +131,51 @@ export class AllModelsExhaustedError extends Error {
   }
 }
 
+// BUG-154 (2026-09-01) — REORDERED AND WIDENED. This list was groq+cerebras
+// ONLY, and its first two entries were both confirmed-dead Groq ids. Because
+// it is also CANDIDATE_POOL for the two live purposes, a user holding keys for
+// any other provider had NO reachable coaching-cue or deal-tier1 model at all
+// — the feature was not degraded, it was absent. See the model-catalog entries
+// for anthropic/openai for the full account.
+//
+// ORDERING PRINCIPLE, stated because it is a cost decision and not obvious:
+// free-tier providers come FIRST and paid ones LAST. A fallback must never
+// silently escalate a user's bill when a free option would have served, but a
+// paid key must still be reachable rather than the feature dying — which is
+// exactly what happened here. Dead entries are kept (not deleted) so the
+// history and their knownStale evidence stay readable; they are filtered out
+// by stepsFromIds and now sit at the back where they cannot consume a cap.
 const SPEED_CHAIN = [
-  'groq-llama-3.1-8b-instant',
-  'groq-llama-3.3-70b-versatile',
   'groq-gpt-oss-120b',
   'cerebras-gpt-oss-120b',
+  'cloudflare-llama-3.1-8b-fast',
+  // Paid tier — reachable, but only after every free option above.
+  'anthropic-claude-haiku-4-5',
+  'openai-gpt-5.4-mini',
+  // LAST RESORT, and a deliberate lane violation — flagged as such rather than
+  // hidden. Z.ai and Hugging Face are catalogued as QUALITY lane (the HF entry
+  // says so explicitly: same weights as the Groq/Cerebras entries, but the
+  // router is not fast). They are here anyway because the alternative, found by
+  // this fix's own resolution test, is that a user holding ONLY one of those
+  // keys gets no live cue at all — which is the bug being fixed, one provider
+  // further down. A slow cue that the 6s CHAIN_BUDGET may cut off is strictly
+  // better than a guaranteed absent one, and the budget bounds the cost of
+  // being wrong about that. They sit behind every genuinely fast option, so a
+  // user with any other key never pays for this.
+  'zai-glm-4.5-flash',
+  'hf-gpt-oss-20b',
+  // BUG-159 — google and openrouter were in NO live-lane chain at all, so a
+  // user holding only those keys had no cue fallback whatsoever: the same gap
+  // zai and huggingface had before BUG-154. Quality-lane models on a live path
+  // is a deliberate last resort, bounded by the 6s CHAIN_BUDGET — a slower
+  // answer that may be cut off beats a guaranteed absent one — and they sit
+  // behind every genuinely fast option, so nobody reaches them who does not
+  // need to.
+  'google-gemini-flash',
+  'openrouter-nemotron-3.5-lightning',
+  // knownStale, filtered by stepsFromIds; kept for provenance only.
+  'groq-llama-3.1-8b-instant',
+  'groq-llama-3.3-70b-versatile',
   'groq-llama-4-scout',
   'groq-qwen3-32b'
 ]
@@ -156,19 +197,37 @@ const QUALITY_CHAIN = [
   // is filtered out (it failed 28/39 real attempts on tool-call output); on
   // a plain-text purpose it remains the last-resort entry it always was.
   'openrouter-auto-free',
-  'groq-llama-3.3-70b-versatile',
   'groq-gpt-oss-120b',
-  'cerebras-gpt-oss-120b'
+  'cerebras-gpt-oss-120b',
+  // BUG-154 — the remaining free/allowance providers this app accepts keys
+  // for and which appeared in NO chain, so their keys were dead weight.
+  'zai-glm-4.7-flash',
+  'zai-glm-4.5-flash',
+  'hf-gpt-oss-120b',
+  'hf-gpt-oss-20b',
+  'cloudflare-gpt-oss-120b',
+  // BUG-154 — paid tier LAST, same cost principle as SPEED_CHAIN above: a
+  // free option is always tried first, but a paid key is reachable instead of
+  // the feature failing outright.
+  'anthropic-claude-sonnet-4-6',
+  'openai-gpt-5.4',
+  // knownStale, filtered by stepsFromIds; kept for provenance only.
+  'groq-llama-3.3-70b-versatile'
 ]
 
-const coachingCap = CHAIN_BUDGET['coaching-cue']?.maxChainLength ?? 2
-const dealTier1Cap = CHAIN_BUDGET['deal-tier1']?.maxChainLength ?? 2
+// BUG-154 — the two `SPEED_CHAIN.slice(0, cap)` constants that used to live
+// here are gone, and the cap moved into bundledSteps() below. Slicing the RAW
+// id list applied the cap BEFORE the liveness filter, so a cap of 2 whose
+// first two ids were knownStale resolved to ZERO usable models — a cap that
+// silently means "no attempts at all" rather than "at most two". The cap
+// answers "how many attempts may this purpose make"; only reachable steps can
+// be attempts, so it has to be applied to reachable steps.
 
 /** Bundled fallback ordering, only reached when a purpose has neither an
  *  explicit chain configured nor a legacy `aiProvider`+key. Not lane-
  *  restricted for the same reason QUALITY_CHAIN isn't - see above. */
 export const DEFAULT_CATALOG_CHAIN: Record<AIPurpose, string[]> = {
-  'coaching-cue': SPEED_CHAIN.slice(0, coachingCap),
+  'coaching-cue': SPEED_CHAIN,
   summary: QUALITY_CHAIN,
   scorecard: QUALITY_CHAIN,
   tasks: QUALITY_CHAIN,
@@ -186,7 +245,7 @@ export const DEFAULT_CATALOG_CHAIN: Record<AIPurpose, string[]> = {
   // M24 - same speed-lane precedent as coaching-cue (see CHAIN_BUDGET's doc
   // comment in types.ts): a live, latency-critical path gets the fast chain,
   // capped the same way.
-  'deal-tier1': SPEED_CHAIN.slice(0, dealTier1Cap),
+  'deal-tier1': SPEED_CHAIN,
   // M24 - quality-lane precedent, same as summary/scorecard/prep-brief; no
   // cap, since deal-tier2 has no CHAIN_BUDGET entry.
   'deal-tier2': QUALITY_CHAIN,
@@ -265,8 +324,33 @@ function legacyStep(): ResolvedStep | null {
  * not the model.
  */
 const LEGACY_TAIL_MAX: Record<AIPurpose, number> = {
-  'coaching-cue': 0,
-  'deal-tier1': 0,
+  // BUG-159 (founder, 2026-09-01): "I want all keys to work and if one fails
+  // for the system to direct the work to it and won't deny a job from the
+  // user and have any failures (EVEN WITHOUT A PAID API)."
+  //
+  // 0 -> 1. This REVERSES BUG-148 decision 5B ("the chain stays exactly one
+  // step long", founder, 2026-08-31), recorded rather than quietly changed:
+  // 5B spent the 6s dead-air budget on a single attempt, and the founder has
+  // now weighed a missed cue as the worse outcome.
+  //
+  // THE BUDGET ALREADY PAID FOR IT. CHAIN_BUDGET declares maxChainLength 2 for
+  // both live purposes; LEGACY_TAIL_MAX 0 meant that whenever a default was
+  // pinned the chain was one step, so the second budgeted attempt could never
+  // be spent. The two tables disagreed and the stricter silently won.
+  //
+  // MEASURED COST OF THE DISAGREEMENT, driving real calls: reaching a working
+  // provider took SIX failed attempts over ~50s before the tail partition, and
+  // still FOUR over ~32s after it — each provider needing three strikes to
+  // bench before the next is tried, one model per attempt. Every one of those
+  // is a cue the rep never saw.
+  //
+  // LATENCY IS UNCHANGED, and that was checked rather than assumed:
+  // completeWithFallback divides remainingBudgetMs by the remaining entries,
+  // so two attempts SHARE the six seconds instead of doubling them. Two is
+  // also the ceiling — going past it needs CHAIN_BUDGET raised, which is a
+  // real dead-air trade-off and a separate decision.
+  'coaching-cue': 1,
+  'deal-tier1': 1,
   other: 1,
   'coaching-chat': 1,
   // M28 - REVERSED from the original 1 (which copied coaching-chat's "human
@@ -298,8 +382,32 @@ const LEGACY_TAIL_MAX: Record<AIPurpose, number> = {
  *  it. Unchanged logic: catalog-known, not knownStale, provider key present.
  *  The key check must stay read-fresh from process.env on every resolution —
  *  ai-keys.ts sets and deletes those vars mid-session. */
-function bundledSteps(purpose: AIPurpose): ResolvedStep[] {
-  return stepsFromIds(DEFAULT_CATALOG_CHAIN[purpose])
+/** BUG-159 — the CONFIGURED set for a purpose: every catalog step whose
+ *  provider has credentials and which is not knownStale, ignoring cooldowns,
+ *  quota and structural breaks entirely, uncapped and unordered.
+ *
+ *  This exists because one resolution was being asked two different questions.
+ *  The WALK wants unusable steps demoted or dropped; the CAPACITY check wants
+ *  the complete set, because its "is this user set up at all?" branch keys off
+ *  an EMPTY result. Sharing one view meant any change that shortened the chain
+ *  silently inverted the capacity signal — a filtered chain empties exactly
+ *  when everything is cooling, which capacity then read as "nothing
+ *  configured, so capacity exists". Background jobs would stop deferring and
+ *  hammer the very providers the user is trying to spread load across.
+ *
+ *  Deliberately NOT capped by CHAIN_BUDGET: an attempts budget answers "how
+ *  many tries may this make", which has nothing to do with "how many models is
+ *  this user set up with". */
+export function configuredStepsFor(purpose: AIPurpose): ResolvedStep[] {
+  return stepsFromIds(CANDIDATE_POOL[purpose] ?? DEFAULT_CATALOG_CHAIN[purpose])
+}
+
+export function bundledSteps(purpose: AIPurpose): ResolvedStep[] {
+  const steps = stepsFromIds(DEFAULT_CATALOG_CHAIN[purpose])
+  // BUG-154 — cap AFTER resolution, never before. See the note where the old
+  // `SPEED_CHAIN.slice(0, cap)` constants used to be defined.
+  const cap = CHAIN_BUDGET[purpose]?.maxChainLength
+  return cap === undefined ? steps : steps.slice(0, cap)
 }
 
 /**
@@ -412,6 +520,30 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
   // Read once, here, so the two branches below cannot disagree about it.
   const legacyDemoted = isDemoted(legacy.providerId, Date.now())
 
+  // BUG-154 follow-up (2026-09-01) — demotion is AUTH-ONLY, and that was the
+  // whole remaining hole in the live path.
+  //
+  // 5B replaces a demoted legacy step on the two tailMax-0 purposes. But
+  // noteAuthRejection() is only reached on reason === 'auth', so a default
+  // provider failing for ANY OTHER persistent reason never demotes, never gets
+  // replaced, and — having no tail to fall through to — is retried forever.
+  //
+  // Measured on the founder's machine: huggingface pinned as default, every
+  // coaching-cue attempt failing with 'the model did not return the expected
+  // structured output' every ~7 seconds for an entire call, logged as
+  // 'legacy:huggingface -> null' each time. The same provider, failing the
+  // same way in the same second, fell back correctly for the 'other' purpose,
+  // which has a tail. Only the live purposes starved.
+  //
+  // A structural break is the right second trigger and not a new concept: it
+  // is already recorded from real failures, already PURPOSE-SCOPED (so a
+  // provider that cannot serve cues can still serve summaries), and already
+  // self-heals on its own TTL. Reading it here costs one map lookup on a path
+  // that re-resolves every few seconds.
+  //
+  // The founder's constraint is untouched: the chain is still EXACTLY ONE
+  // step. Only which single attempt it buys changes.
+
   // Computed before bundledSteps() so the live paths do no extra work at all:
   // coaching-cue re-resolves this every few seconds mid-call.
   if (tailMax === 0) {
@@ -436,10 +568,70 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
     // demoted step at the back of their chains, so it is still attempted and
     // can still earn its own restoration. It is not orphaned by being skipped
     // on a 6-second live path.
-    if (!legacyDemoted) return [legacy]
-    const substitute = stepsFromIds(CANDIDATE_POOL[purpose]).filter(
-      (s) => s.providerId !== legacy.providerId
-    )[0]
+  // COMPUTED INSIDE THIS BRANCH, NOT ABOVE IT, AND THAT IS LOAD-BEARING.
+  //
+  // isStructurallyBroken() MUTATES: an entry whose window has closed is
+  // deleted on read. Hoisting this beside legacyDemoted (which is where it
+  // first went, mirroring that constant's 'read once so the branches cannot
+  // disagree' comment) therefore ran a purging lookup on EVERY purpose's
+  // resolution, including the ones that never consult it.
+  //
+  // capacityForPurpose.test.ts caught it immediately: that suite records
+  // breaks against a fixed fake clock, the hoisted read used the real
+  // Date.now(), every such break read as long expired, and the lookup DELETED
+  // the state the test had just written — so 'counts a structural break as
+  // unusable' went green-to-red for a reason that had nothing to do with the
+  // behaviour under test. In production the clocks agree and this would have
+  // been invisible; it would still have been a resolution path quietly
+  // clearing another purpose's evidence.
+  //
+  // Reading it only where it is used is both correct and cheaper.
+  // WIDENED from isStructurallyBroken() to isUsableFor(), after the narrow
+  // version was driven on a real call and did not fix the bug.
+  //
+  // A structural break is only ONE of the ways the pinned default can be
+  // unavailable. Driving a live call with huggingface pinned showed the next
+  // one immediately: its account hit quota, so it was marked PERIOD-EXHAUSTED
+  // rather than broken, the substitution never triggered, and the walk simply
+  // skipped its only step and attempted nothing at all — cues failed silently
+  // instead of failing loudly, which is worse, not better.
+  //
+  // isUsableFor() is the codebase's own single gate for 'can this step be
+  // attempted right now': cooldown, period-exhaustion and structural break,
+  // one answer, no second encoding to drift (its own doc comment makes that
+  // the point of the flag it takes). Demotion stays separate because it is
+  // provider-scoped rather than catalog-id-scoped.
+  //
+  // ignorePacing: true deliberately. Pacing is OUR own 2-6s spacing, not the
+  // provider refusing us; substituting on it would swap providers during any
+  // ordinary burst and spend a different key for no reason.
+    const legacyUsable = isUsableFor(legacy.catalogId, Date.now(), purposeTier(purpose), {
+      ignorePacing: true,
+      purpose
+    })
+    if (!legacyDemoted && legacyUsable) return [legacy]
+    // The substitute must ALSO be usable, and leaving that out was the last
+    // hole in this fix -- found by driving a third live call.
+    //
+    // stepsFromIds() filters knownStale and missing credentials. It does NOT
+    // filter cooldowns, quota exhaustion or structural breaks. So once the
+    // pinned default became unusable and substitution finally started firing,
+    // it handed back the SAME first candidate every few seconds -- a Groq
+    // model returning 400 'Tool choice is required, but model did not call a
+    // tool', which is structural and was already recorded as such. The step
+    // that had just been benched was re-picked immediately, eight times in a
+    // row, because nothing consulted the bench.
+    //
+    // Same gate as the legacy check above, for the same reason: one encoding
+    // of 'can this be attempted right now', not two.
+    const substitute = stepsFromIds(CANDIDATE_POOL[purpose])
+      .filter((s) => s.providerId !== legacy.providerId)
+      .filter((s) =>
+        isUsableFor(s.catalogId, Date.now(), purposeTier(purpose), {
+          ignorePacing: true,
+          purpose
+        })
+      )[0]
     return substitute ? [{ ...substitute, fromImplicitTail: true }] : [legacy]
   }
 
@@ -450,8 +642,47 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
   // providers' default model IS a catalog entry's modelId — see
   // ProviderRegistryEntry.defaultModelId).
   const legacyModelId = PROVIDER_REGISTRY[legacy.providerId].defaultModelId
-  const usable = bundledSteps(purpose).filter(
-    (s) => legacyModelId === undefined || s.modelId !== legacyModelId
+  // BUG-154 (2026-09-01) — the dedupe must match on PROVIDER AND MODEL, not
+  // on model alone.
+  //
+  // The intent is right: never re-issue the identical request as a later
+  // "fallback". But identical means same provider AND same model. Several
+  // catalog entries are deliberately DUAL-HOMED -- the same open-weights model
+  // served by two different companies -- and model-catalog.ts says so outright:
+  // "Two entries can share a modelId+displayName on different providers (the
+  // dual-homed GPT-OSS 120B)".
+  //
+  // Matching on modelId alone therefore deleted a genuinely different provider,
+  // with its own account, endpoint and quota, from the chain. Concretely: Groq's
+  // legacy default model is openai/gpt-oss-120b, so cerebras-gpt-oss-120b was
+  // dropped from EVERY durable chain for any user whose default provider is
+  // Groq -- a configured, paid-for, perfectly healthy key that could never be
+  // reached. That is precisely the founder's report: "it needs to eventually
+  // try ALL the saved keys and APIs in the system if one fails FOR WHATEVER
+  // REASON." It never tried Cerebras at all.
+  //
+  // Found by bug154-eventually-tries-every-key.test.ts, which loops resolve-
+  // and-fail and names the providers that hold a key and were never attempted.
+  // BUG-159 — the tail draws from the UNCAPPED pool.
+  //
+  // bundledSteps() applies CHAIN_BUDGET's maxChainLength, which for the live
+  // purposes is 2 — so a tail built from it could only ever reach the first two
+  // live entries of SPEED_CHAIN, and the founder's paid Anthropic key (further
+  // down the lane) was unreachable however often the ones ahead failed. Caught
+  // by bug154-eventually-tries-every-key: "never attempted despite holding a
+  // key: anthropic, huggingface".
+  //
+  // CANDIDATE_POOL is the same list without the ATTEMPTS cap, and its own doc
+  // comment already draws the distinction this fix rests on: the cap answers
+  // "how many attempts may this purpose make", which is a different question
+  // from "which models are eligible". The attempts cap is still enforced — by
+  // tailMax just below, and by the walk's own budget — so this widens
+  // eligibility, never cost.
+  const usable = stepsFromIds(CANDIDATE_POOL[purpose]).filter(
+    (s) =>
+      legacyModelId === undefined ||
+      s.providerId !== legacy.providerId ||
+      s.modelId !== legacyModelId
   )
 
   // Different providers FIRST, then at most ONE same-provider model.
@@ -462,11 +693,45 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
   // One is kept because Groq and Gemini rate-limit PER-MODEL, so a different
   // model on the same key genuinely can succeed; only one, because if two
   // models on that key fail, the account is the problem, not the model.
-  const others = usable.filter((s) => s.providerId !== legacy.providerId)
-  const same = usable.filter((s) => s.providerId === legacy.providerId).slice(0, 1)
-  const tail = [...others, ...same]
-    .slice(0, tailMax)
-    .map((s) => ({ ...s, fromImplicitTail: true }))
+  // BUG-159 — the capped tail SLOTS go to steps that can actually be
+  // attempted, while every other step stays in the chain behind them.
+  //
+  // THE PROBLEM: a benched model held one of the 1-3 slots forever. The walk
+  // skips it at attempt time, so it never fails again in a way that would move
+  // it, and a usable model further down never entered the chain at all.
+  // Measured with four keys configured: coaching-cue "never attempted despite
+  // holding a key: anthropic, huggingface".
+  //
+  // WHY NOT SIMPLY FILTER THEM OUT, which is what three earlier attempts did:
+  // the walk ALREADY filters this chain by its own usability gate before
+  // attempting anything, so dropping them here buys nothing for attempts — and
+  // it strips them from `capable`, which two other consumers read:
+  //   * soonestExpiry(capable.map(...)) computes the ACTIONABLE WAIT TIME
+  //     ("try again in about an hour"). Without the cooling entries there is
+  //     nothing to compute it from, and the user gets the generic "every
+  //     configured model is unreachable" that M27 D records reaching a real
+  //     user once already.
+  //   * rescueSteps(capable, ...) needs the full picture to offer a
+  //     never-tried key.
+  //
+  // So: PARTITION, do not filter. Attemptable steps compete for the capped
+  // slots; the rest are appended behind them, where the walk will skip them
+  // and the other consumers can still see them. Attempt count is unchanged —
+  // it was always bounded by the walk's own gate and budget, never by this
+  // array's length.
+  const attemptableNow = (step: ResolvedStep): boolean =>
+    isUsableFor(step.catalogId, Date.now(), purposeTier(purpose), {
+      ignorePacing: true,
+      purpose
+    })
+  const ready = usable.filter(attemptableNow)
+  const notReady = usable.filter((s) => !attemptableNow(s))
+  const readyOthers = ready.filter((s) => s.providerId !== legacy.providerId)
+  const readySame = ready.filter((s) => s.providerId === legacy.providerId).slice(0, 1)
+  const tail = [...[...readyOthers, ...readySame].slice(0, tailMax), ...notReady].map((s) => ({
+    ...s,
+    fromImplicitTail: true
+  }))
 
   // BUG-148 — a provider that keeps rejecting our credential gives up its
   // place at the FRONT, and nothing else. Same steps, same length, same cost:
@@ -480,7 +745,28 @@ export function resolveConfiguredChain(purpose: AIPurpose): ResolvedStep[] {
   //
   // If the tail is empty there is nothing to demote behind, and [legacy] is
   // returned unchanged rather than an empty chain.
-  if (legacyDemoted && tail.length > 0) return [...tail, legacy]
+  // BUG-159 — an UNUSABLE default gives up the front too, not only an
+  // auth-demoted one.
+  //
+  // The substitution BUG-154 added for the live purposes lived inside the
+  // `tailMax === 0` branch above. Raising LEGACY_TAIL_MAX to 1 skips that
+  // branch entirely, so without this an exhausted, cooling or structurally-
+  // broken default would silently lead the chain again.
+  //
+  // Demotion stays PROVIDER-scoped (an auth rejection condemns the key) while
+  // usability is STEP-scoped (a cooldown condemns one model), so both are
+  // consulted rather than one derived from the other.
+  //
+  // Reordered, never removed: the default stays in the chain so it can still
+  // earn its place back with a success — a step never attempted can never
+  // produce the evidence that would restore it.
+  const legacyLeads =
+    !legacyDemoted &&
+    isUsableFor(legacy.catalogId, Date.now(), purposeTier(purpose), {
+      ignorePacing: true,
+      purpose
+    })
+  if (!legacyLeads && tail.length > 0) return [...tail, legacy]
   return [legacy, ...tail]
 }
 
@@ -1338,6 +1624,29 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
         // failureClass (which would also say 'structural' for auth), avoids
         // two independent encodings of the same exclusion drifting apart.
         markStructurallyBroken(step.catalogId, Date.now(), purpose, detail ? `${reason}: ${detail}` : reason)
+      } else if (failureClass === 'transient' && reason !== 'auth') {
+        // BUG-154 follow-up — repetition IS the evidence.
+        //
+        // A transient class means "this might work next time", and for a
+        // sampling-dependent malformed generation that is true. It stops being
+        // true after the third identical failure with no success in between,
+        // and until this branch existed nothing counted them: Groq's
+        // tool_use_failed is deliberately transient (openai-compatible.ts), so
+        // live cues retried the same model every ~7s indefinitely and showed
+        // the user nothing. Measured at twelve consecutive failures across two
+        // real calls before this was added.
+        //
+        // noteTransientFailure escalates to a purpose-scoped structural break
+        // at its threshold and returns whether IT did, so the escalation is
+        // logged rather than being a silent state change. Any success clears
+        // the streak (clearCooldown), so a model that recovers is asked again
+        // at once instead of serving out the break.
+        // The escalation is self-describing without a logger: the reason string
+        // passed to markStructurallyBroken surfaces verbatim in the exhaustion
+        // report the user actually reads ("benched up to 4h by a STRUCTURAL
+        // BREAK after..."), which is this file's existing convention — it
+        // imports no logger on purpose.
+        void noteTransientFailure(step.catalogId, Date.now(), purpose)
       }
       attempts.push({
         catalogId: step.catalogId,
@@ -1840,6 +2149,29 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
           noteRateLimitForDeadProviders(step.providerId, rateLimitCountByProvider, deadProviders)
         } else if (failureClass === 'structural' && reason !== 'auth') {
           markStructurallyBroken(step.catalogId, Date.now(), purpose, detail ? `${reason}: ${detail}` : reason)
+        } else if (failureClass === 'transient' && reason !== 'auth') {
+          // BUG-154 follow-up — repetition IS the evidence.
+          //
+          // A transient class means "this might work next time", and for a
+          // sampling-dependent malformed generation that is true. It stops being
+          // true after the third identical failure with no success in between,
+          // and until this branch existed nothing counted them: Groq's
+          // tool_use_failed is deliberately transient (openai-compatible.ts), so
+          // live cues retried the same model every ~7s indefinitely and showed
+          // the user nothing. Measured at twelve consecutive failures across two
+          // real calls before this was added.
+          //
+          // noteTransientFailure escalates to a purpose-scoped structural break
+          // at its threshold and returns whether IT did, so the escalation is
+          // logged rather than being a silent state change. Any success clears
+          // the streak (clearCooldown), so a model that recovers is asked again
+          // at once instead of serving out the break.
+          // The escalation is self-describing without a logger: the reason string
+          // passed to markStructurallyBroken surfaces verbatim in the exhaustion
+          // report the user actually reads ("benched up to 4h by a STRUCTURAL
+          // BREAK after..."), which is this file's existing convention — it
+          // imports no logger on purpose.
+          void noteTransientFailure(step.catalogId, Date.now(), purpose)
         }
         attempts.push({
           catalogId: step.catalogId,

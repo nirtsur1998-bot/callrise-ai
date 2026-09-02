@@ -395,6 +395,17 @@
     height: 100%;
   }
 
+  /* The detection-overlay BrowserWindow is transparent and shares this
+     stylesheet; an opaque body paints a solid rectangle over its whole frame.
+     Declared on html/body/#root together because all three are height:100%
+     above, so any one of them left opaque is still a full-window rectangle.
+     See main.tsx, which sets the attribute before first paint. */
+  html[data-window='overlay'],
+  html[data-window='overlay'] body,
+  html[data-window='overlay'] #root {
+    background-color: transparent;
+  }
+
   body {
     margin: 0;
     background-color: var(--color-canvas);

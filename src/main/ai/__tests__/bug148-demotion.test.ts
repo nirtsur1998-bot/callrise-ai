@@ -165,29 +165,48 @@ describe('a durable purpose: the demoted step moves to the BACK, and stays in th
   })
 })
 
-describe('the live purposes (LEGACY_TAIL_MAX 0): decision 5B', () => {
-  it('normally the chain is exactly the legacy step', () => {
+// UPDATED BY BUG-159 (founder, 2026-09-01), which REVERSED decision 5B's
+// one-step rule: "I want all keys to work and if one fails for the system to
+// direct the work to it and won't deny a job from the user and have any
+// failures (EVEN WITHOUT A PAID API)."
+//
+// LEGACY_TAIL_MAX for the two live purposes went 0 -> 1, so the chain is now
+// legacy + ONE fallback. What made that safe rather than a latency regression:
+// CHAIN_BUDGET already declared maxChainLength 2 with a 6s total for these
+// purposes, and completeWithFallback splits remainingBudgetMs across remaining
+// entries — two attempts SHARE the six seconds instead of doubling them. The
+// M9 dead-air guarantee is untouched; only the number of chances inside it
+// changed.
+//
+// 5B's actual subject — a demoted default gives up its place at the FRONT and
+// is never deleted — is unchanged and still asserted below. Only the "exactly
+// one step" clause is gone.
+describe('the live purposes (LEGACY_TAIL_MAX 1 since BUG-159): decision 5B', () => {
+  it('normally the legacy step goes FIRST, with one fallback behind it', () => {
     const chain = resolveConfiguredChain('coaching-cue')
-    expect(chain).toHaveLength(1)
+    expect(chain).toHaveLength(2)
     expect(chain[0].catalogId).toBe('legacy:groq')
   })
 
-  it('a demoted default is REPLACED, and the chain is still one step long', () => {
-    // The live budget is what CHAIN_BUDGET protects: one attempt, six seconds.
-    // 5B does not spend a second attempt — it changes which single attempt is
-    // bought, from one we have evidence cannot succeed to one that might.
+  it('a demoted default is moved BEHIND the fallback, not removed', () => {
+    // 5B's real guarantee, and the reason it reorders instead of deleting: a
+    // step that is never attempted can never produce the success that would
+    // clear its demotion. It must stay reachable.
     rejectTimes('groq', DEMOTION_THRESHOLD)
     const chain = resolveConfiguredChain('coaching-cue')
-    expect(chain).toHaveLength(1)
+    expect(chain).toHaveLength(2)
     expect(chain[0].catalogId).not.toBe('legacy:groq')
     expect(chain[0].providerId).not.toBe('groq')
+    // Still present — demoted, not deleted.
+    expect(chain.map((s) => s.catalogId)).toContain('legacy:groq')
   })
 
   it('deal-tier1 behaves identically — both live purposes, not just the one', () => {
     rejectTimes('groq', DEMOTION_THRESHOLD)
     const chain = resolveConfiguredChain('deal-tier1')
-    expect(chain).toHaveLength(1)
+    expect(chain).toHaveLength(2)
     expect(chain[0].providerId).not.toBe('groq')
+    expect(chain.map((s) => s.catalogId)).toContain('legacy:groq')
   })
 
   it('with no substitute available it keeps the legacy step rather than returning nothing', () => {

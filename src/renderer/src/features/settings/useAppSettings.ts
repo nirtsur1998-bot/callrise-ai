@@ -23,6 +23,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   summaryLanguage: 'auto',
   syncScope: {
     transcripts: false,
+    riseConversations: false,
     attachments: false,
     knowledgeBase: false,
     settingsPersonalization: false,

@@ -34,6 +34,7 @@ const handlers: Handler[] = []
 
 const { registerModelCatalog } = await import('../catalog-ipc')
 const { CANDIDATE_POOL } = await import('../complete-with-fallback')
+const { MODEL_CATALOG } = await import('../model-catalog')
 const { chainCouldCrossProviders } = await import('../catalog-ipc')
 
 const ORIGINAL_ENV = { ...process.env }
@@ -63,19 +64,49 @@ afterEach(() => {
   process.env = { ...ORIGINAL_ENV }
 })
 
-/** The fixture only means anything if the pool really is Groq-heavy at the
- *  front — the whole bug is that the first two entries share a provider. */
-describe('the fixture assumption this bug rests on', () => {
-  it("coaching-cue's first two candidates are both Groq", () => {
-    expect(CANDIDATE_POOL['coaching-cue'].slice(0, 2).every((id) => id.startsWith('groq-'))).toBe(
-      true
-    )
+/** BUG-154 (2026-09-01) — INVERTED, on purpose.
+ *
+ *  These two tests used to PIN BUG-149's precondition: "coaching-cue's first
+ *  two candidates are both Groq". That was an accurate description of a broken
+ *  state, written as an assertion that the broken state still held — so the
+ *  suite went red only if someone FIXED it, and stayed green for as long as the
+ *  defect survived. A test that fails on repair is not a guard, it is a lock.
+ *
+ *  The condition is now gone (SPEED_CHAIN was reordered so the front of the
+ *  pool crosses providers), so the same two facts are asserted in the direction
+ *  that keeps them true: the front of the pool MUST cross providers, and the
+ *  pool must never again be single-provider inside the cap.
+ *
+ *  Providers are read from the catalog rather than matched on an id PREFIX.
+ *  The old `id.startsWith('groq-')` was a naming coincidence standing in for
+ *  a real field — it would have silently mis-read any entry whose id did not
+ *  begin with its provider name. */
+describe('the coaching-cue pool must cross providers at the front', () => {
+  const providerOf = (id: string): string | undefined =>
+    MODEL_CATALOG.find((e) => e.id === id)?.providerId
+
+  const liveFront = (n: number): string[] =>
+    CANDIDATE_POOL['coaching-cue']
+      .filter((id) => {
+        const e = MODEL_CATALOG.find((c) => c.id === id)
+        return e && !e.knownStale
+      })
+      .slice(0, n)
+
+  it('the first two LIVE candidates do not share a provider', () => {
+    const front = liveFront(2)
+    expect(front).toHaveLength(2)
+    expect(providerOf(front[0])).not.toBe(providerOf(front[1]))
   })
 
-  it('...and a non-Groq speed model exists further down, outside the old cap', () => {
-    expect(CANDIDATE_POOL['coaching-cue'].slice(2).some((id) => id.startsWith('cerebras-'))).toBe(
-      true
+  it('the pool as a whole reaches more than one provider', () => {
+    const provs = new Set(
+      CANDIDATE_POOL['coaching-cue']
+        .map((id) => MODEL_CATALOG.find((e) => e.id === id))
+        .filter((e) => e && !e.knownStale)
+        .map((e) => e!.providerId)
     )
+    expect(provs.size).toBeGreaterThan(1)
   })
 })
 

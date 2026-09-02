@@ -9,6 +9,7 @@
 // than only the other party's own lines. No Electron import, so it stays
 // testable; IPC wiring lives in contact-intelligence-ipc.ts.
 import type { AITool } from './ai'
+import { isAbsenceAnswer } from './ai/model-placeholders'
 import { completeWithFallback } from './ai/complete-with-fallback'
 import { speakerIdentityKey, speechSegments, type CallSegment } from './calls-fs'
 
@@ -174,6 +175,14 @@ export function verifyDetectedName(
   const name = rawName.trim().slice(0, 200)
   const quote = normalize(rawQuote.slice(0, 400))
   if (!name || !quote) return null
+  // BUG-163 — `name` is `type: ['string','null']` AND required, so a provider
+  // that coerces to the primary type answers the WORD "null". The three
+  // checks below would very probably reject it (the quote must be grounded in
+  // the transcript AND contain the name's first token), but "very probably"
+  // is not a guarantee, and this is the function whose whole job is deciding
+  // whether a claimed name is trustworthy. Say it here rather than rely on
+  // the downstream write guard alone.
+  if (isAbsenceAnswer(name)) return null
 
   if (quote.split(' ').filter(Boolean).length < MIN_QUOTE_WORDS) return null
 

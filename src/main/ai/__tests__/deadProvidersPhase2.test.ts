@@ -20,6 +20,48 @@ vi.mock('../../app-settings', () => ({ loadAppSettings: vi.fn() }))
 vi.mock('../fallback-log', () => ({ logFallbackEvent: vi.fn() }))
 vi.mock('../index', () => ({ getActiveAIProvider: () => null }))
 
+// BUG-154 (2026-09-01) — a SYNTHETIC three-model provider, and it is worth
+// saying why it had to be invented rather than picked.
+//
+// These tests used 'groq-llama-3.1-8b-instant' and 'groq-llama-3.3-70b-
+// versatile' as their "two/three models on one provider" fixture. Both ids
+// were confirmed dead at Groq and are now knownStale, and resolveConfiguredChain
+// skips knownStale entries even in an explicitly CONFIGURED chain — so the
+// fixture silently collapsed to one attempt and four tests went red.
+//
+// THE FINDING THAT CAME OUT OF FIXING THEM, which matters more than the fix:
+// after flagging, NO provider in the catalog has three live entries. Two is
+// the maximum. So the BUG-058 Phase 2 heuristic these tests guard — "skip a
+// THIRD same-provider model once two different models on it have both
+// rate-limited" — CANNOT FIRE IN PRODUCTION TODAY. It is not broken; it is
+// unreachable. That is recorded as its own assertion at the bottom of this
+// file so it surfaces if it ever changes, rather than being discovered again
+// the next time someone edits the catalog.
+//
+// The heuristic's LOGIC still deserves a guard regardless of what the catalog
+// happens to contain, which is exactly what a synthetic fixture is for: the
+// subject under test is the walk, not the model list. catalogEntry() closes
+// over the module-local array, so the function is overridden too — extending
+// only the exported MODEL_CATALOG would have looked right and done nothing.
+const SYNTHETIC = ['syn-nvidia-a', 'syn-nvidia-b', 'syn-nvidia-c']
+vi.mock('../model-catalog', async (orig) => {
+  const real = (await orig()) as typeof import('../model-catalog')
+  const template = real.MODEL_CATALOG.find((e) => e.providerId === 'nvidia')!
+  const extra = SYNTHETIC.map((id, i) => ({
+    ...template,
+    id,
+    modelId: `synthetic/model-${i}`,
+    knownStale: undefined
+  }))
+  const all = [...real.MODEL_CATALOG, ...extra]
+  return {
+    ...real,
+    MODEL_CATALOG: all,
+    catalogEntry: (id: string) => all.find((e) => e.id === id),
+    catalogEntriesForProvider: (p: string) => all.filter((e) => e.providerId === p)
+  }
+})
+
 // Same registry-mock shape as authShortCircuit.test.ts (real catalog, so
 // providerIds/modelIds are genuine), extended with a `stream` implementation
 // so the same mock drives both completeWithFallback and streamWithFallback.
@@ -121,6 +163,11 @@ beforeEach(() => {
   process.env.GROQ_API_KEY = 'g'
   process.env.GOOGLE_AI_API_KEY = 'goo'
   process.env.OPENROUTER_API_KEY = 'or'
+  // BUG-154 — the same-provider fixtures moved onto nvidia ids; without its
+  // key every one of them resolves to an EMPTY chain and the assertions read
+  // 'expected 2, got 0', which looks like a broken heuristic rather than a
+  // missing credential.
+  process.env.NVIDIA_API_KEY = 'nv'
 })
 
 afterEach(() => {
@@ -131,7 +178,7 @@ afterEach(() => {
 describe('streamWithFallback gets the same auth short-circuit completeWithFallback already had', () => {
   it('a bad key costs ONE request, not one per model on that provider', async () => {
     vi.mocked(loadAppSettings).mockReturnValue(
-      withChain('coaching-chat', ['groq-llama-3.1-8b-instant', 'groq-llama-3.3-70b-versatile'])
+      withChain('coaching-chat', ['syn-nvidia-a', 'syn-nvidia-b'])
     )
 
     const stream = streamWithFallback({ purpose: 'coaching-chat', messages: [] } as never)
@@ -147,13 +194,13 @@ describe('streamWithFallback gets the same auth short-circuit completeWithFallba
     // provider once the chain is exhausted, which broke the stricter form
     // without touching the guarantee. Matches the property style already used
     // by 'auth on one provider does not stop a DIFFERENT provider' below.
-    expect(built.filter((b) => b === 'groq')).toHaveLength(1)
+    expect(built.filter((b) => b === 'nvidia')).toHaveLength(1)
   })
 
   it('a rate limit does NOT short-circuit on its own — a different model on the same key still gets tried', async () => {
     behavior.throwCode = 'rate-limit'
     vi.mocked(loadAppSettings).mockReturnValue(
-      withChain('coaching-chat', ['groq-llama-3.1-8b-instant', 'groq-llama-3.3-70b-versatile'])
+      withChain('coaching-chat', ['syn-nvidia-a', 'syn-nvidia-b'])
     )
 
     const stream = streamWithFallback({ purpose: 'coaching-chat', messages: [] } as never)
@@ -165,14 +212,14 @@ describe('streamWithFallback gets the same auth short-circuit completeWithFallba
     // still tried. That is "groq attempted twice", not "the attempt list is
     // exactly these two" — and asserting twice still fails if the rate-limit
     // path ever starts short-circuiting the way auth does.
-    expect(built.filter((b) => b === 'groq')).toHaveLength(2)
+    expect(built.filter((b) => b === 'nvidia')).toHaveLength(2)
   })
 
   it('auth on one provider does not stop a DIFFERENT provider from being tried', async () => {
     vi.mocked(loadAppSettings).mockReturnValue(
       withChain('coaching-chat', [
-        'groq-llama-3.1-8b-instant',
-        'groq-llama-3.3-70b-versatile',
+        'syn-nvidia-a',
+        'syn-nvidia-b',
         'google-gemini-flash'
       ])
     )
@@ -181,7 +228,7 @@ describe('streamWithFallback gets the same auth short-circuit completeWithFallba
     await drain(stream)
     await expect(stream.final).rejects.toBeInstanceOf(AllModelsExhaustedError)
 
-    expect(built.filter((b) => b === 'groq')).toHaveLength(1)
+    expect(built.filter((b) => b === 'nvidia')).toHaveLength(1)
     expect(built).toContain('google')
   })
 })
@@ -191,9 +238,9 @@ describe('same-provider-twice-in-one-walk rate-limit heuristic (BUG-058 Phase 2)
     behavior.throwCode = 'rate-limit'
     vi.mocked(loadAppSettings).mockReturnValue(
       withChain('summary', [
-        'groq-llama-3.1-8b-instant',
-        'groq-llama-3.3-70b-versatile',
-        'groq-gpt-oss-120b',
+        'syn-nvidia-a',
+        'syn-nvidia-b',
+        'syn-nvidia-c',
         'google-gemini-flash'
       ])
     )
@@ -211,18 +258,18 @@ describe('same-provider-twice-in-one-walk rate-limit heuristic (BUG-058 Phase 2)
     // (the third is skipped) and google reached after them. BUG-142's rescue
     // appends one further provider at the end, which the exact-array form
     // could not tolerate even though neither half of the guarantee moved.
-    expect(built.filter((b) => b === 'groq')).toHaveLength(2)
+    expect(built.filter((b) => b === 'nvidia')).toHaveLength(2)
     expect(built).toContain('google')
-    expect(built.indexOf('google')).toBeGreaterThan(built.lastIndexOf('groq'))
+    expect(built.indexOf('google')).toBeGreaterThan(built.lastIndexOf('nvidia'))
   })
 
   it('streamWithFallback: identical behavior, ported', async () => {
     behavior.throwCode = 'rate-limit'
     vi.mocked(loadAppSettings).mockReturnValue(
       withChain('coaching-chat', [
-        'groq-llama-3.1-8b-instant',
-        'groq-llama-3.3-70b-versatile',
-        'groq-gpt-oss-120b',
+        'syn-nvidia-a',
+        'syn-nvidia-b',
+        'syn-nvidia-c',
         'google-gemini-flash'
       ])
     )
@@ -238,15 +285,15 @@ describe('same-provider-twice-in-one-walk rate-limit heuristic (BUG-058 Phase 2)
     // path (pass 1 re-walking the whole chain, since that loop keeps no
     // `attempted` set). The asymmetry between two tests named as identical was
     // the entire signal.
-    expect(built.filter((b) => b === 'groq')).toHaveLength(2)
+    expect(built.filter((b) => b === 'nvidia')).toHaveLength(2)
     expect(built).toContain('google')
-    expect(built.indexOf('google')).toBeGreaterThan(built.lastIndexOf('groq'))
+    expect(built.indexOf('google')).toBeGreaterThan(built.lastIndexOf('nvidia'))
   })
 
   it('two rate-limits on DIFFERENT providers never trips the heuristic — it is same-provider only', async () => {
     behavior.throwCode = 'rate-limit'
     vi.mocked(loadAppSettings).mockReturnValue(
-      withChain('summary', ['groq-llama-3.1-8b-instant', 'google-gemini-flash', 'groq-llama-3.3-70b-versatile'])
+      withChain('summary', ['syn-nvidia-a', 'google-gemini-flash', 'syn-nvidia-b'])
     )
 
     await expect(completeWithFallback({ purpose: 'summary', messages: [] } as never)).rejects.toBeInstanceOf(
@@ -262,8 +309,25 @@ describe('same-provider-twice-in-one-walk rate-limit heuristic (BUG-058 Phase 2)
     // attempted and interleaving never trips it. Asserted as the counts plus
     // the interleaved order of the first three, which is the claim; the
     // trailing rescue entry BUG-142 adds is not part of it.
-    expect(built.filter((b) => b === 'groq')).toHaveLength(2)
+    expect(built.filter((b) => b === 'nvidia')).toHaveLength(2)
     expect(built.filter((b) => b === 'google')).toHaveLength(1)
-    expect(built.slice(0, 3)).toEqual(['groq', 'google', 'groq'])
+    expect(built.slice(0, 3)).toEqual(['nvidia', 'google', 'nvidia'])
+  })
+})
+
+describe('BUG-154 — the catalog fact these fixtures now depend on', () => {
+  it('records that no real provider has three live models, so the heuristic above is currently unreachable in production', async () => {
+    const { MODEL_CATALOG } = await import('../model-catalog')
+    const counts = new Map<string, number>()
+    for (const e of MODEL_CATALOG) {
+      if (e.knownStale) continue
+      if (SYNTHETIC.includes(e.id)) continue // the fixture, not the catalog
+      counts.set(e.providerId, (counts.get(e.providerId) ?? 0) + 1)
+    }
+    const most = Math.max(...counts.values())
+    // If this ever goes RED, that is good news and an instruction: a provider
+    // gained a third live model, the BUG-058 same-provider heuristic can fire
+    // for real again, and these tests should move back onto real ids.
+    expect(most, `most live models on one provider: ${most}`).toBeLessThan(3)
   })
 })

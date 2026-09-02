@@ -38,10 +38,18 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'callrise-capacity-'))
   resetCooldownsForTests()
   resetPacingForTests()
-  // A realistic single-free-provider setup: only Groq configured.
+  // A realistic single-free-provider setup: one provider configured.
+  //
+  // BUG-154 (2026-09-01) — was Groq. Two Groq ids were confirmed dead and are
+  // now knownStale, leaving Groq with exactly ONE live catalog entry, and this
+  // file's "every configured model is unusable" test needs at least two to
+  // mean anything. Its own premise guard caught that and said so
+  // ("otherwise 'every' proves nothing"), which is why this is a repoint and
+  // not a weakened assertion. NVIDIA is also a single-key free-tier provider,
+  // so the shape the setup is describing is unchanged.
   process.env = { ...ORIGINAL_ENV }
   for (const p of Object.values(PROVIDER_REGISTRY)) delete process.env[p.keyEnvName]
-  process.env.GROQ_API_KEY = 'test-key'
+  process.env.NVIDIA_API_KEY = 'test-key'
 })
 
 afterEach(() => {
@@ -55,15 +63,15 @@ describe('hasUsableAiCapacity — the signal', () => {
   })
 
   it('is FALSE only once every configured model is unusable', () => {
-    const groqIds = idsForProvider('groq')
-    expect(groqIds.length).toBeGreaterThan(1) // otherwise "every" proves nothing
+    const ids = idsForProvider('nvidia')
+    expect(ids.length).toBeGreaterThan(1) // otherwise "every" proves nothing
 
     // Exhaust all but one — capacity still exists, so no deferral.
-    for (const id of groqIds.slice(0, -1)) markPeriodExhausted(id, undefined, NOW, 'durable')
+    for (const id of ids.slice(0, -1)) markPeriodExhausted(id, undefined, NOW, 'durable')
     expect(hasUsableAiCapacity(NOW)).toBe(true)
 
     // The last one goes too.
-    markPeriodExhausted(groqIds[groqIds.length - 1], undefined, NOW, 'durable')
+    markPeriodExhausted(ids[ids.length - 1], undefined, NOW, 'durable')
     expect(hasUsableAiCapacity(NOW)).toBe(false)
   })
 
@@ -80,13 +88,13 @@ describe('hasUsableAiCapacity — the signal', () => {
   // could ever clear — a blacklisted model is filtered out of every chain,
   // so it can never earn the success that clears it early.
   it("does NOT count another purpose's structural break — breaks are purpose-scoped", () => {
-    for (const id of idsForProvider('groq')) markStructurallyBroken(id, NOW, 'assistant-chat')
+    for (const id of idsForProvider('nvidia')) markStructurallyBroken(id, NOW, 'assistant-chat')
     expect(hasUsableAiCapacity(NOW)).toBe(true)
   })
 
   it('recovers as soon as ONE model comes back', () => {
-    const groqIds = idsForProvider('groq')
-    for (const id of groqIds) markPeriodExhausted(id, 60_000, NOW, 'durable')
+    const ids = idsForProvider('nvidia')
+    for (const id of ids) markPeriodExhausted(id, 60_000, NOW, 'durable')
     expect(hasUsableAiCapacity(NOW)).toBe(false)
     // One minute later that cooldown has expired.
     expect(hasUsableAiCapacity(NOW + 60_001)).toBe(true)
@@ -96,7 +104,7 @@ describe('hasUsableAiCapacity — the signal', () => {
     // The flicker case: an ordinary burst marks every model used within the
     // last few seconds. That is not quota pressure and must not read as
     // "waiting for provider capacity".
-    for (const id of idsForProvider('groq')) markUsed(id, NOW, 'durable')
+    for (const id of idsForProvider('nvidia')) markUsed(id, NOW, 'durable')
     expect(hasUsableAiCapacity(NOW + 100)).toBe(true)
   })
 

@@ -583,6 +583,21 @@ function mergeDetectionSettings(current: DetectionSettings, patch: unknown): Det
 export interface BackupSyncScope {
   /** Buyer transcripts + coaching evidence quotes (normally stripped before backup). */
   transcripts: boolean
+  /** BUG-157 — Rise assistant conversations (assistant-conversations/*.json).
+   *
+   *  They had NO backup path of any kind: backup.ts syncs from the database,
+   *  and conversations-fs.ts deliberately keeps them as flat JSON OUTSIDE
+   *  memory.db so chat survives with Sales Brain off. Nothing covered the gap,
+   *  so every Rise thread was local-only and died with the machine, silently --
+   *  the app backs up calls, contacts, deals, tasks, events, knowledge and
+   *  settings, so there was no reason for a user to suspect otherwise.
+   *
+   *  OFF by default like every other category here, and deliberately so even
+   *  though the founder asked for the capability directly: a chat log is at
+   *  least as sensitive as the transcripts sitting one line above, which are
+   *  also opt-in. Turning it on for existing installs on upgrade would start
+   *  uploading conversation content that nobody agreed to upload. */
+  riseConversations: boolean
   /** Attached document blobs (Supabase Storage), not just their metadata. */
   attachments: boolean
   knowledgeBase: boolean
@@ -602,13 +617,30 @@ export interface BackupSyncScope {
   salesBrain: boolean
 }
 
+/** BUG-157 — salesBrain and riseConversations now default ON, on the founder's
+ *  explicit instruction: "all memories needs to be saved to cloud and be backed
+ *  up for all users using my Supabase account" and Rise threads "should be there
+ *  too" on another machine.
+ *
+ *  This REVERSES the stance stated directly above ("All default OFF — opt-in
+ *  only"), so it is recorded rather than quietly flipped, and the consequence
+ *  is worth naming: on upgrade, an existing install that never touched these
+ *  toggles begins uploading memory.db and Rise conversation text to the cloud.
+ *  Both remain switchable off in Settings -> Backup, and every other category
+ *  (transcripts, attachments, knowledge base, personalization, contacts) keeps
+ *  the original opt-in default.
+ *
+ *  Deliberately NOT extended to the rest: the founder asked for memories and
+ *  Rise conversations, and widening a privacy default past what was asked is
+ *  exactly the kind of decision that should not be inferred. */
 const EMPTY_SYNC_SCOPE: BackupSyncScope = {
   transcripts: false,
+  riseConversations: true,
   attachments: false,
   knowledgeBase: false,
   settingsPersonalization: false,
   contacts: false,
-  salesBrain: false
+  salesBrain: true
 }
 
 export interface AppSettings {
@@ -789,6 +821,7 @@ function sanitizeSyncScope(value: unknown): BackupSyncScope {
   const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
   return {
     transcripts: v.transcripts === true,
+    riseConversations: v.riseConversations === true,
     attachments: v.attachments === true,
     knowledgeBase: v.knowledgeBase === true,
     settingsPersonalization: v.settingsPersonalization === true,
@@ -802,6 +835,8 @@ function mergeSyncScope(current: BackupSyncScope, patch: unknown): BackupSyncSco
   const p = patch as Record<string, unknown>
   return {
     transcripts: 'transcripts' in p ? p.transcripts === true : current.transcripts,
+    riseConversations:
+      'riseConversations' in p ? p.riseConversations === true : current.riseConversations,
     attachments: 'attachments' in p ? p.attachments === true : current.attachments,
     knowledgeBase: 'knowledgeBase' in p ? p.knowledgeBase === true : current.knowledgeBase,
     settingsPersonalization:

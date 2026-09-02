@@ -39,7 +39,7 @@
 import { MODEL_CATALOG } from './model-catalog'
 import { providerHasCredentials } from './provider-credentials'
 import { isUsableFor } from './model-cooldown'
-import { purposeTier, resolveChain } from './complete-with-fallback'
+import { configuredStepsFor, purposeTier } from './complete-with-fallback'
 import type { AIPurpose } from './types'
 
 /** Every catalog model whose provider currently has a key configured. Read
@@ -95,10 +95,33 @@ export function hasUsableAiCapacity(now: number): boolean {
  * no-key error instead of surfacing it.
  */
 export function hasUsableCapacityForPurpose(purpose: AIPurpose, now: number): boolean {
-  const { capable } = resolveChain(purpose, { needsTool: true })
-  if (capable.length === 0) return true
+  // BUG-159 — this asks the CONFIGURED set and never the walk's chain.
+  //
+  // The two were the same call, and three separate attempts to make a benched
+  // model give up its chain slot were reverted because of it: any change that
+  // shortened the chain emptied it exactly when everything was cooling, hit the
+  // empty-means-setup-state branch, and answered "capacity exists" when there
+  // was none — deferral stops and background jobs hammer the providers whose
+  // quota the user is trying to spread.
+  //
+  // Routing the chain through here at all was the mistake. The question is not
+  // "what would this walk attempt" but "does this user hold anything that could
+  // serve this purpose right now", and the configured set answers it directly.
+  // See docs/BUG-159-api-team-design.md.
+  //
+  // The tool-capability filter is kept, and deliberately: a purpose that needs
+  // tool calls has no capacity in a model that cannot make them, so dropping it
+  // would over-report capacity in exactly the direction that hurts.
+  const configured = configuredStepsFor(purpose).filter(
+    (s) => MODEL_CATALOG.find((e) => e.id === s.catalogId)?.supportsToolCalling !== false
+  )
+  // Empty still means "nothing configured", which is a SETUP state: deferring
+  // here would hide the real, actionable no-key error behind a "waiting for
+  // provider capacity" label.
+  if (configured.length === 0) return true
   const tier = purposeTier(purpose)
-  return capable.some((step) =>
+  return configured.some((step) =>
     isUsableFor(step.catalogId, now, tier, { ignorePacing: true, purpose })
   )
 }
+

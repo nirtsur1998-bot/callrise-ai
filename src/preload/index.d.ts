@@ -2016,6 +2016,10 @@ export type SummaryLanguage =
 export interface BackupSyncScope {
   /** Buyer transcripts + coaching evidence quotes (normally stripped before backup). */
   transcripts: boolean
+  /** BUG-157 — Rise assistant conversations. Kept in lockstep with
+   *  main/app-settings.ts, which carries the full reasoning. OFF by default
+   *  like every category here. */
+  riseConversations: boolean
   /** Attached document blobs (Supabase Storage), not just their metadata. */
   attachments: boolean
   knowledgeBase: boolean
@@ -2362,6 +2366,10 @@ export interface SupportApi {
  */
 export interface DetectionApi {
   getState: () => Promise<DetectorState | undefined>
+  /** BUG-155 — the detection overlay window is click-through by default so it
+   *  cannot swallow scrolls over the transparent inset around its card; the
+   *  card claims the pointer back while it is underneath it. */
+  setOverlayInteractive: (interactive: boolean) => Promise<void>
   /** Ack a `onStartCapture` command once the renderer has actually started recording. */
   captureStarted: (payload: { callId: string; sessionId: string }) => Promise<void>
   /** Tell main the renderer couldn't start recording (mic busy, permission denied, …). */

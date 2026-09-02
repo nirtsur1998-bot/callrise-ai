@@ -356,7 +356,9 @@ export class GeminiProvider implements AIProvider {
       if (!call) {
         throw new AIProviderError(
           'failed',
-          'The model did not return the expected structured output.'
+          'The model did not return the expected structured output.',
+          undefined,
+          classifyFailureClass('failed', { message: 'The model did not return the expected structured output.' })
         )
       }
       return { text: '', toolInput: call.args, usage }

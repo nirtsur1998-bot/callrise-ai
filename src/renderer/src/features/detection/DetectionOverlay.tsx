@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Mic, Pause, Square, ExternalLink, PhoneIncoming, ArrowLeftRight, X } from 'lucide-react'
 
 // Derived from the preload-declared API rather than imported from
@@ -36,6 +36,52 @@ function OverlayShell({ children }: { children: ReactNode }): React.JSX.Element 
   // backdrop-filter render as flat opaque black on win32 — see index.css's
   // .platform-win32 .glass-hud override for the actual fix and why.
   const platformClass = window.api.platform === 'win32' ? 'platform-win32' : ''
+  // BUG-155 — this window is click-through (main sets setIgnoreMouseEvents
+  // with forward:true), so scrolls over the transparent inset around the
+  // card reach the app underneath instead of dying in a window the user
+  // cannot even see. Input is claimed back only while the pointer is
+  // genuinely over the card, and released the moment it leaves.
+  //
+  // Driven off forwarded mousemove rather than onMouseEnter/onMouseLeave:
+  // while ignoring is ON the element receives no enter/leave events at all,
+  // so those handlers could never fire to turn it back off -- the card
+  // would be permanently dead. mousemove keeps arriving because of
+  // forward:true, which is the whole reason that flag is set.
+  const cardRef = useRef<HTMLDivElement | null>(null)
+  // Starts TRUE to match the window's own starting state (main now creates it
+  // interactive). A wrong initial value here would make the first toggle a
+  // no-op through the dedupe below.
+  const interactiveRef = useRef(true)
+  useEffect(() => {
+    const setInteractive = (next: boolean): void => {
+      if (interactiveRef.current === next) return // don't spam IPC on every pixel
+      interactiveRef.current = next
+      void window.api.detection.setOverlayInteractive(next)
+    }
+    const onMove = (e: MouseEvent): void => {
+      const r = cardRef.current?.getBoundingClientRect()
+      if (!r) return
+      setInteractive(
+        e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
+      )
+    }
+    // Leaving the window entirely must release too, or the pointer can exit
+    // across the card's edge without a final mousemove inside the bounds.
+    // Leaving the window entirely RECLAIMS rather than releases: once the
+    // pointer is outside the window there is nothing to pass through to, and
+    // being left in the released state is the one condition that breaks the
+    // card. Every path out of this component therefore ends interactive.
+    const onLeave = (): void => setInteractive(true)
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseleave', onLeave)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseleave', onLeave)
+      // Never leave the window holding the pointer after unmount.
+      void window.api.detection.setOverlayInteractive(true)
+    }
+  }, [])
+
   return (
     <div className={`h-full w-full p-4 ${platformClass}`}>
       {/* Same glass material as the call-detected banner (.glass-hud), because
@@ -44,6 +90,8 @@ function OverlayShell({ children }: { children: ReactNode }): React.JSX.Element 
           — a taller card wants a generous squircle where a single-row bar
           wants a capsule. */}
       <div
+        ref={cardRef}
+        data-overlay-card=""
         style={DRAG}
         className="glass-hud animate-pop relative flex h-full flex-col justify-center gap-2.5 overflow-hidden rounded-[32px] p-4"
       >

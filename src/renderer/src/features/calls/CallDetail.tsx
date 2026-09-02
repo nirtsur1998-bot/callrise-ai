@@ -892,9 +892,14 @@ export function CallDetail({
       </div>
 
       {/* Scrollable body */}
-      {/* relative: anchors this screen's own ScrollToEnd. CallDetail is
-          full-bleed, so AppShell's column does not scroll here and cannot
-          host it. */}
+      {/* BUG-156 — the wrapper is positioned and does NOT scroll; the scroller
+          is inside it. The page-level ScrollToEnd used to live INSIDE the
+          scrolling element, where `absolute bottom-5` anchors to the content
+          rather than the viewport, so it slid up the screen as the user
+          scrolled and came to rest on top of arbitrary content. Same fix and
+          same reasoning as AppShell's column; the transcript's own
+          ScrollToEnd was already a sibling of its scroller and is unchanged. */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
       <div
         ref={bodyScrollRef}
         className="relative flex-1 space-y-4 overflow-y-auto pb-2"
@@ -1408,6 +1413,7 @@ export function CallDetail({
           )}
         </div>
 
+      </div>
         {/* Page-level jump. The transcript has its own (scoped to the
             transcript box) because with the record collapsed these are two
             different destinations — "end of the call" and "end of the page"

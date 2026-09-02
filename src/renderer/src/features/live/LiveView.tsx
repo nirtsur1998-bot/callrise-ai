@@ -34,6 +34,7 @@ import type { CalendarEvent } from '@renderer/features/calendar/types'
 import { PrepBriefModal, type PrepBriefMeeting } from '@renderer/features/prep-brief/PrepBriefModal'
 import { Waveform } from './components/Waveform'
 import { TranscriptView } from './components/TranscriptView'
+import { shouldOfferPostCallExit } from './post-call-exit'
 import { CueCard } from './components/CueCard'
 import { SuggestionRail } from './components/SuggestionRail'
 import { CueControls } from './components/CueControls'
@@ -209,6 +210,7 @@ export function LiveView({
     getSessionId,
     getCallId,
     stop,
+    dismissFinishedCall,
     togglePause,
     enableOtherParty,
     disableOtherParty
@@ -465,6 +467,82 @@ export function LiveView({
   const [checklist, setChecklist] = useState(emptyChecklistState)
 
   const idleWatcherRef = useRef(new IdleStopWatcher())
+  // BUG-158 — how much of the transcript column the floating Live Deal
+  // Intelligence panel is currently covering.
+  //
+  // MEASURED, not assumed: the panel is mounted `absolute top-3 left-4 w-80`
+  // over this same column, and its height is not a constant — driving one call
+  // showed it grow from 37px to 91px as nudges accumulated, covering more
+  // transcript as it went. A hard-coded reservation would be wrong within
+  // seconds of a real call starting.
+  //
+  // The hook is unconditional on purpose. Putting it behind
+  // `dealIntelligenceEnabled` would change the hook order the moment the beta
+  // flag flips mid-session.
+  // A CALLBACK REF, not useRef + useEffect, and the difference is the whole
+  // reason this works.
+  //
+  // The first version kept a plain ref and observed it from an effect keyed on
+  // `dealIntelligenceEnabled`. That effect runs while the panel is still
+  // UNMOUNTED — the wrapper only appears once a call is running — so it read a
+  // null ref, set 0, and never re-ran, because the flag it depended on had not
+  // changed. Verified against the live app: the transcript kept
+  // `padding-top: 24px` with no inline style at all, i.e. the reservation was
+  // silently zero the entire time.
+  //
+  // A callback ref is invoked by React exactly when the node attaches and
+  // again with null when it detaches, so the observer is wired at the only
+  // moment it can be, without depending on anything else being right.
+  const [dealPanelHeight, setDealPanelHeight] = useState(0)
+  const dealPanelObserver = useRef<ResizeObserver | null>(null)
+  const dealPanelRef = useCallback((el: HTMLDivElement | null) => {
+    dealPanelObserver.current?.disconnect()
+    dealPanelObserver.current = null
+    if (!el) {
+      setDealPanelHeight(0)
+      return
+    }
+    const update = (): void => setDealPanelHeight(el.getBoundingClientRect().height)
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    dealPanelObserver.current = ro
+  }, [])
+
+  // BUG-165 — the same defect as BUG-158, on the other axis and the other
+  // element. The coaching-cue column is mounted `absolute top-3 right-4
+  // bottom-4 w-64` OVER this transcript. Its own comment says the two cue
+  // channels "share a single bottom-anchored stack so they cannot COLLIDE" —
+  // true, and about each other. Nothing considered the transcript underneath.
+  //
+  // At 1280px the text column is wide enough that lines stop short of the
+  // rail, which is why it looked fine. Measured on a driven call at narrower
+  // widths, with elementFromPoint at each line's centre: 4 transcript lines
+  // unreachable at 1100px, 3 at 980px, 1 at 860px and 720px. On screen the
+  // cue and the transcript render THROUGH each other and neither is legible.
+  // 1100px is an ordinary window, not an edge case.
+  //
+  // Reserved by MEASURED width for the same reason the panel above is
+  // measured by height: the rail is `w-64` today, but a reservation that
+  // hard-codes 256 is a second source of truth that goes stale silently the
+  // first time that class changes. Callback ref, not useRef + effect — see
+  // the note on dealPanelRef for what that mistake cost.
+  const [cueRailWidth, setCueRailWidth] = useState(0)
+  const cueRailObserver = useRef<ResizeObserver | null>(null)
+  const cueRailRef = useCallback((el: HTMLDivElement | null) => {
+    cueRailObserver.current?.disconnect()
+    cueRailObserver.current = null
+    if (!el) {
+      setCueRailWidth(0)
+      return
+    }
+    const update = (): void => setCueRailWidth(el.getBoundingClientRect().width)
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    cueRailObserver.current = ro
+  }, [])
+
   const [autoStopNotice, setAutoStopNotice] = useState<string | null>(null)
   /** What the rep never asked, captured at the moment they hang up. */
   const [hangupWarning, setHangupWarning] = useState<string | null>(null)
@@ -1104,6 +1182,28 @@ export function LiveView({
           </button>
         </InlineBanner>
       )}
+      {/* BUG-152 — THE WAY OUT.
+          LiveView gates every full-screen state behind `if (!hasTranscript)`,
+          so once a call has produced a transcript there is no route back to
+          the start screen. Pressing Stop is fine — that saves and navigates
+          away — but a call that ends on its own (the watchdog's onCaptureLost
+          sets 'no-device') leaves this layout up with "Reconnect" as its only
+          control, and Reconnect starts a NEW call. The founder's words: "I
+          can't get past it."
+          Deliberately NOT shown mid-call: a second stop-shaped button next to
+          Stop is a way to lose a call in progress. */}
+      {shouldOfferPostCallExit(status, segments.length > 0) && (
+        <InlineBanner tone="positive">
+          <span>This call has ended. Its transcript is saved to Past Calls.</span>
+          <button
+            type="button"
+            onClick={dismissFinishedCall}
+            className="no-drag shrink-0 rounded-lg bg-elevated px-3 py-1.5 text-xs font-semibold text-ink hover:bg-surface"
+          >
+            Done
+          </button>
+        </InlineBanner>
+      )}
 
       {/* Transcript + the floating cue card (kept above the Ask-coach bar). */}
       <div className="relative flex min-h-0 flex-1 flex-col">
@@ -1113,6 +1213,14 @@ export function LiveView({
           repSpeaker={repSpeaker}
           paused={status === 'paused'}
           identities={liveIdentities}
+          // 12px for the panel's own `top-3` offset, plus 8px so a line never
+          // sits flush against its lower edge.
+          reservedTopPx={dealPanelHeight > 0 ? dealPanelHeight + 20 : 0}
+          // 16px for the rail's own `right-4` offset, plus 8px so a line
+          // never sits flush against a cue's edge. 0 whenever no cue is
+          // showing, which is most of a call — the transcript gets its full
+          // width back the moment the last cue is dismissed or expires.
+          reservedRightPx={cueRailWidth > 0 ? cueRailWidth + 24 : 0}
         />
         {/* Two independent channels (§4.3), one column.
             They stay logically independent — a suggestion can never delay,
@@ -1122,7 +1230,10 @@ export function LiveView({
             until a cue wraps to three lines; this cannot overlap at all.
             The interrupt sits lowest, nearest the eye. */}
         {(cue || suggestions.length > 0) && (
-          <div className="pointer-events-none absolute top-3 right-4 bottom-4 z-40 flex w-64 flex-col items-end justify-end gap-2">
+          <div
+            ref={cueRailRef}
+            className="pointer-events-none absolute top-3 right-4 bottom-4 z-40 flex w-64 flex-col items-end justify-end gap-2"
+          >
             <SuggestionRail suggestions={suggestions} onDismiss={dismissSuggestion} />
             {cue && <CueCard key={cue.id} cue={cue} onDismiss={dismiss} />}
           </div>
@@ -1134,7 +1245,10 @@ export function LiveView({
             an empty pointer-events-none node in the DOM when the beta
             feature is off, matching the cue column's own conditional above. */}
         {dealIntelligenceEnabled && (
-          <div className="pointer-events-none absolute top-3 left-4 z-40 flex w-80 flex-col items-start">
+          <div
+            ref={dealPanelRef}
+            className="pointer-events-none absolute top-3 left-4 z-40 flex w-80 flex-col items-start"
+          >
             <DealIntelligencePanel
               enabled={dealIntelligenceEnabled}
               status={dealIntelligenceStatus}
