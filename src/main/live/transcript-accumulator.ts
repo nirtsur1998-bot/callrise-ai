@@ -34,11 +34,38 @@ export type SpeakerRole = 'rep' | 'other' | 'unknown'
 /** BUG-164 — how far back to look for the loopback copy of an incoming mic
  *  segment. Both copies of an echo arrive together (measured at a 0ms offset),
  *  so this only needs to span the jitter between the two channels' finals. */
-const ECHO_LOOKBACK = 8
+/** BUG-164 — the normalised form both channels are compared in. Exported so
+ *  the dry-run tool measures with the SAME function the live path uses: a
+ *  dry run that reimplements the rule is a second source of truth, and the
+ *  first time the two drift it reports on a rule that no longer ships. */
+export function echoKey(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** True when `micText` is the microphone's echo of `loopbackText`.
+ *
+ *  ENDS-WITH rather than equality, because dropping an echo makes the
+ *  surrounding loopback runs consecutive and mergeSegments joins them — so the
+ *  stored loopback text keeps growing while the mic still delivers one line at
+ *  a time. Safe for the same reason the whole fix is: the rep's voice cannot
+ *  reach channel 1, so anything of theirs found inside a loopback segment came
+ *  from the far end. */
+export function isMicEchoOf(micText: string, loopbackText: string): boolean {
+  const mic = echoKey(micText)
+  if (mic.length < ECHO_MIN_CHARS) return false
+  const loop = echoKey(loopbackText)
+  return loop === mic || loop.endsWith(' ' + mic)
+}
+
+export const ECHO_LOOKBACK = 8
 
 /** Below this, an identical string on both channels is more likely to be two
  *  people saying "yes" than an echo. */
-const ECHO_MIN_CHARS = 24
+export const ECHO_MIN_CHARS = 24
 
 export interface AccumulatedSegment {
   speaker: number
@@ -259,7 +286,7 @@ export class TranscriptAccumulator {
   private echoDropped = 0
 
   private static echoKey(text: string): string {
-    return text.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim()
+    return echoKey(text)
   }
 
   /** The OTHER ORDER, and the one that actually happens on a real machine.
@@ -322,7 +349,7 @@ export class TranscriptAccumulator {
       // A suffix match is still safe for the same reason the whole fix is: the
       // rep's voice cannot reach channel 1, so anything of theirs found inside
       // a loopback segment came from the far end.
-      if (!loopbackText.some((t) => t === key || t.endsWith(' ' + key))) return true
+      if (!loopbackText.some((t) => t === key || t.endsWith(' ' + key))) return true  // shared rule: isMicEchoOf
       this.echoDropped += 1
       return false
     })
