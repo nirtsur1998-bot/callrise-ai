@@ -104,6 +104,7 @@ HARD RULES, never break these:
 - Only extract what is actually, clearly stated or clearly demonstrated — never guess, infer, or extrapolate beyond what's said.
 - A single occurrence of a behavior (e.g. "talked over the client once") is NOT enough to state it as a settled pattern — phrase single-occurrence observations tentatively, as something noticed this one time, not as an established fact.
 - If nothing in the source text clearly fits the allowed categories, return an empty candidates array. An empty result is completely normal and expected — most short exchanges have nothing worth extracting.
+- NEVER extract anything about the RECORDING ITSELF rather than the business: how the transcript is labelled, who spoke first, what the speakers sound like, or the CallRise app and its interface. Those are artifacts of how the conversation was captured, not facts about the rep, their company or their client. If a call happens to discuss the tool, that is still not a fact about their business.
 - Every candidate's quote must be copied VERBATIM from the source text — not paraphrased, not summarized, not assembled from multiple places.
 
 When the transcript labels turns "REP (the user)" and "OTHER PARTY (the client)", those labels are AUTHORITATIVE - they come from which microphone the audio arrived on, not from interpretation. Never attribute something the OTHER PARTY said to the rep or to the rep's business, however natural it sounds. If the same sentence appears under BOTH labels, the rep's microphone picked up the other party through a speaker: treat it as the OTHER PARTY's, and never record it as a fact about the rep. Turns labelled "Speaker N" carry no such signal, so do not assume which one is the rep.
@@ -149,6 +150,16 @@ export function verifyAndBuild(
   const expectedKind = CATEGORY_SCOPE_KIND[category as MemoryCategory]
   if (expectedKind !== scopeKind) return null
   if (expectedKind === 'client' && !contactId) return null // no real client to attach this to — drop it
+
+  // BUG-167 — a memory that has to name a speaker LABEL is describing the
+  // transcript, not the business. Found in the real store at confidence 1.0:
+  // "Speaker 0 speaks first", "Speaker 1 speaks in a slightly different style
+  // than Speaker 0", "Speaker 1 covers their words while speaking" — all
+  // filed as `rep/communication-style`, all about the format of the model's
+  // own input. No genuine fact about a rep, their company or their client
+  // needs to say "Speaker 3". Structural, not a prompt request: the prompt
+  // already asks for this and the model does it anyway.
+  if (/(?:^|[^a-z])speakers?\s*\d/i.test(statement)) return null
 
   if (!verifyEvidenceQuote(quote, sourceText)) return null
 
