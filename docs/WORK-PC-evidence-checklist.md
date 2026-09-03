@@ -48,6 +48,11 @@ say so, and note roughly how long the app had been open.
 
 If the call **does** fail, note the **time it started**. That is what ties it to
 a line in the health log.
+**The single most valuable bit, added 2026-09-03:** once you have the health log
+(Step 3), the failing call's line answers BUG-D's open question by itself —
+does it read `multichannel=true` or only `multichannel=false`? See
+`docs/BUG-D-mechanism-narrowing.md`. You do not need to check this yourself; just
+send the log and note the failing call's start time.
 
 ---
 
