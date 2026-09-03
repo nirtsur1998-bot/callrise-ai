@@ -54,6 +54,24 @@ does it read `multichannel=true` or only `multichannel=false`? See
 `docs/BUG-D-mechanism-narrowing.md`. You do not need to check this yourself; just
 send the log and note the failing call's start time.
 
+**What the two outcomes look like, so you can tell a good file from a broken one.**
+You are not diagnosing — this is only so that if the file is truncated or the
+failing call is missing from it, you know to say so rather than assume it is fine:
+
+- The failing call should appear as **at least one line** whose timestamp is near
+  its start time, reading `multichannel=false`.
+- **Branch A** — that line is followed by a `multichannel=true` line for the same
+  call: the switch to two-channel capture succeeded. (Points downstream — audio
+  or ASR.)
+- **Branch B** — there is *only* the `multichannel=false` line, no
+  `multichannel=true` after it: the switch never completed. (Points at the
+  restart step.)
+
+Either branch is a result. What is NOT a result: **no line near the call's start
+time at all** — that means the file was truncated, the wrong file was sent, or the
+call did not reach the point of logging. If you see that, say the file looks
+incomplete rather than letting it read as Branch B (which it would resemble).
+
 ---
 
 ## STEP 3 — collect the files that never sync
