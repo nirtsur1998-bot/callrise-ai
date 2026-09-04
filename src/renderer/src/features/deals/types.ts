@@ -136,6 +136,9 @@ export interface BackfillRow {
    *  The two differ when a call was already linked elsewhere or a write
    *  failed, and the row's confirmation line must report the real number. */
   linkedCallCount?: number
+  /** BUG-184 — this answer was rebuilt from the deal it created because the
+   *  answers file had no record of it (the file is not backed up; deals are). */
+  reconstructed?: boolean
 }
 
 export interface BackfillState {

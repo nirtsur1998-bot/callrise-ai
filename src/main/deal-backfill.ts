@@ -63,6 +63,9 @@ export interface BackfillAnswerRecord {
   /** Exactly the calls this answer linked — so undo unlinks THESE and not
    *  whatever happens to point at the deal later. */
   linkedCallIds?: string[]
+  /** BUG-184 — not read from the answers file: rebuilt from the deal this
+   *  answer created (see reconstructAnswers). Never written back to the file. */
+  reconstructed?: boolean
 }
 
 /** One row of the sitting. Everything needed to answer it is here: the
@@ -83,6 +86,9 @@ export interface BackfillRow {
    *  The two differ when a call was already linked elsewhere or a write
    *  failed, and the row's confirmation line must report the real number. */
   linkedCallCount?: number
+  /** BUG-184 — the answer record was missing and this row was rebuilt from
+   *  the deal; the dialog says so, and ✕ still works. */
+  reconstructed?: boolean
 }
 
 export interface BackfillState {
@@ -207,14 +213,91 @@ function coachedByContact(calls: CallSummary[]): Map<string, CallSummary[]> {
   return byContact
 }
 
+/** The note every backfill-created deal carries. For deals written before
+ *  `origin` existed it is the only provenance they have, so it doubles as the
+ *  legacy recogniser below. */
+const BACKFILL_NOTE = 'Recorded from past calls.'
+
+const ANSWER_FOR_KIND: Partial<Record<DealStageKind, BackfillAnswer>> = {
+  won: 'won',
+  lost: 'lost',
+  'went-quiet': 'went-quiet'
+}
+
+function isBackfillDeal(d: { origin?: string; notes?: string }): boolean {
+  return d.origin === 'backfill' || d.notes === BACKFILL_NOTE
+}
+
+/**
+ * BUG-184 — REBUILD WHAT THE ANSWERS FILE HAS FORGOTTEN.
+ *
+ * Deals ride the cloud backup; `deal-backfill.json` does not. So a restore (or
+ * any loss of the file) brings a backfill-created deal back with no record of
+ * why it exists — and that deal then sat on the founder's board as a real
+ * Lost: excluded from the backfill list (the contact "already has a deal"),
+ * unreachable by ✕, and counted as the only data point on that side. The M32
+ * scope predicted exactly this and it materialised on 2026-09-01.
+ *
+ * Everything the record held is still derivable from the deal and its calls:
+ * the contact, the answer (the stage's kind), the deal id, and the linked
+ * calls (the ones pointing at it). Only `at` is approximated by the deal's
+ * creation time. So rather than make the file load-bearing, the file is
+ * treated as a cache of what the deals already say. A record that IS in the
+ * file always wins; reconstruction only fills the gaps.
+ *
+ * A backfill deal moved by hand into an open stage is no longer an answer —
+ * it is a deal now — and is deliberately not rebuilt.
+ */
+function reconstructAnswers(
+  fileAnswers: readonly BackfillAnswerRecord[],
+  deals: readonly { id: string; contactId: string; stageId: string; origin?: string; notes?: string }[],
+  calls: readonly CallSummary[],
+  stages: readonly { id: string; kind: DealStageKind }[]
+): BackfillAnswerRecord[] {
+  const known = new Set(fileAnswers.map((a) => a.contactId))
+  const kindByStage = new Map(stages.map((s) => [s.id, s.kind]))
+  const rebuilt: BackfillAnswerRecord[] = []
+  for (const d of deals) {
+    if (known.has(d.contactId) || !isBackfillDeal(d)) continue
+    const answer = ANSWER_FOR_KIND[kindByStage.get(d.stageId) ?? 'open']
+    if (!answer) continue
+    rebuilt.push({
+      contactId: d.contactId,
+      answer,
+      at: (d as { createdAt?: string }).createdAt ?? new Date(0).toISOString(),
+      dealId: d.id,
+      linkedCallIds: calls.filter((c) => c.dealId === d.id).map((c) => c.id),
+      reconstructed: true
+    })
+    known.add(d.contactId)
+  }
+  return rebuilt
+}
+
+/** The answers file plus whatever the deals can vouch for that it cannot.
+ *  `file` is what may be written back; `all` is what the sitting shows. */
+async function loadAnswers(): Promise<{
+  file: BackfillAnswerRecord[]
+  all: BackfillAnswerRecord[]
+}> {
+  const [file, deals, calls, stages] = await Promise.all([
+    readAnswers(),
+    listDeals(dealsDir()),
+    listCalls(callsDir()),
+    loadDealStages()
+  ])
+  return { file, all: [...file, ...reconstructAnswers(file, deals, calls, stages)] }
+}
+
 export async function buildState(): Promise<BackfillState> {
-  const [calls, contacts, deals, answers, stages] = await Promise.all([
+  const [calls, contacts, deals, fileAnswers, stages] = await Promise.all([
     listCalls(callsDir()),
     listContacts(contactsDir()),
     listDeals(dealsDir()),
     readAnswers(),
     loadDealStages()
   ])
+  const answers = [...fileAnswers, ...reconstructAnswers(fileAnswers, deals, calls, stages)]
 
   const byContact = coachedByContact(calls)
   const contactById = new Map(contacts.map((c) => [c.id, c]))
@@ -240,7 +323,8 @@ export async function buildState(): Promise<BackfillState> {
       lastCallTitle: contactCalls[0]?.title,
       answer: recorded?.answer,
       dealId: recorded?.dealId,
-      linkedCallCount: recorded?.linkedCallIds?.length
+      linkedCallCount: recorded?.linkedCallIds?.length,
+      reconstructed: recorded?.reconstructed
     })
   }
 
@@ -318,8 +402,10 @@ async function recordAnswerLocked(
   contactId: string,
   answer: BackfillAnswer
 ): Promise<AnswerResult> {
-  const existing = await readAnswers()
-  const prior = existing.find((a) => a.contactId === contactId)
+  // `all` includes answers rebuilt from orphaned backfill deals (BUG-184), so
+  // a correction retires that deal exactly as it would a recorded one.
+  const { file: existing, all } = await loadAnswers()
+  const prior = all.find((a) => a.contactId === contactId)
 
   const kind = OUTCOME_ANSWER_KINDS[answer]
   const record: BackfillAnswerRecord = {
@@ -366,7 +452,10 @@ async function recordAnswerLocked(
       title: contact.company || contact.name,
       contactId,
       stageId: stage.id,
-      notes: 'Recorded from past calls.'
+      notes: BACKFILL_NOTE,
+      // BUG-184: the deal carries its own provenance, so it can be recognised
+      // and undone even after the answers file is gone.
+      origin: 'backfill'
     })
     if (!deal) return { ok: false, error: 'deal-failed' } // prior untouched
 
@@ -413,8 +502,8 @@ export async function clearAnswer(contactId: unknown): Promise<AnswerResult> {
     return { ok: false, error: 'unknown-contact' }
   }
   return withBackfillLock(async () => {
-    const existing = await readAnswers()
-    const prior = existing.find((a) => a.contactId === contactId)
+    const { file: existing, all } = await loadAnswers()
+    const prior = all.find((a) => a.contactId === contactId)
     if (prior) await undoRecord(prior)
     await writeAnswers(existing.filter((a) => a.contactId !== contactId))
     scheduleBackup()

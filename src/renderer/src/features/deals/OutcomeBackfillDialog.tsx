@@ -411,6 +411,12 @@ function BackfillRowItem({
           {typeof row.linkedCallCount === 'number'
             ? ` and linked ${row.linkedCallCount} call${row.linkedCallCount === 1 ? '' : 's'} to it.`
             : '.'}
+          {/* BUG-184: the deal outlived its answer record (a restore brings
+              deals back, not the answers file). Say so, and say that the ✕
+              still works — a row that looks normal but cannot be undone is
+              the shape that put an unexplained Lost on the founder's board. */}
+          {row.reconstructed &&
+            ' This answer was rebuilt from that deal — the record of it had gone missing. Clearing it still removes the deal.'}
         </p>
       )}
       {error && (

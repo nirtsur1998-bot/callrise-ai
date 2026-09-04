@@ -53,6 +53,16 @@ export interface Deal {
    * right, which is the same one-armed sample the gate exists to refuse.
    */
   outcomeReason?: string
+  /**
+   * BUG-184 — where this deal came from. `'backfill'` marks a deal that the
+   * outcome backfill created from an answer, so it can be recognised WITHOUT
+   * the answers file: deals ride the cloud backup, `deal-backfill.json` does
+   * not, and a restore therefore resurrected a Lost deal on the founder's
+   * board with no record of why it existed — invisible to the backfill,
+   * impossible to undo, and counted as a real loss. The deal itself now
+   * carries the provenance the file used to. Absent on every hand-made deal.
+   */
+  origin?: 'backfill'
 }
 
 export interface DealCreateInput {
@@ -62,6 +72,11 @@ export interface DealCreateInput {
   value?: unknown
   expectedCloseDate?: unknown
   notes?: unknown
+  origin?: unknown
+}
+
+function sanitizeOrigin(value: unknown): 'backfill' | undefined {
+  return value === 'backfill' ? 'backfill' : undefined
 }
 
 /** Fields the renderer may change. A key present with `null` clears that
@@ -244,6 +259,7 @@ function sanitizeDealRecord(value: unknown): Deal | null {
     riskAssessmentHistory: sanitizeRiskAssessmentHistory(v.riskAssessmentHistory),
     stageHistory: sanitizeStageHistory(v.stageHistory),
     outcomeReason: sanitizeMultilineText(v.outcomeReason, MAX_OUTCOME_REASON),
+    origin: sanitizeOrigin(v.origin),
     deleted: v.deleted === true ? true : undefined
   }
 }
@@ -268,6 +284,7 @@ export async function createDeal(dir: string, input: DealCreateInput): Promise<D
     value: sanitizeValue(input?.value),
     expectedCloseDate: sanitizeDateOnly(input?.expectedCloseDate),
     notes: sanitizeMultilineText(input?.notes, MAX_NOTES),
+    origin: sanitizeOrigin(input?.origin),
     createdAt: now,
     updatedAt: now
   }
