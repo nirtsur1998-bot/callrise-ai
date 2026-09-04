@@ -399,6 +399,20 @@ export async function importDeal(
     if (!hasKey && current?.outcomeReason) {
       deal.outcomeReason = current.outcomeReason
     }
+    // BUG-184, the residual gap found 2026-09-04: `origin` needs the SAME
+    // absent-key preservation. A build older than the marker pushes rows with
+    // no `origin` key at all; without this, one pull of such a row (newer on
+    // the server because that build re-stamped it) silently stripped the
+    // provenance off every backfill-created deal on this machine — measured on
+    // the founder's real store, where two builds shared one account. There is
+    // no "clear origin" operation anywhere, so absent always means preserve.
+    const hasOrigin =
+      !!payload &&
+      typeof payload === 'object' &&
+      Object.prototype.hasOwnProperty.call(payload, 'origin')
+    if (!hasOrigin && current?.origin) {
+      deal.origin = current.origin
+    }
 
     await ensureDir(dir)
     try {

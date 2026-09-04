@@ -191,4 +191,36 @@ describe('BUG-184 — the answers file is not load-bearing', () => {
     expect(row?.reconstructed).toBeUndefined()
     expect((await readAnswers())[0].reconstructed).toBeUndefined()
   })
+
+  it("the residual gap: a NEWER pulled row with no origin key — an older build's push — keeps the local origin", async () => {
+    // Measured on the founder's real store 2026-09-04: two builds shared one
+    // account, the older one re-stamped and pushed the deal without the field,
+    // and the pull stripped the marker here. Same three-way rule as
+    // outcomeReason: absent key preserves, present key sets.
+    const contactId = await seedContactWithCoachedCalls('Ada', 1)
+    await recordAnswer(contactId, 'lost')
+    const [deal] = await listDeals(dealsDir())
+    expect(deal.origin, 'fixture: the answer did not mark the deal').toBe('backfill')
+
+    const { origin: _dropped, ...olderBuildRow } = deal
+    const newer = { ...olderBuildRow, updatedAt: new Date(Date.parse(deal.updatedAt) + 60_000).toISOString() }
+    expect(Object.prototype.hasOwnProperty.call(newer, 'origin'), 'fixture: key must be ABSENT').toBe(false)
+    const imported = await importDeal(dealsDir(), newer, { onlyIfNewer: true })
+    expect(imported, 'fixture: the newer row was not applied, so nothing was tested').not.toBeNull()
+
+    const after = await getDeal(dealsDir(), deal.id)
+    expect(after?.updatedAt, 'the newer row did not win — the pull path was not exercised').toBe(newer.updatedAt)
+    expect(after?.origin, 'the pull stripped the provenance marker').toBe('backfill')
+    // ...and it is still recognisable to the backfill without the answers file.
+    await loseTheAnswersFile()
+    expect((await buildState()).rows.find((r) => r.contactId === contactId)?.reconstructed).toBe(true)
+  })
+
+  it('a hand-made deal never GAINS an origin from preservation — absent on both sides stays absent', async () => {
+    const contactId = await seedContactWithCoachedCalls('Ada', 1)
+    const hand = await createDeal(dealsDir(), { title: 'Ada', contactId, stageId: 'st-open' })
+    const newer = { ...hand, updatedAt: new Date(Date.parse(hand!.updatedAt) + 60_000).toISOString() }
+    await importDeal(dealsDir(), newer, { onlyIfNewer: true })
+    expect((await getDeal(dealsDir(), hand!.id))?.origin).toBeUndefined()
+  })
 })
