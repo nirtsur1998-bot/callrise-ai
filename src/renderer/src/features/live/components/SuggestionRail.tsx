@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { MessageCircleQuestion, Search, AlertTriangle, TrendingUp, Zap, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
@@ -28,12 +29,31 @@ const META: Partial<Record<CueKind, { icon: LucideIcon; label: string; tint: str
  */
 export function SuggestionRail({
   suggestions,
-  onDismiss
+  onDismiss,
+  collapsed = false
 }: {
   suggestions: LiveCue[]
   onDismiss: (id: number) => void
+  /** M34 3c — Quiet mode: show only a count the rep can open. Nothing is
+   *  dropped; the suggestions keep accumulating behind the pill exactly as
+   *  they would on the rail, and the rail returns the moment Quiet is off. */
+  collapsed?: boolean
 }): React.JSX.Element | null {
+  const [peek, setPeek] = useState(false)
   if (suggestions.length === 0) return null
+
+  if (collapsed && !peek) {
+    return (
+      <button
+        type="button"
+        onClick={() => setPeek(true)}
+        aria-label={`Show ${suggestions.length} coaching suggestion${suggestions.length === 1 ? '' : 's'}`}
+        className="glass-hud pointer-events-auto rounded-full px-3 py-1 text-[11px] font-medium text-muted hover:text-ink"
+      >
+        {suggestions.length} suggestion{suggestions.length === 1 ? '' : 's'}
+      </button>
+    )
+  }
 
   return (
     <div

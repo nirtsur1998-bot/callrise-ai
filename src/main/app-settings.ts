@@ -186,11 +186,20 @@ export type CueSensitivity = 'low' | 'medium' | 'high'
 export interface LiveCueSettings {
   enabled: boolean
   sensitivity: CueSensitivity
+  /** M34 3c — "Quiet" on the live screen: the between-turn instruments
+   *  (gauge, monologue meter, suggestion rail, deal-intelligence panel) are
+   *  hidden; the transcript, must-ask strip, health/status and the ONE
+   *  deterministic interrupt cue stay. Persisted so the last state wins on
+   *  the next call. Independent of `enabled` (the cues mute) on purpose:
+   *  quiet removes reading, the mute removes the tap — two switches, both
+   *  meaningful, no third state to explain. */
+  quiet: boolean
 }
 
 const EMPTY_LIVE_CUES: LiveCueSettings = {
   enabled: true, // default ON — same as the hook it replaces
-  sensitivity: 'low'
+  sensitivity: 'low',
+  quiet: false // default: today's screen; the founder decides from a real call
 }
 
 const CUE_SENSITIVITIES: CueSensitivity[] = ['low', 'medium', 'high']
@@ -203,7 +212,8 @@ function sanitizeLiveCues(value: unknown): LiveCueSettings {
   const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
   return {
     enabled: typeof v.enabled === 'boolean' ? v.enabled : EMPTY_LIVE_CUES.enabled,
-    sensitivity: sanitizeCueSensitivity(v.sensitivity)
+    sensitivity: sanitizeCueSensitivity(v.sensitivity),
+    quiet: typeof v.quiet === 'boolean' ? v.quiet : EMPTY_LIVE_CUES.quiet
   }
 }
 
@@ -212,7 +222,8 @@ function mergeLiveCues(current: LiveCueSettings, patch: unknown): LiveCueSetting
   const p = patch as Record<string, unknown>
   return {
     enabled: 'enabled' in p ? p.enabled === true : current.enabled,
-    sensitivity: 'sensitivity' in p ? sanitizeCueSensitivity(p.sensitivity) : current.sensitivity
+    sensitivity: 'sensitivity' in p ? sanitizeCueSensitivity(p.sensitivity) : current.sensitivity,
+    quiet: 'quiet' in p ? p.quiet === true : current.quiet
   }
 }
 

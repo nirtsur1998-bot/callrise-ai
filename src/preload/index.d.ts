@@ -2343,6 +2343,8 @@ export type CueSensitivity = 'low' | 'medium' | 'high'
 export interface LiveCueSettings {
   enabled: boolean
   sensitivity: CueSensitivity
+  /** M34 3c — see main/app-settings.ts. */
+  quiet: boolean
 }
 
 /** M23 — see main/app-settings.ts's Coach2Settings for the exact behavior. */

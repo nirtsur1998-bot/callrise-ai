@@ -36,7 +36,7 @@ describe('dealIntelligence — defaults and sanitize', () => {
       enabledTypes: { risk: true, opportunity: true, tactical: true },
       frequency: 'balanced'
     })
-    expect(s.liveCues).toEqual({ enabled: true, sensitivity: 'low' })
+    expect(s.liveCues).toEqual({ enabled: true, sensitivity: 'low', quiet: false })
   })
 
   it('an invalid sensitivity/frequency value collapses to the safe default, never a made-up one', async () => {
@@ -118,7 +118,19 @@ describe('liveCues — merge semantics and persistence', () => {
     const { saveAppSettings } = await freshModule()
     saveAppSettings({ liveCues: { enabled: false } })
     const next = saveAppSettings({ liveCues: { sensitivity: 'high' } })
-    expect(next.liveCues).toEqual({ enabled: false, sensitivity: 'high' })
+    expect(next.liveCues).toEqual({ enabled: false, sensitivity: 'high', quiet: false })
+  })
+
+  it('M34 3c — quiet persists on its own and never touches the mute or sensitivity', async () => {
+    const { saveAppSettings, loadAppSettings } = await freshModule()
+    saveAppSettings({ liveCues: { enabled: false, sensitivity: 'high' } })
+    const next = saveAppSettings({ liveCues: { quiet: true } })
+    expect(next.liveCues).toEqual({ enabled: false, sensitivity: 'high', quiet: true })
+    // Survives a reload from disk; a non-boolean collapses to the default (off).
+    expect(loadAppSettings().liveCues.quiet).toBe(true)
+    expect(
+      saveAppSettings({ liveCues: { quiet: 'yes' as unknown as boolean } }).liveCues.quiet
+    ).toBe(false)
   })
 
   it('an invalid sensitivity value collapses to the default (low), never a made-up one', async () => {
@@ -138,7 +150,7 @@ describe('liveCues — merge semantics and persistence', () => {
     // real persistence, not an in-memory value surviving by luck.
     const second = await freshModule()
     const s = second.loadAppSettings()
-    expect(s.liveCues).toEqual({ enabled: false, sensitivity: 'medium' })
+    expect(s.liveCues).toEqual({ enabled: false, sensitivity: 'medium', quiet: false })
     expect(s.dealIntelligence.enabled).toBe(true)
     expect(s.dealIntelligence.sensitivity).toBe('quiet')
   })

@@ -101,4 +101,22 @@ describe('useCueSettings', () => {
     expect(api.enabled).toBe(true)
     expect(api.sensitivity).toBe('low')
   })
+
+  it('M34 3c — quiet loads from main, defaults OFF, and writes through as its own patch', async () => {
+    get.mockResolvedValueOnce({ liveCues: { enabled: true, sensitivity: 'low', quiet: true } })
+    let api!: CueSettings
+    root = createRoot(container)
+    act(() => {
+      root.render(createElement(Consumer, { onApi: (a) => (api = a) }))
+    })
+    expect(api.quiet).toBe(false) // before the real value lands: today's screen
+    await flushMicrotasks()
+    expect(api.quiet).toBe(true)
+
+    act(() => api.setQuiet(false))
+    expect(api.quiet).toBe(false)
+    // Its own patch — never carrying enabled/sensitivity along, so a quiet
+    // toggle cannot clobber a mute set a second earlier from another instance.
+    expect(update).toHaveBeenCalledWith({ liveCues: { quiet: false } })
+  })
 })

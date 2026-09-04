@@ -19,16 +19,22 @@ export interface CueSettings {
   setEnabled: (v: boolean) => void
   sensitivity: Sensitivity
   setSensitivity: (s: Sensitivity) => void
+  /** M34 3c — the live screen's Quiet mode (hides the between-turn
+   *  instruments). Persisted beside the cue settings; see app-settings.ts. */
+  quiet: boolean
+  setQuiet: (v: boolean) => void
 }
 
 // Same defaults main's own sanitizeLiveCues() falls back to — shown until
 // the real value has loaded.
 const DEFAULT_ENABLED = true // default ON
 const DEFAULT_SENSITIVITY: Sensitivity = 'low' // default calm
+const DEFAULT_QUIET = false // default: today's screen
 
 export function useCueSettings(): CueSettings {
   const [enabled, setEnabledState] = useState<boolean>(DEFAULT_ENABLED)
   const [sensitivity, setSensitivityState] = useState<Sensitivity>(DEFAULT_SENSITIVITY)
+  const [quiet, setQuietState] = useState<boolean>(DEFAULT_QUIET)
   const mountedRef = useRef(true)
 
   useEffect(() => {
@@ -41,6 +47,8 @@ export function useCueSettings(): CueSettings {
         setEnabledState(s.liveCues.enabled)
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setSensitivityState(s.liveCues.sensitivity)
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setQuietState(s.liveCues.quiet === true)
       })
       .catch(() => {
         /* keep the defaults shown above */
@@ -60,5 +68,10 @@ export function useCueSettings(): CueSettings {
     void window.api.settings.update({ liveCues: { sensitivity: s } })
   }, [])
 
-  return { enabled, setEnabled, sensitivity, setSensitivity }
+  const setQuiet = useCallback((v: boolean) => {
+    setQuietState(v)
+    void window.api.settings.update({ liveCues: { quiet: v } })
+  }, [])
+
+  return { enabled, setEnabled, sensitivity, setSensitivity, quiet, setQuiet }
 }
