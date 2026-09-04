@@ -58,9 +58,16 @@ honest about what it does: it hides instruments, it does not pretend they are
 gone.
 
 **The one setting worth adding regardless:** a visible **cue-frequency cap** —
-"at most one cue every N seconds" — surfaced in `CueControls`, not buried. The
-nudge engine can already pace; today the rep cannot see or set the pace. That is
-a genuine load lever and it is not taste.
+"at most one cue every N seconds" — surfaced in `CueControls`, not buried. Today
+the rep cannot see or set the pace. That is a genuine load lever and it is not
+taste.
+
+> ⚠ **Cost estimate flagged as optimistic (audit, 2026-09-04).** The line above
+> originally read "the nudge engine can already pace." Checked against source:
+> what exists is a cooldown on the interrupt channel, not a per-cue frequency
+> cap, and no setting feeds it. So the cap is not "expose a knob that exists" —
+> it is a small new mechanism in the nudge path plus the setting. Still small;
+> not free. Budget it as such before deciding.
 
 **Explicitly NOT proposed:** removing any instrument for everyone, or a redesign
 of the layout. 3c is "let the rep turn the volume down mid-call," not "rebuild
