@@ -6,7 +6,14 @@ import { cn } from '@renderer/lib/cn'
 import type { BackfillAnswer, BackfillRow, BackfillState } from './types'
 
 /**
- * THE BACKFILL — one sitting, nineteen rows.
+ * THE BACKFILL — one sitting.
+ *
+ * The row count is DATA-DRIVEN, not fixed at nineteen: buildState() shows one
+ * row per coached contact who does not already have a deal. On the founder's
+ * real profile (driven 2026-09-04) that is 13 rows — 19 coached contacts minus
+ * the 6 already linked to a deal. The "nineteen" below is the founder's
+ * original framing of the effort, kept because the design constraint it drove
+ * is still exactly right, not because the number is live.
  *
  * ══ DESIGNED FOR THE TENTH ROW, NOT THE FIRST ═══════════════════════════
  *
