@@ -28,18 +28,32 @@ gh release view v1.5.2 --json isDraft,isPrerelease,publishedAt
 
 Expect `isDraft: false`, `isPrerelease: false`, and a real `publishedAt`.
 
-### 2. The tag names the commit that actually shipped
+### 2. The tag names the commit CI built and hashed
 
-`tag == HEAD == origin/main`. A tag pushed from a stale local checkout, or
-before the last commit landed, produces a release built from code nobody
-reviewed — and the version number will still look right.
+**The property is: the tag points at the commit whose bytes CI built and check 4
+hashed.** `tag == HEAD == origin/main` is a PROXY for that, and the proxy is what
+the automated check compares — cheaper, and usually equivalent.
+
+But they can diverge without the property being violated. **v1.9.1 (2026-09-03):**
+a docs-only commit was pushed to `main` AFTER the release was dispatched, so the
+tag stayed correctly on the built commit while `origin/main` moved one ahead.
+Check 2 went red; the property held. Confirmed by hand: the delta was a single
+non-shipped `docs/` file, the tagged commit contained the fix, and check 4
+independently proved the served installer's bytes.
 
 ```bash
-git fetch origin --tags && git rev-parse v1.5.2^{commit} HEAD origin/main
+git fetch origin --tags && git rev-parse v1.9.1^{commit} HEAD origin/main
+# If they differ, do NOT retag to make this green. Retagging moves the tag OFF
+# the commit CI built and hashed -- it makes the check pass by breaking the
+# thing the check protects. Instead ask: is the tagged commit the one that was
+# built (yes if CI tagged it at dispatch), and is main ahead only by
+# non-shipped files? If both, the property holds and the red is a proxy
+# artefact -- record why, and note check 4 is the real guarantee of the bytes.
+git diff --name-only v1.9.1 origin/main   # must be docs/ or other non-shipped only
 ```
 
-All three hashes must be identical. If they are not, stop — do not "just retag".
-Work out which commit was actually built first.
+**And the process rule that avoids the red entirely: push nothing after
+dispatching a release until the tag lands.**
 
 ### 3. All four assets are attached
 
