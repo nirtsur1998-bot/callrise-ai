@@ -42,6 +42,9 @@ import { AskCoach } from './components/AskCoach'
 import { EngagementGauge } from './components/EngagementGauge'
 import { MonologueMeter } from './components/MonologueMeter'
 import { DealIntelligencePanel } from '@renderer/features/deal-intelligence/ui/DealIntelligencePanel'
+import { QuietToggle } from './components/QuietToggle'
+import { DealFactsLine } from './components/DealFactsLine'
+import { useLiveDealFacts } from './useLiveDealFacts'
 import {
   IdleHero,
   AttachingState,
@@ -244,6 +247,9 @@ export function LiveView({
   // Date.now() is impure, so "is a meeting happening right now" can't be a
   // useMemo (which runs during render) — it has to live in an effect.
   const [currentMeeting, setCurrentMeeting] = useState<CalendarEvent | null>(null)
+  // M34 3d — the deal facts for the matched meeting, resolved ONCE per
+  // meeting and never refreshed mid-call (see useLiveDealFacts).
+  const dealFacts = useLiveDealFacts(currentMeeting)
   useEffect(() => {
     const now = Date.now()
     const all = [...calEvents, ...googleEvents, ...outlookEvents]
@@ -317,7 +323,8 @@ export function LiveView({
   // state must survive a navigation and an ordinary mid-call restart, not
   // reset on either. This screen is a pure attach/subscribe client for them
   // now, same shape it already is for the transcript.
-  const { enabled, setEnabled, sensitivity, setSensitivity } = liveCall.cueSettings
+  const { enabled, setEnabled, sensitivity, setSensitivity, quiet, setQuiet } =
+    liveCall.cueSettings
   const {
     cue,
     dismiss,
@@ -956,6 +963,13 @@ export function LiveView({
           </button>
         )}
 
+        {/* M34 3d — one line, two glances: stage · risk · last call. Records
+            only, present only on a matched-meeting call, absent otherwise
+            (no placeholder). Rendered in EVERY mode including Quiet: it is a
+            fixed fact, not an instrument, and it never changes during the
+            call. Left of the must-ask strip so the first glance is "where
+            this deal stands" and the second is "what is still unasked". */}
+        <DealFactsLine facts={dealFacts} />
         {recording && <MustAskStrip state={checklist} />}
 
         {(status === 'listening' || status === 'paused') && (
@@ -975,16 +989,24 @@ export function LiveView({
           {allowOtherPartyRecording && (
             <OtherPartyControl consent={consent} onOpen={() => setConsentOpen(true)} />
           )}
+          {/* M34 3c-A — Quiet sits BESIDE the cues mute, deliberately two
+              switches: quiet removes what must be READ (gauge, meter, rail,
+              deal-intelligence panel); the mute removes the one deterministic
+              interrupt that taps you. Founder's call from a real call: quiet
+              keeps the interrupt cue. Health/status is never hidden in any
+              mode — a capture failure staying visible is the whole point of
+              BUG-177's fix. */}
+          <QuietToggle quiet={quiet} onToggle={setQuiet} />
           <CueControls
             enabled={enabled}
             onToggle={setEnabled}
             sensitivity={sensitivity}
             onSensitivity={setSensitivity}
           />
-          {status === 'listening' && engagementScore !== null && (
+          {!quiet && status === 'listening' && engagementScore !== null && (
             <EngagementGauge score={engagementScore} />
           )}
-          {status === 'listening' && monologue !== null && monologue.ms > 0 && (
+          {!quiet && status === 'listening' && monologue !== null && monologue.ms > 0 && (
             <MonologueMeter state={monologue} />
           )}
           <StatusBadge status={status} />
@@ -1342,7 +1364,13 @@ export function LiveView({
             ref={cueRailRef}
             className="pointer-events-none absolute top-3 right-4 bottom-4 z-40 flex w-64 flex-col items-end justify-end gap-2"
           >
-            <SuggestionRail suggestions={suggestions} onDismiss={dismissSuggestion} />
+            {/* M34 3c — in Quiet the rail collapses to a count the rep can
+                open; the interrupt cue below it is untouched. */}
+            <SuggestionRail
+              suggestions={suggestions}
+              onDismiss={dismissSuggestion}
+              collapsed={quiet}
+            />
             {cue && <CueCard key={cue.id} cue={cue} onDismiss={dismiss} />}
           </div>
         )}
@@ -1358,7 +1386,10 @@ export function LiveView({
             ended, sitting under the "This call has ended" banner still saying
             "Watching" with a live health score. Every other live element here
             checks `status`; this one did not. */}
-        {dealIntelligenceEnabled && liveSurfaceVisible && (
+        {/* M34 3c — hidden in Quiet (the engine keeps running in the
+            Provider; only the panel goes). The callback ref sees the unmount
+            and resets the reserved height to 0. */}
+        {!quiet && dealIntelligenceEnabled && liveSurfaceVisible && (
           <div
             ref={dealPanelRef}
             className="pointer-events-none absolute top-3 left-4 z-40 flex w-80 flex-col items-start"
