@@ -51,8 +51,14 @@ you know. Different meaning from "Not a deal," and the app keeps them separate.
 - **Answers save as you go.** If you close the dialog at row 7 and come back
   tomorrow, rows 1–7 are still answered. Progress is written to disk per click,
   not at the end.
-- **Undo is just clicking a different button** — or the same one again to clear
-  it. The row returns to unanswered; nothing is deleted.
+- **Changing an answer is clicking a different button.** Clicking the same
+  button again does nothing (it is not a toggle, so a double-click cannot
+  un-answer a row). **Undo is the ✕ that appears at the right end of an answered
+  row** — the row returns to unanswered. For Won / Lost / Went quiet the deal
+  that answer created is deleted and its calls unlinked; for the other two
+  there is nothing to reverse. *(Driven in the real app on the real profile
+  2026-09-04: the same-button re-click left the row and the file unchanged; the
+  ✕ cleared it and removed the deal it had created.)*
 - **Rows never reorder.** An answered row stays exactly where it was. Row ten is
   always where row ten was.
 - **If a save fails** (a locked file, say), the error appears **on that row**
