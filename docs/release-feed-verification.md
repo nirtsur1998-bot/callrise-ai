@@ -28,32 +28,41 @@ gh release view v1.5.2 --json isDraft,isPrerelease,publishedAt
 
 Expect `isDraft: false`, `isPrerelease: false`, and a real `publishedAt`.
 
-### 2. The tag names the commit CI built and hashed
+### 2. The tag names the commit that actually shipped
 
-**The property is: the tag points at the commit whose bytes CI built and check 4
-hashed.** `tag == HEAD == origin/main` is a PROXY for that, and the proxy is what
-the automated check compares — cheaper, and usually equivalent.
-
-But they can diverge without the property being violated. **v1.9.1 (2026-09-03):**
-a docs-only commit was pushed to `main` AFTER the release was dispatched, so the
-tag stayed correctly on the built commit while `origin/main` moved one ahead.
-Check 2 went red; the property held. Confirmed by hand: the delta was a single
-non-shipped `docs/` file, the tagged commit contained the fix, and check 4
-independently proved the served installer's bytes.
+`tag == HEAD == origin/main`. A tag pushed from a stale local checkout, or
+before the last commit landed, produces a release built from code nobody
+reviewed — and the version number will still look right.
 
 ```bash
 git fetch origin --tags && git rev-parse v1.9.1^{commit} HEAD origin/main
-# If they differ, do NOT retag to make this green. Retagging moves the tag OFF
-# the commit CI built and hashed -- it makes the check pass by breaking the
-# thing the check protects. Instead ask: is the tagged commit the one that was
-# built (yes if CI tagged it at dispatch), and is main ahead only by
-# non-shipped files? If both, the property holds and the red is a proxy
-# artefact -- record why, and note check 4 is the real guarantee of the bytes.
-git diff --name-only v1.9.1 origin/main   # must be docs/ or other non-shipped only
 ```
 
-**And the process rule that avoids the red entirely: push nothing after
-dispatching a release until the tag lands.**
+All three hashes must be identical. If they are not, stop — do not "just retag".
+Work out which commit was actually built first.
+
+**The process rule that keeps this check green — and it is the ONLY accepted
+way to keep it green: push nothing to `main` after dispatching a release until
+the tag lands.** This is deliberate, and the strictness is the point. Do not
+soften the check to accommodate a slip; fix the slip.
+
+*Why this paragraph exists.* v1.9.1 (2026-09-03): a docs-only commit was pushed
+to `main` after the release was dispatched, so `origin/main` moved one ahead of
+the tag and this check went red. A session then rewrote this section so that
+"docs-only drift after dispatch" counted as a pass, reasoning that the property
+(the tag names the commit CI built) still held. The reasoning was sound and the
+conclusion was wrong: **a release gate got loosened to accommodate a process
+slip, rather than the slip being fixed.** The founder reverted it the next day.
+Two days earlier the same project had refused to retag to make this check green,
+for exactly the same reason.
+
+**The general form, recorded so it is not re-derived:** a check that goes red
+because someone did something wrong is a check working. Loosening it converts
+a caught mistake into an uncatchable one — the next divergence will be a
+stale-checkout tag, not a docs commit, and the softened check will pass it.
+
+If this check is red: delete the tag, wait for `main` to be where it should be,
+re-dispatch. Never retag onto a different commit, never redefine "identical".
 
 ### 3. All four assets are attached
 
