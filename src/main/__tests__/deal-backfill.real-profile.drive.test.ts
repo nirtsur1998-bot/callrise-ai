@@ -137,7 +137,7 @@ describe.runIf(HAS_REAL)('M34 1a — backfill driven on the real profile', () =>
 
   it('the gate: reports its status honestly on this real data', async () => {
     const s = await buildState()
-    log(`\n  gate on the real profile: ${s.insight?.status ?? 'n/a'}${s.insight?.reason ? ' — ' + s.insight.reason : ''}`)
+    log(`\n  gate on the real profile: ${s.insight?.status ?? 'n/a'} (${JSON.stringify(s.insight?.counts ?? {})})`)
     // No assertion on the value — this is a report of what the founder would see,
     // and the value depends on their real won/lost deals. Asserting a specific
     // status would be asserting the founder's data.
