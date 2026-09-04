@@ -143,18 +143,34 @@ export function loadDealStages(): DealStage[] {
  * launch would be principle 49's worst case, silently restoring something a
  * person deliberately removed.
  */
-const STAGE_MIGRATIONS = ['went-quiet-v1'] as const
-type StageMigration = (typeof STAGE_MIGRATIONS)[number]
+const STAGE_MIGRATIONS = ['went-quiet-v1', 'went-quiet-dedupe-v1'] as const
+const MAX_MIGRATION_MARKER = 64
 
-function sanitizeMigrations(value: unknown): StageMigration[] {
+/**
+ * BUG-183 — markers this build does NOT recognise are carried through, never
+ * dropped. The first version kept only the markers it knew, which is exactly
+ * how the founder's board grew four "Went quiet" columns: a v1.6.0 build (no
+ * `migrations` field at all, and a `sanitizeKind` that maps the unknown
+ * 'went-quiet' to 'open') rewrote the file on an ordinary stage edit, the
+ * marker and the kind both vanished, and the next newer launch "migrated"
+ * again — appending a fresh stage each time the two builds alternated. A
+ * migration that fights itself across versions. Builds already in the field
+ * cannot be fixed, so the repair below is written to survive their stripping;
+ * this line stops THIS build from doing the same thing to whatever comes next.
+ */
+function sanitizeMigrations(value: unknown): string[] {
   if (!Array.isArray(value)) return []
-  return STAGE_MIGRATIONS.filter((m) => value.includes(m))
+  const seen = new Set<string>()
+  for (const m of value) {
+    if (typeof m === 'string' && m.length > 0 && m.length <= MAX_MIGRATION_MARKER) seen.add(m)
+  }
+  return [...seen]
 }
 
 export function loadDealStagesMeta(): {
   stages: DealStage[]
   updatedAt: string
-  migrations: StageMigration[]
+  migrations: string[]
 } {
   try {
     const parsed = JSON.parse(readFileSync(stagesPath(), 'utf8'))
@@ -189,17 +205,69 @@ export function loadDealStagesMeta(): {
  * write (and a pointless `updatedAt` bump, which would make this device claim
  * "newest" against the cloud for a change nobody made).
  */
+const WENT_QUIET_LABEL = 'Went quiet'
+const normaliseLabel = (label: string): string => label.trim().toLowerCase()
+
 export function migrateDealStages(): boolean {
   const meta = loadDealStagesMeta()
-  if (meta.migrations.includes('went-quiet-v1')) return false
+  let stages = meta.stages
+  const migrations = [...meta.migrations]
+  let changed = false
 
-  const already = meta.stages.some((s) => s.kind === 'went-quiet')
-  const stages = already
-    ? meta.stages
-    : [...meta.stages, { id: 'went-quiet', label: 'Went quiet', kind: 'went-quiet' as const }]
+  if (!migrations.includes('went-quiet-v1')) {
+    // BUG-183 — REPAIR BEFORE APPENDING. An older build that rewrote the file
+    // has turned our stage's kind into 'open' and dropped this marker; the
+    // stage itself is still there under its id or its label. Appending a
+    // second one is what produced four columns. So: no stage of this kind →
+    // look for OUR stage by id, then by label, and put its kind back; only
+    // when neither exists is a stage actually missing.
+    if (!stages.some((s) => s.kind === 'went-quiet')) {
+      const ours =
+        stages.find((s) => s.id === 'went-quiet') ??
+        stages.find((s) => normaliseLabel(s.label) === normaliseLabel(WENT_QUIET_LABEL))
+      stages = ours
+        ? stages.map((s) => (s === ours ? { ...s, kind: 'went-quiet' as const } : s))
+        : [...stages, { id: 'went-quiet', label: WENT_QUIET_LABEL, kind: 'went-quiet' as const }]
+      changed = true
+    }
+    migrations.push('went-quiet-v1')
+  }
 
-  writeStagesWithMigrations(stages, [...meta.migrations, 'went-quiet-v1'], meta.updatedAt, already)
-  return !already
+  if (!migrations.includes('went-quiet-dedupe-v1')) {
+    // BUG-183 — the clean-up for boards that already grew the duplicates.
+    // A clone is a stage labelled like ours whose kind is 'open' (that is the
+    // coerced shape, and it is also why a card dragged into one records the
+    // WRONG outcome) while a real 'went-quiet' stage exists. Removed only when
+    // EMPTY: a clone holding deals is left alone rather than orphaning them,
+    // and the marker is set regardless so this never re-runs on its own.
+    const real = stages.find((s) => s.kind === 'went-quiet')
+    if (real) {
+      const clones = stages.filter(
+        (s) =>
+          s !== real &&
+          s.kind === 'open' &&
+          normaliseLabel(s.label) === normaliseLabel(WENT_QUIET_LABEL)
+      )
+      if (clones.length > 0) {
+        const inUse = new Set(
+          listDealsUsingStage(
+            dealsDir(),
+            clones.map((c) => c.id)
+          ).map((d) => d.stageId)
+        )
+        const removable = new Set(clones.filter((c) => !inUse.has(c.id)).map((c) => c.id))
+        if (removable.size > 0) {
+          stages = stages.filter((s) => !removable.has(s.id))
+          changed = true
+        }
+      }
+    }
+    migrations.push('went-quiet-dedupe-v1')
+  }
+
+  if (!changed && migrations.length === meta.migrations.length) return false
+  writeStagesWithMigrations(stages, migrations, meta.updatedAt, !changed)
+  return changed
 }
 
 function writeStages(stages: DealStage[], updatedAt = new Date().toISOString()): void {
@@ -218,7 +286,7 @@ function writeStages(stages: DealStage[], updatedAt = new Date().toISOString()):
 /** Used only by the migration, which must control the stamp itself. */
 function writeStagesWithMigrations(
   stages: DealStage[],
-  migrations: StageMigration[],
+  migrations: string[],
   previousUpdatedAt: string,
   unchanged: boolean
 ): void {
@@ -298,7 +366,7 @@ export function registerDealStages(): void {
   // deal stages registering at all, which would take the whole Pipeline down
   // over a config nicety.
   try {
-    if (migrateDealStages()) console.log('[deal-stages] added "Went quiet" to the saved pipeline')
+    if (migrateDealStages()) console.log('[deal-stages] repaired the saved pipeline ("Went quiet" added, restored, or de-duplicated)')
   } catch (e) {
     console.error('[deal-stages] migration failed, continuing with the saved pipeline:', e)
   }
