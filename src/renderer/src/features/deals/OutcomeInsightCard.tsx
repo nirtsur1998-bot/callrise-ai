@@ -107,6 +107,25 @@ export function OutcomeInsightCard({
               itself.
             </p>
           )}
+          {usable.lost < needPerArm && (
+            // M34 1d — what the board's OWN numbers say about the bar. Not a
+            // countdown (rejected: it implies arrival is imminent and
+            // automatic) and not analysis output (nothing here is about the
+            // calls): it is the requirement restated at this pipeline's own
+            // win/loss split, because "8 lost" hides that at a 4-to-1 rate the
+            // lost column is ~40 closed deals away. The founder asked for
+            // exactly this to be on the screen, and for it to be read as a
+            // finding about who this feature fits, not as a number to wait on.
+            <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-faint">
+              {closed.won + closed.lost === 0
+                ? 'No deal has closed on this board yet, so there is no win rate to project from. '
+                : closed.lost === 0
+                  ? `Every closed deal so far is a win (${closed.won} won, 0 lost), so there is no loss rate to project from yet. For scale: at a 4-to-1 win rate, ${needPerArm} lost deals is roughly ${needPerArm * 5} closed deals. `
+                  : `At this board's own split so far (${closed.won} won to ${closed.lost} lost), the lost column reaches ${needPerArm} at roughly ${Math.ceil(needPerArm / (closed.lost / (closed.won + closed.lost)))} closed deals. `}
+              That is the volume this analysis is built for. Until then this card is a record of
+              what has been captured, not a countdown.
+            </p>
+          )}
           {backfillUntrustworthy && (
             <p className="mt-2 max-w-xl rounded-lg bg-elevated px-2.5 py-2 text-[12px] leading-relaxed text-warning">
               Most of the rows you&apos;ve answered so far came back &ldquo;I don&apos;t
