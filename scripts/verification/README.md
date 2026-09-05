@@ -644,3 +644,27 @@ git ls-tree -r --name-only main | grep -cx 'docs/HANDOFF.md'    # -x, anchored
 Two bad instruments inside one check, both caught only by looking at what they
 matched. That is the whole thesis of this directory: **an instrument's output is
 a claim about the instrument until you have seen what it looked at.**
+
+## Render tests exist — the recipe (correction, 2026-09-05)
+
+For weeks this project believed "no component in this app can have its render
+output tested" (BUG-140) and shaped decisions around it: logic pushed into
+`.ts` files with thin JSX, and "verified by tests, not by render" accepted as a
+limit in half a dozen reports. **It was false.** Two suites already render real
+components under vitest:
+
+- `src/renderer/src/features/live/__tests__/live-header-pieces.render.test.ts`
+- `src/renderer/src/features/tasks/__tests__/GenerateTasksDialog.recovery.test.ts`
+
+The recipe: a `.test.ts` file (the runner's `include` is `src/**/*.test.ts`),
+`// @vitest-environment happy-dom` on line 1, `createRoot` from
+`react-dom/client`, `act` + `createElement` from `react`, and
+`IS_REACT_ACT_ENVIRONMENT = true`. Anything that provides context at the app
+root (toasts, the tooltip provider) must either be wrapped in or self-provide —
+the tooltip primitive does the latter precisely because these suites found it.
+
+How it surfaced is worth keeping: a commit message claimed a green suite by
+reading the wrapper's exit code instead of the suite's; the seven real failures
+underneath were these render suites breaking on a missing provider, and chasing
+them found the belief. A false claim exposed a false belief; neither would have
+surfaced without the other (taxonomy species 82).

@@ -6,6 +6,7 @@ import type { NavId } from './nav-items'
  *
  * This exists as a pure function, separate from MainApp, for the reason
  * BUG-140 forces: component render output cannot be tested in this repo, so
+ * CORRECTION 2026-09-05: components CAN be render-tested here — see live-header-pieces.render.test.ts (`@vitest-environment happy-dom`, react-dom/client, a `.test.ts` file). The pure/UI split below still stands on its own merits; it is no longer forced.
  * anything with a rule in it lives where a test can reach it. The rule here
  * is small and was wrong for a long time, which is exactly the kind that
  * earns its own module.

@@ -5,6 +5,7 @@ import type { AssistantTraceStep } from '../../../../preload/index.d'
  *
  * Pure, and separate from the component, for the reason BUG-140 forces:
  * component render output cannot be tested in this repo, so the rule lives
+ * CORRECTION 2026-09-05: components CAN be render-tested here — see live-header-pieces.render.test.ts (`@vitest-environment happy-dom`, react-dom/client, a `.test.ts` file). The pure/UI split below still stands on its own merits; it is no longer forced.
  * where a test can reach it. And there IS a rule here, not just formatting —
  * the founder's constraint was that the trace shows what actually happened,
  * "never what was planned", and that empty and failed outcomes are stated

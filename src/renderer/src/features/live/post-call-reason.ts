@@ -9,6 +9,7 @@
 //
 // Extracted as a pure decision because LiveView cannot be render-tested
 // (BUG-140): everything that can be wrong lives here, where a test reaches it.
+// CORRECTION 2026-09-05: components CAN be render-tested here — see live-header-pieces.render.test.ts (`@vitest-environment happy-dom`, react-dom/client, a `.test.ts` file). The pure/UI split below still stands on its own merits; it is no longer forced.
 import type { Deal, DealStage } from '@renderer/features/deals/types'
 import { promptRetired, shouldAnnounceStopping } from '@renderer/features/deals/outcomeReasonPref'
 

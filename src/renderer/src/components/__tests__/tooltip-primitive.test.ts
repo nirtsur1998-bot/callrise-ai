@@ -2,7 +2,8 @@
 // founder approved for it use it (2026-09-05: "one primitive, IconButton
 // adoption, 14 hand edits; truncation reveals and short values stay native").
 //
-// Text pins, because this repo cannot render components under vitest (BUG-140).
+// Text pins, chosen before the render-test recipe was rediscovered (BUG-140 was stale).
+// CORRECTION 2026-09-05: components CAN be render-tested here — see live-header-pieces.render.test.ts (`@vitest-environment happy-dom`, react-dom/client, a `.test.ts` file). The pure/UI split below still stands on its own merits; it is no longer forced.
 // The classification itself is reproducible: scratchpad/tooltip-classify.mjs
 // walked every `title=` back to its opening tag — 179 sites, 118 component
 // props, 61 DOM attributes, of which 16 reveals, 13 labels, 6 + 8 explanatory.

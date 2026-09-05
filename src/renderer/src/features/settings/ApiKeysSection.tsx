@@ -304,6 +304,7 @@ type KeyStatusDot = 'connected' | 'no-key' | 'invalid' | 'rate-limited' | 'unche
  */
 // Exported for `api-key-status-dot.test.ts`. This repo cannot assert on
 // component render output (BUG-140), so the mapping that decides whether a card
+// CORRECTION 2026-09-05: components CAN be render-tested here — see live-header-pieces.render.test.ts (`@vitest-environment happy-dom`, react-dom/client, a `.test.ts` file). The pure/UI split below still stands on its own merits; it is no longer forced.
 // says "Connected" or "Key invalid" is tested as the pure function it is — and
 // the two call sites below (`title=` and the visible label) both read
 // STATUS_DOT_LABEL[deriveStatusDot(...)], so pinning the function pins the text.
