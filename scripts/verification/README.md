@@ -668,3 +668,27 @@ reading the wrapper's exit code instead of the suite's; the seven real failures
 underneath were these render suites breaking on a missing provider, and chasing
 them found the belief. A false claim exposed a false belief; neither would have
 surfaced without the other (taxonomy species 82).
+
+## Read the answer, not a number next to it (species 69, three instances in two days)
+
+The same misreading happened three times on 2026-09-04/05: a wrapper's exit
+code taken as the suite's ("exit 0" over 7 failures), a `grep -c` count taken
+as content, and a typecheck's "1" read as clean. Counts sit NEXT to the answer
+and look like it. The mechanical fix is one command that prints the answer in
+the only form that cannot be misread and ends with one word:
+
+```bash
+node scripts/verification/verify-green.mjs
+```
+
+It runs the project's typecheck and the full suite and prints the suite's OWN
+`Test Files` / `Tests` summary lines, the typecheck's OWN `error TS` lines,
+every `×` test name, and `VERDICT: GREEN` or `VERDICT: NOT GREEN`. Its exit
+code is its own (nothing is piped through `head` or `tail`). `--tests -- <files>`
+narrows the suite; `--types` runs the typecheck alone.
+
+Rules that follow from it, for anything this script does not cover:
+
+- never `| grep -c` a gate — print the matching lines, or none;
+- never read `$?` after a pipe — the last command's code is what you get;
+- when a command prints a count, print the thing counted next to it.
