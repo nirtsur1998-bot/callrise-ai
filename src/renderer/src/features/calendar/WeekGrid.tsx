@@ -238,6 +238,7 @@ export function WeekGrid({
                             ? 'prep brief needs refreshing'
                             : undefined,
                         item.context?.callId && 'call recorded — open the meeting to view it',
+                        item.context?.notSynced,
                         item.subtitle
                       ]
                         .filter(Boolean)
@@ -263,6 +264,11 @@ export function WeekGrid({
                             aria-hidden
                             className={RISK_DOT[item.context.risk === 'high' ? 'high' : 'medium']}
                           />
+                        )}
+                        {item.context?.notSynced && (
+                          <span aria-label="not on your calendar" className="shrink-0 text-warning" data-testid="chip-not-synced">
+                            ⚠
+                          </span>
                         )}
                         <span className="truncate font-medium">{item.title}</span>
                         {item.context?.callId ? (

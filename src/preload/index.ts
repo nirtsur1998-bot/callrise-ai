@@ -395,6 +395,8 @@ const api = {
     deleteExternal: (link: unknown) => ipcRenderer.invoke('events:deleteExternal', link),
     // Retry any pending Google pushes/deletes (offline backlog). Fire-and-forget.
     reconcile: () => ipcRenderer.invoke('events:reconcile'),
+    // BUG-169 — the ONE manual retry of a failed push, from the event itself.
+    retryPush: (id: string) => ipcRenderer.invoke('events:retryPush', id),
     // Fires when a background Google sync changes events on disk (re-pull needed).
     onChanged: (cb: () => void) => subscribe('events:changed', cb)
   },

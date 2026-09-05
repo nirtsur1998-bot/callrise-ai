@@ -210,6 +210,8 @@ function Chip({
     // is one clearly-labelled click further in, so a click never lands
     // somewhere the user didn't ask for.
     ctx?.callId && 'call recorded — open the meeting to view it',
+    // BUG-169 — the full sentence lives in the tooltip; the chip shows a mark.
+    ctx?.notSynced,
     item.subtitle
   ]
     .filter(Boolean)
@@ -232,6 +234,14 @@ function Chip({
     >
       {!item.allDay && <span className="shrink-0 opacity-70">{format(item.start, 'h:mm')}</span>}
       {ctx?.risk && <span aria-hidden className={RISK_DOT[ctx.risk === 'high' ? 'high' : 'medium']} />}
+      {/* BUG-169 — a push that failed. Text, not colour alone: a glyph a rep
+          can read on any theme, with the reason one hover away and the
+          retry one click away (the dialog). */}
+      {ctx?.notSynced && (
+        <span aria-label="not on your calendar" className="shrink-0 text-warning" data-testid="chip-not-synced">
+          ⚠
+        </span>
+      )}
       {/* The title stays the title. An earlier pass swapped in the contact
           name when one was linked, which reads well until two meetings with
           the same person become indistinguishable — the chip would be

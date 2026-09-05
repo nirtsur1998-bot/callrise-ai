@@ -10,6 +10,8 @@ import { useContacts } from '@renderer/features/contacts/useContacts'
 import { useDeals } from '@renderer/features/deals/useDeals'
 import { useDealStages } from '@renderer/features/deals/useDealStages'
 import type { EventDraft } from './types'
+import { SyncFailureLine } from './SyncFailureLine'
+import type { SyncFailure } from './syncFailure'
 
 // Native date/time pickers need an explicit dark color-scheme, on top of the
 // shared field styling.
@@ -47,6 +49,11 @@ interface EventDialogProps {
    *  reach the user's phone/desktop once this event actually pushes to one
    *  of those, so the picker explains itself when neither is connected. */
   syncEnabled?: boolean
+  /** BUG-169 — present only when this event's last push to Google/Outlook
+   *  failed and nobody has retried it. The dialog shows the reason and the
+   *  ONE manual retry; nothing retries silently. */
+  syncFailure?: SyncFailure | null
+  onRetryPush?: () => Promise<{ ok: boolean; reason?: string }>
 }
 
 export function EventDialog({
@@ -57,7 +64,9 @@ export function EventDialog({
   onDelete,
   onOpenPrepBrief,
   onOpenCall,
-  syncEnabled = false
+  syncEnabled = false,
+  syncFailure = null,
+  onRetryPush
 }: EventDialogProps): React.JSX.Element {
   const [draft, setDraft] = useState<EventDraft>(initial)
   const [busy, setBusy] = useState(false)
@@ -141,6 +150,14 @@ export function EventDialog({
       </div>
 
       <div className="flex-1 space-y-3 overflow-y-auto px-6 py-5">
+        {/* BUG-169 — FIRST in the body, not last. The first placement put it
+            below the reminders and the dialog scrolls: on the founder's real
+            events the line was in the DOM and off-screen — a warning nobody
+            sees is the bug this is meant to fix. Read from the screenshot,
+            not the test. */}
+        {isEdit && syncFailure && onRetryPush && (
+          <SyncFailureLine failure={syncFailure} onRetry={onRetryPush} />
+        )}
         <Field label="Title">
           <input
             type="text"

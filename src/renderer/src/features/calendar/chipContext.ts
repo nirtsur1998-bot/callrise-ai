@@ -4,6 +4,7 @@ import type { DealStage } from '@renderer/features/deals/types'
 import { dealAttentionTier } from '@renderer/features/deals/staleness'
 import type { PrepBriefStatus } from '../../../../preload/index.d'
 import type { CalendarItem } from './types'
+import { syncFailureOf } from './syncFailure'
 
 /** The sales context a calendar chip can carry. Every field is optional and
  *  only ever set from data we actually have — an absent field renders
@@ -24,6 +25,10 @@ export interface ChipContext {
    *  presence is a fact rather than a match confidence. There is deliberately
    *  no "probably this call" variant: see CalendarEvent.callId. */
   callId?: string
+  /** BUG-169 — the push to Google/Outlook failed and nobody has retried it:
+   *  one sentence saying so. Read straight off `event.sync`, which the push
+   *  path has always written and nothing ever rendered. Absent when synced. */
+  notSynced?: string
 }
 
 export interface ChipContextSources {
@@ -96,6 +101,11 @@ export function buildChipContext(
   // rules here: the link only exists because a call was actually recorded
   // during this meeting, so its presence already means "this happened".
   if (event.callId) context.callId = event.callId
+
+  // BUG-169 — a failed push is a fact about this event, shown where the event
+  // is. A synced or never-pushed event adds nothing.
+  const failure = syncFailureOf(event)
+  if (failure) context.notSynced = failure.reason
 
   return Object.keys(context).length > 0 ? context : undefined
 }

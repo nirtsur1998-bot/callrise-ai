@@ -1666,6 +1666,8 @@ export interface EventsApi {
   deleteExternal: (link: AdoptEventInput) => Promise<{ ok: boolean }>
   /** Retry any pending Google pushes/deletes (offline backlog). */
   reconcile: () => Promise<void>
+  /** BUG-169 — the one manual retry of a failed push, from the event. */
+  retryPush: (id: string) => Promise<{ ok: boolean; reason?: string }>
   /** Fires when a background Google sync changes events on disk. */
   onChanged: (cb: () => void) => () => void
 }

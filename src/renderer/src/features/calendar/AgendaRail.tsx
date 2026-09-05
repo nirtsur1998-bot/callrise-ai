@@ -133,6 +133,11 @@ export function AgendaRail({
                               · {ctx.risk} risk
                             </span>
                           )}
+                          {ctx?.notSynced && (
+                            <span className="text-warning" title={ctx.notSynced} data-testid="chip-not-synced">
+                              · not on your calendar
+                            </span>
+                          )}
                         </span>
                       </span>
                     </button>
