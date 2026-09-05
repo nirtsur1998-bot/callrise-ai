@@ -20,6 +20,22 @@ export interface EventSync {
 }
 
 /**
+ * BUG-169 follow-up (founder's decision, 2026-09-05) — an event whose provider
+ * calendar NO LONGER EXISTS. Retry could never succeed (a PATCH 404s and the
+ * re-insert into the same dead calendar id 404s too), and re-creating it on the
+ * current calendar would put a stale past meeting there for no benefit. So it
+ * becomes local-only — and the record says WHY, so someone opening it in six
+ * months knows it was orphaned rather than deliberately local. The old link is
+ * kept here, not erased: it is the evidence.
+ */
+export interface EventOrphan {
+  provider: string
+  externalId: string
+  reason: 'calendar-gone'
+  at: string
+}
+
+/**
  * A calendar event stored on disk (one JSON file per event). Times are
  * absolute ISO instants so they're unambiguous across time zones. The
  * source stays 'local' even once mirrored to Google — the event is still
@@ -41,6 +57,9 @@ export interface CalendarEvent {
    *  (never both at once). */
   remoteUpdatedAt?: string
   sync?: EventSync // omitted = never synced (treated as local-only)
+  /** See EventOrphan. Present only on an event that was linked and lost its
+   *  calendar; survives a cloud pull (this machine's copy wins on absence). */
+  orphaned?: EventOrphan
   /** Backup tombstone: a deleted event is kept (not erased) so the deletion can
    *  propagate to the cloud mirror. Distinct from sync.state='deleted', which is
    *  the TRANSIENT Google-delete state; this flag is the permanent record.
@@ -216,6 +235,7 @@ function sanitizeEventRecord(value: unknown): CalendarEvent | null {
     externalId: typeof v.externalId === 'string' ? v.externalId.slice(0, 200) : undefined,
     remoteUpdatedAt: toIso(v.remoteUpdatedAt) ?? undefined,
     sync: sanitizeSync(v.sync),
+    orphaned: sanitizeOrphan(v.orphaned),
     deleted: v.deleted === true ? true : undefined, // preserve the tombstone flag
     contactId: isSafeId(v.contactId) ? v.contactId : undefined,
     dealId: isSafeId(v.dealId) ? v.dealId : undefined,
@@ -224,6 +244,47 @@ function sanitizeEventRecord(value: unknown): CalendarEvent | null {
     createdAt,
     updatedAt: toIso(v.updatedAt) ?? createdAt
   }
+}
+
+function sanitizeOrphan(value: unknown): EventOrphan | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const v = value as Record<string, unknown>
+  const provider = sanitizeLinkField(v.provider)
+  const externalId = sanitizeLinkField(v.externalId)
+  const at = toIso(v.at)
+  if (!provider || !externalId || !at) return undefined
+  return { provider, externalId, reason: 'calendar-gone', at }
+}
+
+/**
+ * Make a linked event local-only because its calendar is gone, keeping the old
+ * link as the reason. Idempotent. Refuses an event that was never linked —
+ * there is nothing to be orphaned FROM, and a "local-only" record with an
+ * orphan note but no evidence would be a lie. `updatedAt` is bumped so the
+ * change reaches the cloud mirror.
+ */
+export async function orphanEvent(dir: string, id: string): Promise<CalendarEvent | null> {
+  const event = await getEvent(dir, id)
+  if (!event) return null
+  if (event.orphaned && !event.externalId) return event
+  if (!event.provider || !event.externalId) return null
+  event.orphaned = {
+    provider: event.provider,
+    externalId: event.externalId,
+    reason: 'calendar-gone',
+    at: new Date().toISOString()
+  }
+  delete event.provider
+  delete event.externalId
+  delete event.remoteUpdatedAt
+  event.sync = { state: 'local-only' }
+  event.updatedAt = new Date().toISOString()
+  try {
+    await writeEvent(dir, event)
+  } catch {
+    return null
+  }
+  return event
 }
 
 function sanitizeLinkField(value: unknown): string | undefined {
@@ -481,6 +542,9 @@ export async function importEvent(
     event.externalId = current.externalId
     event.remoteUpdatedAt = current.remoteUpdatedAt
     event.sync = current.sync
+    // The orphan note is evidence about THIS machine's link; a payload that
+    // predates it must not erase it (the BUG-184 absent-key shape).
+    if (!event.orphaned && current.orphaned) event.orphaned = current.orphaned
   } else if (!event.deleted && event.externalId) {
     // FRESH machine restoring a Google-linked event: adopt the account-level
     // identity the payload carries and mark it 'synced', so (a) the pulled

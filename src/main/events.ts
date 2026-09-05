@@ -6,6 +6,7 @@ import {
   updateEvent,
   getEvent,
   setEventSync,
+  orphanEvent,
   markEventDeleted,
   type CalendarEvent,
   type EventCreateInput,
@@ -33,6 +34,30 @@ import {
 
 function eventsDir(): string {
   return join(app.getPath('userData'), 'events')
+}
+
+/** The words for an orphaned event, shared by the Activity row and (in its own
+ *  copy) the renderer's dialog line. */
+export function orphanNote(o: { provider: string; at: string }): string {
+  const where = o.provider.startsWith('google') ? 'Google Calendar' : o.provider.startsWith('outlook') ? 'Outlook' : 'your calendar'
+  return `Kept here only: the ${where} calendar it was on no longer exists (since ${o.at.slice(0, 10)}).`
+}
+
+/** Founder's decision, 2026-09-05: every linked event stuck in error:not-found
+ *  becomes local-only with the reason recorded. Returns how many changed. */
+export async function orphanNotFoundEvents(): Promise<number> {
+  const all = await listEvents(eventsDir(), { includeDeleted: false })
+  let n = 0
+  for (const e of all) {
+    if (e.sync?.state === 'error' && e.sync.lastError === 'not-found' && e.externalId) {
+      if (await withState(e.id, () => orphanEvent(eventsDir(), e.id))) n++
+    }
+  }
+  if (n) {
+    console.log(`[events] ${n} event(s) whose calendar no longer exists are now kept here only`)
+    notifyEventsChanged()
+  }
+  return n
 }
 
 /** BUG-169 — one Activity row per failed event, never a second while the
@@ -124,6 +149,16 @@ async function recordPushResult(
         remoteUpdatedAt: res.remoteUpdatedAt,
         sync: { state: 'synced', lastPushedAt: new Date().toISOString() }
       })
+    } else if (res.error === 'not-found' && cur.externalId) {
+      // Founder's decision (2026-09-05): a LINKED event whose calendar no
+      // longer exists (the PATCH 404'd and the re-insert into the same
+      // calendar id 404'd) becomes local-only with the reason on the record,
+      // rather than an error nobody can retry out of. On the founder's own
+      // profile: ten events from Aug 6–13 pinned to two dead Outlook calendar
+      // ids. The Activity row below still fires once, and reads as "kept
+      // here only" once it looks at the record.
+      await orphanEvent(eventsDir(), id)
+      noteCalendarPushFailure({ eventId: id, title: cur.title, code: res.error, provider: cur.provider })
     } else {
       await setEventSync(eventsDir(), id, {
         sync: { state: res.retryable ? 'dirty' : 'error', lastError: res.error }
@@ -296,6 +331,13 @@ export function registerEvents(): void {
   // index.ts so it's owned by the same module that owns the event store.
   startEventReminders(eventsDir)
 
+  // Founder's decision (2026-09-05) for the events ALREADY in the not-found
+  // state when this shipped: same transition the push path now applies.
+  // Idempotent and cheap; fire-and-forget off the startup path.
+  void orphanNotFoundEvents().catch((err) =>
+    console.error('[events] orphan sweep failed:', err)
+  )
+
   ipcMain.handle('events:list', (): Promise<CalendarEvent[]> => listEvents(eventsDir()))
   // Each of these announces the change (notifyEventsChanged) rather than
   // relying on schedulePush to do it: that only fires when the SYNC outcome
@@ -451,6 +493,7 @@ export function registerEvents(): void {
         const e = await getEvent(eventsDir(), input.eventId)
         if (!e || e.sync?.state === 'deleted') return 'The event was deleted.'
         if (e.sync?.state === 'synced') return 'Now on your calendar.'
+        if (e.orphaned) return orphanNote(e.orphaned)
         throw new Error(
           describeSyncFailure(e.sync?.lastError ?? input.code, e.provider ?? input.provider) +
             ' Open the event to retry.'

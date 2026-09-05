@@ -52,3 +52,12 @@ export function syncFailureOf(event: Pick<CalendarEvent, 'sync' | 'provider'> | 
   if (s.state !== 'dirty' && s.state !== 'error') return null
   return { code: s.lastError, reason: describeSyncFailure(s.lastError, event?.provider), state: s.state }
 }
+
+/** The dialog's informational line for an orphaned event — not a warning, no
+ *  Retry: there is nothing to retry into. Mirrors main's orphanNote. */
+export function orphanNoteOf(event: { orphaned?: { provider: string; at: string } } | null | undefined): string | null {
+  const o = event?.orphaned
+  if (!o) return null
+  const where = o.provider.startsWith('google') ? 'Google Calendar' : o.provider.startsWith('outlook') ? 'Outlook' : 'your calendar'
+  return `Kept here only: the ${where} calendar it was on no longer exists (since ${o.at.slice(0, 10)}).`
+}

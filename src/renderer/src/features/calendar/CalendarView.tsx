@@ -22,7 +22,7 @@ import { CalendarConnectBar } from './CalendarConnectBar'
 import { QuickEventDialog } from './QuickEventDialog'
 import { AgendaRail } from './AgendaRail'
 import { buildChipContext } from './chipContext'
-import { syncFailureOf } from './syncFailure'
+import { orphanNoteOf, syncFailureOf } from './syncFailure'
 import { usePrepBriefStatuses } from './usePrepBriefStatuses'
 import { useContacts } from '@renderer/features/contacts/useContacts'
 import { useDeals } from '@renderer/features/deals/useDeals'
@@ -412,6 +412,7 @@ export function CalendarView({
           // Main refreshes the calendar itself when the outcome changes
           // (notifyEventsChanged), so nothing here re-pulls by hand.
           syncFailure={dialog.event ? syncFailureOf(dialog.event) : null}
+          orphanNote={dialog.event ? orphanNoteOf(dialog.event) : null}
           onRetryPush={
             dialog.event
               ? async () => {

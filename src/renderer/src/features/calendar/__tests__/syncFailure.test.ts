@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { describeSyncFailure, syncFailureOf, SYNC_FAILURE_TEXT } from '../syncFailure'
+import { describeSyncFailure, orphanNoteOf, syncFailureOf, SYNC_FAILURE_TEXT } from '../syncFailure'
 import { buildChipContext, type ChipContextSources } from '../chipContext'
 import type { CalendarEvent, CalendarItem } from '../types'
 
@@ -56,5 +56,19 @@ describe('describeSyncFailure (renderer copy) — the provider as it is actually
     expect(describeSyncFailure('not-found', 'outlook:AQMkADAwATM3ZmYBLWI2OTUt')).toBe(
       'Not on Outlook: the calendar or the event no longer exists there.'
     )
+  })
+})
+
+describe('orphanNoteOf — the reason line for an event whose calendar is gone', () => {
+  it('says kept-here-only, names the provider and the date; nothing for an event that was never orphaned', () => {
+    expect(orphanNoteOf({ orphaned: { provider: 'outlook:AQMk', externalId: 'x', reason: 'calendar-gone', at: '2026-09-05T12:00:00.000Z' } })).toBe(
+      'Kept here only: the Outlook calendar it was on no longer exists (since 2026-09-05).'
+    )
+    expect(orphanNoteOf({})).toBeNull()
+    expect(orphanNoteOf(null)).toBeNull()
+  })
+  it('matches main\'s orphanNote word for word (lockstep)', () => {
+    const main = readFileSync(join(__dirname, '..', '..', '..', '..', '..', 'main', 'events.ts'), 'utf8')
+    expect(main).toContain("`Kept here only: the ${where} calendar it was on no longer exists (since ${o.at.slice(0, 10)}).`")
   })
 })

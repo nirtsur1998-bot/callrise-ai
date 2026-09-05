@@ -25,6 +25,9 @@ export interface CalendarEvent {
   attendees?: { email: string; name?: string }[]
   remoteUpdatedAt?: string
   sync?: { state: EventSyncState; lastPushedAt?: string; lastError?: string }
+  /** The event was linked to a calendar that no longer exists; it is kept here
+   *  only, and this says why (main's EventOrphan). */
+  orphaned?: { provider: string; externalId: string; reason: 'calendar-gone'; at: string }
   /** The contact/deal this event is with, if linked — app-local only, never
    *  pushed to Google/Outlook. Powers the follow-up dashboard. */
   contactId?: string

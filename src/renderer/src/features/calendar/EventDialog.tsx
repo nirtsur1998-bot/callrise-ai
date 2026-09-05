@@ -54,6 +54,8 @@ interface EventDialogProps {
    *  ONE manual retry; nothing retries silently. */
   syncFailure?: SyncFailure | null
   onRetryPush?: () => Promise<{ ok: boolean; reason?: string }>
+  /** An orphaned event's reason line (see syncFailure.ts orphanNoteOf). */
+  orphanNote?: string | null
 }
 
 export function EventDialog({
@@ -66,7 +68,8 @@ export function EventDialog({
   onOpenCall,
   syncEnabled = false,
   syncFailure = null,
-  onRetryPush
+  onRetryPush,
+  orphanNote = null
 }: EventDialogProps): React.JSX.Element {
   const [draft, setDraft] = useState<EventDraft>(initial)
   const [busy, setBusy] = useState(false)
@@ -157,6 +160,14 @@ export function EventDialog({
             not the test. */}
         {isEdit && syncFailure && onRetryPush && (
           <SyncFailureLine failure={syncFailure} onRetry={onRetryPush} />
+        )}
+        {isEdit && !syncFailure && orphanNote && (
+          <p
+            className="rounded-lg bg-elevated px-3 py-2 text-[12px] text-muted"
+            data-testid="orphan-note"
+          >
+            {orphanNote}
+          </p>
         )}
         <Field label="Title">
           <input
