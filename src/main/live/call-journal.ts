@@ -25,7 +25,7 @@
 // await on the hot path.
 import { app } from 'electron'
 import { join } from 'node:path'
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, unlinkSync } from 'node:fs'
 import { readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { isOtherPartySpeaker, type ConsentRecord } from '../calls-fs'
 import {
@@ -88,10 +88,13 @@ function journalsDir(): string {
   return join(baseDir ?? app.getPath('userData'), 'call-journals')
 }
 
-/** `.done` marks a journal whose call was saved normally. Kept as a separate
- *  marker file rather than a line inside the journal, so that "was this call
- *  completed?" can be answered without reading — and without trusting — a file
- *  that may have been torn mid-write by the very crash we are recovering from. */
+/** LEGACY (pre-BUG-189). `.done` marked a journal whose call was saved
+ *  normally, and the journal itself was kept beside it. Since BUG-189 a saved
+ *  call's journal is DELETED at save time (see CallJournal.complete), so this
+ *  marker is never written any more; the path helper survives only so the
+ *  startup sweep (retireCompletedJournals) can find and remove the pairs older
+ *  builds left behind, and so listOrphanJournals keeps honouring one if it
+ *  ever meets one. */
 function donePath(id: string): string {
   return join(journalsDir(), `${id}.done`)
 }
@@ -100,6 +103,9 @@ function journalPath(id: string): string {
   return join(journalsDir(), `${id}.jsonl`)
 }
 
+/** LEGACY (pre-BUG-189). retireJournal used to RENAME a recovered journal to
+ *  this name as "cheap insurance"; it now deletes. Kept so the startup sweep
+ *  can remove the copies older builds retained. */
 function recoveredPath(id: string): string {
   return `${journalPath(id)}.recovered`
 }
@@ -177,19 +183,35 @@ export class CallJournal {
     this.writeLine(event)
   }
 
-  /** The call was saved normally, so this journal is no longer a recovery
-   *  candidate. Writes a marker rather than deleting immediately: if the save
-   *  itself is what failed, the journal is the last copy and must survive.
+  /** The call was saved normally, so this journal has done its one job and is
+   *  RETIRED: deleted, with every marker, right here.
    *
-   *  writeFileSync, not createWriteStream: a stream reports a bad path via an
-   *  asynchronous 'error' event, which with no listener attached is an
-   *  unhandled exception — i.e. journaling taking down the app, the one thing
-   *  this module is not allowed to do. Synchronous means catchable. */
+   *  BUG-189 (founder's rule, 2026-09-05): a journal is crash recovery only —
+   *  "retire it after a successful save, never sync it, never retain it." It
+   *  keeps the buyer's words verbatim for the length of the call, which is
+   *  right while it is the only copy and wrong the moment it is not. This is
+   *  only ever called AFTER saveCall() resolved (calls.ts's calls:save
+   *  handler), so the Call record already holds the transcript; a save that
+   *  failed never reaches here and its journal survives as the last copy.
+   *
+   *  Before this, complete() wrote a `.done` marker and the journal stayed on
+   *  disk — and was then deleted anyway on the NEXT launch, by accident: the
+   *  BUG-139 sweep removes `.done` journals "whose call no longer exists", and
+   *  a saved call never has the journal's id (saveCall mints its own), so
+   *  every one qualified. The retention the founder ruled out was already not
+   *  happening, one launch late and by a mechanism written for something else.
+   *  Same shape as BUG-188's "survives by accident". Now it is on purpose.
+   *
+   *  Synchronous and swallowing, like every write here: a locked file must
+   *  never turn a successful save into an error. A journal that survives a
+   *  failed unlink is caught by retireCompletedJournals on the next launch. */
   complete(): void {
-    try {
-      writeFileSync(donePath(this.id), '', 'utf8')
-    } catch (err) {
-      console.error('[call-journal] could not mark complete:', err)
+    for (const path of allJournalPaths(this.id)) {
+      try {
+        unlinkSync(path)
+      } catch {
+        /* missing (most of these, always) or locked — the sweep gets it */
+      }
     }
   }
 
@@ -477,18 +499,52 @@ export async function sweepJournalsForMissingCalls(
   return removed
 }
 
-/** Retire a journal that has been recovered into a real Call, keeping the file
- *  under a `.recovered` name rather than deleting it. Cheap insurance: if the
- *  recovery itself produced something wrong, the source is still there. */
+/** Retire a journal that has been recovered into a real Call: delete it, with
+ *  every marker. It used to be RENAMED to `.jsonl.recovered` as "cheap
+ *  insurance" — BUG-189 ended that: the recovered Call is the copy, and the
+ *  journal's verbatim buyer words are not to be retained beside it. The
+ *  M27 E2 recovered-call marker goes too: its only job was surviving a crash
+ *  between saveCall() and this function, and once the `.jsonl` is gone the
+ *  journal is no longer offered as an orphan, so it has nothing to protect. */
 export async function retireJournal(id: string): Promise<void> {
-  await rename(journalPath(id), recoveredPath(id)).catch(() => {})
-  await unlink(donePath(id)).catch(() => {})
-  // M27 E2 — the marker's only job was surviving a crash between saveCall()
-  // and this function running; once retirement itself succeeds, the journal
-  // is no longer offered as an orphan (its `.jsonl` name is gone), so the
-  // marker has nothing left to protect. Cleaned up here rather than left to
-  // accumulate forever.
-  await unlink(recoveredCallMarkerPath(id)).catch(() => {})
+  for (const path of allJournalPaths(id)) await unlink(path).catch(() => {})
+}
+
+/**
+ * BUG-189 — the startup sweep for what older builds RETAINED: a `.done`
+ * journal (pre-BUG-189 normal save) and a `.jsonl.recovered` journal
+ * (pre-BUG-189 recovery). Both describe a call that was saved, so the journal
+ * has no recovery job left and, under the founder's rule, no reason to exist.
+ *
+ * Deliberately never touches a journal still awaiting a recover/discard
+ * decision (a bare `.jsonl` with no `.done`) — that one may be the ONLY copy
+ * of a call, and deleting it silently is the one thing this module must never
+ * do. listOrphanJournals keeps offering it to the rep.
+ */
+export async function retireCompletedJournals(): Promise<number> {
+  let entries: string[]
+  try {
+    entries = await readdir(journalsDir())
+  } catch {
+    return 0
+  }
+  const ids = new Set<string>()
+  for (const f of entries) {
+    if (f.endsWith('.done')) ids.add(f.slice(0, -'.done'.length))
+    else if (f.endsWith('.jsonl.recovered')) ids.add(f.slice(0, -'.jsonl.recovered'.length))
+  }
+  let removed = 0
+  for (const id of ids) {
+    for (const path of allJournalPaths(id)) {
+      try {
+        await unlink(path)
+        removed++
+      } catch {
+        /* best-effort per file */
+      }
+    }
+  }
+  return removed
 }
 
 /**

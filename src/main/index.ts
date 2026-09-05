@@ -252,7 +252,11 @@ import { registerEvents } from './events'
 import { registerLiveCue } from './live-cue'
 import { registerLoopbackCapture } from './loopback'
 import { registerLiveTranscriptIpc } from './live/live-transcript-ipc'
-import { redactPendingClosedJournals, sweepJournalsForMissingCalls } from './live/call-journal'
+import {
+  redactPendingClosedJournals,
+  retireCompletedJournals,
+  sweepJournalsForMissingCalls
+} from './live/call-journal'
 import { sweepOrphanedCompanions, recordIsGone } from './companion-files'
 import { registerGoogle } from './google'
 import { registerOutlook } from './outlook'
@@ -647,9 +651,20 @@ app.whenReady().then(async () => {
   // to createWindow() — see J2's own lesson about the Sales Brain init race
   // just above. Safe to run every launch regardless: already-redacted
   // journals are skipped instantly via their `.redacted` marker.
-  void redactPendingClosedJournals().catch((err) =>
-    console.error('[index] pending journal redaction sweep failed:', err)
-  )
+  // BUG-189 — retire what older builds retained (`.done` pairs and
+  // `.jsonl.recovered` copies of calls that were saved) BEFORE the redaction
+  // sweep looks at them: a journal that is about to be deleted does not need
+  // redacting, and an unrecovered crash journal is touched by neither.
+  void retireCompletedJournals()
+    .then((n) => {
+      if (n) console.log(`[index] BUG-189 retired ${n} journal file(s) of saved calls`)
+    })
+    .catch((err) => console.error('[index] journal retirement sweep failed:', err))
+    .finally(() => {
+      void redactPendingClosedJournals().catch((err) =>
+        console.error('[index] pending journal redaction sweep failed:', err)
+      )
+    })
 
   // BUG-139 (privacy) — the backlog half of the companion-file fix. Purging on
   // delete only protects calls deleted from NOW ON: anything deleted before

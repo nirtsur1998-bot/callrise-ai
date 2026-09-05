@@ -33,7 +33,8 @@ const {
   redactJournalConsentIfNeeded,
   redactPendingClosedJournals,
   markJournalRecoveredAsCall,
-  readRecoveredCallId
+  readRecoveredCallId,
+  retireCompletedJournals
 } = await import('../live/call-journal')
 
 const {
@@ -481,77 +482,86 @@ describe('1.2.5 hotfix — consent redaction of the raw journal', () => {
     return existsSync(join(journalFolder(), `${id}.redacted`))
   }
 
-  it('strips buyer words from the raw journal once a non-consented buyer-capture call is saved', async () => {
-    beginCall({ restart: false })
-    recordConsent(null) // buyer never consented
-    recordResult(
-      result(
-        [
-          { speaker: 0, text: 'rep talking', channel: 0 },
-          { speaker: 1, text: 'buyer talking', channel: 1 }
-        ],
-        { multichannel: true }
+  // BUG-189 (2026-09-05) — these four used to assert that a normal save left
+  // the journal on disk with the buyer's words redacted (or, for a consented
+  // call, kept). The founder's rule replaced redaction-on-save with RETIREMENT:
+  // a saved call's journal is deleted at save time, with every marker, whatever
+  // the consent — the stronger form of the same privacy guarantee, and the
+  // words of a consented call are not retained beside the Call record either.
+  // redactJournalConsentIfNeeded is still exercised directly below, because it
+  // remains the backstop for a journal a locked file kept the retire from
+  // deleting.
+  describe('BUG-189 — a normal save RETIRES the journal, whatever the consent', () => {
+    function allFilesFor(id: string): string[] {
+      return readdirSync(journalFolder()).filter((f) => f.startsWith(id))
+    }
+
+    it('non-consented buyer-capture call: every journal file is gone the instant the save completes', () => {
+      beginCall({ restart: false })
+      recordConsent(null)
+      recordResult(
+        result(
+          [
+            { speaker: 0, text: 'rep talking', channel: 0 },
+            { speaker: 1, text: 'buyer talking', channel: 1 }
+          ],
+          { multichannel: true }
+        )
       )
-    )
-    const id = idOf(journalFile())
-    endCall({ saved: true }) // fire-and-forget redaction kicks off here
+      const id = idOf(journalFile())
+      expect(readFileSync(journalFile(), 'utf8')).toContain('buyer talking') // it WAS there
+      endCall({ saved: true })
+      expect(allFilesFor(id)).toEqual([]) // synchronous: nothing to wait for
+    })
 
-    await vi.waitFor(() => expect(markerExists(id)).toBe(true))
-    const raw = readFileSync(journalFile(), 'utf8')
-    expect(raw).not.toContain('buyer talking')
-    expect(raw).toContain('rep talking')
-  })
-
-  it('honours a mid-call revocation the same way applyConsentRetention does — last state wins', async () => {
-    beginCall({ restart: false })
-    recordConsent(CONSENTED)
-    recordResult(
-      result(
-        [
-          { speaker: 0, text: 'rep talking', channel: 0 },
-          { speaker: 1, text: 'buyer talking', channel: 1 }
-        ],
-        { multichannel: true }
+    it("consented call: retired just the same — the Call record is the copy, the journal's words are not kept", () => {
+      beginCall({ restart: false })
+      recordConsent(CONSENTED)
+      recordResult(
+        result(
+          [
+            { speaker: 0, text: 'rep talking', channel: 0 },
+            { speaker: 1, text: 'buyer talking', channel: 1 }
+          ],
+          { multichannel: true }
+        )
       )
-    )
-    recordConsent(null) // rep switched recording off before the call ended
-    const id = idOf(journalFile())
-    endCall({ saved: true })
+      const id = idOf(journalFile())
+      endCall({ saved: true })
+      expect(allFilesFor(id)).toEqual([])
+      expect(readdirSync(journalFolder())).toEqual([]) // and no .done, no .redacted, nothing
+    })
 
-    await vi.waitFor(() => expect(markerExists(id)).toBe(true))
-    expect(readFileSync(journalFile(), 'utf8')).not.toContain('buyer talking')
-  })
+    it('an UNSAVED end keeps the journal — it may be the only copy, and the rep decides', async () => {
+      beginCall({ restart: false })
+      recordResult(result([{ speaker: 0, text: 'abandoned mid-way' }]))
+      const id = idOf(journalFile())
+      endCall({ saved: false })
+      expect(allFilesFor(id)).toEqual([`${id}.jsonl`])
+      expect(await listOrphanJournals()).toHaveLength(1)
+    })
 
-  it('leaves a consented call’s journal untouched', async () => {
-    beginCall({ restart: false })
-    recordConsent(CONSENTED)
-    recordResult(
-      result(
-        [
-          { speaker: 0, text: 'rep talking', channel: 0 },
-          { speaker: 1, text: 'buyer talking', channel: 1 }
-        ],
-        { multichannel: true }
-      )
-    )
-    const id = idOf(journalFile())
-    const before = readFileSync(journalFile(), 'utf8')
-    endCall({ saved: true })
+    it('the startup sweep retires what older builds kept (.done pairs, .jsonl.recovered) and leaves an unrecovered crash alone', async () => {
+      mkdirSync(journalFolder(), { recursive: true })
+      const header = (id: string): string =>
+        JSON.stringify({ v: 1, callJournalId: id, startedAt: new Date().toISOString() })
+      const line = JSON.stringify({ t: 'result', at: 1000, p: result([{ speaker: 1, text: 'kept words' }]) })
+      // pre-BUG-189 normal save: .jsonl + .done (+ a .redacted marker)
+      writeFileSync(join(journalFolder(), 'old-save.jsonl'), `${header('old-save')}\n${line}\n`, 'utf8')
+      writeFileSync(join(journalFolder(), 'old-save.done'), '', 'utf8')
+      writeFileSync(join(journalFolder(), 'old-save.redacted'), '', 'utf8')
+      // pre-BUG-189 recovery: .jsonl.recovered (+ marker)
+      writeFileSync(join(journalFolder(), 'old-rec.jsonl.recovered'), `${header('old-rec')}\n${line}\n`, 'utf8')
+      writeFileSync(join(journalFolder(), 'old-rec.redacted'), '', 'utf8')
+      // an unrecovered crash: a bare .jsonl — the ONLY copy of that call
+      writeFileSync(join(journalFolder(), 'crash.jsonl'), `${header('crash')}\n${line}\n`, 'utf8')
 
-    await vi.waitFor(() => expect(markerExists(id)).toBe(true))
-    expect(readFileSync(journalFile(), 'utf8')).toBe(before)
-  })
+      const removed = await retireCompletedJournals()
 
-  it('never touches a mono-only call — BUG-002\'s rule applies here too', async () => {
-    beginCall({ restart: false })
-    recordConsent(null)
-    recordResult(result([{ speaker: 0, text: 'mono words' }, { speaker: 1, text: 'more mono' }]))
-    const id = idOf(journalFile())
-    const before = readFileSync(journalFile(), 'utf8')
-    endCall({ saved: true })
-
-    await vi.waitFor(() => expect(markerExists(id)).toBe(true))
-    expect(readFileSync(journalFile(), 'utf8')).toBe(before)
+      expect(removed).toBe(5)
+      expect(readdirSync(journalFolder()).sort()).toEqual(['crash.jsonl'])
+      expect((await listOrphanJournals()).map((j) => j.id)).toEqual(['crash'])
+    })
   })
 
   it('is idempotent — a second pass over an already-redacted journal is a no-op', async () => {
@@ -590,7 +600,7 @@ describe('1.2.5 hotfix — consent redaction of the raw journal', () => {
     expect(markerExists('never-existed')).toBe(false)
   })
 
-  it('recovering a crashed, non-consented buyer-capture call redacts the .recovered file too', async () => {
+  it('recovering a crashed call retires its journal — nothing is retained under any name (BUG-189)', async () => {
     beginCall({ restart: false })
     recordConsent(null)
     recordResult(
@@ -605,14 +615,14 @@ describe('1.2.5 hotfix — consent redaction of the raw journal', () => {
     crash()
 
     const [found] = await afterRelaunch()
-    await recoverCall(found.id, callsDir)
-    // retireJournal renamed it — recoverCall's own redaction call is awaited,
-    // so no vi.waitFor is needed here, unlike the fire-and-forget endCall path.
-    expect(markerExists(found.id)).toBe(true)
-    const recoveredPath = join(journalFolder(), `${found.id}.jsonl.recovered`)
-    const raw = readFileSync(recoveredPath, 'utf8')
-    expect(raw).not.toContain('buyer on the crashed call')
-    expect(raw).toContain('rep on the crashed call')
+    const call = await recoverCall(found.id, callsDir)
+    expect(call).toBeTruthy() // the Call record is the copy now
+    // Used to assert a redacted `.jsonl.recovered` copy; BUG-189 retires it.
+    // The buyer's words exist nowhere under the journals directory.
+    expect(readdirSync(journalFolder()).filter((f) => f.startsWith(found.id))).toEqual([])
+    for (const f of readdirSync(journalFolder())) {
+      expect(readFileSync(join(journalFolder(), f), 'utf8')).not.toContain('buyer on the crashed call')
+    }
   })
 
   describe('redactPendingClosedJournals — the startup backlog sweep', () => {
