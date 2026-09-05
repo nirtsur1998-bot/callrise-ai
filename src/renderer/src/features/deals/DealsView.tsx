@@ -33,7 +33,8 @@ import { StageEditorDialog } from './StageEditorDialog'
 import { PipelineBoard } from './PipelineBoard'
 import { OutcomeInsightCard } from './OutcomeInsightCard'
 import { OutcomeBackfillDialog } from './OutcomeBackfillDialog'
-import type { BackfillState, DealStageKind } from './types'
+import { LinkCallsDialog } from './LinkCallsDialog'
+import type { BackfillState, DealStageKind, LinkSuggestions } from './types'
 import { OutcomeReasonPrompt, OutcomeReasonRetiredNotice } from './OutcomeReasonPrompt'
 import {
   noteAnswered,
@@ -88,6 +89,10 @@ export function DealsView({
   } | null>(null)
   const [retiredNotice, setRetiredNotice] = useState(false)
   const [backfill, setBackfill] = useState<BackfillState | null>(null)
+  // M34 — closed deals whose contacts have coached calls on no deal: the
+  // "board says won, gate sees zero" gap, offered as a set with a count.
+  const [linkable, setLinkable] = useState<LinkSuggestions | null>(null)
+  const [linking, setLinking] = useState(false)
   const [viewingId, setViewingId] = useState<string | null>(initialViewDealId)
 
   const consumedRef = useRef(false)
@@ -110,6 +115,7 @@ export function DealsView({
 
   const refreshBackfill = useCallback((): void => {
     void window.api.dealBackfill.state().then(setBackfill)
+    void window.api.dealBackfill.linkSuggestions().then(setLinkable)
   }, [])
 
   useEffect(() => {
@@ -301,6 +307,8 @@ export function DealsView({
           insight={backfill.insight}
           unansweredRows={backfill.total - backfill.answered}
           onOpenBackfill={() => setBackfilling(true)}
+          linkable={linkable}
+          onOpenLinking={() => setLinking(true)}
         />
       )}
 
@@ -389,6 +397,19 @@ export function DealsView({
         <OutcomeBackfillDialog
           onClose={() => {
             setBackfilling(false)
+            refreshBackfill()
+            void refresh()
+          }}
+          onChanged={() => {
+            refreshBackfill()
+            void refresh()
+          }}
+        />
+      )}
+      {linking && (
+        <LinkCallsDialog
+          onClose={() => {
+            setLinking(false)
             refreshBackfill()
             void refresh()
           }}

@@ -1,12 +1,16 @@
-import { ClipboardList } from 'lucide-react'
+import { ClipboardList, Link2 } from 'lucide-react'
 import { Button } from '@renderer/components/Button'
-import type { Insight } from './types'
+import type { Insight, LinkSuggestions } from './types'
 
 interface OutcomeInsightCardProps {
   insight: Insight
   /** Backfill rows that still have no answer — the offer, not a nag. */
   unansweredRows: number
   onOpenBackfill: () => void
+  /** M34 — closed deals whose contacts have coached calls on no deal. Null
+   *  while loading; an empty set renders nothing. */
+  linkable?: LinkSuggestions | null
+  onOpenLinking?: () => void
 }
 
 /**
@@ -39,7 +43,9 @@ interface OutcomeInsightCardProps {
 export function OutcomeInsightCard({
   insight,
   unansweredRows,
-  onOpenBackfill
+  onOpenBackfill,
+  linkable,
+  onOpenLinking
 }: OutcomeInsightCardProps): React.JSX.Element | null {
   // The 'ready' arm has no renderer yet — the analysis it gates does not
   // exist. Rendering nothing is the correct behaviour and not a stub: this
@@ -135,12 +141,40 @@ export function OutcomeInsightCard({
             </p>
           )}
         </div>
-        {unansweredRows > 0 && (
-          <Button variant="secondary" icon={ClipboardList} onClick={onOpenBackfill}>
-            Record past outcomes ({unansweredRows})
-          </Button>
-        )}
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          {unansweredRows > 0 && (
+            <Button variant="secondary" icon={ClipboardList} onClick={onOpenBackfill}>
+              Record past outcomes ({unansweredRows})
+            </Button>
+          )}
+          {linkable && linkable.deals.length > 0 && onOpenLinking && (
+            <Button variant="secondary" icon={Link2} onClick={onOpenLinking}>
+              Link coached calls ({linkable.totalCalls})
+            </Button>
+          )}
+        </div>
       </div>
+      {/* M34 — the gap between what the board shows and what counts, named:
+          which closed deals have coached calls that are simply not linked.
+          Records only. Absent when the set is empty (species 62: an empty
+          line here would be a placeholder for nothing). */}
+      {linkable && linkable.deals.length > 0 && (
+        <p className="mt-3 max-w-3xl border-t border-line-soft pt-3 text-[13px] leading-relaxed text-muted" data-testid="linkable-line">
+          <strong className="font-medium tabular-nums text-ink">
+            {linkable.deals.length} closed deal{linkable.deals.length === 1 ? '' : 's'}
+          </strong>{' '}
+          {linkable.deals.length === 1 ? 'has' : 'have'}{' '}
+          <strong className="font-medium tabular-nums text-ink">
+            {linkable.totalCalls} coached call{linkable.totalCalls === 1 ? '' : 's'}
+          </strong>{' '}
+          with {linkable.deals.length === 1 ? 'its' : 'their'} contact that {linkable.totalCalls === 1 ? 'is' : 'are'} not linked, so{' '}
+          {linkable.deals.length === 1 ? 'it' : 'they'} cannot be counted:{' '}
+          <span className="text-ink">
+            {linkable.deals.map((d) => `${d.dealTitle} (${d.coachedCallIds.length})`).join(', ')}
+          </span>
+          . Linking is bookkeeping, not a judgment.
+        </p>
+      )}
     </div>
   )
 }

@@ -1539,11 +1539,37 @@ export interface BackfillAnswerResult {
   state?: BackfillState
 }
 
+/** M34 — a closed deal whose contact has coached calls that belong to no deal. */
+export interface LinkSuggestion {
+  dealId: string
+  dealTitle: string
+  contactId: string
+  contactName: string
+  stageLabel: string
+  kind: DealStageKind
+  coachedCallIds: string[]
+}
+
+export interface LinkSuggestions {
+  deals: LinkSuggestion[]
+  totalCalls: number
+}
+
+export interface LinkResult {
+  ok: boolean
+  linked: number
+  suggestions: LinkSuggestions
+  state: BackfillState
+}
+
 export interface DealBackfillApi {
   state: () => Promise<BackfillState>
   insight: () => Promise<Insight>
   answer: (contactId: string, answer: BackfillAnswer) => Promise<BackfillAnswerResult>
   clear: (contactId: string) => Promise<BackfillAnswerResult>
+  linkSuggestions: () => Promise<LinkSuggestions>
+  linkCoachedCalls: (dealId: string) => Promise<LinkResult>
+  linkAllSuggested: () => Promise<LinkResult>
 }
 
 export type EventSyncState = 'local-only' | 'synced' | 'dirty' | 'deleted' | 'error'

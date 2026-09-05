@@ -377,7 +377,12 @@ const api = {
     insight: () => ipcRenderer.invoke('dealBackfill:insight'),
     answer: (contactId: string, answer: string) =>
       ipcRenderer.invoke('dealBackfill:answer', contactId, answer),
-    clear: (contactId: string) => ipcRenderer.invoke('dealBackfill:clear', contactId)
+    clear: (contactId: string) => ipcRenderer.invoke('dealBackfill:clear', contactId),
+    // M34 — link a closed deal's own coached calls: one deal, or the whole set.
+    linkSuggestions: () => ipcRenderer.invoke('dealBackfill:linkSuggestions'),
+    linkCoachedCalls: (dealId: string) =>
+      ipcRenderer.invoke('dealBackfill:linkCoachedCalls', dealId),
+    linkAllSuggested: () => ipcRenderer.invoke('dealBackfill:linkAllSuggested')
   },
   events: {
     list: () => ipcRenderer.invoke('events:list'),

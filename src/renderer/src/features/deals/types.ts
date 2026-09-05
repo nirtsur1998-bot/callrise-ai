@@ -141,6 +141,29 @@ export interface BackfillRow {
   reconstructed?: boolean
 }
 
+/** M34 — mirrors main/deal-backfill.ts's LinkSuggestion (renderer cannot import main). */
+export interface LinkSuggestion {
+  dealId: string
+  dealTitle: string
+  contactId: string
+  contactName: string
+  stageLabel: string
+  kind: DealStageKind
+  coachedCallIds: string[]
+}
+
+export interface LinkSuggestions {
+  deals: LinkSuggestion[]
+  totalCalls: number
+}
+
+export interface LinkResult {
+  ok: boolean
+  linked: number
+  suggestions: LinkSuggestions
+  state: BackfillState
+}
+
 export interface BackfillState {
   rows: BackfillRow[]
   answered: number

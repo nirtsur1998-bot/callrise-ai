@@ -511,6 +511,121 @@ export async function clearAnswer(contactId: unknown): Promise<AnswerResult> {
   })
 }
 
+// ── M34 — LINK THE CALLS A CLOSED DEAL ALREADY HAS ────────────────────────
+//
+// The founder's board said "4 won" while the gate saw zero, because none of
+// those deals had a coached call linked to it — the calls existed, on the
+// right contacts, unlinked. Linking them by hand is twelve clicks across four
+// pages, which is exactly the friction that means it never happens. This is
+// the backfill's lesson applied to deals that already exist: show the WHOLE
+// set up front with a count, and make each one (or all of them) one click.
+//
+// Records only. A call is offered for a deal when it already belongs to that
+// deal's CONTACT, carries coaching metrics, and belongs to no deal yet. The
+// deal must already be closed (the gate only counts closed deals) and have no
+// coached call linked (otherwise it already counts). No stage changes, no
+// guessing across contacts, nothing from the outcome gate.
+
+export interface LinkSuggestion {
+  dealId: string
+  dealTitle: string
+  contactId: string
+  contactName: string
+  stageLabel: string
+  kind: DealStageKind
+  /** The contact's coached calls that belong to no deal — what one click links. */
+  coachedCallIds: string[]
+}
+
+export interface LinkSuggestions {
+  deals: LinkSuggestion[]
+  totalCalls: number
+}
+
+export interface LinkResult {
+  ok: boolean
+  /** Calls actually linked by this call — the real number, not the offer. */
+  linked: number
+  suggestions: LinkSuggestions
+  state: BackfillState
+}
+
+export async function linkSuggestions(): Promise<LinkSuggestions> {
+  const [calls, contacts, deals, stages] = await Promise.all([
+    listCalls(callsDir()),
+    listContacts(contactsDir()),
+    listDeals(dealsDir()),
+    loadDealStages()
+  ])
+  const stageById = new Map(stages.map((s) => [s.id, s]))
+  const contactById = new Map(contacts.map((c) => [c.id, c]))
+  // Same definition of "counts" as the gate: a coached call linked to the deal.
+  const alreadyCounted = new Set(
+    calls.filter((c) => c.dealId && c.hasCoaching).map((c) => c.dealId as string)
+  )
+  const out: LinkSuggestion[] = []
+  for (const d of deals) {
+    const stage = stageById.get(d.stageId)
+    if (!stage || stage.kind === 'open') continue
+    if (alreadyCounted.has(d.id)) continue
+    const coachedCallIds = calls
+      .filter((c) => c.contactId === d.contactId && c.hasCoaching && !c.dealId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map((c) => c.id)
+    if (coachedCallIds.length === 0) continue
+    out.push({
+      dealId: d.id,
+      dealTitle: d.title,
+      contactId: d.contactId,
+      contactName: contactById.get(d.contactId)?.name ?? '',
+      stageLabel: stage.label,
+      kind: stage.kind,
+      coachedCallIds
+    })
+  }
+  return { deals: out, totalCalls: out.reduce((n, s) => n + s.coachedCallIds.length, 0) }
+}
+
+async function linkOne(s: LinkSuggestion): Promise<number> {
+  let linked = 0
+  for (const id of s.coachedCallIds) {
+    try {
+      const r = await setCallDeal(callsDir(), id, s.dealId)
+      if (r?.dealId === s.dealId) linked++
+    } catch {
+      /* the count reports what actually linked */
+    }
+  }
+  return linked
+}
+
+/** Link every offered call for ONE deal. Recomputes the offer first, so a
+ *  stale dialog cannot link a call that was claimed by another deal meanwhile. */
+export async function linkCoachedCalls(dealId: unknown): Promise<LinkResult> {
+  const fail = async (): Promise<LinkResult> => ({
+    ok: false,
+    linked: 0,
+    suggestions: await linkSuggestions(),
+    state: await buildState()
+  })
+  if (typeof dealId !== 'string' || !dealId) return fail()
+  const s = (await linkSuggestions()).deals.find((x) => x.dealId === dealId)
+  if (!s) return fail()
+  const linked = await linkOne(s)
+  scheduleBackup()
+  return { ok: true, linked, suggestions: await linkSuggestions(), state: await buildState() }
+}
+
+/** Link every offered call for EVERY deal in the set — the "show me the whole
+ *  set up front" click. Sequential, so two deals can never race for a call. */
+export async function linkAllSuggested(): Promise<LinkResult> {
+  const { deals } = await linkSuggestions()
+  let linked = 0
+  for (const s of deals) linked += await linkOne(s)
+  if (linked > 0) scheduleBackup()
+  return { ok: true, linked, suggestions: await linkSuggestions(), state: await buildState() }
+}
+
 export function registerDealBackfill(): void {
   ipcMain.handle('dealBackfill:state', () => buildState())
   ipcMain.handle('dealBackfill:insight', () => computeInsight())
@@ -518,4 +633,7 @@ export function registerDealBackfill(): void {
     recordAnswer(contactId, answer)
   )
   ipcMain.handle('dealBackfill:clear', (_e, contactId: unknown) => clearAnswer(contactId))
+  ipcMain.handle('dealBackfill:linkSuggestions', () => linkSuggestions())
+  ipcMain.handle('dealBackfill:linkCoachedCalls', (_e, dealId: unknown) => linkCoachedCalls(dealId))
+  ipcMain.handle('dealBackfill:linkAllSuggested', () => linkAllSuggested())
 }

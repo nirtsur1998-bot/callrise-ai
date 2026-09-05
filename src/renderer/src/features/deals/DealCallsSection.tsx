@@ -147,9 +147,33 @@ export function DealCallsSection({
 
       {candidates.length > 0 && (
         <div className="mt-4">
-          <p className="mb-2 text-[12px] font-medium text-muted">
-            Other calls with {contactName ?? 'this contact'}, not on any deal
-          </p>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[12px] font-medium text-muted">
+              Other calls with {contactName ?? 'this contact'}, not on any deal
+            </p>
+            {/* M34 — one click for the coached ones, on a CLOSED deal that has
+                none linked yet: exactly the deals the gate cannot count. Goes
+                through the same main-process path as the Pipeline dialog so
+                there is one definition of "offered". */}
+            {stageKind && stageKind !== 'open' && measurable === 0 && candidates.some((c) => c.hasCoaching) && (
+              <button
+                type="button"
+                disabled={busyId !== null}
+                onClick={() => {
+                  setBusyId('all')
+                  void window.api.dealBackfill
+                    .linkCoachedCalls(dealId)
+                    .then(() => load())
+                    .finally(() => setBusyId(null))
+                }}
+                className="inline-flex items-center gap-1.5 rounded-md border border-line px-2.5 py-1 text-[12px] font-medium text-muted transition-colors hover:border-line-strong hover:text-ink disabled:opacity-50"
+              >
+                <Link2 className="h-3.5 w-3.5" />
+                Link all {candidates.filter((c) => c.hasCoaching).length} coached call
+                {candidates.filter((c) => c.hasCoaching).length === 1 ? '' : 's'}
+              </button>
+            )}
+          </div>
           <ul className="space-y-1.5">
             {candidates.map((call) => (
               <CallRow
