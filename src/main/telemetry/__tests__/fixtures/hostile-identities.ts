@@ -92,6 +92,31 @@ export const HOSTILE_IDENTITIES: readonly HostileIdentity[] = [
     username: 'A'.repeat(200),
     homedir: `C:\\Users\\${'A'.repeat(200)}`,
     breaks: 'Length, and its interaction with the scrubber\u2019s 4096-char cap.'
+  },
+  // Founder's additions, 2026-09-05 (BUG-091 fix-shape item 4, answered).
+  {
+    id: 'hyphen-apostrophe',
+    username: "O'Neill-Smith",
+    homedir: "C:\\Users\\O'Neill-Smith",
+    breaks:
+      'A hyphen AND an apostrophe together: the hyphen is a word boundary to a naive rule, ' +
+      'so half the name can match on its own; the apostrophe is the quote hazard again.'
+  },
+  {
+    id: 'common-word-admin',
+    username: 'Admin',
+    homedir: 'C:\\Users\\Admin',
+    breaks:
+      "A second account name that is also an ordinary English word (this machine's `User` is " +
+      'the first). Over-redaction pressure: prose mentioning admins must not be scrubbed.'
+  },
+  {
+    id: 'corporate-dot',
+    username: 'nir.tsur',
+    homedir: 'C:\\Users\\nir.tsur',
+    breaks:
+      'A dot that is NOT a domain — the corporate first.last shape, and the one most likely ' +
+      'to be half-matched by a rule written against Administrator.DOMAIN.'
   }
 ] as const
 
