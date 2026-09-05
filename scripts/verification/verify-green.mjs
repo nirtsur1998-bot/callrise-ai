@@ -95,8 +95,7 @@ export function main(argv) {
       // The run did not reach its own summary. A refusal with no cause is a
       // dead end (learned on the first CI run): show the raw tail so the
       // crash, the missing dependency or the OOM is in the log.
-      const tail = r.out.split('
-').filter((l) => l.trim()).slice(-60)
+      const tail = r.out.split('\n').filter((l) => l.trim()).slice(-60)
       console.log('SUITE: last lines of the raw output, because the run did not finish:')
       for (const l of tail) console.log('  | ' + l)
     }
