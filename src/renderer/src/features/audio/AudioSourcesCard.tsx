@@ -1,4 +1,5 @@
 import { Mic, Volume2, RefreshCw, Headphones, AlertTriangle } from 'lucide-react'
+import { micSelectorOptions } from './micOutcome'
 import { Card } from '@renderer/components/Card'
 import { IconButton } from '@renderer/components/IconButton'
 import { fieldClass } from '@renderer/components/field'
@@ -40,10 +41,9 @@ export function AudioSourcesCard(): React.JSX.Element {
         aria-label="Microphone"
         className={cn(fieldClass, 'mt-1.5')}
       >
-        <option value="">System default</option>
-        {mics.map((m) => (
-          <option key={m.deviceId} value={m.deviceId}>
-            {m.label}
+        {micSelectorOptions(mics).map((opt) => (
+          <option key={opt.value || '__default'} value={opt.value} disabled={opt.disabled}>
+            {opt.label}
           </option>
         ))}
       </select>

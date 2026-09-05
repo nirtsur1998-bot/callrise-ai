@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { MIC_OUTCOME_TEXT } from '@renderer/features/audio/micOutcome'
 import {
   Mic,
   Square,
@@ -914,7 +915,7 @@ export function LiveView({
       return (
         <CenteredState
           icon={<MicOff className="h-6 w-6 text-faint" />}
-          title="No microphone found"
+          title={MIC_OUTCOME_TEXT['no-device'].title}
           subtitle="Connect a microphone, then try again."
           action={{ label: 'Try again', onClick: start }}
         />

@@ -9,6 +9,7 @@ import {
   PhoneCall
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { micSelectorOptions } from '@renderer/features/audio/micOutcome'
 import { isMac, isWindows } from '@renderer/lib/platform'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
 import { SegmentedControl } from '@renderer/components/SegmentedControl'
@@ -294,10 +295,9 @@ export function CopilotPanel({
             aria-label="Microphone"
             className={cn(fieldClass, 'text-[13px]')}
           >
-            <option value="">System default</option>
-            {mics.map((m) => (
-              <option key={m.deviceId} value={m.deviceId}>
-                {m.label}
+            {micSelectorOptions(mics).map((opt) => (
+              <option key={opt.value || '__default'} value={opt.value} disabled={opt.disabled}>
+                {opt.label}
               </option>
             ))}
           </select>

@@ -4,6 +4,7 @@ import type { Sensitivity } from '@renderer/features/live/useLiveCues'
 import { saveDefaultJurisdiction } from '@renderer/features/consent/prefs'
 import { useAppSettings, type AppSettings } from '@renderer/features/settings/useAppSettings'
 import { markOnboardingComplete } from './prefs'
+import type { MicOutcome } from '@renderer/features/audio/micOutcome'
 
 type Pronoun = AppSettings['personalization']['pronoun']
 
@@ -56,6 +57,10 @@ export interface OnboardingState {
   jurisdiction: ConsentJurisdiction
   setJurisdiction: (v: ConsentJurisdiction) => void
 
+  // microphone step — what the request actually came back with (null = not asked yet)
+  micOutcome: MicOutcome | null
+  setMicOutcome: (v: MicOutcome | null) => void
+
   // live coaching cues
   cuesEnabled: boolean
   setCuesEnabled: (v: boolean) => void
@@ -94,6 +99,7 @@ export function useOnboarding(): OnboardingState {
   const [jurisdiction, setJurisdiction] = useState<ConsentJurisdiction>('two-party')
   const [cuesEnabled, setCuesEnabled] = useState(true)
   const [sensitivity, setSensitivity] = useState<Sensitivity>('low')
+  const [micOutcome, setMicOutcome] = useState<MicOutcome | null>(null)
   const [prefilled, setPrefilled] = useState(false)
 
   useEffect(() => {
@@ -150,6 +156,8 @@ export function useOnboarding(): OnboardingState {
       setRecordBothSides,
       jurisdiction,
       setJurisdiction,
+      micOutcome,
+      setMicOutcome,
       cuesEnabled,
       setCuesEnabled,
       sensitivity,
@@ -173,6 +181,7 @@ export function useOnboarding(): OnboardingState {
       about,
       recordBothSides,
       jurisdiction,
+      micOutcome,
       cuesEnabled,
       sensitivity,
       index,
