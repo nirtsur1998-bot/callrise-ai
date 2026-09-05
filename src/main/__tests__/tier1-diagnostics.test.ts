@@ -128,10 +128,10 @@ describe('the collected set is enumerated, pinned, and nothing more', () => {
 })
 
 describe('app-diagnostics.json', () => {
-  it('carries version, tier1 status, prefs and device LABELS', () => {
+  it('carries version, tier1 status, prefs and a device CLASSIFICATION — never a label (BUG-122)', () => {
     const json = JSON.parse(
       buildAppDiagnostics({
-        deviceLabels: ['Mic A', 'Mic B'],
+        devices: { hasVirtualMic: true, inputCount: 2, kinds: ['bluetooth', 'virtual'] },
         tier1Enabled: true,
         denoiseStrength: 'medium'
       })
@@ -139,15 +139,19 @@ describe('app-diagnostics.json', () => {
     expect(json['appVersion']).toBe('1.3.2-test')
     expect(json['tier1Enabled']).toBe(true)
     expect(json['denoiseStrength']).toBe('medium')
-    expect(json['deviceLabels']).toEqual(['Mic A', 'Mic B'])
+    expect(json['devices']).toEqual({ hasVirtualMic: true, inputCount: 2, kinds: ['bluetooth', 'virtual'] })
+    expect(json).not.toHaveProperty('deviceLabels')
     expect(json['tier1Status']).toMatchObject({ engineAvailable: true })
   })
 
-  it('drops non-string junk from deviceLabels instead of serialising it', () => {
+  it('a renderer payload that smuggles labels or junk kinds is re-validated on the main side', () => {
     const json = JSON.parse(
-      buildAppDiagnostics({ deviceLabels: ['ok', 42, null, 'also ok'] as unknown as string[] })
+      buildAppDiagnostics({
+        devices: { hasVirtualMic: 'yes', inputCount: 2.7, kinds: ['bluetooth', "Dana's AirPods", 42] }
+      } as unknown as Parameters<typeof buildAppDiagnostics>[0])
     ) as Record<string, unknown>
-    expect(json['deviceLabels']).toEqual(['ok', 'also ok'])
+    expect(json['devices']).toEqual({ hasVirtualMic: false, inputCount: 2, kinds: ['bluetooth'] })
+    expect(JSON.stringify(json)).not.toContain('AirPods')
   })
 })
 

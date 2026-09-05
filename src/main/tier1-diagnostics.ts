@@ -50,10 +50,39 @@ export function engineDiagnosticFiles(localAppData: string): string[] {
   ]
 }
 
+/** BUG-122 — what the bundle says about the device list: a classification
+ *  derived from keywords in the labels (renderer/features/audio/deviceKinds),
+ *  NEVER a label. A label is a person's name often enough ("Dana's AirPods")
+ *  and the scrubber structurally cannot catch a bare name; you cannot scrub a
+ *  name, only refuse to include it. Founder: "labels don't go in the bundle
+ *  at all." */
+export interface DeviceSummary {
+  hasVirtualMic: boolean
+  inputCount: number
+  kinds: string[]
+}
+
+const DEVICE_KINDS = new Set(['virtual', 'bluetooth', 'usb', 'builtin', 'other'])
+
+/** Re-validated on the main side: a renderer payload is never trusted blindly,
+ *  and this is the one place that decides what a bundle can carry. */
+export function sanitizeDeviceSummary(value: unknown): DeviceSummary | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const v = value as Record<string, unknown>
+  const kinds = Array.isArray(v.kinds)
+    ? v.kinds.filter((k): k is string => typeof k === 'string' && DEVICE_KINDS.has(k))
+    : []
+  const inputCount =
+    typeof v.inputCount === 'number' && Number.isFinite(v.inputCount)
+      ? Math.max(0, Math.min(64, Math.trunc(v.inputCount)))
+      : kinds.length
+  return { hasVirtualMic: v.hasVirtualMic === true, inputCount, kinds }
+}
+
 /** What the renderer contributes: state only IT can see. */
 export interface RendererDiagnostics {
-  /** Device labels from enumerateDevices() — names, never ids or streams. */
-  deviceLabels?: string[]
+  /** See DeviceSummary. Labels are refused at the type: there is no field for them. */
+  devices?: DeviceSummary
   tier1Enabled?: boolean
   denoiseStrength?: string
 }
@@ -68,9 +97,7 @@ export function buildAppDiagnostics(renderer: RendererDiagnostics): string {
       tier1Status: getStatus(),
       tier1Enabled: renderer.tier1Enabled ?? null,
       denoiseStrength: renderer.denoiseStrength ?? null,
-      deviceLabels: Array.isArray(renderer.deviceLabels)
-        ? renderer.deviceLabels.filter((l): l is string => typeof l === 'string')
-        : []
+      devices: sanitizeDeviceSummary(renderer.devices) ?? { hasVirtualMic: false, inputCount: 0, kinds: [] }
     },
     null,
     2
@@ -140,9 +167,11 @@ export async function exportTier1Diagnostics(
       // preserves the skip-never-fatal behaviour this loop always had.
       if (scrubbedCopy(src, join(staging, src.split(/[\\/]/).pop()!))) collected++
     }
-    // The renderer supplies deviceLabels (microphone names, which routinely
-    // contain a person's name — "Dana's AirPods") and tier1Status carries
-    // enginePath, an absolute path. Scrubbed as a DOCUMENT: the app-wide
+    // The renderer used to supply deviceLabels (microphone names, which
+    // routinely contain a person's name — "Dana's AirPods"); BUG-122 replaced
+    // them with a keyword-derived classification, because a bare name cannot
+    // be scrubbed. tier1Status still carries enginePath, an absolute path,
+    // which CAN be. Scrubbed as a DOCUMENT: the app-wide
     // scrubber caps a single string at 4096 chars, which would truncate this
     // JSON into unparseable output.
     writeFileSync(

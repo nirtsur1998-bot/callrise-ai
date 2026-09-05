@@ -580,10 +580,10 @@ const api = {
     stop: () => ipcRenderer.invoke('tier1:stop'),
     getStatus: () => ipcRenderer.invoke('tier1:getStatus'),
     // Collects engine logs + status + app state into one zip via a save
-    // dialog. The renderer passes device LABELS (names only) because
-    // enumerateDevices() only exists on its side of the bridge.
+    // dialog. The renderer passes a device CLASSIFICATION (BUG-122: never a
+    // label) because enumerateDevices() only exists on its side of the bridge.
     exportDiagnostics: (info: {
-      deviceLabels?: string[]
+      devices?: { hasVirtualMic: boolean; inputCount: number; kinds: string[] }
       tier1Enabled?: boolean
       denoiseStrength?: string
     }) => ipcRenderer.invoke('tier1:exportDiagnostics', info),

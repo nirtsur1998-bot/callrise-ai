@@ -1,3 +1,4 @@
+import { summarizeDevices } from './deviceKinds'
 import { useState } from 'react'
 import { AudioLines, Loader2, AlertTriangle, CheckCircle2, FileDown, Mic } from 'lucide-react'
 import { useMicTest } from './useMicTest'
@@ -55,13 +56,14 @@ export function Tier1DiagnosticsCard(): React.JSX.Element | null {
     setExporting(true)
     setResult(null)
     try {
-      // Labels only — the names the user already sees in mic dropdowns.
+      // BUG-122 — the labels never leave the renderer: only a classification
+      // (has our virtual mic / how many inputs / what kinds) reaches the zip.
       const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [])
       const { getTier1Enabled, getDenoiseStrength } = await import(
         '@renderer/features/settings/prefs'
       )
       const res = await window.api.tier1.exportDiagnostics({
-        deviceLabels: devices.filter((d) => d.kind === 'audioinput').map((d) => d.label),
+        devices: summarizeDevices(devices.filter((d) => d.kind === 'audioinput').map((d) => d.label)),
         tier1Enabled: getTier1Enabled(),
         denoiseStrength: getDenoiseStrength()
       })

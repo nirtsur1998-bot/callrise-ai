@@ -2037,7 +2037,8 @@ export interface Tier1Api {
   /** Collects noise-cancellation logs + audio state into one zip (save
    *  dialog). No call audio, recordings or transcripts are included. */
   exportDiagnostics: (info: {
-    deviceLabels?: string[]
+    /** BUG-122 — a keyword-derived classification, never the labels. */
+    devices?: { hasVirtualMic: boolean; inputCount: number; kinds: string[] }
     tier1Enabled?: boolean
     denoiseStrength?: string
   }) => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
