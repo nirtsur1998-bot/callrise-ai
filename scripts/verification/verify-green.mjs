@@ -22,6 +22,9 @@
 // verify-green.test.ts) — the gate has a red check of its own. Importing this
 // file runs nothing: the gates run only when it is the command being executed.
 import { spawnSync } from 'node:child_process'
+import { closeSync, openSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 /** How a typecheck run is read: "error TS" lines are the answer; a non-zero
@@ -53,14 +56,29 @@ export function suiteVerdict(out, code) {
   }
 }
 
+/** Run a gate with its output streamed to a FILE, not a memory buffer. The
+ *  first CI run died without a summary line: spawnSync's maxBuffer (64 MB)
+ *  was exceeded by the suite's stderr chatter, the child was killed, and the
+ *  gate could only say "the run did not finish". A file has no cap, the log
+ *  survives for the tail, and the exit code is the child's own. */
 function run(cmd, cmdArgs, cwd) {
-  const r = spawnSync(cmd, cmdArgs, {
-    cwd,
-    shell: process.platform === 'win32',
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024
-  })
-  return { code: r.status ?? -1, out: (r.stdout ?? '') + (r.stderr ?? '') }
+  const logPath = join(tmpdir(), `verify-green-${process.pid}-${Date.now()}.log`)
+  const fd = openSync(logPath, 'w')
+  let status
+  try {
+    const r = spawnSync(cmd, cmdArgs, {
+      cwd,
+      shell: process.platform === 'win32',
+      stdio: ['ignore', fd, fd]
+    })
+    status = r.status
+    if (r.error) console.log(`GATE: could not run ${cmd}: ${r.error.message}`)
+  } finally {
+    closeSync(fd)
+  }
+  const out = readFileSync(logPath, 'utf8')
+  console.log(`GATE: ${cmd} ${cmdArgs.join(' ')} -> exit ${status ?? 'null'}, ${out.length} chars captured (${logPath})`)
+  return { code: status ?? -1, out }
 }
 
 export function main(argv) {
