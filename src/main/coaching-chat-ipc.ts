@@ -4,6 +4,7 @@
 // same shape as transcription.ts's emit() pattern, the only precedent for
 // incremental main->renderer delivery in this app (see coach.ts's Phase 0
 // research note: no streaming consumer existed anywhere before this).
+import { startOnUserTurn } from './coach-chat-history'
 import { app, ipcMain, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import {
@@ -125,6 +126,7 @@ export interface CoachChatSendResult {
 // stored, not what's replayed to the model on every turn).
 const MAX_HISTORY_MESSAGES = 40
 
+
 /** Best-effort with a hard time budget — extractContextSuggestions() is an
  *  ancillary pass; a slow/degraded provider chain must never hold up the
  *  chat turn the rep is actively waiting on past a few seconds. Whatever
@@ -197,7 +199,7 @@ async function handleSend(
     buildSystem = (context) =>
       buildEndPracticeSystemPrompt(context, focusSkill ? SKILL_LABEL[focusSkill.skill] : null)
     const practiceTail = startFreshPractice ? [] : trailingPracticeMessages(history)
-    historyForModel = practiceTail.map((m) => ({ role: m.role, content: m.text }))
+    historyForModel = startOnUserTurn(practiceTail).map((m) => ({ role: m.role, content: m.text }))
     trailingMessage = ''
     replyMode = 'advisor'
     userMode = 'advisor'
@@ -209,18 +211,20 @@ async function handleSend(
     // formally "ended" the old one (the rep may have simply tabbed over to
     // Advisor to glance at the scorecard, then back).
     const practiceTail = startFreshPractice ? [] : trailingPracticeMessages(history)
-    historyForModel = practiceTail
-      .slice(-MAX_HISTORY_MESSAGES)
-      .map((m) => ({ role: m.role, content: m.text }))
+    historyForModel = startOnUserTurn(practiceTail.slice(-MAX_HISTORY_MESSAGES)).map((m) => ({
+      role: m.role,
+      content: m.text
+    }))
     trailingMessage = message
     replyMode = 'practice'
     userMode = 'practice'
   } else {
     buildSystem = buildAdvisorSystemPrompt
     const advisorHistory = history.filter((m) => m.mode !== 'practice')
-    historyForModel = advisorHistory
-      .slice(-MAX_HISTORY_MESSAGES)
-      .map((m) => ({ role: m.role, content: m.text }))
+    historyForModel = startOnUserTurn(advisorHistory.slice(-MAX_HISTORY_MESSAGES)).map((m) => ({
+      role: m.role,
+      content: m.text
+    }))
     trailingMessage = message
     replyMode = 'advisor'
     userMode = 'advisor'

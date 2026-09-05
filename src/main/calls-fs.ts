@@ -2467,6 +2467,18 @@ export async function appendCoachChatTurn(
       createdAt: now,
       mode: assistantMessage.mode
     }
+    // BUG-109 — a pair shares ONE mode. Every reader filters or walks by
+    // mode assuming that; a pair that straddled modes would be split by the
+    // advisor filter and leave a lone assistant turn. Callers pass the same
+    // mode for both today; this keeps it true if a future caller does not.
+    if (userEntry.mode !== assistantEntry.mode) {
+      console.warn('[calls] coach-chat pair with two modes — using the user turn\'s for both', {
+        callId,
+        user: userEntry.mode,
+        assistant: assistantEntry.mode
+      })
+      assistantEntry.mode = userEntry.mode
+    }
     const turn: CoachChatMessage[] = [userEntry, assistantEntry]
     // The new turn is appended at the END, and slice(-N) keeps the LAST N, so
     // the two messages just minted are always among the survivors — the ids
