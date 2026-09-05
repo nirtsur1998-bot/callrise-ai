@@ -13,6 +13,10 @@ files:
   - '!docs/**'
   - '!supabase/**'
   - '!.claude/**'
+  # BUG-124 — build/test tooling is not the product. Nothing at runtime reads
+  # from scripts/ (grep'd 2026-09-05); beforePack/afterPack run from the repo,
+  # not from the asar. ~60 KB of our tooling was shipping to every user.
+  - '!scripts/**'
   # Stray logs and archives must never be packaged. Beyond bloat, a file that
   # is still being WRITTEN while electron-builder streams the asar corrupts it:
   # the header records the size seen at stat time, the file keeps growing, and
