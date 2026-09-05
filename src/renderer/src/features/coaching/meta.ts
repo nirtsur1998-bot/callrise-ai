@@ -2,7 +2,7 @@ import type { BadgeTone } from '@renderer/components/Badge'
 import type { GaugeTone } from '@renderer/components/ScoreGauge'
 import type { CoachDimensionKey, CoachMetrics } from './types'
 import type { SpeakerRole } from '@renderer/features/calls/types'
-import { speakerKey } from '@renderer/features/live/segments'
+import { speakerKey } from '@renderer/features/live/speakerKey'
 
 export const DIMENSION_ORDER: CoachDimensionKey[] = [
   'discovery',

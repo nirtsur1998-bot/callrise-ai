@@ -9,7 +9,7 @@ import {
   SPEAKER_SOURCE_LABEL,
   type SpeakerIdentities
 } from '@renderer/features/coaching/meta'
-import { speakerKey } from '@renderer/features/live/segments'
+import { speakerKey } from '@renderer/features/live/speakerKey'
 
 const CONFIDENCE_DOT: Record<'high' | 'medium' | 'low', string> = {
   high: 'bg-positive',

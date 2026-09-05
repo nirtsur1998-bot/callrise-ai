@@ -4,7 +4,7 @@ import { BattlecardMatcher, type Battlecard } from './battlecards/match'
 import { STARTER_TRIGGERS } from './battlecards/library'
 import { otherPartyObservable } from './other-party-capture'
 import { MonologueTracker, type MonologueState } from './monologue'
-import { speakerKey } from './segments'
+import { speakerKey } from './speakerKey'
 
 // Live in-call coaching cues. The substance comes from a conversation-aware
 // Claude call (window.api.transcription.liveCue) over a SPEAKER-LABELED
