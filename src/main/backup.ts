@@ -28,6 +28,10 @@ import {
   type Call
 } from './calls-fs'
 import { listEntries, importEntry, type KnowledgeEntry } from './knowledge-fs'
+import {
+  listQueue as listObjectionQueue,
+  importQueueItem as importObjectionQueueItem
+} from './objection-queue-fs'
 import { memoryDbPath, removeWalSidecars } from './memory/db'
 import { snapshotMemoryDb } from './memory/snapshot'
 import { listContacts, importContact, type Contact } from './contacts-fs'
@@ -113,6 +117,11 @@ function callsDir(): string {
 }
 function knowledgeDir(): string {
   return join(app.getPath('userData'), 'knowledge')
+}
+
+/** BUG-189 — the objection review queue (objection-queue/*.json). */
+function objectionQueueDir(): string {
+  return join(app.getPath('userData'), 'objection-queue')
 }
 function contactsDir(): string {
   return join(app.getPath('userData'), 'contacts')
@@ -253,6 +262,22 @@ async function drainPendingScrubs(
         // transcript-bearing rows can only be evicted by NEWER quote-free
         // ones — bump every call's updatedAt and let this push replace them.
         await touchAllCallsForRepush(callsDir())
+        // BUG-189 — the objection queue rows are the buyer's words too, and
+        // they leave with the same switch: deleted outright (the one table
+        // with a delete policy — a tombstone would still be a row). Its own
+        // try: if the table does not exist yet there is nothing there to
+        // scrub, and a missing table must not keep this key pending forever
+        // (which would re-touch every call on every push).
+        try {
+          const { error } = await client
+            .from('backup_objection_queue')
+            .delete()
+            .eq('user_id', userId)
+          if (error) throw new Error(error.message)
+        } catch (err) {
+          console.error('[backup] objection queue scrub failed:', err)
+          reportBackupStep('objectionQueueScrub', err)
+        }
       } else if (key === 'attachments') {
         await scrubAllAttachmentBlobs(client, userId)
       } else if (key === 'knowledgeBase') {
@@ -743,6 +768,28 @@ export async function pushAll(): Promise<BackupResult> {
         reportBackupStep('knowledgePush', err)
       }
     }
+    // BUG-189 — the objection review queue. Gated on the TRANSCRIPTS toggle,
+    // not its own: an item is the buyer's words verbatim, the same category
+    // the toggle already governs, and one switch the user already understands
+    // beats a second one that means the same thing. Same isolation discipline
+    // as every optional category: its own try/catch, its own step. Tombstones
+    // travel as `deleted` rows (quotes already dropped on disk).
+    if (syncScope.transcripts) {
+      try {
+        const items = await listObjectionQueue(objectionQueueDir(), { includeDeleted: true })
+        const queueRows: BackupRow[] = items.map((i) => ({
+          id: i.id,
+          user_id: userId,
+          updated_at: i.updatedAt,
+          deleted: i.deleted === true,
+          payload: i
+        }))
+        await upsertRows(client, 'backup_objection_queue', queueRows, skewMs)
+      } catch (err) {
+        console.error('[backup] objection queue push failed:', err)
+        reportBackupStep('objectionQueuePush', err)
+      }
+    }
     // BUG-157 — Rise conversations. Same isolation discipline as every optional
     // category: a missing backup_rise_conversations table must never fail the
     // rest of the push, so this is its own try/catch and reports its own step.
@@ -1068,6 +1115,31 @@ export async function pullAll(): Promise<RestoreResult> {
       } catch (err) {
         console.error('[backup] knowledge-base pull failed:', err)
         reportBackupStep('knowledgePull', err)
+      }
+    }
+    // BUG-189 — the objection review queue, under the transcripts toggle
+    // (see the push side for why it has no toggle of its own).
+    if (syncScope.transcripts) {
+      try {
+        const queueRows = await fetchAllRows(client, 'backup_objection_queue', userId)
+        const queueMap = new Map(
+          (await listObjectionQueue(objectionQueueDir(), { includeDeleted: true })).map((i) => [
+            i.id,
+            i
+          ])
+        )
+        const queueChanged = await reconcileStore(
+          objectionQueueDir(),
+          queueRows,
+          queueMap,
+          (d, payload) => importObjectionQueueItem(d, payload, { onlyIfNewer: true }),
+          lastSyncAt,
+          skewMs
+        )
+        if (queueChanged > 0) notifyDataChanged()
+      } catch (err) {
+        console.error('[backup] objection queue restore failed:', err)
+        reportBackupStep('objectionQueueRestore', err)
       }
     }
     if (syncScope.settingsPersonalization) {

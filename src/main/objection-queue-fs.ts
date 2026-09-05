@@ -1,8 +1,23 @@
 // Step 3 of the Objection Library milestone: a staging area between mining
 // and the real library. Mirrors knowledge-fs.ts's one-JSON-file-per-record
-// pattern, but items are transient — approve/reject removes the file
-// entirely (no tombstone) since this is a working queue, not a permanent
-// record like Knowledge/Calls/Tasks.
+// pattern.
+//
+// BUG-189 (2026-09-05) — the queue now SYNCS (backup_objection_queue, under the
+// transcripts toggle: it holds the buyer's words verbatim), so approve/reject
+// and a source call's deletion write a TOMBSTONE instead of unlinking the file:
+// `{ id, callId, deleted: true, updatedAt }` with every quote dropped. Without
+// one, a rejected candidate would come straight back from the cloud on the
+// next pull — the exact caveat backup_rise_conversations carries. listQueue
+// hides tombstones; the backup reads them with includeDeleted.
+//
+// WHY IT MAY SYNC AT ALL (the founder's condition): an item is mined from the
+// SAVED call record — calls.ts's mineCallIntoQueue reads getCall() and feeds
+// speechSegments(call.segments) to the miner — and applyConsentRetention has
+// already stripped every other-party segment from a call whose consent does
+// not permit recording them. The queue therefore cannot hold words the consent
+// gate would strip. Measured on the founder's data before this shipped: 95 of
+// 95 items from consented calls, 0 strip cases. Pinned by
+// objection-queue-backup.test.ts.
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -23,6 +38,12 @@ export interface ObjectionQueueItem {
   callId: string
   callTitle: string
   createdAt: string
+  /** BUG-189 — bumped on tombstoning; equals createdAt for a live item. The
+   *  backup's reconcile keys on it. Older files without one read as createdAt. */
+  updatedAt: string
+  /** BUG-189 — a rejected/approved item, or one whose source call was deleted.
+   *  Quotes are dropped on the way in; the record exists only to propagate. */
+  deleted?: true
 }
 
 const ID_RE = /^[A-Za-z0-9-]{1,64}$/
@@ -59,17 +80,23 @@ function sanitizeItem(value: unknown): ObjectionQueueItem | null {
   const v = value as Record<string, unknown>
   if (!isSafeId(v.id)) return null
   if (typeof v.type !== 'string' || !TYPES.has(v.type as MinedObjectionType)) return null
-  const objectionQuote = str(v.objectionQuote, MAX_QUOTE)
-  const responseQuote = str(v.responseQuote, MAX_QUOTE)
-  if (!objectionQuote || !responseQuote) return null
+  const deleted = v.deleted === true
+  const objectionQuote = deleted ? '' : str(v.objectionQuote, MAX_QUOTE)
+  const responseQuote = deleted ? '' : str(v.responseQuote, MAX_QUOTE)
+  // A live item without both quotes is not an item; a tombstone never has them.
+  if (!deleted && (!objectionQuote || !responseQuote)) return null
   const callId = str(v.callId, 128)
   if (!callId) return null
   const createdAt =
     typeof v.createdAt === 'string' && !Number.isNaN(Date.parse(v.createdAt))
       ? v.createdAt
       : new Date().toISOString()
+  const updatedAt =
+    typeof v.updatedAt === 'string' && !Number.isNaN(Date.parse(v.updatedAt))
+      ? v.updatedAt
+      : createdAt
 
-  return {
+  const item: ObjectionQueueItem = {
     id: v.id,
     type: v.type as MinedObjectionType,
     objectionQuote,
@@ -77,10 +104,34 @@ function sanitizeItem(value: unknown): ObjectionQueueItem | null {
     responseQuote,
     responseSpeaker: speakerNum(v.responseSpeaker),
     recoveredWell: v.recoveredWell === true,
-    judgmentNote: str(v.judgmentNote, MAX_NOTE),
+    // A tombstone keeps NO words — the note is model prose about the quotes.
+    judgmentNote: deleted ? '' : str(v.judgmentNote, MAX_NOTE),
     callId,
-    callTitle: str(v.callTitle, MAX_TITLE),
-    createdAt
+    callTitle: deleted ? '' : str(v.callTitle, MAX_TITLE),
+    createdAt,
+    updatedAt
+  }
+  if (deleted) item.deleted = true
+  return item
+}
+
+/** The tombstone a removed item leaves behind: identity and a timestamp, no
+ *  words. `type` is kept only because the record shape requires one. */
+function tombstoneOf(item: Pick<ObjectionQueueItem, 'id' | 'type' | 'callId' | 'createdAt'>): ObjectionQueueItem {
+  return {
+    id: item.id,
+    type: item.type,
+    objectionQuote: '',
+    objectionSpeaker: 0,
+    responseQuote: '',
+    responseSpeaker: 0,
+    recoveredWell: false,
+    judgmentNote: '',
+    callId: item.callId,
+    callTitle: '',
+    createdAt: item.createdAt,
+    updatedAt: new Date().toISOString(),
+    deleted: true
   }
 }
 
@@ -125,7 +176,12 @@ export async function addToQueue(
   // Belt-and-braces against double mining (auto-mine racing a scan, a re-run
   // after a cloud restore wiped the mined flag, …): a candidate whose quote is
   // already staged from the same call never lands in the queue twice.
-  const seen = new Set((await listQueue(dir)).map((i) => dedupeKey(i.callId, i.objectionQuote)))
+  // Tombstones count too: an item the rep already rejected must not come back
+  // because a re-mine (a cleared objectionsMined flag after a restore) proposed
+  // the same words again. Their quotes are empty, so they never match a real
+  // candidate here; the per-id dedupe below is what protects against that.
+  const all = await listQueue(dir, { includeDeleted: true })
+  const seen = new Set(all.filter((i) => !i.deleted).map((i) => dedupeKey(i.callId, i.objectionQuote)))
   const now = new Date().toISOString()
   const items: ObjectionQueueItem[] = []
   for (const raw of candidates) {
@@ -147,7 +203,8 @@ export async function addToQueue(
       judgmentNote: c.judgmentNote,
       callId: str(callId, 128),
       callTitle: str(callTitle, MAX_TITLE),
-      createdAt: now
+      createdAt: now,
+      updatedAt: now
     }
     await writeJsonAtomic(join(dir, `${item.id}.json`), item)
     items.push(item)
@@ -155,7 +212,10 @@ export async function addToQueue(
   return items
 }
 
-export async function listQueue(dir: string): Promise<ObjectionQueueItem[]> {
+export async function listQueue(
+  dir: string,
+  opts?: { includeDeleted?: boolean }
+): Promise<ObjectionQueueItem[]> {
   await ensureDir(dir)
   let files: string[]
   try {
@@ -175,31 +235,64 @@ export async function listQueue(dir: string): Promise<ObjectionQueueItem[]> {
         }
       })
   )
-  const items = results.filter((i): i is ObjectionQueueItem => i !== null)
+  const items = results.filter(
+    (i): i is ObjectionQueueItem => i !== null && (opts?.includeDeleted === true || !i.deleted)
+  )
   items.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   return items
 }
 
-export async function getQueueItem(dir: string, id: string): Promise<ObjectionQueueItem | null> {
+/**
+ * BUG-189 — a record arriving from the cloud backup. Same contract as
+ * importEntry/importConversation: sanitized through the one record parser,
+ * `onlyIfNewer` keeps a local copy that is same-or-newer (the reconcile has
+ * already decided on the server's clock; this is the on-disk re-check). A
+ * tombstone imports as a tombstone — that is how a rejection on one machine
+ * reaches the other.
+ */
+export async function importQueueItem(
+  dir: string,
+  payload: unknown,
+  opts?: { onlyIfNewer?: boolean }
+): Promise<ObjectionQueueItem | null> {
+  const item = sanitizeItem(payload)
+  if (!item) return null
+  await ensureDir(dir)
+  if (opts?.onlyIfNewer) {
+    const existing = await getQueueItem(dir, item.id, { includeDeleted: true })
+    if (existing && Date.parse(existing.updatedAt) >= Date.parse(item.updatedAt)) return existing
+  }
+  await writeJsonAtomic(join(dir, `${item.id}.json`), item)
+  return item
+}
+
+export async function getQueueItem(
+  dir: string,
+  id: string,
+  opts?: { includeDeleted?: boolean }
+): Promise<ObjectionQueueItem | null> {
   if (!isSafeId(id)) return null
   try {
     const raw = await fs.readFile(join(dir, `${id}.json`), 'utf8')
-    return sanitizeItem(JSON.parse(raw))
+    const item = sanitizeItem(JSON.parse(raw))
+    if (item?.deleted && !opts?.includeDeleted) return null
+    return item
   } catch {
     return null
   }
 }
 
-/** Delete every staged item mined from one call. Mirrors deleteCall's privacy
- *  guarantee: a deleted call must not retain buyer words anywhere on disk —
- *  the queue stores verbatim buyer quotes, so it must be purged with the call. */
+/** Tombstone every staged item mined from one call. Mirrors deleteCall's
+ *  privacy guarantee: a deleted call must not retain buyer words anywhere on
+ *  disk — the tombstone keeps the id and callId and drops every quote, and
+ *  (BUG-189) carries the deletion to the other machine through the backup. */
 export async function purgeQueueForCall(dir: string, callId: string): Promise<number> {
   const items = await listQueue(dir)
   let purged = 0
   for (const item of items) {
     if (item.callId !== callId) continue
     try {
-      await fs.unlink(join(dir, `${item.id}.json`))
+      await writeJsonAtomic(join(dir, `${item.id}.json`), tombstoneOf(item))
       purged++
     } catch {
       /* best-effort: an unreadable file was already skipped by listQueue */
@@ -208,10 +301,13 @@ export async function purgeQueueForCall(dir: string, callId: string): Promise<nu
   return purged
 }
 
+/** Approve/reject. A tombstone, not an unlink — see the file header. */
 export async function removeFromQueue(dir: string, id: string): Promise<{ ok: boolean }> {
   if (!isSafeId(id)) return { ok: false }
+  const item = await getQueueItem(dir, id)
+  if (!item) return { ok: false }
   try {
-    await fs.unlink(join(dir, `${id}.json`))
+    await writeJsonAtomic(join(dir, `${id}.json`), tombstoneOf(item))
   } catch {
     return { ok: false }
   }

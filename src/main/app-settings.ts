@@ -592,7 +592,10 @@ function mergeDetectionSettings(current: DetectionSettings, patch: unknown): Det
 /** Which optional categories back up to the cloud, on top of the always-on
  *  Tasks/Calendar events/Call metadata. All default OFF — opt-in only. */
 export interface BackupSyncScope {
-  /** Buyer transcripts + coaching evidence quotes (normally stripped before backup). */
+  /** Buyer transcripts + coaching evidence quotes (normally stripped before backup).
+   *  BUG-189: also the objection review queue (objection-queue/*.json) — the
+   *  buyer's words verbatim, the same category, the same switch. Off scrubs
+   *  its rows too. */
   transcripts: boolean
   /** BUG-157 — Rise assistant conversations (assistant-conversations/*.json).
    *
