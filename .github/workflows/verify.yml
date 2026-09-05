@@ -1,0 +1,52 @@
+# M35 Stage 3 — the discipline made mechanical: every push and pull request
+# runs the same gate a session runs by hand, scripts/verification/
+# verify-green.mjs, which reads the typecheck's own error lines and the
+# suite's own summary lines and REFUSES (exit 1) on anything that is not
+# green — including a stray "Errors  N error" line beside a passing count
+# (taxonomy species 4) and a missing summary (the run did not finish).
+#
+# Order matters (species 41): the native addon and the renderer/main bundles
+# are built BEFORE the tests, so the tests gated on their presence run instead
+# of skipping silently; the gate prints the suite's skipped count so a skip
+# is visible in the log, never invisible.
+#
+# The sweeps that need a running app (screen-sweep, occlusion-sweep, the UI
+# driver) cannot run here and are not pretended to; see
+# scripts/verification/README.md.
+name: Verify
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build native addon (win-audio-sessions)
+        run: npm run native:build:win
+
+      - name: Build renderer/main (electron-vite)
+        run: npx electron-vite build
+
+      - name: Gate — typecheck + full suite, read from their own lines
+        run: node scripts/verification/verify-green.mjs
+
+      - name: Self-tests of the instruments (they must be able to refuse)
+        run: node scripts/verification/verify-green.mjs --tests -- src/__tests__/verify-green.test.ts src/__tests__/tracker-status.test.ts src/__tests__/no-uncollected-test-files.test.ts src/__tests__/frozen-modules-have-no-production-callers.test.ts src/__tests__/packaged-files.test.ts src/__tests__/release-notes.test.ts
