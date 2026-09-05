@@ -1,6 +1,14 @@
 import * as RadixTooltip from '@radix-ui/react-tooltip'
-import type { ReactNode } from 'react'
+import { createContext, useContext, type ReactNode } from 'react'
 import { cn } from '@renderer/lib/cn'
+
+/** True below the app-root TooltipProvider. A <Tooltip> rendered OUTSIDE one
+ *  — a component test mounting one piece of UI, a detached window — brings
+ *  its own provider instead of throwing Radix's "must be used within
+ *  TooltipProvider". Found by the suite the first time this shipped: seven
+ *  render tests (the live header pieces, the tasks dialog) mount components
+ *  that contain an IconButton, with no app root above them. */
+const HasProvider = createContext(false)
 
 /**
  * M35 — the app's one tooltip primitive (M31's Stage 1 leftover).
@@ -45,8 +53,9 @@ export function Tooltip({
   /** Render the child alone (no tooltip) — for a site that is conditionally worded. */
   disabled?: boolean
 }): React.JSX.Element {
+  const hasProvider = useContext(HasProvider)
   if (disabled || content === null || content === undefined || content === '') return <>{children}</>
-  return (
+  const root = (
     <RadixTooltip.Root>
       <RadixTooltip.Trigger asChild>{children}</RadixTooltip.Trigger>
       <RadixTooltip.Portal>
@@ -67,14 +76,17 @@ export function Tooltip({
       </RadixTooltip.Portal>
     </RadixTooltip.Root>
   )
+  return hasProvider ? root : <RadixTooltip.Provider delayDuration={400}>{root}</RadixTooltip.Provider>
 }
 
 /** Mount ONCE at the app root (App.tsx). Every <Tooltip> below it shares the
  *  delay and the "once one is open, the next opens instantly" behaviour. */
 export function TooltipProvider({ children }: { children: ReactNode }): React.JSX.Element {
   return (
-    <RadixTooltip.Provider delayDuration={400} skipDelayDuration={250}>
-      {children}
-    </RadixTooltip.Provider>
+    <HasProvider.Provider value={true}>
+      <RadixTooltip.Provider delayDuration={400} skipDelayDuration={250}>
+        {children}
+      </RadixTooltip.Provider>
+    </HasProvider.Provider>
   )
 }
