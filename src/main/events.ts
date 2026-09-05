@@ -494,7 +494,10 @@ export function registerEvents(): void {
       notifyEventsChanged()
       if (ok) return { ok: true }
       const e = await getEvent(eventsDir(), id)
-      return { ok: false, reason: describeSyncFailure(e?.sync?.lastError, e?.provider) }
+      // Found while driving: a bogus id answered "has not reached your
+      // calendar yet" — true of nothing. Name the case.
+      if (!e) return { ok: false, reason: 'Unknown event.' }
+      return { ok: false, reason: describeSyncFailure(e.sync?.lastError, e.provider) }
     }
   )
 
