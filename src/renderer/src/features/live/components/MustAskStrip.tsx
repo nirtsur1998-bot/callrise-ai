@@ -1,3 +1,4 @@
+import { Tooltip } from '@renderer/components/Tooltip'
 import { Check } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { MUST_ASK, type ChecklistState } from '../checklist/must-ask'
@@ -23,17 +24,17 @@ export function MustAskStrip({ state }: { state: ChecklistState }): React.JSX.El
       {MUST_ASK.map((item) => {
         const covered = state.covered.has(item.id)
         return (
-          <span
-            key={item.id}
-            title={covered ? `${item.label} — covered` : `${item.label} — not yet`}
-            className={cn(
-              'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors',
-              covered ? 'bg-positive-soft text-positive' : 'border border-line-soft text-faint'
-            )}
-          >
-            {covered && <Check className="h-3 w-3" aria-hidden="true" />}
-            {item.label}
-          </span>
+          <Tooltip key={item.id} content={covered ? `${item.label} — covered` : `${item.label} — not yet`}>
+            <span
+              className={cn(
+                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors',
+                covered ? 'bg-positive-soft text-positive' : 'border border-line-soft text-faint'
+              )}
+            >
+              {covered && <Check className="h-3 w-3" aria-hidden="true" />}
+              {item.label}
+            </span>
+          </Tooltip>
         )
       })}
     </div>

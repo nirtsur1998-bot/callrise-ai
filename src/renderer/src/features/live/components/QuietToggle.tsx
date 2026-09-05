@@ -1,3 +1,4 @@
+import { Tooltip } from '@renderer/components/Tooltip'
 import { Eye, EyeOff } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 
@@ -24,22 +25,26 @@ export function QuietToggle({
   onToggle: (v: boolean) => void
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
-      onClick={() => onToggle(!quiet)}
-      aria-pressed={quiet}
-      title={
+    <Tooltip
+      content={
         quiet
           ? 'Quiet is on — gauge, meter, suggestions and deal panel are hidden. Click to show them.'
           : 'Quiet — hide the gauge, meter, suggestions and deal panel. The transcript, checklist, health and the interrupt cue stay.'
       }
-      className={cn(
-        'no-drag flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition',
-        quiet ? 'border-accent/40 bg-accent-soft text-ink' : 'border-line text-muted hover:text-ink'
-      )}
+      className="max-w-sm"
     >
-      {quiet ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-      {quiet ? 'Quiet' : 'Quiet'}
-    </button>
+      <button
+        type="button"
+        onClick={() => onToggle(!quiet)}
+        aria-pressed={quiet}
+        className={cn(
+          'no-drag flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition',
+          quiet ? 'border-accent/40 bg-accent-soft text-ink' : 'border-line text-muted hover:text-ink'
+        )}
+      >
+        {quiet ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+        Quiet
+      </button>
+    </Tooltip>
   )
 }

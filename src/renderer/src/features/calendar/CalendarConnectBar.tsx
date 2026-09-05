@@ -1,3 +1,4 @@
+import { Tooltip } from '@renderer/components/Tooltip'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, Plug, RefreshCw, X } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
@@ -190,15 +191,16 @@ export function CalendarConnectBar({
         >
           <Plug className="h-3 w-3" /> Connect
         </button>
-        <button
-          type="button"
-          onClick={dismiss}
-          aria-label="Dismiss"
-          title="Dismiss — you can still connect from the header any time"
-          className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-faint transition hover:bg-elevated hover:text-ink"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        <Tooltip content="Dismiss — you can still connect from the header any time">
+          <button
+            type="button"
+            onClick={dismiss}
+            aria-label="Dismiss"
+            className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-faint transition hover:bg-elevated hover:text-ink"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </Tooltip>
       </div>
       {cards}
     </div>

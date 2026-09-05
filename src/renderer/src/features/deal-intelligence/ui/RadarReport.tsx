@@ -1,3 +1,4 @@
+import { Tooltip } from '@renderer/components/Tooltip'
 import { useMemo, useState } from 'react'
 import { Quote, ThumbsDown, ThumbsUp } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
@@ -120,23 +121,24 @@ function RadarNudgeRow({ nudge }: { nudge: DealNudgeRecord }): React.JSX.Element
           </p>
         </div>
         {nudge.feedback && (
-          <span
-            className={cn(
-              'mt-0.5 shrink-0',
-              nudge.feedback === 'helpful' ? 'text-positive' : 'text-faint'
-            )}
-            title={
-              nudge.feedback === 'helpful'
-                ? 'You marked this helpful'
-                : 'You marked this not helpful'
+          <Tooltip
+            content={
+              nudge.feedback === 'helpful' ? 'You marked this helpful' : 'You marked this not helpful'
             }
           >
-            {nudge.feedback === 'helpful' ? (
-              <ThumbsUp className="h-3.5 w-3.5" aria-hidden="true" />
-            ) : (
-              <ThumbsDown className="h-3.5 w-3.5" aria-hidden="true" />
-            )}
-          </span>
+            <span
+              className={cn(
+                'mt-0.5 shrink-0',
+                nudge.feedback === 'helpful' ? 'text-positive' : 'text-faint'
+              )}
+            >
+              {nudge.feedback === 'helpful' ? (
+                <ThumbsUp className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <ThumbsDown className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+            </span>
+          </Tooltip>
         )}
       </button>
 

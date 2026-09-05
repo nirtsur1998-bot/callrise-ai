@@ -1,3 +1,4 @@
+import { Tooltip } from '@renderer/components/Tooltip'
 import { useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Eye, EyeOff, ExternalLink, Loader2, FlaskConical } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
@@ -88,18 +89,19 @@ const RETENTION_CLASS: Record<RetentionPosture, string> = {
 
 function RetentionBadge({ posture, url }: { posture: RetentionPosture; url: string }): React.JSX.Element {
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noreferrer"
-      className={cn(
-        'inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[11px] font-medium hover:underline',
-        RETENTION_CLASS[posture]
-      )}
-      title="Opens the provider's own data-usage terms"
-    >
-      {RETENTION_LABEL[posture]}
-    </a>
+    <Tooltip content="Opens the provider's own data-usage terms">
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        className={cn(
+          'inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[11px] font-medium hover:underline',
+          RETENTION_CLASS[posture]
+        )}
+      >
+        {RETENTION_LABEL[posture]}
+      </a>
+    </Tooltip>
   )
 }
 

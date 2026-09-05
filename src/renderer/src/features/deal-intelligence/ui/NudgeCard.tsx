@@ -1,3 +1,4 @@
+import { Tooltip } from '@renderer/components/Tooltip'
 import { useEffect, useState } from 'react'
 import { Check, ChevronDown, Quote, ThumbsDown, ThumbsUp, X } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
@@ -154,13 +155,12 @@ export function NudgeCard({
             </span>
             {onFeedback &&
               (rated ? (
-                <span
-                  className="flex items-center gap-1 text-[10px] text-faint"
-                  title="Thanks — this tunes future calls"
-                >
-                  <Check className="h-3 w-3" aria-hidden="true" />
-                  Noted
-                </span>
+                <Tooltip content="Thanks — this tunes future calls">
+                  <span className="flex items-center gap-1 text-[10px] text-faint">
+                    <Check className="h-3 w-3" aria-hidden="true" />
+                    Noted
+                  </span>
+                </Tooltip>
               ) : (
                 <div className="flex items-center gap-0.5">
                   <IconButton
