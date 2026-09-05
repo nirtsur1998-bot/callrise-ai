@@ -34,7 +34,8 @@ const {
   redactPendingClosedJournals,
   markJournalRecoveredAsCall,
   readRecoveredCallId,
-  retireCompletedJournals
+  retireCompletedJournals,
+  journalHasWords
 } = await import('../live/call-journal')
 
 const {
@@ -539,6 +540,37 @@ describe('1.2.5 hotfix — consent redaction of the raw journal', () => {
       endCall({ saved: false })
       expect(allFilesFor(id)).toEqual([`${id}.jsonl`])
       expect(await listOrphanJournals()).toHaveLength(1)
+    })
+
+    it('a journal whose results carry NO words is not offered — recovering it would mint an empty call', async () => {
+      beginCall({ restart: false })
+      recordResult(result([])) // a mic opened, a final with nothing in it
+      recordResult(result([]))
+      const id = idOf(journalFile())
+      crash()
+      expect((await listOrphanJournals()).map((j) => j.id)).not.toContain(id)
+      expect(journalHasWords({ events: [{ t: 'result', at: 1, p: result([]) }] })).toBe(false)
+      expect(journalHasWords({ events: [{ t: 'result', at: 1, p: result([{ speaker: 0, text: 'hi' }]) }] })).toBe(true)
+    })
+
+    it('the sweep retires an EMPTY bare journal once it is a day old, never a fresh one, never one with words', async () => {
+      mkdirSync(journalFolder(), { recursive: true })
+      const header = (id: string, startedAt: string): string =>
+        JSON.stringify({ v: 1, callJournalId: id, startedAt })
+      const empty = JSON.stringify({ t: 'result', at: 500, p: result([]) })
+      const spoken = JSON.stringify({ t: 'result', at: 500, p: result([{ speaker: 1, text: 'real words' }]) })
+      const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
+      const fresh = new Date().toISOString()
+      writeFileSync(join(journalFolder(), 'old-empty.jsonl'), `${header('old-empty', old)}\n${empty}\n`, 'utf8')
+      writeFileSync(join(journalFolder(), 'old-header-only.jsonl'), `${header('old-header-only', old)}\n`, 'utf8')
+      writeFileSync(join(journalFolder(), 'fresh-empty.jsonl'), `${header('fresh-empty', fresh)}\n${empty}\n`, 'utf8')
+      writeFileSync(join(journalFolder(), 'old-spoken.jsonl'), `${header('old-spoken', old)}\n${spoken}\n`, 'utf8')
+
+      const removed = await retireCompletedJournals()
+
+      expect(removed).toBe(2)
+      expect(readdirSync(journalFolder()).sort()).toEqual(['fresh-empty.jsonl', 'old-spoken.jsonl'])
+      expect((await listOrphanJournals()).map((j) => j.id)).toEqual(['old-spoken'])
     })
 
     it('the startup sweep retires what older builds kept (.done pairs, .jsonl.recovered) and leaves an unrecovered crash alone', async () => {

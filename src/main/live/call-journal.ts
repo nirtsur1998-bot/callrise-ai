@@ -302,16 +302,26 @@ export async function listOrphanJournals(): Promise<OrphanJournal[]> {
   const out: OrphanJournal[] = []
   for (const id of ids) {
     const journal = await readJournal(id)
-    // A journal with a header but no events is a call where nothing was ever
-    // said. Offering to "recover" it would produce an empty call record —
-    // exactly the phantom this function exists to avoid.
-    if (journal && journal.events.length > 0) out.push(journal)
+    // A journal in which nothing was ever SAID is a call with nothing to
+    // recover. Offering it would mint an empty call record — exactly the
+    // phantom this function exists to avoid. "Nothing said" used to mean "no
+    // events"; on the founder's disk (2026-09-05) four journals had 3–11
+    // result events and ZERO words — a mic opened and closed — and had been
+    // offered as recoverable calls for days. Words, not events.
+    if (journal && journalHasWords(journal)) out.push(journal)
   }
   // Oldest first, so the rep works through them in the order they happened.
   // The id tiebreak is not decoration: two journals stamped in the same
   // millisecond would otherwise fall back to readdir order, which is arbitrary
   // and would make the prompt list reshuffle between launches.
   return out.sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id))
+}
+
+/** True when at least one recorded result carries a word. */
+export function journalHasWords(journal: Pick<OrphanJournal, 'events'>): boolean {
+  return journal.events.some(
+    (e) => e?.t === 'result' && Array.isArray(e.p?.words) && e.p.words.length > 0
+  )
 }
 
 export interface ReplayedCall {
@@ -521,7 +531,7 @@ export async function retireJournal(id: string): Promise<void> {
  * of a call, and deleting it silently is the one thing this module must never
  * do. listOrphanJournals keeps offering it to the rep.
  */
-export async function retireCompletedJournals(): Promise<number> {
+export async function retireCompletedJournals(now = Date.now()): Promise<number> {
   let entries: string[]
   try {
     entries = await readdir(journalsDir())
@@ -529,9 +539,29 @@ export async function retireCompletedJournals(): Promise<number> {
     return 0
   }
   const ids = new Set<string>()
+  const done = new Set(entries.filter((f) => f.endsWith('.done')).map((f) => f.slice(0, -'.done'.length)))
   for (const f of entries) {
     if (f.endsWith('.done')) ids.add(f.slice(0, -'.done'.length))
     else if (f.endsWith('.jsonl.recovered')) ids.add(f.slice(0, -'.jsonl.recovered'.length))
+  }
+  // An EMPTY bare journal — a header and no words, a mic opened and closed —
+  // is never offered for recovery (listOrphanJournals filters it), so nobody
+  // can ever decide about it and it would sit forever. Six such files sat on
+  // the founder's disk for a week, two of them consent-bearing (BUG-189's
+  // "the .conflict shape again"). Retired once it is older than a day: no
+  // live call lasts that long, so a day-old empty journal cannot be the
+  // safety net of a call in progress. A journal WITH words is never touched
+  // here, however old — that one is the rep's to recover or discard.
+  for (const f of entries) {
+    if (!f.endsWith('.jsonl')) continue
+    const id = f.slice(0, -'.jsonl'.length)
+    if (done.has(id) || ids.has(id)) continue
+    const journal = await readJournal(id)
+    const startedMs = journal ? Date.parse(journal.startedAt) : Number.NaN
+    const olderThanADay = Number.isFinite(startedMs) && now - startedMs > 24 * 60 * 60 * 1000
+    // readJournal returns null for a header-only file with no readable header
+    // too — leave those to a human, they are not "empty", they are unknown.
+    if (journal && !journalHasWords(journal) && olderThanADay) ids.add(id)
   }
   let removed = 0
   for (const id of ids) {
