@@ -27,10 +27,18 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+/** The runner's output as plain lines: ANSI colour codes stripped (GitHub's
+ *  runner writes them into the file; the summary regex missed "Test Files"
+ *  behind an escape on the first three CI runs) and CRLF normalised. */
+export function plainLines(out) {
+  // eslint-disable-next-line no-control-regex
+  return out.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\r\n?/g, '\n').split('\n')
+}
+
 /** How a typecheck run is read: "error TS" lines are the answer; a non-zero
  *  exit with no such line is still not green (species 14). */
 export function typecheckVerdict(out, code) {
-  const errors = out.split('\n').filter((l) => /error TS\d+/.test(l))
+  const errors = plainLines(out).filter((l) => /error TS\d+/.test(l))
   return { green: errors.length === 0 && code === 0, errors, code }
 }
 
@@ -39,7 +47,7 @@ export function typecheckVerdict(out, code) {
  *  errors, printed BESIDE a passing count — species 4) is a failure; and the
  *  exit must be 0 — necessary, never sufficient (species 14). */
 export function suiteVerdict(out, code) {
-  const lines = out.split('\n')
+  const lines = plainLines(out)
   const files = lines.find((l) => /^\s*Test Files\s/.test(l))?.trim()
   const tests = lines.find((l) => /^\s*Tests\s/.test(l))?.trim()
   const errors = lines.find((l) => /^\s*Errors\s+\d+\s+error/.test(l))?.trim() ?? null
@@ -113,7 +121,7 @@ export function main(argv) {
       // The run did not reach its own summary. A refusal with no cause is a
       // dead end (learned on the first CI run): show the raw tail so the
       // crash, the missing dependency or the OOM is in the log.
-      const tail = r.out.split('\n').filter((l) => l.trim()).slice(-60)
+      const tail = plainLines(r.out).filter((l) => l.trim()).slice(-60)
       console.log('SUITE: last lines of the raw output, because the run did not finish:')
       for (const l of tail) console.log('  | ' + l)
     }

@@ -38,6 +38,17 @@ describe('suiteVerdict — reads the suite\'s own lines, not the wrapper', () =>
     expect(v.green).toBe(false)
     expect(v.errors).toBe('Errors  1 error')
   })
+  it('reads a summary wrapped in ANSI colour codes and CRLF line endings (what the CI runner writes to the file)', () => {
+    const esc = String.fromCharCode(27)
+    const crlf = String.fromCharCode(13, 10)
+    const coloured =
+      `${esc}[2m Test Files ${esc}[22m ${esc}[1m${esc}[32m10 passed${esc}[39m${esc}[22m${esc}[90m (10)${esc}[39m${crlf}` +
+      `${esc}[2m      Tests ${esc}[22m ${esc}[1m${esc}[32m100 passed${esc}[39m${esc}[22m${esc}[90m (100)${esc}[39m${crlf}`
+    const v = suiteVerdict(coloured, 0)
+    expect(v.green).toBe(true)
+    expect(v.files).toBe('Test Files  10 passed (10)')
+  })
+
   it('lists the failed test names it saw', () => {
     const out = CLEAN.replace('Test Files  10 passed (10)', 'Test Files  1 failed | 9 passed (10)') + '     × the one that failed 3ms\n'
     expect(suiteVerdict(out, 1).failedNames).toEqual(['× the one that failed 3ms'])

@@ -7,7 +7,11 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const wf = readFileSync(join(__dirname, '..', '..', '.github', 'workflows', 'verify.yml'), 'utf8')
+// CRLF-normalised: the CI runner's checkout writes CRLF, and a search for a
+// line ending in a bare newline came back "not found" there (first CI runs).
+const NORMALISE = true
+const raw = readFileSync(join(__dirname, '..', '..', '.github', 'workflows', 'verify.yml'), 'utf8')
+const wf = NORMALISE ? raw.replace(/\r\n?/g, '\n') : raw
 
 describe('verify.yml — the gate runs on every push and PR, and refuses', () => {
   it('triggers on push to any branch and on pull requests', () => {
