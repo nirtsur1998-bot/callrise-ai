@@ -278,6 +278,8 @@ import {
 } from './detection-service'
 import { disposeOverlay } from './detection-overlay'
 import { disposeTray } from './detection-tray'
+import { noteMainWindowClosedToTray } from './tray-notice'
+import { showNativeNotification } from './notifications'
 import { registerCoachPdf } from './coach-pdf'
 import { registerAiKeys, loadStoredAiKeysIntoEnv } from './ai-keys'
 import { registerFallbackLog } from './ai/fallback-log'
@@ -455,6 +457,13 @@ function createWindow(): void {
     handleMainWindowClosed()
     mainWindow = null
     setMainWindow(null)
+    // BUG-188 — the overlay window keeps the app alive, so this close is a
+    // hide-to-tray in effect and nothing ever said so. Say it once. When the
+    // founder chose Quit (quitConfirmed) it is a real exit: no notice.
+    const stillRunning = !quitConfirmed && BrowserWindow.getAllWindows().length > 0
+    noteMainWindowClosedToTray(app.getPath('userData'), stillRunning, (n) =>
+      showNativeNotification({ title: n.title, body: n.body })
+    )
   })
 
   setMainWindow(mainWindow)

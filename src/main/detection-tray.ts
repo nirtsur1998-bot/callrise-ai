@@ -5,7 +5,7 @@
 // existing icon for every state and instead reflects state via the tooltip
 // text and the (disabled) top menu item, updated on every transition - state
 // is genuinely reflected, just via text rather than four distinct glyphs.
-import { Menu, Tray } from 'electron'
+import { app, Menu, Tray } from 'electron'
 import icon from '../../resources/icon.png?asset'
 
 export interface TrayActions {
@@ -71,7 +71,11 @@ export function updateTray(snapshot: TraySnapshot, actions: TrayActions): void {
         ? { label: 'Pause detection', click: () => actions.pauseDetection() }
         : { label: 'Resume detection', click: () => actions.resumeDetection() },
       { label: 'Pause detection for 1 hour', click: () => actions.snoozeDetection(60) },
-      ...(capturing ? [{ label: 'Stop capturing', click: () => actions.stopCapture() }] : [])
+      ...(capturing ? [{ label: 'Stop capturing', click: () => actions.stopCapture() }] : []),
+      // BUG-188 — closing the window keeps the app here; this is the way out
+      // that reads as one. app.quit() goes through before-quit's own cleanup.
+      { type: 'separator' },
+      { label: 'Quit CallRise AI', click: () => app.quit() }
     ])
   )
 }
