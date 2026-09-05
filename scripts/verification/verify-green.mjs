@@ -17,50 +17,87 @@
 //
 // Exit code: 0 only when every gate is green; otherwise 1. Nothing is piped
 // through head/tail, so the exit code is this script's own.
+//
+// The two verdict functions are exported and tested (src/__tests__/
+// verify-green.test.ts) — the gate has a red check of its own. Importing this
+// file runs nothing: the gates run only when it is the command being executed.
 import { spawnSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 
-const args = process.argv.slice(2)
-const dash = args.indexOf('--')
-const vitestArgs = dash >= 0 ? args.slice(dash + 1) : []
-const flags = dash >= 0 ? args.slice(0, dash) : args
-const doTypes = !flags.includes('--tests')
-const doTests = !flags.includes('--types')
-const cwd = process.cwd()
-const isWin = process.platform === 'win32'
-
-function run(cmd, cmdArgs) {
-  const r = spawnSync(cmd, cmdArgs, { cwd, shell: isWin, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-  return { code: r.status ?? -1, out: (r.stdout ?? '') + (r.stderr ?? '') }
+/** How a typecheck run is read: "error TS" lines are the answer; a non-zero
+ *  exit with no such line is still not green (species 14). */
+export function typecheckVerdict(out, code) {
+  const errors = out.split('\n').filter((l) => /error TS\d+/.test(l))
+  return { green: errors.length === 0 && code === 0, errors, code }
 }
 
-const verdicts = []
-
-if (doTypes) {
-  const r = run('npm', ['run', 'typecheck'])
-  const errors = r.out.split('\n').filter((l) => /error TS\d+/.test(l))
-  if (errors.length || r.code !== 0) {
-    console.log(`TYPECHECK: ${errors.length} error line(s), exit ${r.code}`)
-    for (const l of errors.slice(0, 40)) console.log('  ' + l.trim())
-    verdicts.push(false)
-  } else {
-    console.log('TYPECHECK: no "error TS" lines, exit 0')
-    verdicts.push(true)
+/** How a vitest run is read: both of its own summary lines must exist and
+ *  say nothing of "failed"; an "Errors  N error" line (vitest's unhandled
+ *  errors, printed BESIDE a passing count — species 4) is a failure; and the
+ *  exit must be 0 — necessary, never sufficient (species 14). */
+export function suiteVerdict(out, code) {
+  const lines = out.split('\n')
+  const files = lines.find((l) => /^\s*Test Files\s/.test(l))?.trim()
+  const tests = lines.find((l) => /^\s*Tests\s/.test(l))?.trim()
+  const errors = lines.find((l) => /^\s*Errors\s+\d+\s+error/.test(l))?.trim() ?? null
+  const failedNames = lines.filter((l) => /^\s*×/.test(l)).map((l) => l.trim())
+  const green =
+    code === 0 && !!files && !!tests && !/failed/.test(files) && !/failed/.test(tests) && errors === null
+  return {
+    green,
+    files: files ?? '(no "Test Files" summary line — the run did not finish)',
+    tests: tests ?? '(no "Tests" summary line)',
+    errors,
+    failedNames,
+    code
   }
 }
 
-if (doTests) {
-  const r = run('npx', ['vitest', 'run', ...vitestArgs])
-  const files = r.out.split('\n').find((l) => /^\s*Test Files\s/.test(l))?.trim()
-  const tests = r.out.split('\n').find((l) => /^\s*Tests\s/.test(l))?.trim()
-  const failedNames = r.out.split('\n').filter((l) => /^\s*×/.test(l)).map((l) => l.trim())
-  const green = r.code === 0 && !!files && !!tests && !/failed/.test(files) && !/failed/.test(tests)
-  console.log(`SUITE: ${files ?? '(no "Test Files" summary line — the run did not finish)'}`)
-  console.log(`SUITE: ${tests ?? '(no "Tests" summary line)'}`)
-  console.log(`SUITE: vitest exit ${r.code}`)
-  for (const l of failedNames.slice(0, 40)) console.log('  ' + l)
-  verdicts.push(green)
+function run(cmd, cmdArgs, cwd) {
+  const r = spawnSync(cmd, cmdArgs, {
+    cwd,
+    shell: process.platform === 'win32',
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024
+  })
+  return { code: r.status ?? -1, out: (r.stdout ?? '') + (r.stderr ?? '') }
 }
 
-const allGreen = verdicts.length > 0 && verdicts.every(Boolean)
-console.log(allGreen ? 'VERDICT: GREEN' : 'VERDICT: NOT GREEN')
-process.exit(allGreen ? 0 : 1)
+export function main(argv) {
+  const dash = argv.indexOf('--')
+  const vitestArgs = dash >= 0 ? argv.slice(dash + 1) : []
+  const flags = dash >= 0 ? argv.slice(0, dash) : argv
+  const doTypes = !flags.includes('--tests')
+  const doTests = !flags.includes('--types')
+  const cwd = process.cwd()
+  const verdicts = []
+
+  if (doTypes) {
+    const r = run('npm', ['run', 'typecheck'], cwd)
+    const v = typecheckVerdict(r.out, r.code)
+    if (v.green) console.log('TYPECHECK: no "error TS" lines, exit 0')
+    else {
+      console.log(`TYPECHECK: ${v.errors.length} error line(s), exit ${v.code}`)
+      for (const l of v.errors.slice(0, 40)) console.log('  ' + l.trim())
+    }
+    verdicts.push(v.green)
+  }
+
+  if (doTests) {
+    const r = run('npx', ['vitest', 'run', ...vitestArgs], cwd)
+    const v = suiteVerdict(r.out, r.code)
+    console.log(`SUITE: ${v.files}`)
+    console.log(`SUITE: ${v.tests}`)
+    if (v.errors) console.log(`SUITE: ${v.errors}   <- unhandled errors beside the count (species 4)`)
+    console.log(`SUITE: vitest exit ${v.code}`)
+    for (const l of v.failedNames.slice(0, 40)) console.log('  ' + l)
+    verdicts.push(v.green)
+  }
+
+  const allGreen = verdicts.length > 0 && verdicts.every(Boolean)
+  console.log(allGreen ? 'VERDICT: GREEN' : 'VERDICT: NOT GREEN')
+  return allGreen ? 0 : 1
+}
+
+const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
+if (invokedDirectly) process.exit(main(process.argv.slice(2)))
