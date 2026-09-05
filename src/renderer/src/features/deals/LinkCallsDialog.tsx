@@ -29,11 +29,24 @@ export function LinkCallsDialog({
   const [linkedByDeal, setLinkedByDeal] = useState<Record<string, number>>({})
   const [order, setOrder] = useState<string[]>([]) // rows never reorder: fixed at first load
 
+  // A linked row drops out of the live set, so its title has to be remembered
+  // from the set that had it — the first version showed "Deal" after linking,
+  // seen on the founder's real board.
+  const [titleById, setTitleById] = useState<Record<string, string>>({})
+  const remember = useCallback((s: LinkSuggestions): void => {
+    setTitleById((m) => {
+      const next = { ...m }
+      for (const d of s.deals) next[d.dealId] = d.dealTitle
+      return next
+    })
+  }, [])
+
   const load = useCallback(async (): Promise<void> => {
     const s = await window.api.dealBackfill.linkSuggestions()
+    remember(s)
     setSet(s)
     setOrder((prev) => (prev.length ? prev : s.deals.map((d) => d.dealId)))
-  }, [])
+  }, [remember])
   useEffect(() => {
     void load()
   }, [load])
@@ -124,7 +137,7 @@ export function LinkCallsDialog({
                   <div className="flex items-center gap-1.5">
                     {typeof linked === 'number' && <Check className="h-3.5 w-3.5 shrink-0 text-positive" />}
                     <span className="truncate text-[13px] font-medium text-ink">
-                      {live?.dealTitle ?? linkedTitleFallback(id, set)}
+                      {live?.dealTitle ?? titleById[id] ?? 'Deal'}
                     </span>
                     {live?.contactName && (
                       <span className="truncate text-[12px] text-faint">· {live.contactName}</span>
@@ -166,11 +179,4 @@ export function LinkCallsDialog({
       </div>
     </Modal>
   )
-}
-
-/** A linked row drops out of the live set; keep its title from the last set that had it. */
-const titles = new Map<string, string>()
-function linkedTitleFallback(id: string, set: LinkSuggestions | null): string {
-  for (const d of set?.deals ?? []) titles.set(d.dealId, d.dealTitle)
-  return titles.get(id) ?? 'Deal'
 }

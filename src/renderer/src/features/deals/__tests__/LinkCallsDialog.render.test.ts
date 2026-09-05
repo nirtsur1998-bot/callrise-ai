@@ -105,6 +105,10 @@ describe('LinkCallsDialog', () => {
     const rows = document.querySelectorAll('[data-testid="link-row"]')
     expect(rows[0].textContent).toContain('Linked 2 calls.')
     expect(rows[1].textContent).toContain('Linked 4 calls.')
+    // The titles survive the row leaving the live set — the first version read
+    // "Deal" here, seen on the founder's real board.
+    expect(rows[0].textContent).toContain('Emma deal')
+    expect(rows[1].textContent).toContain('Kevin deal')
     expect(document.querySelector('[data-testid="link-summary"]')!.textContent).toBe('Nothing left to link.')
     expect(byText(/^Link all/)).toBeNull()
   })
