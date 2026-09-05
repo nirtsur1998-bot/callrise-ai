@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MessageCircleQuestion, Search, AlertTriangle, TrendingUp, Zap, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
@@ -40,6 +40,11 @@ export function SuggestionRail({
   collapsed?: boolean
 }): React.JSX.Element | null {
   const [peek, setPeek] = useState(false)
+  // A peek is for THIS quiet stretch. When Quiet is switched off and on again
+  // the pill must come back, not stay open from a click ten minutes ago.
+  useEffect(() => {
+    if (collapsed) setPeek(false)
+  }, [collapsed])
   if (suggestions.length === 0) return null
 
   if (collapsed && !peek) {
