@@ -52,6 +52,18 @@ export function suiteVerdict(out, code) {
   const tests = lines.find((l) => /^\s*Tests\s/.test(l))?.trim()
   const errors = lines.find((l) => /^\s*Errors\s+\d+\s+error/.test(l))?.trim() ?? null
   const failedNames = lines.filter((l) => /^\s*×/.test(l)).map((l) => l.trim())
+  // A test FILE that failed to load counts in "Test Files N failed" with no ×
+  // line at all (first seen on CI: 2 files failed, 0 tests failed). Vitest
+  // prints them as " FAIL  path" followed by the error; keep both.
+  const failedSuites = []
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*FAIL\s+\S/.test(lines[i])) {
+      failedSuites.push(lines[i].trim())
+      for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+        if (lines[j].trim()) failedSuites.push('    ' + lines[j].trim())
+      }
+    }
+  }
   const green =
     code === 0 && !!files && !!tests && !/failed/.test(files) && !/failed/.test(tests) && errors === null
   return {
@@ -60,6 +72,7 @@ export function suiteVerdict(out, code) {
     tests: tests ?? '(no "Tests" summary line)',
     errors,
     failedNames,
+    failedSuites,
     code
   }
 }
@@ -117,6 +130,7 @@ export function main(argv) {
     if (v.errors) console.log(`SUITE: ${v.errors}   <- unhandled errors beside the count (species 4)`)
     console.log(`SUITE: vitest exit ${v.code}`)
     for (const l of v.failedNames.slice(0, 40)) console.log('  ' + l)
+    for (const l of v.failedSuites.slice(0, 60)) console.log('  ' + l)
     if (!v.files.startsWith('Test Files')) {
       // The run did not reach its own summary. A refusal with no cause is a
       // dead end (learned on the first CI run): show the raw tail so the

@@ -49,6 +49,16 @@ describe('suiteVerdict — reads the suite\'s own lines, not the wrapper', () =>
     expect(v.files).toBe('Test Files  10 passed (10)')
   })
 
+  it('names a test FILE that failed to load, with its error, even when no test ran (2 files failed, 0 tests failed)', () => {
+    const out =
+      [' FAIL  src/__tests__/x.test.ts [ src/__tests__/x.test.ts ]', 'Error: Cannot find module ../../scripts/verification/x.mjs', ''].join(String.fromCharCode(10)) +
+      CLEAN.replace('Test Files  10 passed (10)', 'Test Files  1 failed | 9 passed (10)')
+    const v = suiteVerdict(out, 1)
+    expect(v.green).toBe(false)
+    expect(v.failedSuites[0]).toMatch(/^FAIL {2}src\/__tests__\/x\.test\.ts/)
+    expect(v.failedSuites[1]).toMatch(/Cannot find module/)
+  })
+
   it('lists the failed test names it saw', () => {
     const out = CLEAN.replace('Test Files  10 passed (10)', 'Test Files  1 failed | 9 passed (10)') + '     × the one that failed 3ms\n'
     expect(suiteVerdict(out, 1).failedNames).toEqual(['× the one that failed 3ms'])
