@@ -45,6 +45,8 @@ import { DealIntelligencePanel } from '@renderer/features/deal-intelligence/ui/D
 import { QuietToggle } from './components/QuietToggle'
 import { DealFactsLine } from './components/DealFactsLine'
 import { useLiveDealFacts } from './useLiveDealFacts'
+import { PostCallReasonBanner } from './components/PostCallReasonBanner'
+import { resolvePostCallReason, type PostCallReasonDecision } from './post-call-reason'
 import {
   IdleHero,
   AttachingState,
@@ -153,9 +155,16 @@ export function LiveView({
   // tick, so reading currentMeeting directly would capture a stale value.
   const currentMeetingRef = useRef<CalendarEvent | null>(null)
 
+  // M34 3e — the reason prompt at call end. Decided ONCE per saved call from
+  // records (the saved call's deal, else the matched meeting's), rendered
+  // under the "call has ended" banner, cleared when answered, skipped, or the
+  // banner is dismissed. Never blocks: Done works regardless.
+  const [postCallReason, setPostCallReason] = useState<PostCallReasonDecision | null>(null)
+
   const handleSaved = useCallback(
     (callId: string) => {
       clips.flush(callId)
+      void resolvePostCallReason(callId, currentMeetingRef.current?.dealId).then(setPostCallReason)
       const report = dealIntelligenceReportGetterRef.current()
       if (report.nudges.length > 0 || report.healthScoreHistory.length > 0) {
         void window.api.calls.saveDealIntelligence(callId, report).catch(() => {})
@@ -1323,11 +1332,17 @@ export function LiveView({
           Deliberately NOT shown mid-call: a second stop-shaped button next to
           Stop is a way to lose a call in progress. */}
       {shouldOfferPostCallExit(status, segments.length > 0) && (
+        <PostCallReasonBanner decision={postCallReason} onDone={() => setPostCallReason(null)} />
+      )}
+      {shouldOfferPostCallExit(status, segments.length > 0) && (
         <InlineBanner tone="positive">
           <span>This call has ended. Its transcript is saved to Past Calls.</span>
           <button
             type="button"
-            onClick={dismissFinishedCall}
+            onClick={() => {
+              setPostCallReason(null)
+              dismissFinishedCall()
+            }}
             className="no-drag shrink-0 rounded-lg bg-elevated px-3 py-1.5 text-xs font-semibold text-ink hover:bg-surface"
           >
             Done
