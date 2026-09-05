@@ -7,6 +7,7 @@
 // output through every normal channel (console, --enable-logging, Event
 // Viewer, WER) - remove once that's root-caused.
 import { statSync, writeFileSync } from 'fs'
+import { createStartupSplash, openSplashWindow } from './startup-splash'
 import { tmpdir } from 'os'
 import { join as joinPathForCrashLog } from 'path'
 const crashLogPath = joinPathForCrashLog(tmpdir(), 'callrise-startup-crash.log')
@@ -351,6 +352,12 @@ function handleDeepLink(url: string): void {
   }
 }
 
+// BUG-191 — a splash from app-ready until the main window paints; see
+// startup-splash.ts for why a 4 GB machine otherwise shows nothing for ~35 s.
+const startupSplash = createStartupSplash(
+  openSplashWindow({ BrowserWindow: BrowserWindow as never, version: app.getVersion() })
+)
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -420,6 +427,7 @@ function createWindow(): void {
 
   // Only show the window once the UI is painted (avoids a white flash).
   mainWindow.on('ready-to-show', () => {
+    startupSplash.mainWindowReady()
     mainWindow?.show()
     if (pendingDeepLinkEventId) {
       mainWindow?.webContents.send('prepBrief:openRequested', pendingDeepLinkEventId)
@@ -504,6 +512,10 @@ app.whenReady().then(async () => {
     app.exit(0)
     return
   }
+
+  // BUG-191 — first thing after the diagnose exit: something on screen NOW.
+  startupSplash.appReady()
+  writeCrashLog('splash shown', `startup splash state=${startupSplash.state()}`)
 
   // M26 — created before every other registerX() call below: several of
   // them (starting with Phase 3's adapters, e.g. calls.ts) register their
