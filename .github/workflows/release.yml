@@ -232,7 +232,12 @@ jobs:
             # releaseType says (electron-publish gitHubPublisher.js:69-71),
             # so both targets upload into this same invisible draft. The
             # flip to live happens only in the last step below.
-            gh release create "$TAG" --draft --title "$TAG" --notes "Automated release $TAG." --repo "${{ github.repository }}"
+            # BUG-192 (Stage 2 walk): the body used to be "Automated release
+            # $TAG." above six assets - nothing told a stranger which file to
+            # take or that Edge would block an unsigned installer. The notes
+            # live in .github/release-notes.md (a test pins their content).
+            sed "s/__TAG__/$TAG/g" .github/release-notes.md > /tmp/release-notes.md
+            gh release create "$TAG" --draft --title "$TAG" --notes-file /tmp/release-notes.md --repo "${{ github.repository }}"
           fi
 
       - name: Package + publish (electron-builder)
