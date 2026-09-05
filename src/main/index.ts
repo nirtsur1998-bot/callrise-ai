@@ -84,6 +84,14 @@ const devProfileOverride = app.isPackaged ? undefined : process.env['CALLRISE_US
 const userDataDir = devProfileOverride || join(app.getPath('appData'), 'sales-os')
 if (devProfileOverride) console.log(`[dev] userData overridden -> ${devProfileOverride}`)
 app.setPath('userData', userDataDir)
+// BUG-186 — a profile COPY must not reach the real cloud backup unless asked.
+// Told from here (the one override read above) rather than read again in
+// backup.ts; the allow flag is read exactly once, here.
+markSandboxProfile(devProfileOverride, process.env['CALLRISE_SANDBOX_ALLOW_SYNC'] === '1')
+{
+  const line = describeSandboxProfile()
+  if (line) console.log(line)
+}
 
 registerCrashLogging()
 
@@ -257,6 +265,7 @@ import {
   retireCompletedJournals,
   sweepJournalsForMissingCalls
 } from './live/call-journal'
+import { describeSandboxProfile, markSandboxProfile } from './sandbox-profile'
 import { sweepOrphanedCompanions, recordIsGone } from './companion-files'
 import { registerGoogle } from './google'
 import { registerOutlook } from './outlook'

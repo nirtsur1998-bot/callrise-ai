@@ -32,6 +32,7 @@ import {
   listQueue as listObjectionQueue,
   importQueueItem as importObjectionQueueItem
 } from './objection-queue-fs'
+import { backupRefusedForSandbox } from './sandbox-profile'
 import { memoryDbPath, removeWalSidecars } from './memory/db'
 import { snapshotMemoryDb } from './memory/snapshot'
 import { listContacts, importContact, type Contact } from './contacts-fs'
@@ -678,6 +679,13 @@ export type BackupResult =
 
 /** Push all local tasks + events to the cloud (full upsert). Never throws. */
 export async function pushAll(): Promise<BackupResult> {
+  // BUG-186 — a dev build on a profile COPY refuses to reach the real backend
+  // unless CALLRISE_SANDBOX_ALLOW_SYNC=1. Recorded like any other push
+  // failure so the Backup card says so instead of showing a stale green.
+  if (backupRefusedForSandbox()) {
+    await writeState({ lastPushError: 'sandbox', lastPushErrorAt: new Date().toISOString() })
+    return { ok: false, error: 'sandbox' }
+  }
   // Record the "can't sync at all" states like any other push failure —
   // otherwise a signed-out user keeps seeing a green "Backed up N hours ago"
   // while every sync silently no-ops.
@@ -985,6 +993,12 @@ export type RestoreResult =
 /** Pull the cloud mirror and reconcile it into the local stores. Never throws,
  *  never wipes: every change is per-record, and only when the cloud is newer. */
 export async function pullAll(): Promise<RestoreResult> {
+  // BUG-186 — see pushAll. A pull from a sandbox is the quieter half of the
+  // same hazard: it would drag the real account's data into a throwaway copy.
+  if (backupRefusedForSandbox()) {
+    await writeState({ lastPullError: 'sandbox', lastPullErrorAt: new Date().toISOString() })
+    return { ok: false, error: 'sandbox' }
+  }
   const client = getSupabaseClient()
   if (!client) {
     await writeState({ lastPullError: 'not-configured', lastPullErrorAt: new Date().toISOString() })
