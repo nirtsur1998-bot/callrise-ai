@@ -141,7 +141,7 @@ export async function exportTier1Diagnostics(
       if (scrubbedCopy(src, join(staging, src.split(/[\\/]/).pop()!))) collected++
     }
     // The renderer supplies deviceLabels (microphone names, which routinely
-    // contain a person's name — "Nir's AirPods") and tier1Status carries
+    // contain a person's name — "Dana's AirPods") and tier1Status carries
     // enginePath, an absolute path. Scrubbed as a DOCUMENT: the app-wide
     // scrubber caps a single string at 4096 chars, which would truncate this
     // JSON into unparseable output.

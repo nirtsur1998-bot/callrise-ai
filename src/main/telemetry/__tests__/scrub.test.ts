@@ -10,7 +10,7 @@ import { homedir, userInfo } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { createScrubber, scrub } from '../scrub'
 
-const NAME = 'nirtsur'
+const NAME = 'danawhitfield'
 const jane = createScrubber({ homedir: 'C:\\Users\\jane', username: 'jane' })
 
 describe('user-profile paths — the Windows username must never survive', () => {
@@ -224,7 +224,7 @@ describe('secrets — every key shape the app stores, plus the generic ones', ()
 
 describe('identity shapes', () => {
   it('emails', () => {
-    const raw = 'signed in as nir.tsur+test@gmail.com; cc Someone@Example.co.uk'
+    const raw = 'signed in as dana.whitfield+test@example.com; cc Someone@Example.co.uk'
     const out = scrub(raw)
     expect(out).not.toContain('gmail.com')
     expect(out).not.toContain('Example.co.uk')

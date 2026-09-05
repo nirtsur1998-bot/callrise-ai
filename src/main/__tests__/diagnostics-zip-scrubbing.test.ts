@@ -66,7 +66,7 @@ vi.mock('../tier1', () => ({
     connected: false,
     denoisingActive: null,
     // The absolute path that used to ship unscrubbed.
-    enginePath: 'C:\\Users\\Nir Tsur\\AppData\\Local\\CallRiseAI\\kern_bridge.exe'
+    enginePath: 'C:\\Users\\Dana Whitfield\\AppData\\Local\\CallRiseAI\\kern_bridge.exe'
   })
 }))
 
@@ -165,25 +165,25 @@ describe('BUG-094 — the diagnostics zip must scrub the engine logs', () => {
 describe('BUG-094 — app-diagnostics.json must not ship paths or device names raw', () => {
   it('enginePath and a person-named device label are both scrubbed', () => {
     const raw = buildAppDiagnostics({
-      deviceLabels: ["Nir Tsur's AirPods", 'Realtek HD Audio'],
+      deviceLabels: ["Dana Whitfield's AirPods", 'Realtek HD Audio'],
       tier1Enabled: true,
       denoiseStrength: 'medium'
     })
     // CONTROL: the raw builder output really does carry both.
-    expect(raw).toContain('Nir Tsur')
+    expect(raw).toContain('Dana Whitfield')
 
     // What the zip now writes.
     // createScrubber, not createLocalScrubber: this test simulates a DIFFERENT
     // machine's identity, and createLocalScrubber deliberately binds this one's
     // (its type omits homedir/username for exactly that reason).
     const scrubDocument = createScrubber({
-      homedir: 'C:\\Users\\Nir Tsur',
-      username: 'Nir Tsur',
+      homedir: 'C:\\Users\\Dana Whitfield',
+      username: 'Dana Whitfield',
       maxLength: Number.MAX_SAFE_INTEGER
     })
     const out = scrubDocument(raw)
 
-    expect(out, 'enginePath shipped the username').not.toContain('C:\\Users\\Nir Tsur')
+    expect(out, 'enginePath shipped the username').not.toContain('C:\\Users\\Dana Whitfield')
     // Still useful: the non-identifying half survives.
     expect(out).toContain('Realtek HD Audio')
 
@@ -192,7 +192,7 @@ describe('BUG-094 — app-diagnostics.json must not ship paths or device names r
     // scrub.ts documents that it deliberately never matches a username as a
     // BARE WORD — on this machine the account is literally "User", so a
     // bare-word rule would mangle every sentence containing it. The
-    // scrubber therefore cannot catch "Nir Tsur's AirPods", structurally.
+    // scrubber therefore cannot catch "Dana Whitfield's AirPods", structurally.
     //
     // This is the strip-not-scrub lesson again: you cannot scrub a name,
     // only refuse to include it. Surfaced as its own finding rather than

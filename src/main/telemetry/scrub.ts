@@ -115,10 +115,10 @@ function homedirPattern(homedir: string): RegExp | null {
   const parts = trimmed.split(/[\\/]+/).map(escapeRegExp)
   // Trailing lookahead: `C:\Users\jo` must not half-match `C:\Users\joanna`.
   // BUG-093: this used to end `(?=[\\/]|$)` — a slash-only lookahead — so a
-  // quote or a space after the path defeated it. `EPERM scandir 'C:\\Users\\Nir Tsur'`
+  // quote or a space after the path defeated it. `EPERM scandir 'C:\\Users\\Dana Whitfield'`
   // and `JSON.stringify({dir})` both leaked. The rule is an EXACT literal, so it
   // does not need a slash to know where it ends: it only needs to refuse a
-  // longer name (`C:\\Users\\Nir` must not match inside `C:\\Users\\Nirvana`).
+  // longer name (`C:\\Users\\Dana` must not match inside `C:\\Users\\Danaher`).
   // A non-alphanumeric boundary does exactly that and accepts quote, space,
   // comma and end-of-string.
   return new RegExp(`${parts.join('[\\\\/]+')}(?![A-Za-z0-9])`, 'gi')
@@ -132,8 +132,8 @@ export function createScrubber(options: ScrubberOptions = {}): Scrubber {
   // `/User/`, any case. Catches spellings the profile regexes miss (a custom
   // profile root like `D:\Profiles\jane\`). NOT applied as a bare word.
   // BUG-093, same fix as homedirPattern: an exact literal needs a
-  // word boundary, not a slash. `(?![A-Za-z0-9])` still refuses `Nir Tsur`
-  // inside `Nir Tsurson` while allowing a quote/space/comma/end to close it.
+  // word boundary, not a slash. `(?![A-Za-z0-9])` still refuses `Dana Whitfield`
+  // inside `Dana Whitfieldson` while allowing a quote/space/comma/end to close it.
   const userPathRe =
     username.length > 0
       ? new RegExp(`([\\\\/]+)${escapeRegExp(username)}(?![A-Za-z0-9])`, 'gi')
@@ -148,8 +148,8 @@ export function createScrubber(options: ScrubberOptions = {}): Scrubber {
       //
       // The exact-literal rules (this machine's real homedir and username, from
       // os.userInfo()) are the MOST precise thing we have, and they used to run
-      // LAST — after WIN_PROFILE had already rewritten `\Nir` to `\<user>`, so
-      // the literal `\Nir Tsur` they were searching for no longer existed. The
+      // LAST — after WIN_PROFILE had already rewritten `\Dana` to `\<user>`, so
+      // the literal `\Dana Whitfield` they were searching for no longer existed. The
       // generic rule destroyed the exact rule's input, which is why the A1
       // red-check's "two independent mechanisms" were not independent.
       //

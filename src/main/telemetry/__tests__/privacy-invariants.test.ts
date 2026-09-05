@@ -29,7 +29,7 @@ import { listQueued, record, resetTelemetry } from '../index'
 import { recordLaunch, recordQuit, setupTelemetry } from '../setup'
 
 const TRANSCRIPT = 'Buyer said: our budget is forty thousand and the CFO is Dana'
-const EMAIL = 'nir.tsur.real@gmail.com'
+const EMAIL = 'dana.whitfield.real@example.com'
 const ACCOUNT_ID = 'acc0un7-1d00-4000-8000-000000000001'
 const UPDATER_ID = 'e8328791-a06e-5af3-bd54-a1995b9c350b'
 const SESSION_JWT =
@@ -60,7 +60,7 @@ beforeEach(async () => {
     JSON.stringify({
       'sb-proj-auth-token': {
         access_token: SESSION_JWT,
-        user: { id: ACCOUNT_ID, email: EMAIL, user_metadata: { full_name: 'Nir Tsur' } }
+        user: { id: ACCOUNT_ID, email: EMAIL, user_metadata: { full_name: 'Dana Whitfield' } }
       }
     })
   )
@@ -78,7 +78,7 @@ function plantedError(): Error {
   const err = new Error(`Summary failed — ${TRANSCRIPT} — for ${EMAIL}`)
   err.stack = [
     `Error: Summary failed — ${TRANSCRIPT} — for ${EMAIL}`,
-    `    at summarize (C:\\Users\\nirtsur\\AppData\\Local\\Programs\\CallRiseAI\\resources\\app.asar\\out\\main\\index.js:10:5)`
+    `    at summarize (C:\\Users\\danawhitfield\\AppData\\Local\\Programs\\CallRiseAI\\resources\\app.asar\\out\\main\\index.js:10:5)`
   ].join('\n')
   return err
 }
@@ -105,7 +105,7 @@ describe('1. a transcript planted in an error path never leaves', () => {
     expect(body).not.toContain(TRANSCRIPT)
     expect(body).not.toContain('forty thousand')
     expect(body).not.toContain('Dana')
-    expect(body).not.toContain('nirtsur') // the username in the path
+    expect(body).not.toContain('danawhitfield') // the username in the path
   })
 })
 
@@ -159,7 +159,7 @@ describe('3. the telemetry id cannot be joined to the account', () => {
     expect(req.body).not.toContain(ACCOUNT_ID)
     expect(req.body).not.toContain(UPDATER_ID)
     expect(req.body).not.toContain('user_id')
-    expect(req.body).not.toContain('Nir Tsur')
+    expect(req.body).not.toContain('Dana Whitfield')
     // RPC parameter shape: { rows: [...] }, not a bare array (transport.ts
     // targets telemetry_ingest_batch, not a direct table insert).
     const rows = (JSON.parse(req.body) as { rows: Array<Record<string, unknown>> }).rows

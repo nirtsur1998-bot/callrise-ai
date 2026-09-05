@@ -117,22 +117,22 @@ offending *prop* rather than the whole event.
 
 The scrubber is the milestone's P0: nothing reaches the log, telemetry, or a
 bundle without passing it. Three rules are meant to cover the username. On an
-account whose profile is `C:\Users\Nir Tsur`, **all three fail together** for any
+account whose profile is `C:\Users\Dana Whitfield`, **all three fail together** for any
 spelling not immediately followed by a slash:
 
 - `homedirPattern` ends with `(?=[\\/]|$)` — a quote or a space after the path defeats it.
 - `WIN_PROFILE`'s capture class is `[^\\/\s"'<>|:*?]+` — `\s` is negated, so the capture **stops at the space** and only the first name is replaced.
-- `userPathRe` carries the same lookahead **and** runs *after* `WIN_PROFILE` has already rewritten `\Nir` → `\<user>`, so the literal it searches for no longer exists.
+- `userPathRe` carries the same lookahead **and** runs *after* `WIN_PROFILE` has already rewritten `\Dana` → `\<user>`, so the literal it searches for no longer exists.
 
 The "two independent mechanisms" the A1 red-check credits are not independent
 here: the first destroys the second's input.
 
 Verified by importing the real `createScrubber` and running it:
 
-| shape | account `Nir Tsur` | control `nirtsur` |
+| shape | account `Dana Whitfield` | control `danawhitfield` |
 |---|---|---|
 | plain path, separator follows | caught | caught |
-| `JSON.stringify({dir})` | **LEAK** — `C:\Users\<user> Tsur` | caught |
+| `JSON.stringify({dir})` | **LEAK** — `C:\Users\<user> Whitfield` | caught |
 | quoted at end (`EPERM scandir '…'`) | **LEAK** | caught |
 | prose, space follows | **LEAK** | caught |
 

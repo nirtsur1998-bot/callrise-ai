@@ -82,14 +82,14 @@ describe('scrubbing at the write chokepoint', () => {
     const err = new Error('boom')
     err.stack = [
       'Error: boom',
-      '    at startCall (C:\\Users\\nirtsur\\AppData\\Local\\Programs\\CallRiseAI\\resources\\app.asar\\out\\main\\index.js:10:5)',
+      '    at startCall (C:\\Users\\danawhitfield\\AppData\\Local\\Programs\\CallRiseAI\\resources\\app.asar\\out\\main\\index.js:10:5)',
       '    provider said: sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789'
     ].join('\n')
-    expect(err.stack).toContain('nirtsur') // control
+    expect(err.stack).toContain('danawhitfield') // control
     expect(err.stack).toContain('sk-ant-api03') // control
     logError('test:scope', err, { email: 'rep@example.com' })
     const content = await readFile(logFilePath(), 'utf8')
-    expect(content).not.toContain('nirtsur')
+    expect(content).not.toContain('danawhitfield')
     expect(content).not.toContain('sk-ant-api03')
     expect(content).not.toContain('rep@example.com')
     expect(content).toContain('C:\\Users\\<user>\\AppData') // path shape kept for debugging
@@ -97,9 +97,9 @@ describe('scrubbing at the write chokepoint', () => {
   })
 
   it('INFO lines and renderer-forwarded messages go through the same chokepoint', async () => {
-    logInfo('renderer:x', 'saved to /Users/nirtsur/Library/x.json')
+    logInfo('renderer:x', 'saved to /Users/danawhitfield/Library/x.json')
     const content = await readFile(logFilePath(), 'utf8')
-    expect(content).not.toContain('nirtsur')
+    expect(content).not.toContain('danawhitfield')
     expect(content).toContain('/Users/<user>/Library/x.json')
   })
 

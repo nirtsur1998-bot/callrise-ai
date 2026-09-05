@@ -33,8 +33,8 @@ function plantedError(): Error {
   const err = new TypeError(`Cannot summarize — ${TRANSCRIPT}`)
   err.stack = [
     `TypeError: Cannot summarize — ${TRANSCRIPT}`,
-    '    at summarize (C:\\Users\\nirtsur\\AppData\\Local\\Programs\\CallRiseAI\\resources\\app.asar\\out\\main\\index.js:10:5)',
-    '    at async run (C:\\Users\\nirtsur\\AppData\\Local\\Programs\\CallRiseAI\\resources\\app.asar\\out\\main\\index.js:99:1)'
+    '    at summarize (C:\\Users\\danawhitfield\\AppData\\Local\\Programs\\CallRiseAI\\resources\\app.asar\\out\\main\\index.js:10:5)',
+    '    at async run (C:\\Users\\danawhitfield\\AppData\\Local\\Programs\\CallRiseAI\\resources\\app.asar\\out\\main\\index.js:99:1)'
   ].join('\n')
   return err
 }
@@ -99,7 +99,7 @@ describe('captureError → the queue (with consent on), and nothing (with consen
     expect(e.name).toBe('error.main-uncaughtexception')
     expect(e.props.errorClass).toBe('TypeError')
     const serialized = JSON.stringify(e)
-    expect(serialized).not.toContain('nirtsur')
+    expect(serialized).not.toContain('danawhitfield')
     expect(serialized).not.toContain(TRANSCRIPT)
     expect(serialized).not.toContain('forty thousand')
     expect(serialized).toContain('C:\\\\Users\\\\<user>\\\\AppData') // path shape survives for debugging

@@ -33,8 +33,8 @@ export interface HostileIdentity {
 export const HOSTILE_IDENTITIES: readonly HostileIdentity[] = [
   {
     id: 'space',
-    username: 'Nir Tsur',
-    homedir: 'C:\\Users\\Nir Tsur',
+    username: 'Dana Whitfield',
+    homedir: 'C:\\Users\\Dana Whitfield',
     breaks:
       'BUG-093 itself. WIN_PROFILE negates \\s so its capture stops at the space; the ' +
       'homedir and username rules both used a slash-only lookahead. All three failed together.'
@@ -69,11 +69,11 @@ export const HOSTILE_IDENTITIES: readonly HostileIdentity[] = [
   },
   {
     id: 'prefix-short',
-    username: 'Nir',
-    homedir: 'C:\\Users\\Nir',
+    username: 'Dana',
+    homedir: 'C:\\Users\\Dana',
     breaks:
-      'Prefix collision with `Nir Tsur`: the short name must not half-match the long one, ' +
-      'and redacting `Nir` must not leave a dangling ` Tsur`.'
+      'Prefix collision with `Dana Whitfield`: the short name must not half-match the long one, ' +
+      'and redacting `Dana` must not leave a dangling ` Whitfield`.'
   },
   {
     id: 'single-char',
@@ -112,8 +112,8 @@ export const HOSTILE_IDENTITIES: readonly HostileIdentity[] = [
   },
   {
     id: 'corporate-dot',
-    username: 'nir.tsur',
-    homedir: 'C:\\Users\\nir.tsur',
+    username: 'dana.whitfield',
+    homedir: 'C:\\Users\\dana.whitfield',
     breaks:
       'A dot that is NOT a domain — the corporate first.last shape, and the one most likely ' +
       'to be half-matched by a rule written against Administrator.DOMAIN.'

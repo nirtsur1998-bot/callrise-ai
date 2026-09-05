@@ -29,7 +29,7 @@ vi.mock('../updater/index', () => ({ updateStatus: () => ({ state: 'idle' }) }))
 
 const { buildSupportBundle, BUNDLE_FILES } = await import('../support-bundle')
 
-const POISON_EMAIL = 'nirtsur1998@gmail.com'
+const POISON_EMAIL = 'danawhitfield1998@example.com'
 const POISON_PATH = 'C:\\Users\\User\\Desktop\\callrise-ai\\private-note.txt'
 const POISON_TRANSCRIPT = "customer said their card is 4111 1111 1111 1111 don't tell anyone"
 const POISON_DETAIL = 'OpenAI returned invalid_request: prompt contains banned phrase XYZZY-SECRET'
