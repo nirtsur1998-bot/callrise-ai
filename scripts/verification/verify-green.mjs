@@ -91,6 +91,15 @@ export function main(argv) {
     if (v.errors) console.log(`SUITE: ${v.errors}   <- unhandled errors beside the count (species 4)`)
     console.log(`SUITE: vitest exit ${v.code}`)
     for (const l of v.failedNames.slice(0, 40)) console.log('  ' + l)
+    if (!v.files.startsWith('Test Files')) {
+      // The run did not reach its own summary. A refusal with no cause is a
+      // dead end (learned on the first CI run): show the raw tail so the
+      // crash, the missing dependency or the OOM is in the log.
+      const tail = r.out.split('
+').filter((l) => l.trim()).slice(-60)
+      console.log('SUITE: last lines of the raw output, because the run did not finish:')
+      for (const l of tail) console.log('  | ' + l)
+    }
     verdicts.push(v.green)
   }
 
