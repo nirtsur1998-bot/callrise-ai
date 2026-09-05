@@ -1,5 +1,31 @@
 # Verification tooling — read this before driving the app
 
+## THE TOOLS (M35 Stage 3 — the one index; the lessons below are why each exists)
+
+| Tool | The question it answers | Needs | Run | How it refuses |
+|---|---|---|---|---|
+| `verify-green.mjs` | Is the branch green? Read from the typecheck's own `error TS` lines and the suite's own `Test Files` / `Tests` lines, never a wrapper's exit or a count beside the answer (species 4, 14, 69). | nothing | `node scripts/verification/verify-green.mjs` (`--tests`, `--types`, `-- <vitest args>`) | prints `VERDICT: NOT GREEN`, exit 1, on any failed/missing summary or a stray `Errors N error` line. Also the CI gate (`.github/workflows/verify.yml`). Self-test: `src/__tests__/verify-green.test.ts`. |
+| `tracker-status.mjs` | Does every Bug Tracker entry's status line agree with its body? Regenerates the index at the top of the tracker (species 77). | the vault | `node scripts/verification/tracker-status.mjs` (`--check`, `--migrate`, `--file`) | exit 2 and writes NOTHING when a body has a dated closure later than an OPEN status, a heading still carries a status word, or an entry has no status line. Self-test: `src/__tests__/tracker-status.test.ts`. |
+| `state-guard.mjs` (+ `state-guard-selftest.mjs`) | Whatever a drive changes in the real profile is put back by mechanism, not memory — settings AND key files (species 53, 50). | the app's profile | imported by drive scripts: `withRestoredState(...)`; self-test: `node scripts/verification/state-guard-selftest.mjs` | refuses to run a mutation whose target it cannot name unambiguously; the self-test deletes and restores a canary, never a real credential. |
+| `cdp.mjs` | Talk to the running renderer over the Chrome DevTools Protocol (dev app `--remote-debugging-port=9333`; the packaged build honours the same flag — confirmed on the Stage 2 VM). | a running app | imported: `connect()`, `evaluate()`, target picking by page URL | throws when the target is ambiguous; never picks "the nearest plausible" page. |
+| `ui-driver.mjs` | Drive the UI with every rule below built in: click through the element's real hit-test, wait for PAINT not the port, assert the action CHANGED state. | a running app | imported by drive scripts | `actAndExpectChange` fails when nothing changed; hidden-window timers are named as a limit, not worked around. |
+| `screen-sweep.mjs` | Walk every screen of a running build: text a user must never see (raw ids, `undefined`, placeholder copy) and per-screen screenshots hashed in pairs. | a running app | `node scripts/verification/screen-sweep.mjs` | a screen that cannot be reached is reported as unreached, never as clean; identical screenshot pairs fail the theme check. |
+| `occlusion-sweep.mjs` | Is any text drawn on top of by something else? | a running app | `node scripts/verification/occlusion-sweep.mjs` | reports the occluded elements by text; an empty DOM is a refusal, not a zero. |
+| `purge-test-data.mjs` | Remove only what a drive created in the real profile, by id list, nothing older. | the app's profile | `node scripts/verification/purge-test-data.mjs <ids…>` | refuses ids it cannot find; never touches records not in its list; verifies removal after. |
+| `render-surfaces.mjs` / `measure-reach.mjs` | Render a component in the REAL app's stylesheet and theme without a session; can the founder reach every row of a modal at a given viewport? | dev module server | `node scripts/verification/render-surfaces.mjs`, `…/measure-reach.mjs` | measured from `getBoundingClientRect`, reported per viewport; unreachable rows are listed, not summed. |
+| `five-checks.mjs` | The five release-feed checks: manifest, hash, staged percentage, installer name, download. | network | `node scripts/verification/five-checks.mjs vX.Y.Z 100` | any check failing prints which and exits non-zero; a missing asset is not a pass. |
+| one-offs: `bug141-fsync-probe.mjs`, `bug176-corpus-check.mjs`, `bugd-partition.mjs`, `drive-call-deal-picker.mjs` | evidence for a single bug, kept because the tracker cites them | varies | see each file's header | — |
+
+**Which ones CI runs:** only `verify-green.mjs` (and the instruments' own self-tests). Everything
+that needs a running app or the founder's profile is run by a session, by hand, and its result
+is pasted into the tracker with the screenshot hashes — see "THE SECOND RULE" below.
+
+**The three rules in one line each:** an instrument that writes names its target and refuses
+when it cannot (species 53); test the instrument's refusals before trusting its results
+(species 79); read the answer, not a number next to it (species 69).
+
+---
+
 Two small modules for verifying behaviour against a **running packaged build**,
 plus the rule that matters more than either of them.
 
@@ -444,7 +470,8 @@ Observed, in one session:
 |---|---|---|
 | `/s+/g` | `/s+/g` | stripped every letter **s** — `"Calls"` became `"call"`, `"Past"` became `"pa t"`, `"Settings"` became `"setting"`. Every comparison silently failed and the driver reported "found 0" for controls plainly on screen. |
 | `/[ 	
-]+/g` | `/[ tnr]+/g` … then unparseable | `SyntaxError: Invalid regular expression` — the loud, harmless version |
+
+]+/g` | `/[ tnr]+/g` … then unparseable | `SyntaxError: Invalid regular expression` — the loud, harmless version |
 | `.` inside a class | `.` | class matches far more than intended |
 
 The first row cost the most: it produced a **plausible wrong answer**, not an
