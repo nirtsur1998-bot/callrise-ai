@@ -22,6 +22,7 @@ import { NoiseCancellationCard } from '@renderer/features/audio/NoiseCancellatio
 import { ActivationChecklist } from './ActivationChecklist'
 import { Tier1SettingsCard } from '@renderer/features/audio/Tier1SettingsCard'
 import { TelemetryAskCard } from './TelemetryAskCard'
+import { SampleCallCard } from '@renderer/features/sample-call/SampleCallCard'
 import { AutoUpdateNoticeCard } from './AutoUpdateNoticeCard'
 import { AccountMigrationNoticeCard } from './AccountMigrationNoticeCard'
 import type { NavId } from '@renderer/features/navigation/nav-items'
@@ -142,6 +143,7 @@ export function HomeView({
   return (
     <div className="mx-auto max-w-3xl">
       <MissingKeyBanner onNavigate={onNavigate} />
+      <SampleCallCard onNavigate={onNavigate} />
       <ActivationChecklist />
       <TelemetryAskCard onNavigate={onNavigate} />
       <AccountMigrationNoticeCard />

@@ -75,6 +75,8 @@ const BUYER_CALLID_RETRY_MS = 250
 const BUYER_CALLID_MAX_WAIT_MS = 30_000
 
 interface LiveViewProps {
+  /** M36 Stage 1 — opens the read-only sample call from the no-key state. */
+  onOpenSample?: () => void
   /** AI Note Taker's "auto-open meeting page" — called with the saved call's
    *  id right after a successful save. Optional so LiveView still works
    *  standalone (e.g. in tests) without a parent wiring navigation. */
@@ -110,6 +112,7 @@ interface LiveViewProps {
 }
 
 export function LiveView({
+  onOpenSample,
   onSaved,
   autoStartFromDetection = false,
   onAutoStartFromDetectionConsumed,
@@ -921,7 +924,7 @@ export function LiveView({
         />
       )
     }
-    if (status === 'no-key') return <NoKeyState onRetry={start} />
+    if (status === 'no-key') return <NoKeyState onRetry={start} onSample={onOpenSample} />
     if (status === 'error') {
       return (
         <CenteredState
