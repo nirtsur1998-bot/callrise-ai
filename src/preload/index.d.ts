@@ -2978,8 +2978,34 @@ export interface Memory {
   invalidatedBy?: string
   createdAt: string
   lastConfirmedAt: string
+  lastRetrievedAt?: string | null
   invalidatedAt?: string
+  /** M36 Stage 3 item 5 — EVENT time beside the system time above: when the
+   *  fact was true (valid_from … valid_until), each with where the date came
+   *  from. Absent on a row the backfill has not dated. */
+  validFrom?: string | null
+  validFromSource?: ValidityDateSource | null
+  validUntil?: string | null
+  validUntilSource?: ValidityDateSource | null
 }
+
+/** 'call' = the evidence call's own start (real); 'stated' = the user's own
+ *  words at that moment (exact); 'approx' = the learning time, marked. */
+export type ValidityDateSource = 'call' | 'stated' | 'approx'
+
+/** The temporal backfill's record: what it did to the store, once. */
+export type TemporalBackfillRecord =
+  | {
+      status: 'ran'
+      ranAt: string
+      total: number
+      datedBefore: number
+      validFrom: Record<ValidityDateSource, number>
+      validUntil: Record<ValidityDateSource | 'none', number>
+      callsReferenced: number
+      callsResolved: number
+    }
+  | { status: 'skipped'; at: string; reason: string }
 
 export interface MemoryChangelogEntry {
   memoryId: string
@@ -3009,6 +3035,9 @@ export interface SalesBrainMemoriesApi {
   forgetEverything: () => Promise<{ ok: boolean }>
   changelog: (scope?: string) => Promise<MemoryChangelogEntry[]>
   byCall: (callId: string) => Promise<Memory[]>
+  /** M36 Stage 3 item 5 — the backfill's record, or null when Sales Brain is
+   *  off, the db is unavailable, or the job has not run yet. */
+  temporalRecord: () => Promise<TemporalBackfillRecord | null>
 }
 
 export interface SalesBrainCallsApi {

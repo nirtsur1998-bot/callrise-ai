@@ -19,6 +19,7 @@ import {
   updateMemoryStatement
 } from './memories-store'
 import type { Memory, MemoryScope, MemoryStatus } from './types'
+import { temporalBackfillRecord, type TemporalBackfillRecord } from './temporal-backfill'
 
 function noDb<T>(fallback: T): T {
   return fallback
@@ -71,6 +72,21 @@ export function registerMemoryCenter(): void {
     // Cheap: the count, not the rows.
     const count = listMemories(db, {}).length
     return count === 0 ? { state: 'empty' } : { state: 'ready', count }
+  })
+
+  // M36 Stage 3 item 5, step 5 — "the app can tell you what it did to your
+  // data": the temporal backfill's record (ran with these counts, skipped
+  // with this reason, or none yet), so the Memory Center shows how many
+  // facts carry a real date and how many an approximate one. Read-only.
+  ipcMain.handle('salesBrain:temporal:record', async (): Promise<TemporalBackfillRecord | null> => {
+    if (!isSalesBrainEnabled()) return null
+    const db = getMemoryDb()
+    if (!db) return null
+    try {
+      return temporalBackfillRecord(db)
+    } catch {
+      return null
+    }
   })
 
   ipcMain.handle(

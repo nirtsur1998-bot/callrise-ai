@@ -351,7 +351,10 @@ const api = {
       delete: (id: string) => ipcRenderer.invoke('salesBrain:memories:delete', id),
       forgetEverything: () => ipcRenderer.invoke('salesBrain:memories:forgetEverything'),
       changelog: (scope?: string) => ipcRenderer.invoke('salesBrain:memories:changelog', scope),
-      byCall: (callId: string) => ipcRenderer.invoke('salesBrain:memories:byCall', callId)
+      byCall: (callId: string) => ipcRenderer.invoke('salesBrain:memories:byCall', callId),
+      // M36 Stage 3 item 5 — the temporal backfill's record (counts by date
+      // source, or a skip with its reason), for the Memory Center's header.
+      temporalRecord: () => ipcRenderer.invoke('salesBrain:temporal:record')
     },
     calls: {
       setExcluded: (callId: string, excluded: boolean) =>

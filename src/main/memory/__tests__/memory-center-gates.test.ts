@@ -87,6 +87,25 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
 })
 
+// M36 Stage 3 item 5, step 5 — the backfill's record, gated like every other door.
+describe('salesBrain:temporal:record', () => {
+  it('OFF → null, even when a record exists', async () => {
+    const { runTemporalBackfill } = await import('../temporal-backfill')
+    runTemporalBackfill(db!, new Map())
+    salesBrainOn.value = false
+    expect(await call('salesBrain:temporal:record')).toBeNull()
+  })
+  it('ON with no run yet → null; after a run → the counts; after a skip → the skip', async () => {
+    expect(await call('salesBrain:temporal:record')).toBeNull()
+    const { recordTemporalBackfillSkipped, runTemporalBackfill } = await import('../temporal-backfill')
+    recordTemporalBackfillSkipped(db!, 'connection replaced during startup')
+    expect(await call('salesBrain:temporal:record')).toMatchObject({ status: 'skipped', reason: 'connection replaced during startup' })
+    seed('m1', 'something learned')
+    runTemporalBackfill(db!, new Map())
+    expect(await call('salesBrain:temporal:record')).toMatchObject({ status: 'ran', total: 1, validFrom: { call: 0, stated: 0, approx: 1 } })
+  })
+})
+
 describe('with Sales Brain OFF, no door serves memory data', () => {
   // Read paths. "Off" must mean the data is not handed out, not merely that
   // the UI stops asking for it — a renderer bug, a devtools call or a future
