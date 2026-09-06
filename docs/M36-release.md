@@ -42,11 +42,17 @@ A minor bump, not a patch. Two migrations run on every user's `memory.db` on fir
 the Live screen changes for everyone with the design preview on, and the sign-in screen gains a
 door. `1.10.1` would tell people nothing changed for them.
 
-## Rollout: **the 10 % staged default**, then the runbook ramp
+## Rollout: **100 %** — the founder's decision, 2026-09-06 night
 
-The reason to stage: migration 6's backfill writes every memory row once, and the HUD has not been
-on a call. Ten percent of installs is the founder's own machines plus a handful; the ramp
-(`docs/M29-rollout-runbook.md`) is one asset edit after a day with no red run.
+Proposed at the 10 % staged default (migration 6 writes every memory row once; the HUD had not been
+on a call). The founder overruled it, same reasoning as every release this project has cut: the
+install base is small enough that a 10 % cohort produces no signal to act on, and this release is
+strictly better than what is shipped (the crash fix, the sample-call door, the temporal work). So:
+`workflow_dispatch` with rollout `100`, after the VM walk below.
+
+Version stays **1.11.0**. The installer for the walk was built from a clean worktree of `main`
+(`C:\Users\User\Desktop\callrise-release`, `npm ci` from main's lockfile, `npm run build:win`) so
+the walked build is the tagged tree, not a branch's.
 
 ## Before the tag — what was driven, and the one gap
 
