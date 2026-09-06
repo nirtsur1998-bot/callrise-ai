@@ -32,14 +32,14 @@ vi.mock('../../calls-fs', () => ({
 }))
 
 const extractMemoriesFromCall = vi.fn(
-  async (_segments: any[], _callId: string, _contactId: string | null): Promise<any> => ({
+  async (_segments: any[], _callId: string, _contactId: string | null, _opts?: { at?: string }): Promise<any> => ({
     candidates: [],
     aiFailed: false
   })
 )
 vi.mock('../extraction', () => ({
-  extractMemoriesFromCall: (segments: any[], callId: string, contactId: string | null) =>
-    extractMemoriesFromCall(segments, callId, contactId)
+  extractMemoriesFromCall: (segments: any[], callId: string, contactId: string | null, opts?: { at?: string }) =>
+    extractMemoriesFromCall(segments, callId, contactId, opts)
 }))
 
 const consolidateNewCandidate = vi.fn(async (_db: unknown, _candidate: any): Promise<string> => 'created')
@@ -129,6 +129,13 @@ describe('runBackfill — BUG-046 fresh-permission checks', () => {
 
     const extractedIds = extractMemoriesFromCall.mock.calls.map((c) => c[1])
     expect(extractedIds).toEqual(['call-a', 'call-c'])
+    // M36 Stage 3 item 5, step 2 — every imported call hands extraction its
+    // own start time, so the memories are born with the CALL's date, not the
+    // import's
+    expect(extractMemoriesFromCall.mock.calls.map((c) => c[3])).toEqual([
+      { at: '2026-01-01T00:00:00.000Z' },
+      { at: '2026-01-01T00:00:00.000Z' }
+    ])
     expect(progress.at(-1)).toMatchObject({ stage: 'done' })
   })
 

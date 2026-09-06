@@ -426,12 +426,30 @@ export function invalidateMemory(db: Database.Database, id: string, supersededBy
   const existing = getMemoryById(db, id)
   if (!existing) return null
   const now = new Date().toISOString()
-  db.prepare("UPDATE memories SET status = 'invalidated', invalidated_at = ?, invalidated_by = ? WHERE id = ?").run(
-    now,
-    supersededByMemoryId,
-    id
-  )
-  return { ...existing, status: 'invalidated', invalidatedAt: now, invalidatedBy: supersededByMemoryId }
+  // M36 Stage 3 item 5, step 2 — the window CLOSES WHEN THE NEW FACT BECAME
+  // TRUE, not now. `invalidated_at` (system time) still records when we
+  // noticed; `valid_until` (event time) takes the superseder's valid_from and
+  // its source, so a fact learned from a July call closes the old one in
+  // July even if the extraction ran in September. The superseder is read
+  // from THIS db — never the calls store (the founder's condition: the
+  // memory db does not reach outside itself for a timestamp; the caller
+  // stamped the evidence with `at` when the superseder was inserted). A
+  // superseder with no date (should not happen after migration 6) closes at
+  // `now`, marked approximate, never silently.
+  const superseder = getMemoryById(db, supersededByMemoryId)
+  const validUntil = superseder?.validFrom ?? now
+  const validUntilSource: ValidityDateSource = superseder?.validFrom ? (superseder.validFromSource ?? 'approx') : 'approx'
+  db.prepare(
+    "UPDATE memories SET status = 'invalidated', invalidated_at = ?, invalidated_by = ?, valid_until = ?, valid_until_source = ? WHERE id = ?"
+  ).run(now, supersededByMemoryId, validUntil, validUntilSource, id)
+  return {
+    ...existing,
+    status: 'invalidated',
+    invalidatedAt: now,
+    invalidatedBy: supersededByMemoryId,
+    validUntil,
+    validUntilSource
+  }
 }
 
 /** Decay (spec section 2, nightly): confidence drifts down without

@@ -37,6 +37,12 @@ import type { MemoryEvidence, ValidityDateSource } from './types'
 export const TEMPORAL_BACKFILL_META_KEY = 'temporal_backfill'
 
 export interface TemporalBackfillCounts {
+  /** 'ran' — the job dated the rows below (a store with zero rows still
+   *  RAN: total 0 is a result, not a skip). The other shape,
+   *  TemporalBackfillSkip, is what a startup that could not run it leaves
+   *  behind, so "did it run, did it find nothing, or did it never get the
+   *  chance" are three distinguishable records (the founder, step 1 review). */
+  status: 'ran'
   ranAt: string
   /** rows in the store when the job ran */
   total: number
@@ -52,6 +58,18 @@ export interface TemporalBackfillCounts {
   callsReferenced: number
   callsResolved: number
 }
+
+/** Left by a startup that opened the store but could not run the job
+ *  (connection replaced mid-read, calls directory unreadable, an error). A
+ *  skip never blocks the next launch: runTemporalBackfill treats it as
+ *  "not run yet". */
+export interface TemporalBackfillSkip {
+  status: 'skipped'
+  at: string
+  reason: string
+}
+
+export type TemporalBackfillRecord = TemporalBackfillCounts | TemporalBackfillSkip
 
 interface BackfillRow {
   id: string
@@ -79,14 +97,23 @@ export async function loadCallStartTimes(callsDir: string): Promise<Map<string, 
   return out
 }
 
-export function temporalBackfillRecord(db: Database.Database): TemporalBackfillCounts | null {
+export function temporalBackfillRecord(db: Database.Database): TemporalBackfillRecord | null {
   const raw = getMeta(db, TEMPORAL_BACKFILL_META_KEY)
   if (!raw) return null
   try {
-    return JSON.parse(raw) as TemporalBackfillCounts
+    return JSON.parse(raw) as TemporalBackfillRecord
   } catch {
     return null
   }
+}
+
+/** Records that a startup could not run the job. Never overwrites a
+ *  completed run — a 'ran' record is the one that matters. */
+export function recordTemporalBackfillSkipped(db: Database.Database, reason: string): void {
+  const existing = temporalBackfillRecord(db)
+  if (existing?.status === 'ran') return
+  const skip: TemporalBackfillSkip = { status: 'skipped', at: new Date().toISOString(), reason }
+  setMeta(db, TEMPORAL_BACKFILL_META_KEY, JSON.stringify(skip))
 }
 
 function evidenceCallIds(evidenceJson: string): string[] {
@@ -108,7 +135,7 @@ export function runTemporalBackfill(
   callStartTimes: ReadonlyMap<string, string>
 ): TemporalBackfillCounts {
   const existing = temporalBackfillRecord(db)
-  if (existing) return existing
+  if (existing?.status === 'ran') return existing // a 'skipped' record is "not run yet" — run now
 
   const rows = db
     .prepare(
@@ -117,6 +144,7 @@ export function runTemporalBackfill(
     .all() as BackfillRow[]
 
   const counts: TemporalBackfillCounts = {
+    status: 'ran',
     ranAt: new Date().toISOString(),
     total: rows.length,
     datedBefore: rows.filter((r) => r.valid_from !== null).length,
@@ -201,7 +229,8 @@ export function runTemporalBackfill(
 
 /** One line for the main log — the founder asked for the counts, not a
  *  cheerful "done". */
-export function describeTemporalBackfill(c: TemporalBackfillCounts): string {
+export function describeTemporalBackfill(c: TemporalBackfillRecord): string {
+  if (c.status === 'skipped') return `temporal backfill SKIPPED at ${c.at}: ${c.reason} — runs at the next launch`
   return (
     `temporal backfill: ${c.total} memories, ${c.datedBefore} already dated; ` +
     `valid_from — ${c.validFrom.call} from evidence calls (real), ${c.validFrom.stated} user-stated (exact), ` +

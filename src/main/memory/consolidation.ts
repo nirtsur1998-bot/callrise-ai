@@ -428,6 +428,20 @@ export function decayMemories(db: Database.Database, scope: MemoryScope): void {
   for (const memory of candidates) {
     if (memory.pinned || memory.source === 'user_stated' || memory.source === 'user_confirmed') continue
 
+    // M36 Stage 3 item 5 — A FACT WITH A valid_until IS HISTORICAL, NOT STALE.
+    // DO NOT REMOVE THIS GUARD WHEN TIDYING THE LOOP. "Budget was $40k, true
+    // from March to July" is not a memory that failed to get reconfirmed; it
+    // is a closed window, and it is the only thing that lets Rise answer
+    // "what was the budget in June?" Decay measures neglect of a live fact;
+    // a closed fact is not neglected, it is finished. Archiving it destroys
+    // the temporal feature (docs/M36-temporal-validity-design.md, "what
+    // breaks"). Today such rows are also status 'invalidated' and never reach
+    // this loop — this guard exists so that stays true the day a window is
+    // closed WITHOUT an invalidation (an expiry parsed from the fact itself).
+    // Pinned by temporal-step2.test.ts: an ACTIVE row with valid_until set
+    // survives the decay that archives its twin.
+    if (memory.validUntil) continue
+
     const next = decayedConfidence(
       memory.confidence,
       decayAnchor(memory.lastConfirmedAt, memory.lastRetrievedAt),

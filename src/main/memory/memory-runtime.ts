@@ -10,6 +10,7 @@ import { memoryDbPath, openMemoryDb, migrate, type MigrateResult } from './db'
 import {
   describeTemporalBackfill,
   loadCallStartTimes,
+  recordTemporalBackfillSkipped,
   runTemporalBackfill,
   temporalBackfillRecord
 } from './temporal-backfill'
@@ -157,17 +158,30 @@ export async function initSalesBrain(): Promise<{ ok: boolean; detail: string }>
 async function runTemporalBackfillOnce(handle: Database.Database, callsDir: string): Promise<void> {
   try {
     // a handle that is not open is never read or written through (a test's
-    // stand-in object, or a connection closed during startup)
+    // stand-in object, or a connection closed during startup). Nothing can
+    // be recorded through it either — the absence of any record IS the
+    // "never got the chance" state, and the next launch runs the job.
     if (!handle.open) return
-    if (temporalBackfillRecord(handle)) return
+    if (temporalBackfillRecord(handle)?.status === 'ran') return
     const callStartTimes = await loadCallStartTimes(callsDir)
-    // the connection may have been closed by a test reset or a shutdown
-    // while the directory was being read — never write through a dead handle
-    if (db !== handle || !handle.open) return
+    // the connection may have been replaced or closed while the directory
+    // was being read — never write rows through a stale handle. A skip is
+    // recorded (where the handle still can) so it reads as a skip, not as a
+    // run that found nothing.
+    if (!handle.open) return
+    if (db !== handle) {
+      recordTemporalBackfillSkipped(handle, 'connection replaced during startup')
+      return
+    }
     const counts = runTemporalBackfill(handle, callStartTimes)
     console.log(`[sales-brain] ${describeTemporalBackfill(counts)}`)
   } catch (err) {
     console.error('[sales-brain] temporal backfill failed (memories stay undated until the next launch):', err)
+    try {
+      if (handle.open) recordTemporalBackfillSkipped(handle, `error: ${err instanceof Error ? err.message : String(err)}`)
+    } catch {
+      /* the record is best-effort; the log line above already says what happened */
+    }
   }
 }
 

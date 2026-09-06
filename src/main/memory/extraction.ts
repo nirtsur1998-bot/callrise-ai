@@ -235,7 +235,14 @@ function speakerLabel(seg: CallSegment, all: CallSegment[]): string {
 export async function extractMemoriesFromCall(
   segments: CallSegment[],
   callId: string,
-  contactId: string | null
+  contactId: string | null,
+  /** M36 Stage 3 item 5 — `at`: the call's START time (a call record's
+   *  createdAt), stamped on every candidate's evidence so the memory is born
+   *  with its EVENT time. The caller passes it because the caller already
+   *  holds the call record; this module never reaches into the calls store
+   *  for a timestamp (the founder's condition, step 2). Omitted → the
+   *  memory's date falls back to the learning time, marked approximate. */
+  opts: { at?: string } = {}
 ): Promise<ExtractionOutcome> {
   const speechOnly = speechSegments(segments)
   const transcript = speechOnly
@@ -257,7 +264,10 @@ export async function extractMemoriesFromCall(
     const candidates = raw
       .map((c) => verifyAndBuild(c, transcript, contactId))
       .filter((c): c is MemoryCandidate => c !== null)
-      .map((c) => ({ ...c, evidence: c.evidence.map((e) => ({ ...e, callId })) }))
+      .map((c) => ({
+        ...c,
+        evidence: c.evidence.map((e) => ({ ...e, callId, ...(opts.at ? { at: opts.at } : {}) }))
+      }))
     return { candidates, aiFailed: false }
   } catch (err) {
     // best-effort, same as every other extraction module — never throw into

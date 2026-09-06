@@ -134,7 +134,9 @@ export async function runMemoryExtractionForCall(
   // extraction.ts) — the post-save pass passes null unconditionally, never
   // reading the call's actual contactId at all.
   const contactId = pass.pass === 'post-save' ? null : pass.contactIdAtTrigger
-  const { candidates } = await extractMemoriesFromCall(call.segments, callId, contactId)
+  // M36 Stage 3 item 5 — the call's start time rides on every evidence entry,
+  // so each memory is born with its event time (not the moment this hook ran).
+  const { candidates } = await extractMemoriesFromCall(call.segments, callId, contactId, { at: call.createdAt })
   const touchedScopes = new Set<MemoryScope>()
   let newCount = 0
   for (const candidate of candidates) {
