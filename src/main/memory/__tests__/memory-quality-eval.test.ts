@@ -131,6 +131,9 @@ interface ScenarioReport {
   /** BUG-196 — what the model proposed and the guardrails refused, with the reason, and
    *  whether the refused statement would have satisfied a ground-truth fact */
   rejected: { statement: string; category: string; reason: string; wouldHaveHit: string | null }[]
+  /** BUG-196 shape (b) — kept as client-fact in the client scope after a rep/business category
+   *  claim; how much of the recall the remap is responsible for */
+  remapped: { statement: string; from: string }[]
 }
 
 /** BUG-195 — two of the first three real runs failed INSIDE a model (malformed
@@ -263,7 +266,8 @@ describe('Memory Quality Eval Harness (M27 audit — Sales Brain extraction base
           unexpectedByTopic,
           servedBy: outcome.servedBy ?? '(model not recorded)',
           attempts,
-          rejected
+          rejected,
+          remapped: outcome.remapped
         })
       }
 
@@ -288,6 +292,7 @@ function printReport(reports: ScenarioReport[]): void {
   let totalForbiddenHits = 0
   let totalRefused = 0
   let totalRefusedWouldHaveHit = 0
+  let totalRemapped = 0
 
   for (const r of reports) {
     totalExpected += r.truePositives.length + r.falseNegatives.length
@@ -319,6 +324,10 @@ function printReport(reports: ScenarioReport[]): void {
       console.log(
         `    - [${x.category}] "${x.statement}" — ${x.reason}${x.wouldHaveHit ? `  *** WOULD HAVE HIT: ${x.wouldHaveHit}` : ''}`
       )
+    // BUG-196 shape (b) — what the remap kept that the old rule would have dropped
+    totalRemapped += r.remapped.length
+    console.log(`  Kept by the client-fact remap (would have been refused before): ${r.remapped.length}`)
+    for (const x of r.remapped) console.log(`    - "${x.statement}" (was filed as ${x.from})`)
     console.log('')
   }
 
@@ -331,6 +340,7 @@ function printReport(reports: ScenarioReport[]): void {
     `Refused by the guardrails: ${totalRefused}, of which would have hit a ground-truth fact: ${totalRefusedWouldHaveHit} ` +
       `(0 here means the misses are the MODEL's omissions, not the guardrails')`
   )
+  console.log(`Kept by the client-fact remap across all scenarios: ${totalRemapped}`)
   console.log(`Served by: ${[...new Set(reports.map((r) => r.servedBy))].join(', ')}`)
   console.log('===================================================\n')
 }

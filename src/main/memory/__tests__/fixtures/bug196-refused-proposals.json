@@ -1,0 +1,290 @@
+[
+  {
+    "run": 14,
+    "scenario": "healthy",
+    "scopeKind": "client",
+    "category": "stated-goal",
+    "statement": "The client aims to have the new scheduling system live by the end of Q3 before peak season.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Wants to go live by end of Q3, driven by peak season"
+  },
+  {
+    "run": 14,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "stated-goal",
+    "statement": "The client wants better visibility into calls.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": null
+  },
+  {
+    "run": 14,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "stated-struggle",
+    "statement": "The client currently relies on manual notes after each call, which they find ineffective.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Current process is manual notes after each call, which is not great"
+  },
+  {
+    "run": 14,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "stated-struggle",
+    "statement": "The client is constrained by a tight budget this quarter and limited time for a rollout.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": null
+  },
+  {
+    "run": 14,
+    "scenario": "authorityHeavy",
+    "scopeKind": "client",
+    "category": "stated-goal",
+    "statement": "The client aims to have the solution implemented by the end of Q2.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Internal goal of end of Q2, before busy season — not a hard deadline"
+  },
+  {
+    "run": 15,
+    "scenario": "healthy",
+    "scopeKind": "client",
+    "category": "stated-goal",
+    "statement": "The client aims to have the new scheduling system live by the end of Q3.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Wants to go live by end of Q3, driven by peak season"
+  },
+  {
+    "run": 15,
+    "scenario": "healthy",
+    "scopeKind": "client",
+    "category": "pricing-model",
+    "statement": "The client expects to spend between $40,000 and $50,000 per year on the solution.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Budget range of roughly $40k-$50k for the year"
+  },
+  {
+    "run": 15,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "stated-struggle",
+    "statement": "The client currently relies on manual notes after calls, which they find ineffective.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Current process is manual notes after each call, which is not great"
+  },
+  {
+    "run": 15,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "stated-struggle",
+    "statement": "The client has tight budget this quarter and limited time for a rollout.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": null
+  },
+  {
+    "run": 15,
+    "scenario": "authorityHeavy",
+    "scopeKind": "client",
+    "category": "stated-goal",
+    "statement": "The target implementation date is end of Q2.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Internal goal of end of Q2, before busy season — not a hard deadline"
+  },
+  {
+    "run": 16,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "stated-goal",
+    "statement": "The client's manager wants better visibility into calls.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": null
+  },
+  {
+    "run": 16,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "stated-struggle",
+    "statement": "The client currently relies on manual notes after each call, which is ineffective.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Current process is manual notes after each call, which is not great"
+  },
+  {
+    "run": 16,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "stated-struggle",
+    "statement": "The client has a tight budget this quarter and limited bandwidth for a rollout.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": null
+  },
+  {
+    "run": 16,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "icp",
+    "statement": "The client plans to initially roll out to about fifteen reps.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": null
+  },
+  {
+    "run": 16,
+    "scenario": "authorityHeavy",
+    "scopeKind": "client",
+    "category": "stated-goal",
+    "statement": "They aim to have the solution implemented by the end of Q2.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Internal goal of end of Q2, before busy season — not a hard deadline"
+  },
+  {
+    "run": 16,
+    "scenario": "authorityHeavy",
+    "scopeKind": "client",
+    "category": "preference",
+    "statement": "The client prefers a technical brief that addresses data residency and access control details.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": null
+  },
+  {
+    "run": 17,
+    "scenario": "healthy",
+    "scopeKind": "client",
+    "category": "pricing-model",
+    "statement": "The client’s budget for a scheduling solution is roughly $40,000 to $50,000 per year.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Budget range of roughly $40k-$50k for the year"
+  },
+  {
+    "run": 17,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "icp",
+    "statement": "The client is considering rolling out the tool to about fifteen reps initially.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": null
+  },
+  {
+    "run": 17,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "stated-goal",
+    "statement": "The client’s manager wants better visibility into calls.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": null
+  },
+  {
+    "run": 17,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "stated-struggle",
+    "statement": "The client currently relies on manual notes after each call.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Current process is manual notes after each call, which is not great"
+  },
+  {
+    "run": 17,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "stated-struggle",
+    "statement": "The client is constrained by a tight budget and limited time for rollout.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": null
+  },
+  {
+    "run": 17,
+    "scenario": "authorityHeavy",
+    "scopeKind": "client",
+    "category": "stated-struggle",
+    "statement": "The client must obtain final approval from the IT director for any solution that touches their systems.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "IT director owns the final call on anything touching their systems"
+  },
+  {
+    "run": 17,
+    "scenario": "authorityHeavy",
+    "scopeKind": "client",
+    "category": "stated-goal",
+    "statement": "The IT director’s primary concerns are security posture and seamless integration with existing tools.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "IT director owns the final call on anything touching their systems"
+  },
+  {
+    "run": 17,
+    "scenario": "authorityHeavy",
+    "scopeKind": "client",
+    "category": "stated-goal",
+    "statement": "Finance must approve any purchase exceeding a few thousand dollars per year.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Finance must separately approve spend over a few thousand dollars a year"
+  },
+  {
+    "run": 19,
+    "scenario": "healthy",
+    "scopeKind": "client",
+    "category": "stated-goal",
+    "statement": "The client wants to implement the solution by the end of Q3 before peak season.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Wants to go live by end of Q3, driven by peak season"
+  },
+  {
+    "run": 19,
+    "scenario": "healthy",
+    "scopeKind": "business",
+    "category": "product-or-service",
+    "statement": "Meridian Flow automatically pushes approved shift hours to the payroll system overnight, eliminating manual copy‑paste.",
+    "reason": "quote-not-in-source",
+    "wouldHaveHit": "Manual payroll copy takes the ops coordinator half a day every pay period"
+  },
+  {
+    "run": 19,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "stated-struggle",
+    "statement": "The client currently tracks deals using mostly manual notes after each call.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Current process is manual notes after each call, which is not great"
+  },
+  {
+    "run": 19,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "stated-struggle",
+    "statement": "The client has a tight budget this quarter and limited bandwidth for rollout.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": null
+  },
+  {
+    "run": 19,
+    "scenario": "stalling",
+    "scopeKind": "client",
+    "category": "preference",
+    "statement": "The client prefers a follow-up in a couple of weeks.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": null
+  },
+  {
+    "run": 19,
+    "scenario": "authorityHeavy",
+    "scopeKind": "client",
+    "category": "icp",
+    "statement": "The IT director has final authority on any solution that touches the client’s systems.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "IT director owns the final call on anything touching their systems"
+  },
+  {
+    "run": 19,
+    "scenario": "authorityHeavy",
+    "scopeKind": "client",
+    "category": "icp",
+    "statement": "Finance must approve any purchase over a few thousand dollars per year.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": "Finance must separately approve spend over a few thousand dollars a year"
+  },
+  {
+    "run": 19,
+    "scenario": "authorityHeavy",
+    "scopeKind": "client",
+    "category": "preference",
+    "statement": "The client prefers receiving a technical brief they can forward directly.",
+    "reason": "category-scope-mismatch",
+    "wouldHaveHit": null
+  }
+]

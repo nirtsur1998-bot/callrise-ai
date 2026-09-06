@@ -64,7 +64,7 @@ const EXTRACT_TOOL: AITool = {
             category: {
               type: 'string',
               enum: [...MEMORY_CATEGORIES],
-              description: `Must be exactly one of: ${CATEGORY_LIST}. Never invent a category outside this list.`
+              description: `Must be exactly one of: ${CATEGORY_LIST}. Never invent a category outside this list. A fact about the CLIENT (scopeKind 'client') always uses category 'client-fact' — their budget, timeline, decision process, current tools and pains are all 'client-fact'; the other categories describe the rep or the rep's own business.`
             },
             statement: {
               type: 'string',
@@ -98,6 +98,7 @@ const GUARDRAIL_PROMPT = `
 You are extracting durable, useful facts for a sales rep's personal "Sales Brain" memory — facts that will help THEM sell better in the future, and facts about their business and their clients.
 
 Only extract facts that clearly fit one of these categories: ${CATEGORY_LIST}.
+A fact about the CLIENT — their budget, their timeline, who decides on their side, what they use today, what is painful for them — is scopeKind 'client' and category 'client-fact', always. The other categories are about the rep and the rep's own business.
 
 HARD RULES, never break these:
 - NEVER extract inferences about mental or emotional state, health, family, or personal life — even if it's visible in the transcript. If someone mentions being tired, stressed, sick, or anything personal, do NOT record it as a memory, no matter how it might seem useful.
@@ -145,7 +146,59 @@ export type CandidateRejectReason =
   | 'speaker-label-statement'
   | 'quote-not-in-source'
 
-export type VerifyOutcome = { candidate: MemoryCandidate } | { rejected: CandidateRejectReason }
+export type VerifyOutcome =
+  | { candidate: MemoryCandidate; remappedFrom?: MemoryCategory }
+  | { rejected: CandidateRejectReason }
+
+/**
+ * BUG-196, shape (b) — THE ONE-WAY REMAP (the founder: "proceed", 2026-09-06
+ * evening; docs/M36-bug196-fix-shapes.md).
+ *
+ * The category's own scope-kind is the source of truth: a category names who
+ * a fact is about, and a model that says "scopeKind rep, category
+ * client-fact" has contradicted itself. Before this function, EVERY
+ * mismatch was dropped — and the instrument showed what that cost: 31 of 32
+ * refused proposals in a day's runs were the model claiming scopeKind
+ * `client` with a rep/business category (`client/stated-goal` for the
+ * buyer's go-live date, `client/pricing-model` for the buyer's budget,
+ * `client/stated-struggle` for the buyer's pain), 19 of them ground-truth
+ * facts. The taxonomy gives a client fact exactly one name and the model
+ * reached for a more specific one.
+ *
+ * So, ONE direction only: a fact the model says is about the CLIENT, filed
+ * under a rep/business category, is kept as `client-fact` IN THE CLIENT
+ * SCOPE — the most restricted scope in the store (bound chats and
+ * named-client inference only; rag.ts's cross-scope invariant throws on any
+ * leak). It can never reach the rep's or the business's profile, which is
+ * the damage BUG-166 named and this guardrail exists to prevent.
+ *
+ * The other direction stays a drop: a `client-fact` the model attributes to
+ * the rep or the business, or any rep↔business swap, is still a
+ * contradiction we do not resolve by guessing. And a client fact with no
+ * real contact to attach to is still dropped (never a fabricated scope).
+ *
+ * Pure, so the replay test (bug196-remap.test.ts) can run the day's real
+ * proposals through it with no model in the loop.
+ */
+export function resolveScopeAndCategory(
+  scopeKind: unknown,
+  category: MemoryCategory,
+  contactId: string | null
+):
+  | { expectedKind: 'rep' | 'business' | 'client'; category: MemoryCategory; remappedFrom?: MemoryCategory }
+  | { rejected: CandidateRejectReason } {
+  const expectedKind = CATEGORY_SCOPE_KIND[category]
+  if (expectedKind === scopeKind) {
+    if (expectedKind === 'client' && !contactId) return { rejected: 'client-fact-without-contact' }
+    return { expectedKind, category }
+  }
+  if (scopeKind === 'client') {
+    // the safe direction: keep the model's scope claim, generalise its category
+    if (!contactId) return { rejected: 'client-fact-without-contact' }
+    return { expectedKind: 'client', category: 'client-fact', remappedFrom: category }
+  }
+  return { rejected: 'category-scope-mismatch' }
+}
 
 export function verifyAndBuild(
   raw: RawCandidate,
@@ -170,14 +223,9 @@ export function verifyCandidate(raw: RawCandidate, sourceText: string, contactId
   }
   if (scopeKind !== 'rep' && scopeKind !== 'business' && scopeKind !== 'client') return { rejected: 'unknown-scope-kind' }
 
-  // The category's own allowed scope-kind is the source of truth, never the
-  // model's separately-claimed scopeKind alone — a mismatch (e.g. category
-  // 'client-fact' but scopeKind 'rep') means the model contradicted itself,
-  // which is reason enough to drop the candidate rather than guess which
-  // half to trust.
-  const expectedKind = CATEGORY_SCOPE_KIND[category as MemoryCategory]
-  if (expectedKind !== scopeKind) return { rejected: 'category-scope-mismatch' }
-  if (expectedKind === 'client' && !contactId) return { rejected: 'client-fact-without-contact' } // no real client to attach this to — drop it
+  const resolved = resolveScopeAndCategory(scopeKind, category as MemoryCategory, contactId)
+  if ('rejected' in resolved) return resolved
+  const { expectedKind, remappedFrom } = resolved
 
   // BUG-167 — a memory that has to name a speaker LABEL is describing the
   // transcript, not the business. Found in the real store at confidence 1.0:
@@ -194,13 +242,14 @@ export function verifyCandidate(raw: RawCandidate, sourceText: string, contactId
   return {
     candidate: {
       scope: expectedKind === 'client' ? clientScope(contactId as string) : (expectedKind as 'rep' | 'business'),
-      category: category as MemoryCategory,
+      category: resolved.category,
       statement,
       evidence: [{ type: 'transcript', callId: '', quote: quote.trim().slice(0, 400) }], // callId filled in by the caller, who knows it
       confidence,
       importance,
       source: 'auto'
-    }
+    },
+    ...(remappedFrom ? { remappedFrom } : {})
   }
 }
 
@@ -224,6 +273,10 @@ export interface ExtractionOutcome {
   /** BUG-196 — what the model proposed and verifyCandidate refused, with the
    *  reason. Empty when nothing was refused (and on the failure paths). */
   rejected: { raw: RawCandidate; reason: CandidateRejectReason }[]
+  /** BUG-196 shape (b) — candidates kept as `client-fact` in the client scope
+   *  after the model filed them under a rep/business category; counted so the
+   *  harness can say how much of the recall the remap is responsible for. */
+  remapped: { statement: string; from: MemoryCategory }[]
   /** BUG-196 — the concrete model that answered (AICompletionResult.model),
    *  so a measurement is never "a number about nothing". */
   servedBy?: string
@@ -285,7 +338,7 @@ export async function extractMemoriesFromCall(
     .map((s) => `${speakerLabel(s, speechOnly)}: ${s.text}`)
     .join('\n')
     .slice(0, MAX_TRANSCRIPT_CHARS)
-  if (!transcript.trim()) return { candidates: [], rejected: [], aiFailed: false }
+  if (!transcript.trim()) return { candidates: [], rejected: [], remapped: [], aiFailed: false }
 
   try {
     const result = await completeWithFallback({
@@ -299,24 +352,27 @@ export async function extractMemoriesFromCall(
     const raw = Array.isArray(result.toolInput?.candidates) ? (result.toolInput.candidates as RawCandidate[]) : []
     const candidates: MemoryCandidate[] = []
     const rejected: ExtractionOutcome['rejected'] = []
+    const remapped: ExtractionOutcome['remapped'] = []
     for (const c of raw) {
       const outcome = verifyCandidate(c, transcript, contactId)
       if ('rejected' in outcome) {
         rejected.push({ raw: c, reason: outcome.rejected })
         continue
       }
+      if (outcome.remappedFrom) remapped.push({ statement: outcome.candidate.statement, from: outcome.remappedFrom })
       candidates.push({
         ...outcome.candidate,
         evidence: outcome.candidate.evidence.map((e) => ({ ...e, callId, ...(opts.at ? { at: opts.at } : {}) }))
       })
     }
-    return { candidates, rejected, servedBy: result.model, aiFailed: false }
+    return { candidates, rejected, remapped, servedBy: result.model, aiFailed: false }
   } catch (err) {
     // best-effort, same as every other extraction module — never throw into
     // the fire-and-forget caller. But no longer SILENT: see ExtractionOutcome.
     return {
       candidates: [],
       rejected: [],
+      remapped: [],
       aiFailed: true,
       failureReason: err instanceof Error ? err.message : String(err)
     }
@@ -333,7 +389,7 @@ export async function extractMemoriesFromChatMessage(
   chatMessageId: string,
   contactId: string | null
 ): Promise<ExtractionOutcome> {
-  if (!message.trim()) return { candidates: [], rejected: [], aiFailed: false }
+  if (!message.trim()) return { candidates: [], rejected: [], remapped: [], aiFailed: false }
 
   try {
     const result = await completeWithFallback({
@@ -347,22 +403,25 @@ export async function extractMemoriesFromChatMessage(
     const raw = Array.isArray(result.toolInput?.candidates) ? (result.toolInput.candidates as RawCandidate[]) : []
     const candidates: MemoryCandidate[] = []
     const rejected: ExtractionOutcome['rejected'] = []
+    const remapped: ExtractionOutcome['remapped'] = []
     for (const c of raw) {
       const outcome = verifyCandidate(c, message, contactId)
       if ('rejected' in outcome) {
         rejected.push({ raw: c, reason: outcome.rejected })
         continue
       }
+      if (outcome.remappedFrom) remapped.push({ statement: outcome.candidate.statement, from: outcome.remappedFrom })
       candidates.push({
         ...outcome.candidate,
         evidence: outcome.candidate.evidence.map((e) => ({ ...e, callId, chatMessageId }))
       })
     }
-    return { candidates, rejected, servedBy: result.model, aiFailed: false }
+    return { candidates, rejected, remapped, servedBy: result.model, aiFailed: false }
   } catch (err) {
     return {
       candidates: [],
       rejected: [],
+      remapped: [],
       aiFailed: true,
       failureReason: err instanceof Error ? err.message : String(err)
     }
