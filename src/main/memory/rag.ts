@@ -116,6 +116,14 @@ export interface RetrieveStructuredOptions {
    *  stays as the fallback (unbound-client-notice.ts). Ignored when
    *  contactId is set. */
   inferredClientIds?: string[]
+  /** M36 Stage 3 item 5, step 3 — answer AS OF this moment (ISO): only facts
+   *  whose validity window contains it, INCLUDING superseded ones (a fact
+   *  that was true in June is exactly what "in June" asks for). Absent — the
+   *  default for every existing caller — nothing changes: no window filter,
+   *  no widened status, byte-identical results (the retrieval harness proves
+   *  it, before and after). Set only from the words the user typed
+   *  (step 4's parser); never inferred from context. */
+  asOf?: string
   /** Also search still-hypothesis memories (they arrive flagged by their own
    *  `status`, so callers can hedge the phrasing — spec section 5). Default
    *  false: profile-parity with the original behavior. */
@@ -171,7 +179,17 @@ export async function retrieveRelevantMemoriesStructured(
 
   const limit = opts.limit ?? MAX_RESULTS
   const maxDistance = opts.maxDistance ?? MAX_DISTANCE
-  const statuses: MemoryStatus[] = opts.includeHypotheses ? ['active', 'hypothesis'] : ['active']
+  // step 3 — an as-of question may be answered by a fact that has since been
+  // superseded: 'invalidated' joins the status list ONLY when asOf is set,
+  // and the window filter in the store keeps out anything not true at that
+  // moment (a superseded fact whose window does not contain asOf stays
+  // out, exactly like today).
+  const asOf = opts.asOf
+  const statuses: MemoryStatus[] = [
+    'active',
+    ...(opts.includeHypotheses ? (['hypothesis'] as MemoryStatus[]) : []),
+    ...(asOf ? (['invalidated'] as MemoryStatus[]) : [])
+  ]
   const contactId = opts.contactId ?? null
   const inferred = contactId ? [] : (opts.inferredClientIds ?? [])
   const scopes: MemoryScope[] = [
@@ -179,8 +197,11 @@ export async function retrieveRelevantMemoriesStructured(
     'business',
     ...(contactId ? [clientScope(contactId)] : inferred.map((id) => clientScope(id)))
   ]
+  // `asOf` is spread only when set, so an untimed call hands the store the
+  // exact option object it always has
+  const window = asOf ? { asOf } : {}
   const vector = scopes
-    .flatMap((scope) => searchMemoriesByVector(db, embedding, { scope, limit, statuses }))
+    .flatMap((scope) => searchMemoriesByVector(db, embedding, { scope, limit, statuses, ...window }))
     .filter((r) => r.distance <= maxDistance)
     .sort((a, b) => a.distance - b.distance)
   // M36 Stage 3 item 2 — the lexical channel: the same scopes, by string.
@@ -189,7 +210,7 @@ export async function retrieveRelevantMemoriesStructured(
   const terms = lexicalTerms(query)
   const lexical = terms.length
     ? scopes
-        .flatMap((scope) => searchMemoriesByText(db, terms, embedding, { scope, limit, statuses }))
+        .flatMap((scope) => searchMemoriesByText(db, terms, embedding, { scope, limit, statuses, ...window }))
         .sort((a, b) => a.score - b.score)
     : []
   const results = fuseChannels(vector, lexical, limit)

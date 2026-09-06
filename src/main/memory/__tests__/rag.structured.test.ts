@@ -259,6 +259,33 @@ describe('lexical channel fusion', () => {
   })
 })
 
+// M36 Stage 3 item 5, step 3 — asOf at the orchestration level. The window
+// filter itself is SQL (retrieval-eval-temporal.test.ts proves it on real
+// rows); what THIS pins is that an untimed call hands the store exactly what
+// it always has, and a timed one hands both channels the moment and widens
+// the status list to superseded facts.
+describe('asOf', () => {
+  it('untimed: the store receives the exact option object it always has — no asOf key, no widened status', async () => {
+    await retrieveRelevantMemoriesStructured('what is the budget', { contactId: 'c-1' })
+    expect(mocks.search.mock.calls[0][2]).toEqual({ scope: 'rep', limit: 5, statuses: ['active'] })
+    expect(mocks.lexical.mock.calls[0][3]).toEqual({ scope: 'rep', limit: 5, statuses: ['active'] })
+  })
+  it('timed: both channels receive asOf, and invalidated joins the statuses', async () => {
+    await retrieveRelevantMemoriesStructured('what is the budget', { contactId: 'c-1', asOf: '2026-06-15T00:00:00.000Z' })
+    expect(mocks.search.mock.calls[0][2]).toEqual({
+      scope: 'rep',
+      limit: 5,
+      statuses: ['active', 'invalidated'],
+      asOf: '2026-06-15T00:00:00.000Z'
+    })
+    expect(mocks.lexical.mock.calls[0][3]).toMatchObject({ asOf: '2026-06-15T00:00:00.000Z', statuses: ['active', 'invalidated'] })
+  })
+  it('timed + hypotheses: active, hypothesis, invalidated — in that order', async () => {
+    await retrieveRelevantMemoriesStructured('q', { includeHypotheses: true, asOf: '2026-06-15T00:00:00.000Z' })
+    expect((mocks.search.mock.calls[0][2] as { statuses: string[] }).statuses).toEqual(['active', 'hypothesis', 'invalidated'])
+  })
+})
+
 describe('retrieveRelevantMemories (legacy string shape)', () => {
   it('formats the structured results — same section header, confidence visible', async () => {
     mocks.search.mockImplementation((_d: unknown, _e: unknown, opts: { scope: string }) =>

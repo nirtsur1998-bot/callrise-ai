@@ -305,7 +305,7 @@ export function searchMemoriesByText(
   db: Database.Database,
   terms: ReadonlyArray<string>,
   queryEmbedding: Float32Array,
-  opts: { scope?: MemoryScope; limit?: number; statuses?: MemoryStatus[] } = {}
+  opts: { scope?: MemoryScope; limit?: number; statuses?: MemoryStatus[]; asOf?: string } = {}
 ): LexicalSearchResult[] {
   if (terms.length === 0) return []
   const limit = opts.limit ?? 10
@@ -324,6 +324,7 @@ export function searchMemoriesByText(
       WHERE memories_fts MATCH @match
         AND m.status IN (${statuses.map((_, i) => `@status${i}`).join(', ')})
         ${opts.scope ? 'AND m.scope = @scope' : ''}
+        ${validityClause(opts.asOf)}
       ORDER BY bm25(memories_fts)
       LIMIT @limit
       `
@@ -333,7 +334,8 @@ export function searchMemoriesByText(
       embedding: toBlob(queryEmbedding),
       limit,
       ...statusParams,
-      ...(opts.scope ? { scope: opts.scope } : {})
+      ...(opts.scope ? { scope: opts.scope } : {}),
+      ...(opts.asOf ? { asOf: opts.asOf } : {})
     }) as (MemoryRow & { score: number; distance: number })[]
 
   return rows.map((row) => ({
@@ -353,10 +355,26 @@ export function searchMemoriesByText(
  *  consolidation.ts's dedupe search widen this to active+hypothesis, since
  *  a new candidate needs to be checked against BOTH before deciding it's
  *  genuinely new. */
+/**
+ * M36 Stage 3 item 5, step 3 — the validity window as a SQL filter. Absent
+ * `asOf` (every existing caller), the clause is the empty string and the
+ * query is byte-identical to before — proven by the retrieval harness
+ * running unchanged before and after (docs/M36-temporal-validity-design.md,
+ * step 3). With `asOf`: a row is in range when it became true at or before
+ * that moment and had not stopped being true by it. A NULL valid_from (a
+ * row the backfill has not reached) cannot be excluded — "true since at
+ * least when we learned it" — and a NULL valid_until means still true.
+ */
+function validityClause(asOf: string | undefined): string {
+  return asOf
+    ? 'AND (m.valid_from IS NULL OR m.valid_from <= @asOf) AND (m.valid_until IS NULL OR m.valid_until > @asOf)'
+    : ''
+}
+
 export function searchMemoriesByVector(
   db: Database.Database,
   queryEmbedding: Float32Array,
-  opts: { scope?: MemoryScope; limit?: number; statuses?: MemoryStatus[] } = {}
+  opts: { scope?: MemoryScope; limit?: number; statuses?: MemoryStatus[]; asOf?: string } = {}
 ): VectorSearchResult[] {
   const limit = opts.limit ?? 10
   const statuses = opts.statuses?.length ? opts.statuses : (['active'] as MemoryStatus[])
@@ -373,6 +391,7 @@ export function searchMemoriesByVector(
       WHERE v.embedding MATCH @embedding AND k = @limit
         AND m.status IN (${statuses.map((_, i) => `@status${i}`).join(', ')})
         ${opts.scope ? 'AND m.scope = @scope' : ''}
+        ${validityClause(opts.asOf)}
       ORDER BY v.distance
       `
     )
@@ -380,7 +399,8 @@ export function searchMemoriesByVector(
       embedding: toBlob(queryEmbedding),
       limit,
       ...statusParams,
-      ...(opts.scope ? { scope: opts.scope } : {})
+      ...(opts.scope ? { scope: opts.scope } : {}),
+      ...(opts.asOf ? { asOf: opts.asOf } : {})
     }) as (MemoryRow & { distance: number })[]
 
   return rows.map((row) => ({ memory: rowToMemory(row), distance: row.distance }))
