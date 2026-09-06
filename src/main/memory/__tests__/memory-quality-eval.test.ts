@@ -140,6 +140,12 @@ interface ScenarioReport {
  *  run fails only when every attempt failed. */
 const MAX_ATTEMPTS_PER_SCENARIO = 3
 const RETRY_BACKOFF_MS = 20_000
+/** BUG-195 / BUG-196 — a before/after is only a measurement if the SAME model
+ *  answered both sides. Set CALLRISE_EVAL_MODEL to the concrete model id the
+ *  run must be served by (e.g. `gemini-2.5-flash`, as reported by
+ *  AICompletionResult.model); any scenario served by another model fails the
+ *  run instead of quietly contributing a number about a different system. */
+const REQUIRED_MODEL = process.env.CALLRISE_EVAL_MODEL?.trim() || null
 
 describe('Memory Quality Eval Harness (M27 audit — Sales Brain extraction baseline)', () => {
   const hasKey = anyProviderKeyConfigured()
@@ -262,6 +268,12 @@ describe('Memory Quality Eval Harness (M27 audit — Sales Brain extraction base
       }
 
       printReport(reports)
+
+      // the number is about ONE model, or it is about nothing
+      if (REQUIRED_MODEL) {
+        const strangers = reports.filter((r) => r.servedBy !== REQUIRED_MODEL).map((r) => `${r.id}: ${r.servedBy}`)
+        expect(strangers, `CALLRISE_EVAL_MODEL=${REQUIRED_MODEL} but these scenarios were served by another model:\n${strangers.join('\n')}`).toEqual([])
+      }
     },
     300_000 // three scenarios × up to two backed-off retries each
   )
