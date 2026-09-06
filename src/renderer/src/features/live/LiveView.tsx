@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useDesignPreview } from '@renderer/features/settings/useDesignPreview'
+import { GlanceLine } from './hud/GlanceLine'
+import { StateStrip } from './hud/StateStrip'
+import { useGlanceCue } from './hud/useGlanceCue'
+import { loadHudLayout, loadTranscriptCollapsed, saveHudLayout, saveTranscriptCollapsed, type HudLayout } from './hud/hudCore'
 import { MIC_OUTCOME_TEXT } from '@renderer/features/audio/micOutcome'
 import {
   Mic,
@@ -937,6 +942,23 @@ export function LiveView({
     }
   }
 
+  // M36 Stage 2 — the glance HUD, behind the M31 design preview: glance by
+  // default, full as the switch (the founder's decision). Transcript stays ON
+  // by default and its collapse is remembered (the founder's amendment).
+  const { enabled: designPreview } = useDesignPreview()
+  const [hudLayout, setHudLayoutState] = useState<HudLayout>(() => loadHudLayout())
+  const setHudLayout = (l: HudLayout): void => {
+    saveHudLayout(l)
+    setHudLayoutState(l)
+  }
+  const glance = designPreview && hudLayout === 'glance'
+  const [transcriptCollapsed, setTranscriptCollapsedState] = useState(() => loadTranscriptCollapsed())
+  const setTranscriptCollapsed = (c: boolean): void => {
+    saveTranscriptCollapsed(c)
+    setTranscriptCollapsedState(c)
+  }
+  const glanceCue = useGlanceCue(cue, suggestions, segments, glance)
+
   const stoppable =
     status === 'listening' ||
     status === 'paused' ||
@@ -982,7 +1004,7 @@ export function LiveView({
             fixed fact, not an instrument, and it never changes during the
             call. Left of the must-ask strip so the first glance is "where
             this deal stands" and the second is "what is still unasked". */}
-        <DealFactsLine facts={dealFacts} />
+        {!glance && <DealFactsLine facts={dealFacts} />}
         {recording && <MustAskStrip state={checklist} />}
 
         {(status === 'listening' || status === 'paused') && (
@@ -1009,17 +1031,28 @@ export function LiveView({
               keeps the interrupt cue. Health/status is never hidden in any
               mode — a capture failure staying visible is the whole point of
               BUG-177's fix. */}
-          <QuietToggle quiet={quiet} onToggle={setQuiet} />
+          {designPreview && (
+            <button
+              type="button"
+              data-testid="hud-layout-switch"
+              onClick={() => setHudLayout(glance ? 'full' : 'glance')}
+              className="no-drag rounded-lg border border-line px-2.5 py-1 text-[12px] text-muted hover:text-ink"
+              title={glance ? 'Show the full live screen' : 'Show the glance HUD (one line, the state strip, the transcript)'}
+            >
+              {glance ? 'Full' : 'Glance'}
+            </button>
+          )}
+          {!glance && <QuietToggle quiet={quiet} onToggle={setQuiet} />}
           <CueControls
             enabled={enabled}
             onToggle={setEnabled}
             sensitivity={sensitivity}
             onSensitivity={setSensitivity}
           />
-          {!quiet && status === 'listening' && engagementScore !== null && (
+          {!glance && !quiet && status === 'listening' && engagementScore !== null && (
             <EngagementGauge score={engagementScore} />
           )}
-          {!quiet && status === 'listening' && monologue !== null && monologue.ms > 0 && (
+          {!glance && !quiet && status === 'listening' && monologue !== null && monologue.ms > 0 && (
             <MonologueMeter state={monologue} />
           )}
           <StatusBadge status={status} />
@@ -1354,8 +1387,29 @@ export function LiveView({
         </InlineBanner>
       )}
 
+      {glance && (
+        <div className="space-y-2 px-4 pt-2" data-testid="glance-hud">
+          <StateStrip
+            status={status}
+            health={health}
+            segments={segments}
+            latestAt={glanceCue.latestAt}
+            now={performance.now()}
+            dealFacts={dealFacts}
+          />
+          <GlanceLine cue={glanceCue.cue} onDismiss={glanceCue.dismiss} />
+          <button
+            type="button"
+            data-testid="transcript-collapse"
+            onClick={() => setTranscriptCollapsed(!transcriptCollapsed)}
+            className="no-drag text-[11px] text-faint hover:text-ink"
+          >
+            {transcriptCollapsed ? 'Show transcript' : 'Hide transcript'}
+          </button>
+        </div>
+      )}
       {/* Transcript + the floating cue card (kept above the Ask-coach bar). */}
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className={glance && transcriptCollapsed ? 'hidden' : 'relative flex min-h-0 flex-1 flex-col'}>
         <TranscriptView
           segments={segments}
           interimText={interimText}
@@ -1378,7 +1432,7 @@ export function LiveView({
             absolutely and picking offsets that happen not to overlap works
             until a cue wraps to three lines; this cannot overlap at all.
             The interrupt sits lowest, nearest the eye. */}
-        {(cue || suggestions.length > 0) && (
+        {!glance && (cue || suggestions.length > 0) && (
           <div
             ref={cueRailRef}
             className="pointer-events-none absolute top-3 right-4 bottom-4 z-40 flex w-64 flex-col items-end justify-end gap-2"
