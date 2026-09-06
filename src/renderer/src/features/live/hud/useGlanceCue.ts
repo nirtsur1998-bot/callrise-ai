@@ -25,7 +25,7 @@ export function useGlanceCue(
   suggestions: LiveCue[],
   segments: CallSegment[],
   enabled: boolean
-): { cue: GlanceCue | null; dismiss: (id: number) => void; latestAt: number | null } {
+): { cue: GlanceCue | null; dismiss: (id: number) => void; latestAt: number | null; now: number } {
   const [now, setNow] = useState(() => performance.now())
   const [dismissedIds, setDismissedIds] = useState<Set<number>>(() => new Set())
   const repLastRef = useRef<number | null>(null)
@@ -62,22 +62,29 @@ export function useGlanceCue(
   // remember when each candidate first became ready, so the TTL runs from then
   if (candidate && !readyAtRef.current.has(candidate.id)) readyAtRef.current.set(candidate.id, now)
 
-  const cue: GlanceCue | null = useMemo(() => {
-    if (!enabled || !candidate) return null
+  // Pure: decides what to show. The one side effect (recording an expiry in
+  // the absorption ledger) lives in the effect below — a render must never
+  // write (react-hooks/purity, found by the lint pass after BUG-194).
+  const decision: { cue: GlanceCue | null; expired: LiveCue | null } = useMemo(() => {
+    if (!enabled || !candidate) return { cue: null, expired: null }
     const readyAt = readyAtRef.current.get(candidate.id) ?? now
-    if (now - readyAt > GLANCE_TTL_MS) {
-      if (!expiredRef.current.has(candidate.id)) {
-        expiredRef.current.add(candidate.id)
-        recordAbsorption({ type: 'expired', cueId: candidate.id, kind: candidate.kind, at: Date.now() })
-      }
-      return null
-    }
+    if (now - readyAt > GLANCE_TTL_MS) return { cue: null, expired: candidate }
     const deliverable = canDeliverNow({ now, repLastSpokeAt: repLastRef.current, otherLastSpokeAt: otherLastRef.current })
-    if (!deliverable) return null
-    return { id: candidate.id, kind: candidate.kind, text: candidate.text, evidence: candidate.evidence, source: candidate.source }
+    if (!deliverable) return { cue: null, expired: null }
+    return {
+      cue: { id: candidate.id, kind: candidate.kind, text: candidate.text, evidence: candidate.evidence, source: candidate.source },
+      expired: null
+    }
   }, [enabled, candidate, now])
+
+  useEffect(() => {
+    const expired = decision.expired
+    if (!expired || expiredRef.current.has(expired.id)) return
+    expiredRef.current.add(expired.id)
+    recordAbsorption({ type: 'expired', cueId: expired.id, kind: expired.kind, at: Date.now() })
+  }, [decision.expired])
 
   const dismiss = (id: number): void => setDismissedIds((prev) => new Set(prev).add(id))
 
-  return { cue, dismiss, latestAt: latestAtRef.current }
+  return { cue: decision.cue, dismiss, latestAt: latestAtRef.current, now }
 }

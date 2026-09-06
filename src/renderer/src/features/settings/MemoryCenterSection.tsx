@@ -228,10 +228,13 @@ export function MemoryCenterSection(): React.JSX.Element {
     [memories, scope]
   )
 
+  // the clock is read once, when the page opens — never during a render
+  // (react-hooks/purity); "this week" is relative to opening the page
+  const [openedAt] = useState(() => Date.now())
   const weeklyCount = useMemo(() => {
-    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
+    const weekAgo = openedAt - 7 * 24 * 60 * 60 * 1000
     return (memories ?? []).filter((m) => new Date(m.createdAt).getTime() >= weekAgo).length
-  }, [memories])
+  }, [memories, openedAt])
 
   const forgetEverything = async (): Promise<void> => {
     if (

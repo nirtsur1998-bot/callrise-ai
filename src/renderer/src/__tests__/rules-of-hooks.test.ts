@@ -19,19 +19,24 @@ import { describe, expect, it } from 'vitest'
 import { ESLint } from 'eslint'
 import { join } from 'node:path'
 
-const RULE = 'react-hooks/rules-of-hooks'
+/** Widened rule by rule, only once that rule's baseline across the renderer
+ *  is ZERO (the doc rule at the top). 2026-09-06 evening: purity joined —
+ *  the four render-time clock reads (three in the glance HUD, one in the
+ *  Memory Center) were moved into state, an effect, or the ledger, and the
+ *  count went to 0. */
+const RULES = ['react-hooks/rules-of-hooks', 'react-hooks/purity'] as const
 const RENDERER = join(__dirname, '..')
 
-describe('react-hooks/rules-of-hooks across the renderer', () => {
-  it('no component calls a hook conditionally or after an early return', async () => {
+describe('react-hooks gates across the renderer', () => {
+  it('no component calls a hook conditionally, after an early return, or reads the clock/randomness during render', async () => {
     // the project's own flat config (eslint.config.mjs) supplies the plugin
-    // and already sets this rule to 'error'; only that rule's verdict is read
+    // and already sets these rules to 'error'; only their verdicts are read
     const eslint = new ESLint({ cwd: join(RENDERER, '..', '..', '..'), cache: false })
     const results = await eslint.lintFiles([`${RENDERER.replace(/\\/g, '/')}/**/*.{ts,tsx}`])
     const violations = results.flatMap((r) =>
       r.messages
-        .filter((m) => m.ruleId === RULE)
-        .map((m) => `${r.filePath.split(/[\\/]src[\\/]/)[1] ?? r.filePath}:${m.line}:${m.column} ${m.message}`)
+        .filter((m) => (RULES as readonly string[]).includes(m.ruleId ?? ''))
+        .map((m) => `${r.filePath.split(/[\\/]src[\\/]/)[1] ?? r.filePath}:${m.line}:${m.column} [${m.ruleId}] ${m.message.split('\n')[0]}`)
     )
     expect(results.length, 'the glob matched no files — the gate lints nothing').toBeGreaterThan(50)
     expect(violations, violations.join('\n')).toEqual([])

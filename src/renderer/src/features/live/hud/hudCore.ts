@@ -124,10 +124,13 @@ export function loadAbsorption(): AbsorptionEvent[] {
   }
 }
 
-export function recordAbsorption(ev: AbsorptionEvent): void {
+/** `at` is stamped HERE when the caller leaves it out, so a component can
+ *  record from a handler without reading the clock during render
+ *  (react-hooks/purity, found by the lint pass after BUG-194). */
+export function recordAbsorption(ev: Omit<AbsorptionEvent, 'at'> & { at?: number }): void {
   try {
     const all = loadAbsorption()
-    all.push(ev)
+    all.push({ ...ev, at: ev.at ?? Date.now() } as AbsorptionEvent)
     localStorage.setItem(ABSORPTION_KEY, JSON.stringify(all.slice(-ABSORPTION_CAP)))
   } catch {
     /* the instrument never breaks the call */

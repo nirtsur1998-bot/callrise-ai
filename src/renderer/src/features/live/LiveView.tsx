@@ -1402,7 +1402,7 @@ export function LiveView({
             health={health}
             segments={segments}
             latestAt={glanceCue.latestAt}
-            now={performance.now()}
+            now={glanceCue.now}
             dealFacts={dealFacts}
           />
           <GlanceLine cue={glanceCue.cue} onDismiss={glanceCue.dismiss} />

@@ -57,7 +57,7 @@ export function GlanceLine({
   function markUseful(): void {
     if (!cue || markedRef.current.has(cue.id)) return
     markedRef.current.add(cue.id)
-    recordAbsorption({ type: 'useful', cueId: cue.id, kind: cue.kind, at: Date.now() })
+    recordAbsorption({ type: 'useful', cueId: cue.id, kind: cue.kind }) // stamped by the ledger, not by render
   }
 
   const marked = markedRef.current.has(cue.id)
