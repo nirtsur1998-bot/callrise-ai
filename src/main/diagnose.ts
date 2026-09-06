@@ -139,7 +139,15 @@ export function buildDiagnoseReport(): string {
     )
     push(`  queued            : ${health.queuedSec}s`)
     push(`  shed this session : ${health.shedSec}s`)
-    push(`  socket resets     : ${health.resets}`)
+    // M37 — RENAMED, because the old label was false. This is
+    // `lag.resetCount`, and `noteReset()` has exactly ONE caller in the whole
+    // tree: the LAG-triggered reset path. The other two rebuilds that call
+    // resetToLiveEdge — the sleep/resume rebuild and the socket-dead rebuild
+    // — do not increment it. So printing it as "socket resets" reported a
+    // number that is neither about sockets nor complete, to a human, under a
+    // name that invited them to trust it. The real per-call socket count is
+    // `socketOpens=` in session-health.log (BUG-D's trap, M37).
+    push(`  lag resets        : ${health.resets}   (lag-triggered only — see socketOpens= in session-health.log)`)
     push(`  drift             : ${health.driftPpm} ppm`)
     if (health.gaps.length === 0) push('  gaps              : none')
     else {

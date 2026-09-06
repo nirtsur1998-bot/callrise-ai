@@ -64,6 +64,50 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number]
  *  none of the named client categories belongs. Never a refusal reason. */
 export const CLIENT_RESIDUAL_CATEGORY: MemoryCategory = 'client-fact'
 
+/**
+ * M37 Stage 4 — THE LINE A TEAM FEATURE MAY NEVER CROSS.
+ *
+ * The founder's question was whether a team Sales Brain can exist without
+ * becoming a manager's window into a rep's private coaching. The researched
+ * answer is that two different features have been sharing one name:
+ *
+ *   - a team brain over BUSINESS facts (what objections recur, what pricing
+ *     pushback sounds like) is a fact about the WORLD. There is no individual
+ *     to protect, and it can exist honestly.
+ *   - a team brain over REP facts — the seven categories below that
+ *     CATEGORY_SCOPE_KIND binds to 'rep' — CANNOT exist honestly at any team
+ *     size this product sells into, aggregated or not. At n=5 the team mean
+ *     and the mean of the other four recover one rep's value exactly
+ *     (5·m5 − 4·m4), no attack required; differential privacy stops that and
+ *     costs more than the signal is worth (at n=5, ε=1 the noise on a
+ *     proportion is 1.4x one rep's entire possible contribution); and the
+ *     manager holds the roster, so "the team's weakest area is discovery" on
+ *     an eight-person team is a name. See docs/M37-team-layer.md.
+ *
+ * NOTHING READS THIS TODAY — there is no team feature and no publish path.
+ * It exists now because it costs an hour now and cannot be reconstructed
+ * cheaply later: in a year "is a skill-weakness shareable?" gets answered
+ * per-customer, in a settings screen, by whoever is closing the deal. That is
+ * not speculation; it is what every vendor in the prior art did. Widening this
+ * list means deleting a named assertion in a diff, which is the point.
+ */
+export const SHAREABLE_CATEGORIES: readonly MemoryCategory[] = [
+  'product-or-service',
+  'pricing-model',
+  'icp',
+  'objection-and-response',
+  'competitor',
+  'terminology'
+] as const
+
+/** True only for a fact that could ever be shown to someone other than the
+ *  rep it belongs to. Rep-scope facts are never shareable. Client-scope facts
+ *  are excluded for a less obvious reason: the manager knows who owns the
+ *  account, so a client fact is attributable to one rep at ANY headcount. */
+export function isShareableCategory(category: MemoryCategory): boolean {
+  return SHAREABLE_CATEGORIES.includes(category)
+}
+
 /** Every category bound to the client scope kind — derived from
  *  CATEGORY_SCOPE_KIND below, never listed twice. Consolidation checks
  *  contradictions across this whole family (the founder's call: a budget
