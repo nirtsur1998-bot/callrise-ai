@@ -53,6 +53,15 @@ const FOREGROUND_EMBED_TIMEOUT_MS = 10_000
 
 export interface RetrieveStructuredOptions {
   contactId?: string | null
+  /** M36 Stage 3 — clients the QUESTION names, for an UNBOUND conversation
+   *  (contactId null). Each becomes a client scope in the search. Computed by
+   *  the caller from the words the user typed (client-inference.ts) and
+   *  never guessed here. Production does NOT set this yet: BUG-096's option C
+   *  (a note, no widening) is the founder's standing decision and widening
+   *  to a named client is option B, theirs to switch on — the retrieval
+   *  harness measures both shapes so that decision has a number on each
+   *  side. Ignored when contactId is set. */
+  inferredClientIds?: string[]
   /** Also search still-hypothesis memories (they arrive flagged by their own
    *  `status`, so callers can hedge the phrasing — spec section 5). Default
    *  false: profile-parity with the original behavior. */
@@ -110,7 +119,12 @@ export async function retrieveRelevantMemoriesStructured(
   const maxDistance = opts.maxDistance ?? MAX_DISTANCE
   const statuses: MemoryStatus[] = opts.includeHypotheses ? ['active', 'hypothesis'] : ['active']
   const contactId = opts.contactId ?? null
-  const scopes: MemoryScope[] = ['rep', 'business', ...(contactId ? [clientScope(contactId)] : [])]
+  const inferred = contactId ? [] : (opts.inferredClientIds ?? [])
+  const scopes: MemoryScope[] = [
+    'rep',
+    'business',
+    ...(contactId ? [clientScope(contactId)] : inferred.map((id) => clientScope(id)))
+  ]
   return scopes
     .flatMap((scope) => searchMemoriesByVector(db, embedding, { scope, limit, statuses }))
     .filter((r) => r.distance <= maxDistance)

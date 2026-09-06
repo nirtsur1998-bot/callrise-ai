@@ -82,6 +82,14 @@ import { configureEmbeddingsCacheDir, embedText } from '../embeddings'
 import { openMemoryDb, migrate } from '../db'
 import { insertMemory } from '../memories-store'
 import { retrieveRelevantMemoriesStructured } from '../rag'
+import { buildClientDirectory, inferClientIds } from '../client-inference'
+
+/** The two corpus clients as a contact directory: the company, and the
+ *  decision-maker's name the corpus questions use ("What did Dana say"). */
+const EVAL_DIRECTORY = buildClientDirectory([
+  { id: 'eval-acme', name: 'Dana Levy', company: 'Acme' },
+  { id: 'eval-globex', name: '', company: 'Globex' }
+])
 
 // Repo-local persistent cache so repeat runs never re-download the model.
 configureEmbeddingsCacheDir(join(__dirname, '..', '..', '..', '..', 'node_modules', '.cache', 'callrise-eval'))
@@ -187,12 +195,21 @@ async function runConfig(
    * (assistant-ipc.ts), so this is the shape of every general conversation —
    * the default one a user gets by clicking "New chat".
    */
-  unscoped = false
+  unscoped = false,
+  /**
+   * M36 Stage 3 — option B measured: the unbound conversation searches the
+   * clients the QUESTION names, inferred from the words typed
+   * (client-inference.ts). OFF in production until the founder switches it
+   * (BUG-096's option C is the standing decision); this row exists so that
+   * decision has a number on each side.
+   */
+  inferClients = false
 ): Promise<QuestionResult[]> {
   const results: QuestionResult[] = []
   for (const q of QUESTIONS) {
     const retrieved = await retrieveRelevantMemoriesStructured(q.question, {
       contactId: unscoped ? null : q.contactId,
+      inferredClientIds: unscoped && inferClients ? inferClientIds(q.question, EVAL_DIRECTORY) : undefined,
       includeHypotheses,
       maxDistance
     })
@@ -289,6 +306,15 @@ describe('retrieval quality eval (offline, real embeddings + real sqlite-vec)', 
       'Rise, UNSCOPED — *** THE DEFAULT "New chat" SHAPE ***',
       await runConfig(true, undefined, true)
     )
+    const inferredMetrics = report(
+      "Rise, UNSCOPED + named-client inference (option B — OFF in production, the founder's switch)",
+      await runConfig(true, undefined, true, true)
+    )
+    // The option-B row must recover what the question names and leak nothing:
+    // at least as many hits as the plain unscoped row, zero scope violations,
+    // and a floor that a regression in the inference would break.
+    expect(inferredMetrics.violations, 'option B must not surface another client').toBe(0)
+    expect(inferredMetrics.totalHits, 'option B recovers the named clients').toBeGreaterThanOrEqual(12)
 
     // Structural sanity (kept, but it was never the real gate).
     expect(activeOnly).toHaveLength(QUESTIONS.length)
