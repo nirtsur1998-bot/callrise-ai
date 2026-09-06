@@ -29,7 +29,7 @@ vi.mock('../memory-runtime', () => ({
   ensureMemoryDb: mocks.ensured
 }))
 vi.mock('../embeddings', () => ({ embedText: mocks.embed }))
-vi.mock('../memories-store', () => ({ searchMemoriesByVector: mocks.search }))
+vi.mock('../memories-store', () => ({ searchMemoriesByVector: mocks.search, touchRetrieved: vi.fn() }))
 
 import { retrieveRelevantMemories, retrieveRelevantMemoriesStructured } from '../rag'
 

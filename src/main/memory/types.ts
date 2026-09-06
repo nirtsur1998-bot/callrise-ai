@@ -118,6 +118,9 @@ export interface Memory {
   invalidatedBy?: string
   createdAt: string
   lastConfirmedAt: string
+  /** M36 — when retrieval last surfaced this memory to a feature; null until
+   *  it has been. Decay runs from the later of this and lastConfirmedAt. */
+  lastRetrievedAt?: string | null
   invalidatedAt?: string
 }
 

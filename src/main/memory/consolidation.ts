@@ -409,6 +409,14 @@ export function decayedConfidence(
   return Math.max(0, Math.min(1, currentConfidence * decayFactor))
 }
 
+/** M36 Stage 3 item 4 — the decay clock runs from the LATER of the last
+ *  confirmation and the last retrieval. A fact the retriever surfaced last
+ *  week is in use; treating it like one untouched since January was wrong. */
+export function decayAnchor(lastConfirmedAtIso: string, lastRetrievedAtIso: string | null | undefined): string {
+  if (!lastRetrievedAtIso) return lastConfirmedAtIso
+  return Date.parse(lastRetrievedAtIso) > Date.parse(lastConfirmedAtIso) ? lastRetrievedAtIso : lastConfirmedAtIso
+}
+
 /** Applies decay across every non-exempt memory in `scope`. Salience floor
  *  (spec section 2): pinned memories and directly user-sourced ones
  *  (user_stated/user_confirmed — the user IS the evidence, there's nothing
@@ -420,7 +428,12 @@ export function decayMemories(db: Database.Database, scope: MemoryScope): void {
   for (const memory of candidates) {
     if (memory.pinned || memory.source === 'user_stated' || memory.source === 'user_confirmed') continue
 
-    const next = decayedConfidence(memory.confidence, memory.lastConfirmedAt, now, distinctEpisodeCount(memory.evidence))
+    const next = decayedConfidence(
+      memory.confidence,
+      decayAnchor(memory.lastConfirmedAt, memory.lastRetrievedAt),
+      now,
+      distinctEpisodeCount(memory.evidence)
+    )
     if (next === memory.confidence) continue
     updateConfidence(db, memory.id, next)
 

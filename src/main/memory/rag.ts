@@ -18,7 +18,7 @@
 import { isSalesBrainEnabled } from '../app-settings'
 import { ensureMemoryDb, getMemoryDb } from './memory-runtime'
 import { embedText } from './embeddings'
-import { searchMemoriesByVector, type VectorSearchResult } from './memories-store'
+import { touchRetrieved, searchMemoriesByVector, type VectorSearchResult } from './memories-store'
 import { clientScope, type MemoryScope, type MemoryStatus } from './types'
 
 const MAX_RESULTS = 5
@@ -133,6 +133,15 @@ export async function retrieveRelevantMemoriesStructured(
     .sort((a, b) => a.distance - b.distance)
     .slice(0, limit)
   assertScopeInvariant(results, scopes)
+  // M36 Stage 3 item 4 — what was surfaced is in use; say so for the decay
+  // clock. Best-effort: a failed touch must never cost the turn its memories.
+  if (results.length > 0) {
+    try {
+      touchRetrieved(db, results.map((r) => r.memory.id), new Date().toISOString())
+    } catch (err) {
+      console.warn('[rag] touchRetrieved failed (memories still returned):', err)
+    }
+  }
   return results
 }
 

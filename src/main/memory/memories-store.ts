@@ -21,6 +21,7 @@ interface MemoryRow {
   invalidated_by: string | null
   created_at: string
   last_confirmed_at: string
+  last_retrieved_at?: string | null
   invalidated_at: string | null
 }
 
@@ -39,8 +40,26 @@ function rowToMemory(row: MemoryRow): Memory {
     invalidatedBy: row.invalidated_by ?? undefined,
     createdAt: row.created_at,
     lastConfirmedAt: row.last_confirmed_at,
+    lastRetrievedAt: row.last_retrieved_at ?? undefined,
     invalidatedAt: row.invalidated_at ?? undefined
   }
+}
+
+/**
+ * M36 Stage 3 item 4 — the retriever surfaced these memories: record it, so
+ * decay can tell a fact in weekly use from one nobody has touched. Only
+ * moves forward (an older timestamp never rewinds a newer one); an empty
+ * list is a no-op; never throws into the retrieval path.
+ */
+export function touchRetrieved(db: Database.Database, ids: ReadonlyArray<string>, nowIso: string): void {
+  if (ids.length === 0) return
+  const stmt = db.prepare(
+    'UPDATE memories SET last_retrieved_at = ? WHERE id = ? AND (last_retrieved_at IS NULL OR last_retrieved_at < ?)'
+  )
+  const run = db.transaction((list: ReadonlyArray<string>) => {
+    for (const id of list) stmt.run(nowIso, id, nowIso)
+  })
+  run(ids)
 }
 
 /** A directly user-confirmed/stated fact is trusted immediately (the user

@@ -87,6 +87,15 @@ CREATE TABLE backfill_attempts (
  *  already applied it has that exact SQL baked into their file; changing it
  *  retroactively would make the same version number mean two different
  *  things depending on when a user installed). */
-export const MIGRATIONS: Migration[] = [MIGRATION_001, MIGRATION_002, MIGRATION_003]
+const MIGRATION_004: Migration = {
+  version: 4,
+  description:
+    'M36 Stage 3 item 4 — last_retrieved_at: usage-aware decay. The founder (2026-09-06): a fact retrieved every week decaying like one never touched is wrong. Nullable; existing rows keep NULL and decay exactly as before until they are next retrieved.',
+  sql: `
+ALTER TABLE memories ADD COLUMN last_retrieved_at TEXT;
+`
+}
+
+export const MIGRATIONS: Migration[] = [MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004]
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version
