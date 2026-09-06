@@ -185,7 +185,11 @@ describe('Memory Quality Eval Harness (M27 audit — Sales Brain extraction base
 
       for (const scenario of EVAL_SCENARIOS) {
         const outcome = await extractMemoriesFromCall(scenario.segments, `eval:${scenario.id}`, scenario.contactId)
-        expect(outcome.aiFailed).toBe(false) // the pipeline itself must not error — a real failure here IS a bug, unlike a low score
+        // the pipeline itself must not error — a real failure here IS a bug, unlike a low score.
+        // The provider's own reason rides on the assertion (2026-09-06): the first real run
+        // failed in 200ms with "expected true to be false" and nothing else, which is a
+        // shrug, not a finding.
+        expect(outcome.aiFailed, `AI call failed for ${scenario.id}: ${outcome.failureReason ?? '(no reason recorded)'}`).toBe(false)
 
         const truePositives: ScenarioReport['truePositives'] = []
         const falseNegatives: ScenarioReport['falseNegatives'] = []

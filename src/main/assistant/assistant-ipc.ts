@@ -35,15 +35,17 @@ import {
 import { retrieveRelevantMemoriesStructured } from '../memory/rag'
 import { consolidateNewCandidate } from '../memory/consolidation'
 import { getMemoryDb, ensureMemoryDb } from '../memory/memory-runtime'
-import { forgetCallContribution, getMemoryById } from '../memory/memories-store'
+import { earliestValidFrom, forgetCallContribution, getMemoryById } from '../memory/memories-store'
 import { runMemoryExtractionForAssistantMessage } from '../memory/memory-hooks'
+import { parseAsOf } from '../memory/temporal-question'
 import { isSalesBrainEnabled } from '../app-settings'
 import { extractContextSuggestions } from '../coaching-chat'
 import type { CoachChatContextSuggestion } from '../calls-fs'
-import type { MemoryCategory, MemoryScope } from '../memory/types'
+import { clientScope, type MemoryCategory, type MemoryScope } from '../memory/types'
 import { buildAssistantContext, citationsUsedIn } from './context'
 import { detectUnboundClientMentions, type UnboundClientMention } from './unbound-client'
 import { unboundClientNotice } from './unbound-client-notice'
+import { asOfQuestionNotice } from './temporal-notice'
 import {
   deleteVoiceNote,
   readVoiceNote,
@@ -57,6 +59,7 @@ import {
   executeLookups,
   planLookups,
   LOOKUP_LABEL,
+  type LookupSection,
   type TaskProposal
 } from './tools'
 import {
@@ -381,6 +384,11 @@ async function handleSend(
     const unboundMentions: UnboundClientMention[] = scope
       ? []
       : await detectUnboundClientMentions(message, toolDirs.contactsDir).catch(() => [])
+    // M36 Stage 3 item 5, step 4 — WHEN is the question about? Parsed from
+    // the words typed and nothing else (temporal-question.ts); an unparsed
+    // question gets no asOf and retrieval runs untimed, exactly as before.
+    // Never inferred from the conversation — the founder's condition.
+    const asOfQuestion = parseAsOf(message, new Date())
     if (turn.stopRequested) return { ok: false, error: 'cancelled', message: 'Stopped.' }
     const [retrieved, planned, clientBrief] = await Promise.all([
       retrieveRelevantMemoriesStructured(message, {
@@ -389,7 +397,10 @@ async function handleSend(
         // Scoped: rag searches rep + business + THIS client's scope and no
         // other client's. Unbound: rep + business + the NAMED clients only.
         contactId: scope?.contactId ?? null,
-        inferredClientIds: scope ? undefined : unboundMentions.map((m) => m.contactId)
+        inferredClientIds: scope ? undefined : unboundMentions.map((m) => m.contactId),
+        // spread only when parsed, so an untimed turn hands rag the exact
+        // options it always has
+        ...(asOfQuestion ? { asOf: asOfQuestion.asOf } : {})
       }),
       planLookups(message, turn.controller.signal),
       scope ? clientBriefSections(scope.contactId, toolDirs) : Promise.resolve([])
@@ -400,6 +411,27 @@ async function handleSend(
     // the model must say it cannot reach a client rather than guess (fix C's
     // refusal, kept as the fallback). A scoped chat gets no notice.
     const unboundNotice = scope ? null : unboundClientNotice(unboundMentions)
+    // step 4 — an as-of question gets its notice: which moment the words
+    // resolved to, and, when nothing was valid then, the refusal with the
+    // boundary ("the earliest fact I have is from …"). The boundary is read
+    // from the same scopes retrieval searched, so it never names a fact the
+    // turn could not have reached.
+    let asOfNotice: LookupSection | null = null
+    if (asOfQuestion) {
+      const scopesSearched: MemoryScope[] = [
+        'rep',
+        'business',
+        ...(scope ? [clientScope(scope.contactId)] : unboundMentions.map((m) => clientScope(m.contactId)))
+      ]
+      let earliest: string | null = null
+      try {
+        const memDb = getMemoryDb()
+        earliest = memDb ? earliestValidFrom(memDb, scopesSearched) : null
+      } catch {
+        earliest = null // the boundary is a courtesy; its absence must never cost the turn
+      }
+      asOfNotice = asOfQuestionNotice(asOfQuestion, retrieved.length, earliest)
+    }
     if (planned.length > 0) {
       broadcast('assistant:phase', { conversationId, phase: 'searching' })
     }
@@ -497,6 +529,7 @@ async function handleSend(
       // brief leads in a scoped turn: it changes how everything after it
       // should be read.
       lookupSections: [
+        ...(asOfNotice ? [asOfNotice] : []),
         ...(unboundNotice ? [unboundNotice] : []),
         ...clientBrief,
         ...lookups.sections

@@ -114,6 +114,22 @@ export function setValidity(
   db.prepare(`UPDATE memories SET ${sets.join(', ')} WHERE id = @id`).run(params)
 }
 
+/**
+ * M36 Stage 3 item 5, step 4 — the boundary for the refusal: the earliest
+ * moment any memory in these scopes is known to have been true, whatever its
+ * status (a superseded fact still marks where history starts). null when
+ * nothing in the scopes is dated. Powers "the earliest fact I have is from …".
+ */
+export function earliestValidFrom(db: Database.Database, scopes: ReadonlyArray<MemoryScope>): string | null {
+  if (scopes.length === 0) return null
+  const row = db
+    .prepare(
+      `SELECT MIN(valid_from) AS earliest FROM memories WHERE valid_from IS NOT NULL AND scope IN (${scopes.map(() => '?').join(', ')})`
+    )
+    .get(...scopes) as { earliest: string | null } | undefined
+  return row?.earliest ?? null
+}
+
 /** `memory_meta` (migration 6): small key/value facts about the store itself
  *  — the temporal backfill's record lives here so its counts can be shown,
  *  and so it never runs twice. */
