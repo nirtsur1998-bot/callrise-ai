@@ -4,7 +4,7 @@ import { Card } from '@renderer/components/Card'
 import { Button } from '@renderer/components/Button'
 import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { IconButton } from '@renderer/components/IconButton'
-import type { Memory, MemoryChangelogEntry } from '../../../../preload/index.d'
+import type { Memory, MemoryChangelogEntry, TemporalBackfillRecord } from '../../../../preload/index.d'
 import { Brain } from 'lucide-react'
 import { EmptyState } from '@renderer/components/EmptyState'
 import { useAppSettings } from './useAppSettings'
@@ -34,6 +34,44 @@ const STATUS_COLOR: Record<Memory['status'], string> = {
 function matchesScope(scope: string, filter: ScopeFilter): boolean {
   if (filter === 'client') return scope.startsWith('client:')
   return scope === filter
+}
+
+const fmtDay = (iso: string): string =>
+  new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+const fmtWhen = (iso: string, source: Memory['validFromSource']): string =>
+  source === 'approx' ? `around ${fmtDay(iso)}` : fmtDay(iso)
+
+/**
+ * M36 Stage 3 item 5, step 5 — the validity window in the user's words. The
+ * founder: "a fact that quietly disappears from view because it was
+ * superseded would read as data loss … 'was true from March to July' is
+ * information I want, not clutter." So a superseded fact keeps its row and
+ * says its window; a live fact says since when; an approximate date says
+ * "around" and never pretends to a precise day. null for an undated row (a
+ * store the backfill has not reached), so nothing is claimed that is not
+ * known.
+ */
+export function validityText(memory: Memory): string | null {
+  if (!memory.validFrom && !memory.validUntil) return null
+  if (memory.validUntil) {
+    const until = fmtWhen(memory.validUntil, memory.validUntilSource)
+    return memory.validFrom ? `Was true ${fmtWhen(memory.validFrom, memory.validFromSource)} – ${until}` : `Was true until ${until}`
+  }
+  return `True since ${fmtWhen(memory.validFrom!, memory.validFromSource)}`
+}
+
+/** The header line built from the backfill's record — the counts the founder
+ *  asked to see rather than find in a log. */
+export function temporalSummaryText(record: TemporalBackfillRecord | null): string | null {
+  if (!record) return null
+  if (record.status === 'skipped') return `Dating of facts was skipped at last launch (${record.reason}) and runs at the next one.`
+  const real = record.validFrom.call + record.datedBefore
+  const parts = [
+    `${real} dated from the call they came from`,
+    ...(record.validFrom.stated ? [`${record.validFrom.stated} from your own words`] : []),
+    `${record.validFrom.approx} only by when they were learned (approximate)`
+  ]
+  return `${record.total} facts: ${parts.join(', ')}.`
 }
 
 function MemoryRow({
@@ -126,6 +164,16 @@ function MemoryRow({
               <span className="text-[10px] text-faint">{memory.category}</span>
               {memory.pinned && <Pin className="h-3 w-3 text-accent" />}
             </div>
+            {validityText(memory) && (
+              // a superseded fact's window is the information, not clutter —
+              // it stays visible and reads differently from a live fact's
+              <p
+                data-testid="memory-validity"
+                className={`mt-1 text-[11px] ${memory.validUntil ? 'text-danger' : 'text-faint'}`}
+              >
+                {validityText(memory)}
+              </p>
+            )}
           </>
         )}
       </div>
@@ -160,9 +208,13 @@ export function MemoryCenterSection(): React.JSX.Element {
   const [showChangelog, setShowChangelog] = useState(false)
   const [changelog, setChangelog] = useState<MemoryChangelogEntry[]>([])
   const [forgetting, setForgetting] = useState(false)
+  // M36 Stage 3 item 5 — what the backfill did to the store, shown here
+  // because this page is where the user checks what the app thinks it knows
+  const [temporal, setTemporal] = useState<TemporalBackfillRecord | null>(null)
 
   const refresh = (): void => {
     void window.api.salesBrain.memories.list().then(setMemories)
+    void window.api.salesBrain.memories.temporalRecord?.().then(setTemporal).catch(() => setTemporal(null))
   }
 
   useEffect(refresh, [])
@@ -176,10 +228,13 @@ export function MemoryCenterSection(): React.JSX.Element {
     [memories, scope]
   )
 
+  // the clock is read once, when the page opens — never during a render
+  // (react-hooks/purity); "this week" is relative to opening the page
+  const [openedAt] = useState(() => Date.now())
   const weeklyCount = useMemo(() => {
-    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
+    const weekAgo = openedAt - 7 * 24 * 60 * 60 * 1000
     return (memories ?? []).filter((m) => new Date(m.createdAt).getTime() >= weekAgo).length
-  }, [memories])
+  }, [memories, openedAt])
 
   const forgetEverything = async (): Promise<void> => {
     if (
@@ -204,6 +259,16 @@ export function MemoryCenterSection(): React.JSX.Element {
         <Card className="mb-5">
           <p className="text-[13px] text-ink">
             <strong>{weeklyCount}</strong> new thing{weeklyCount === 1 ? '' : 's'} learned this week.
+          </p>
+        </Card>
+      )}
+
+      {temporalSummaryText(temporal) && (
+        <Card className="mb-5">
+          <p data-testid="memory-temporal-summary" className="text-[12px] text-faint">
+            <span className="font-medium text-ink">When facts were true. </span>
+            {temporalSummaryText(temporal)} A replaced fact keeps its row and says the period it covered; an
+            approximate date says “around”.
           </p>
         </Card>
       )}

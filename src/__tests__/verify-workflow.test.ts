@@ -36,7 +36,9 @@ describe('verify.yml — the gate runs on every push and PR, and refuses', () =>
       'no-uncollected-test-files.test.ts',
       'frozen-modules-have-no-production-callers.test.ts',
       'packaged-files.test.ts',
-      'release-notes.test.ts'
+      'release-notes.test.ts',
+      'protected-instances.test.ts',
+      'no-control-bytes-in-source.test.ts'
     ]) expect(wf).toContain(`src/__tests__/${f}`)
   })
 })

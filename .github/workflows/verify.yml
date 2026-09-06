@@ -49,4 +49,4 @@ jobs:
         run: node scripts/verification/verify-green.mjs
 
       - name: Self-tests of the instruments (they must be able to refuse)
-        run: node scripts/verification/verify-green.mjs --tests -- src/__tests__/verify-green.test.ts src/__tests__/tracker-status.test.ts src/__tests__/no-uncollected-test-files.test.ts src/__tests__/frozen-modules-have-no-production-callers.test.ts src/__tests__/packaged-files.test.ts src/__tests__/release-notes.test.ts
+        run: node scripts/verification/verify-green.mjs --tests -- src/__tests__/verify-green.test.ts src/__tests__/tracker-status.test.ts src/__tests__/no-uncollected-test-files.test.ts src/__tests__/frozen-modules-have-no-production-callers.test.ts src/__tests__/packaged-files.test.ts src/__tests__/release-notes.test.ts src/__tests__/protected-instances.test.ts src/__tests__/no-control-bytes-in-source.test.ts

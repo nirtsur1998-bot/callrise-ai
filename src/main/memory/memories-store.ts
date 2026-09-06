@@ -4,7 +4,17 @@
 // shape, everything else goes through its functions).
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
-import type { CompiledProfile, Memory, MemoryCandidate, MemoryEvidence, MemoryScope, MemoryStatus, ProfileSize } from './types'
+import type {
+  CompiledProfile,
+  Memory,
+  MemoryCandidate,
+  MemoryEvidence,
+  MemoryScope,
+  MemoryStatus,
+  ProfileSize,
+  ValidityDateSource
+} from './types'
+import { ftsMatchQuery, matchedTerms } from './lexical-terms'
 
 interface MemoryRow {
   rowid_pk: number
@@ -21,7 +31,12 @@ interface MemoryRow {
   invalidated_by: string | null
   created_at: string
   last_confirmed_at: string
+  last_retrieved_at?: string | null
   invalidated_at: string | null
+  valid_from?: string | null
+  valid_from_source?: string | null
+  valid_until?: string | null
+  valid_until_source?: string | null
 }
 
 function rowToMemory(row: MemoryRow): Memory {
@@ -39,8 +54,108 @@ function rowToMemory(row: MemoryRow): Memory {
     invalidatedBy: row.invalidated_by ?? undefined,
     createdAt: row.created_at,
     lastConfirmedAt: row.last_confirmed_at,
-    invalidatedAt: row.invalidated_at ?? undefined
+    lastRetrievedAt: row.last_retrieved_at ?? undefined,
+    invalidatedAt: row.invalidated_at ?? undefined,
+    validFrom: row.valid_from ?? undefined,
+    validFromSource: (row.valid_from_source as ValidityDateSource | null | undefined) ?? undefined,
+    validUntil: row.valid_until ?? undefined,
+    validUntilSource: (row.valid_until_source as ValidityDateSource | null | undefined) ?? undefined
   }
+}
+
+/**
+ * M36 Stage 3 item 5 — the validity a NEW memory is born with. Event time
+ * first: the earliest `at` its transcript evidence carries (the call's own
+ * start). Failing that, a fact the user stated or confirmed themselves is
+ * exact at the moment they said it ('stated'). Failing both, the learning
+ * time stands in, marked 'approx' so nothing downstream mistakes it for a
+ * real date. Pure, so the rule is testable without a db.
+ */
+export function validityAtInsert(
+  candidate: Pick<MemoryCandidate, 'evidence' | 'source'>,
+  createdAtIso: string
+): { validFrom: string; validFromSource: ValidityDateSource } {
+  const eventTimes = candidate.evidence
+    .flatMap((e) => (e.type === 'transcript' && e.at && !Number.isNaN(Date.parse(e.at)) ? [e.at] : []))
+    .sort()
+  if (eventTimes.length > 0) return { validFrom: eventTimes[0], validFromSource: 'call' }
+  if (candidate.source === 'user_stated' || candidate.source === 'user_confirmed') {
+    return { validFrom: createdAtIso, validFromSource: 'stated' }
+  }
+  return { validFrom: createdAtIso, validFromSource: 'approx' }
+}
+
+/** Sets either or both validity bounds with their sources. Used by the
+ *  temporal backfill and by consolidation when a contradiction closes a
+ *  fact's window. Only the fields given are written. */
+export function setValidity(
+  db: Database.Database,
+  id: string,
+  validity: {
+    validFrom?: string | null
+    validFromSource?: ValidityDateSource | null
+    validUntil?: string | null
+    validUntilSource?: ValidityDateSource | null
+  }
+): void {
+  const sets: string[] = []
+  const params: Record<string, string | null> = { id }
+  if ('validFrom' in validity) {
+    sets.push('valid_from = @validFrom', 'valid_from_source = @validFromSource')
+    params.validFrom = validity.validFrom ?? null
+    params.validFromSource = validity.validFromSource ?? null
+  }
+  if ('validUntil' in validity) {
+    sets.push('valid_until = @validUntil', 'valid_until_source = @validUntilSource')
+    params.validUntil = validity.validUntil ?? null
+    params.validUntilSource = validity.validUntilSource ?? null
+  }
+  if (sets.length === 0) return
+  db.prepare(`UPDATE memories SET ${sets.join(', ')} WHERE id = @id`).run(params)
+}
+
+/**
+ * M36 Stage 3 item 5, step 4 — the boundary for the refusal: the earliest
+ * moment any memory in these scopes is known to have been true, whatever its
+ * status (a superseded fact still marks where history starts). null when
+ * nothing in the scopes is dated. Powers "the earliest fact I have is from …".
+ */
+export function earliestValidFrom(db: Database.Database, scopes: ReadonlyArray<MemoryScope>): string | null {
+  if (scopes.length === 0) return null
+  const row = db
+    .prepare(
+      `SELECT MIN(valid_from) AS earliest FROM memories WHERE valid_from IS NOT NULL AND scope IN (${scopes.map(() => '?').join(', ')})`
+    )
+    .get(...scopes) as { earliest: string | null } | undefined
+  return row?.earliest ?? null
+}
+
+/** `memory_meta` (migration 6): small key/value facts about the store itself
+ *  — the temporal backfill's record lives here so its counts can be shown,
+ *  and so it never runs twice. */
+export function getMeta(db: Database.Database, key: string): string | null {
+  const row = db.prepare('SELECT value FROM memory_meta WHERE key = ?').get(key) as { value: string } | undefined
+  return row?.value ?? null
+}
+export function setMeta(db: Database.Database, key: string, value: string): void {
+  db.prepare('INSERT OR REPLACE INTO memory_meta (key, value) VALUES (?, ?)').run(key, value)
+}
+
+/**
+ * M36 Stage 3 item 4 — the retriever surfaced these memories: record it, so
+ * decay can tell a fact in weekly use from one nobody has touched. Only
+ * moves forward (an older timestamp never rewinds a newer one); an empty
+ * list is a no-op; never throws into the retrieval path.
+ */
+export function touchRetrieved(db: Database.Database, ids: ReadonlyArray<string>, nowIso: string): void {
+  if (ids.length === 0) return
+  const stmt = db.prepare(
+    'UPDATE memories SET last_retrieved_at = ? WHERE id = ? AND (last_retrieved_at IS NULL OR last_retrieved_at < ?)'
+  )
+  const run = db.transaction((list: ReadonlyArray<string>) => {
+    for (const id of list) stmt.run(nowIso, id, nowIso)
+  })
+  run(ids)
 }
 
 /** A directly user-confirmed/stated fact is trusted immediately (the user
@@ -79,13 +194,14 @@ export function insertMemory(
     source: candidate.source,
     pinned: false,
     createdAt: now,
-    lastConfirmedAt: now
+    lastConfirmedAt: now,
+    ...validityAtInsert(candidate, now)
   }
 
   const insertMemoryStmt = db.prepare(`
     INSERT INTO memories
-      (id, scope, category, statement, evidence, confidence, importance, status, source, pinned, created_at, last_confirmed_at)
-    VALUES (@id, @scope, @category, @statement, @evidence, @confidence, @importance, @status, @source, @pinned, @createdAt, @lastConfirmedAt)
+      (id, scope, category, statement, evidence, confidence, importance, status, source, pinned, created_at, last_confirmed_at, valid_from, valid_from_source)
+    VALUES (@id, @scope, @category, @statement, @evidence, @confidence, @importance, @status, @source, @pinned, @createdAt, @lastConfirmedAt, @validFrom, @validFromSource)
   `)
   const insertVecStmt = db.prepare('INSERT INTO vec_memories(rowid, embedding) VALUES (?, ?)')
 
@@ -102,7 +218,9 @@ export function insertMemory(
       source: memory.source,
       pinned: 0,
       createdAt: memory.createdAt,
-      lastConfirmedAt: memory.lastConfirmedAt
+      lastConfirmedAt: memory.lastConfirmedAt,
+      validFrom: memory.validFrom ?? null,
+      validFromSource: memory.validFromSource ?? null
     })
     // vec0 quirk (confirmed empirically, see db.ts's sibling module doc
     // comments / the Phase 1 checkpoint write-up): a bound rowid parameter
@@ -171,7 +289,77 @@ export function listDistinctScopes(db: Database.Database): MemoryScope[] {
 
 export interface VectorSearchResult {
   memory: Memory
+  /** L2 distance between the question's embedding and this memory's — REAL
+   *  on every result, including ones the lexical channel surfaced (they
+   *  carry the distance the vector channel would have given them, which is
+   *  usually why the vector channel missed them). */
   distance: number
+  /** M36 Stage 3 item 2 — which channel(s) surfaced this result. Absent on
+   *  raw store results; set by rag.ts's fusion. */
+  via?: 'vector' | 'lexical' | 'both'
+  /** The question's terms this statement contains, when the lexical channel
+   *  had a say — so a citation can show WHY ("matched: okafor"). */
+  matchedTerms?: string[]
+}
+
+export interface LexicalSearchResult extends VectorSearchResult {
+  /** FTS5 bm25() — lower is better, always ≤ 0. */
+  score: number
+  matchedTerms: string[]
+}
+
+/**
+ * M36 Stage 3 item 2 — the lexical channel (hybrid retrieval's other half).
+ * Matches ANY of `terms` against `memories_fts` (migration 5), ranked by
+ * bm25, with the same status and scope filters as the vector search so the
+ * cross-scope invariant in rag.ts holds for both channels identically. Each
+ * row also carries its TRUE vector distance from `queryEmbedding` — a lexical
+ * hit is never given a made-up distance. `terms` come from
+ * lexical-terms.ts; an empty list returns [] without touching the db.
+ */
+export function searchMemoriesByText(
+  db: Database.Database,
+  terms: ReadonlyArray<string>,
+  queryEmbedding: Float32Array,
+  opts: { scope?: MemoryScope; limit?: number; statuses?: MemoryStatus[]; asOf?: string } = {}
+): LexicalSearchResult[] {
+  if (terms.length === 0) return []
+  const limit = opts.limit ?? 10
+  const statuses = opts.statuses?.length ? opts.statuses : (['active'] as MemoryStatus[])
+  const statusParams: Record<string, string> = {}
+  statuses.forEach((s, i) => {
+    statusParams[`status${i}`] = s
+  })
+  const rows = db
+    .prepare(
+      `
+      SELECT m.*, bm25(memories_fts) AS score, vec_distance_L2(v.embedding, @embedding) AS distance
+      FROM memories_fts f
+      JOIN memories m ON m.rowid_pk = f.rowid
+      JOIN vec_memories v ON v.rowid = m.rowid_pk
+      WHERE memories_fts MATCH @match
+        AND m.status IN (${statuses.map((_, i) => `@status${i}`).join(', ')})
+        ${opts.scope ? 'AND m.scope = @scope' : ''}
+        ${validityClause(opts.asOf)}
+      ORDER BY bm25(memories_fts)
+      LIMIT @limit
+      `
+    )
+    .all({
+      match: ftsMatchQuery(terms),
+      embedding: toBlob(queryEmbedding),
+      limit,
+      ...statusParams,
+      ...(opts.scope ? { scope: opts.scope } : {}),
+      ...(opts.asOf ? { asOf: opts.asOf } : {})
+    }) as (MemoryRow & { score: number; distance: number })[]
+
+  return rows.map((row) => ({
+    memory: rowToMemory(row),
+    distance: row.distance,
+    score: row.score,
+    matchedTerms: matchedTerms(row.statement, terms)
+  }))
 }
 
 /** Hybrid-retrieval's vector half (spec section 2's RETRIEVE step) — ranking
@@ -183,10 +371,26 @@ export interface VectorSearchResult {
  *  consolidation.ts's dedupe search widen this to active+hypothesis, since
  *  a new candidate needs to be checked against BOTH before deciding it's
  *  genuinely new. */
+/**
+ * M36 Stage 3 item 5, step 3 — the validity window as a SQL filter. Absent
+ * `asOf` (every existing caller), the clause is the empty string and the
+ * query is byte-identical to before — proven by the retrieval harness
+ * running unchanged before and after (docs/M36-temporal-validity-design.md,
+ * step 3). With `asOf`: a row is in range when it became true at or before
+ * that moment and had not stopped being true by it. A NULL valid_from (a
+ * row the backfill has not reached) cannot be excluded — "true since at
+ * least when we learned it" — and a NULL valid_until means still true.
+ */
+function validityClause(asOf: string | undefined): string {
+  return asOf
+    ? 'AND (m.valid_from IS NULL OR m.valid_from <= @asOf) AND (m.valid_until IS NULL OR m.valid_until > @asOf)'
+    : ''
+}
+
 export function searchMemoriesByVector(
   db: Database.Database,
   queryEmbedding: Float32Array,
-  opts: { scope?: MemoryScope; limit?: number; statuses?: MemoryStatus[] } = {}
+  opts: { scope?: MemoryScope; limit?: number; statuses?: MemoryStatus[]; asOf?: string } = {}
 ): VectorSearchResult[] {
   const limit = opts.limit ?? 10
   const statuses = opts.statuses?.length ? opts.statuses : (['active'] as MemoryStatus[])
@@ -203,6 +407,7 @@ export function searchMemoriesByVector(
       WHERE v.embedding MATCH @embedding AND k = @limit
         AND m.status IN (${statuses.map((_, i) => `@status${i}`).join(', ')})
         ${opts.scope ? 'AND m.scope = @scope' : ''}
+        ${validityClause(opts.asOf)}
       ORDER BY v.distance
       `
     )
@@ -210,7 +415,8 @@ export function searchMemoriesByVector(
       embedding: toBlob(queryEmbedding),
       limit,
       ...statusParams,
-      ...(opts.scope ? { scope: opts.scope } : {})
+      ...(opts.scope ? { scope: opts.scope } : {}),
+      ...(opts.asOf ? { asOf: opts.asOf } : {})
     }) as (MemoryRow & { distance: number })[]
 
   return rows.map((row) => ({ memory: rowToMemory(row), distance: row.distance }))
@@ -256,12 +462,30 @@ export function invalidateMemory(db: Database.Database, id: string, supersededBy
   const existing = getMemoryById(db, id)
   if (!existing) return null
   const now = new Date().toISOString()
-  db.prepare("UPDATE memories SET status = 'invalidated', invalidated_at = ?, invalidated_by = ? WHERE id = ?").run(
-    now,
-    supersededByMemoryId,
-    id
-  )
-  return { ...existing, status: 'invalidated', invalidatedAt: now, invalidatedBy: supersededByMemoryId }
+  // M36 Stage 3 item 5, step 2 — the window CLOSES WHEN THE NEW FACT BECAME
+  // TRUE, not now. `invalidated_at` (system time) still records when we
+  // noticed; `valid_until` (event time) takes the superseder's valid_from and
+  // its source, so a fact learned from a July call closes the old one in
+  // July even if the extraction ran in September. The superseder is read
+  // from THIS db — never the calls store (the founder's condition: the
+  // memory db does not reach outside itself for a timestamp; the caller
+  // stamped the evidence with `at` when the superseder was inserted). A
+  // superseder with no date (should not happen after migration 6) closes at
+  // `now`, marked approximate, never silently.
+  const superseder = getMemoryById(db, supersededByMemoryId)
+  const validUntil = superseder?.validFrom ?? now
+  const validUntilSource: ValidityDateSource = superseder?.validFrom ? (superseder.validFromSource ?? 'approx') : 'approx'
+  db.prepare(
+    "UPDATE memories SET status = 'invalidated', invalidated_at = ?, invalidated_by = ?, valid_until = ?, valid_until_source = ? WHERE id = ?"
+  ).run(now, supersededByMemoryId, validUntil, validUntilSource, id)
+  return {
+    ...existing,
+    status: 'invalidated',
+    invalidatedAt: now,
+    invalidatedBy: supersededByMemoryId,
+    validUntil,
+    validUntilSource
+  }
 }
 
 /** Decay (spec section 2, nightly): confidence drifts down without

@@ -134,7 +134,16 @@ export function DeniedState({ onRetry }: { onRetry: () => void }): React.JSX.Ele
 }
 
 /** Setup guidance when the Deepgram API key is missing. */
-export function NoKeyState({ onRetry }: { onRetry: () => void }): React.JSX.Element {
+export function NoKeyState({
+  onRetry,
+  onSample
+}: {
+  onRetry: () => void
+  /** M36 Stage 1 — the sample call: what a stranger with no key can look at
+   *  instead of a dead microphone. Optional so tests and standalone mounts
+   *  still work. */
+  onSample?: () => void
+}): React.JSX.Element {
   return (
     <CenteredState
       icon={<Mic className="h-6 w-6 text-faint" />}
@@ -152,9 +161,16 @@ export function NoKeyState({ onRetry }: { onRetry: () => void }): React.JSX.Elem
           <li>Restart the app, then click Try again</li>
         </ol>
       </div>
-      <Button className="no-drag mt-5" onClick={onRetry}>
-        Try again
-      </Button>
+      <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+        <Button className="no-drag" onClick={onRetry}>
+          Try again
+        </Button>
+        {onSample && (
+          <Button className="no-drag" variant="secondary" onClick={onSample}>
+            See a sample call instead
+          </Button>
+        )}
+      </div>
     </CenteredState>
   )
 }

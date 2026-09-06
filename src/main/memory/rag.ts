@@ -18,10 +18,62 @@
 import { isSalesBrainEnabled } from '../app-settings'
 import { ensureMemoryDb, getMemoryDb } from './memory-runtime'
 import { embedText } from './embeddings'
-import { searchMemoriesByVector, type VectorSearchResult } from './memories-store'
+import {
+  touchRetrieved,
+  searchMemoriesByText,
+  searchMemoriesByVector,
+  type LexicalSearchResult,
+  type VectorSearchResult
+} from './memories-store'
+import { lexicalTerms } from './lexical-terms'
 import { clientScope, type MemoryScope, type MemoryStatus } from './types'
 
 const MAX_RESULTS = 5
+
+/** Reciprocal-rank-fusion constant (Cormack et al. 2009's 60). With two
+ *  channels this makes a memory both channels rank first score ~2/61, one
+ *  either channel ranks first ~1/61, and the tenth in one channel ~1/70 — a
+ *  gentle slope, so agreement between channels outranks a strong showing in
+ *  one, and a lexical-only hit (a name the vector channel cannot see) still
+ *  lands beside the vector channel's own top results rather than below all
+ *  of them. */
+const RRF_K = 60
+
+/**
+ * M36 Stage 3 item 2 — hybrid fusion. `vector` is already sorted by distance
+ * (the vector channel's rank order), `lexical` by bm25 (the lexical
+ * channel's). Each memory's score is the sum of 1/(K + rank) over the
+ * channels that surfaced it; ties break on the real vector distance. The
+ * result keeps every field the vector channel returned and adds `via` and
+ * `matchedTerms` so a consumer can say which channel spoke.
+ */
+export function fuseChannels(
+  vector: ReadonlyArray<VectorSearchResult>,
+  lexical: ReadonlyArray<LexicalSearchResult>,
+  limit: number
+): VectorSearchResult[] {
+  const fused = new Map<string, { result: VectorSearchResult; score: number }>()
+  vector.forEach((r, rank) => {
+    fused.set(r.memory.id, { result: { ...r, via: 'vector' }, score: 1 / (RRF_K + rank + 1) })
+  })
+  lexical.forEach((r, rank) => {
+    const contribution = 1 / (RRF_K + rank + 1)
+    const existing = fused.get(r.memory.id)
+    if (existing) {
+      existing.score += contribution
+      existing.result = { ...existing.result, via: 'both', matchedTerms: r.matchedTerms }
+    } else {
+      fused.set(r.memory.id, {
+        result: { memory: r.memory, distance: r.distance, via: 'lexical', matchedTerms: r.matchedTerms },
+        score: contribution
+      })
+    }
+  })
+  return [...fused.values()]
+    .sort((a, b) => b.score - a.score || a.result.distance - b.result.distance)
+    .slice(0, limit)
+    .map((f) => f.result)
+}
 
 /** BUG-080 — vec_memories is a plain `vec0` table, so distances are
  *  EUCLIDEAN (L2), not cosine: on MiniLM's unit vectors a natural-language
@@ -53,6 +105,25 @@ const FOREGROUND_EMBED_TIMEOUT_MS = 10_000
 
 export interface RetrieveStructuredOptions {
   contactId?: string | null
+  /** M36 Stage 3 — clients the QUESTION names, for an UNBOUND conversation
+   *  (contactId null). Each becomes a client scope in the search. Computed by
+   *  the caller from the words the user typed (client-inference.ts) and
+   *  never guessed here. Switched ON by the founder 2026-09-06 (option B,
+   *  measured 57% -> 93% on the harness with zero cross-client surfacing)
+   *  under three conditions: the cross-scope invariant is asserted, not
+   *  measured (assertScopeInvariant); a question that names nobody stays
+   *  unscoped (client-inference.test.ts pins it); and option C's refusal
+   *  stays as the fallback (unbound-client-notice.ts). Ignored when
+   *  contactId is set. */
+  inferredClientIds?: string[]
+  /** M36 Stage 3 item 5, step 3 — answer AS OF this moment (ISO): only facts
+   *  whose validity window contains it, INCLUDING superseded ones (a fact
+   *  that was true in June is exactly what "in June" asks for). Absent — the
+   *  default for every existing caller — nothing changes: no window filter,
+   *  no widened status, byte-identical results (the retrieval harness proves
+   *  it, before and after). Set only from the words the user typed
+   *  (step 4's parser); never inferred from context. */
+  asOf?: string
   /** Also search still-hypothesis memories (they arrive flagged by their own
    *  `status`, so callers can hedge the phrasing — spec section 5). Default
    *  false: profile-parity with the original behavior. */
@@ -108,14 +179,75 @@ export async function retrieveRelevantMemoriesStructured(
 
   const limit = opts.limit ?? MAX_RESULTS
   const maxDistance = opts.maxDistance ?? MAX_DISTANCE
-  const statuses: MemoryStatus[] = opts.includeHypotheses ? ['active', 'hypothesis'] : ['active']
+  // step 3 — an as-of question may be answered by a fact that has since been
+  // superseded: 'invalidated' joins the status list ONLY when asOf is set,
+  // and the window filter in the store keeps out anything not true at that
+  // moment (a superseded fact whose window does not contain asOf stays
+  // out, exactly like today).
+  const asOf = opts.asOf
+  const statuses: MemoryStatus[] = [
+    'active',
+    ...(opts.includeHypotheses ? (['hypothesis'] as MemoryStatus[]) : []),
+    ...(asOf ? (['invalidated'] as MemoryStatus[]) : [])
+  ]
   const contactId = opts.contactId ?? null
-  const scopes: MemoryScope[] = ['rep', 'business', ...(contactId ? [clientScope(contactId)] : [])]
-  return scopes
-    .flatMap((scope) => searchMemoriesByVector(db, embedding, { scope, limit, statuses }))
+  const inferred = contactId ? [] : (opts.inferredClientIds ?? [])
+  const scopes: MemoryScope[] = [
+    'rep',
+    'business',
+    ...(contactId ? [clientScope(contactId)] : inferred.map((id) => clientScope(id)))
+  ]
+  // `asOf` is spread only when set, so an untimed call hands the store the
+  // exact option object it always has
+  const window = asOf ? { asOf } : {}
+  const vector = scopes
+    .flatMap((scope) => searchMemoriesByVector(db, embedding, { scope, limit, statuses, ...window }))
     .filter((r) => r.distance <= maxDistance)
     .sort((a, b) => a.distance - b.distance)
-    .slice(0, limit)
+  // M36 Stage 3 item 2 — the lexical channel: the same scopes, by string.
+  // A question made only of function words has nothing to match and the
+  // channel is skipped, so such a question behaves exactly as before.
+  const terms = lexicalTerms(query)
+  const lexical = terms.length
+    ? scopes
+        .flatMap((scope) => searchMemoriesByText(db, terms, embedding, { scope, limit, statuses, ...window }))
+        .sort((a, b) => a.score - b.score)
+    : []
+  const results = fuseChannels(vector, lexical, limit)
+  assertScopeInvariant(results, scopes)
+  // M36 Stage 3 item 4 — what was surfaced is in use; say so for the decay
+  // clock. Best-effort: a failed touch must never cost the turn its memories.
+  if (results.length > 0) {
+    try {
+      touchRetrieved(db, results.map((r) => r.memory.id), new Date().toISOString())
+    } catch (err) {
+      console.warn('[rag] touchRetrieved failed (memories still returned):', err)
+    }
+  }
+  return results
+}
+
+/**
+ * THE CROSS-CLIENT INVARIANT, as a hard check rather than a measured result
+ * (the founder's condition for switching option B on, 2026-09-06): every
+ * memory returned belongs to a scope this call asked for. A result from any
+ * other scope is not filtered out quietly — it throws, so a regression in
+ * the store or the fan-out fails the turn loudly instead of degrading into a
+ * confident answer built from another client's memories (BUG-096's original
+ * damage). Red-checked in rag.structured.test.ts by planting one.
+ */
+export function assertScopeInvariant(
+  results: ReadonlyArray<{ memory: { scope: string; id: string } }>,
+  scopes: ReadonlyArray<MemoryScope>
+): void {
+  const allowed = new Set<string>(scopes)
+  for (const r of results) {
+    if (!allowed.has(r.memory.scope)) {
+      throw new Error(
+        `[rag] cross-scope result refused: memory ${r.memory.id} is in scope "${r.memory.scope}" but this retrieval asked for [${scopes.join(', ')}]`
+      )
+    }
+  }
 }
 
 /** Returns a labeled context section (same shape as profile-injection.ts's

@@ -211,7 +211,18 @@ export function nextMidnightPacificMs(now: number): number {
   return nextMidnightAsIfUtc - offsetMin * 60_000
 }
 
-async function toProviderError(displayName: string, res: Response): Promise<AIProviderError> {
+/** BUG-197 — Google's own wording for "this project has no credit to spend":
+ *  "Your prepayment credits are depleted…". Kept as a keyword check on the
+ *  message, like the quota keywords in failure-class.ts, so a rewording that
+ *  keeps the words still matches and one that drops them falls back to the
+ *  generic copy rather than to a wrong claim. Exported for the unit test. */
+export function looksLikeCreditsDepleted(message: string): boolean {
+  const msg = message.toLowerCase()
+  return msg.includes('credits are depleted') || msg.includes('prepayment credit')
+}
+
+/** Exported for the unit test of the copy above (BUG-197); the adapter is the only production caller. */
+export async function toProviderError(displayName: string, res: Response): Promise<AIProviderError> {
   let message = `${displayName} returned an error (${res.status}).`
   let googleStatus = ''
   let retryAfterMs: number | undefined
@@ -244,6 +255,22 @@ async function toProviderError(displayName: string, res: Response): Promise<AIPr
       failureClass === 'period-exhausted' && isGeminiDailyQuota(body)
         ? nextMidnightPacificMs(Date.now())
         : undefined
+    // BUG-197 (2026-09-06) — a project with NO prepaid credit answers 429 with
+    // "Your prepayment credits are depleted. Please go to AI Studio at
+    // https://ai.studio/projects to manage your project and billing." The
+    // classifier already reads that as period-exhausted (the body says
+    // "credits" and "billing"), but the sentence the user saw was the generic
+    // one below, and the founder waited for a reset that cannot come. Say
+    // what Google said, and what fixes it.
+    if (looksLikeCreditsDepleted(message)) {
+      return new AIProviderError(
+        'rate-limit',
+        `${displayName} says this project has no prepaid credit left — this is not a rate limit and waiting will not clear it. Add credit to the project at ai.studio/projects, or use a different Google AI Studio project.`,
+        retryAfterMs,
+        failureClass,
+        resetsAt
+      )
+    }
     return new AIProviderError(
       'rate-limit',
       `${displayName} is rate-limiting requests right now.`,

@@ -20,6 +20,16 @@ const mocks = vi.hoisted(() => ({
       _opts: { scope: string; limit: number; statuses: string[] }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ) => [] as { memory: any; distance: number }[]
+  ),
+  // M36 Stage 3 item 2 — the lexical channel, quiet unless a test speaks.
+  lexical: vi.fn(
+    (
+      _db: unknown,
+      _terms: ReadonlyArray<string>,
+      _embedding: unknown,
+      _opts: { scope: string; limit: number; statuses: string[] }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ) => [] as { memory: any; distance: number; score: number; matchedTerms: string[] }[]
   )
 }))
 
@@ -29,9 +39,13 @@ vi.mock('../memory-runtime', () => ({
   ensureMemoryDb: mocks.ensured
 }))
 vi.mock('../embeddings', () => ({ embedText: mocks.embed }))
-vi.mock('../memories-store', () => ({ searchMemoriesByVector: mocks.search }))
+vi.mock('../memories-store', () => ({
+  searchMemoriesByVector: mocks.search,
+  searchMemoriesByText: mocks.lexical,
+  touchRetrieved: vi.fn()
+}))
 
-import { retrieveRelevantMemories, retrieveRelevantMemoriesStructured } from '../rag'
+import { fuseChannels, retrieveRelevantMemories, retrieveRelevantMemoriesStructured } from '../rag'
 
 function mem(id: string, statement: string, status: Memory['status'] = 'active'): Memory {
   return {
@@ -58,6 +72,8 @@ beforeEach(() => {
   mocks.embed.mockImplementation(async () => new Float32Array(384))
   mocks.search.mockReset()
   mocks.search.mockReturnValue([])
+  mocks.lexical.mockReset()
+  mocks.lexical.mockReturnValue([])
 })
 
 afterEach(() => {
@@ -81,6 +97,36 @@ describe('retrieveRelevantMemoriesStructured', () => {
     // Three scopes searched: rep, business, client:c-1.
     const scopes = mocks.search.mock.calls.map((c) => (c[2] as { scope: string }).scope)
     expect(scopes).toEqual(['rep', 'business', 'client:c-1'])
+  })
+
+  // M36 Stage 3 — option B, switched on by the founder under three conditions.
+  it('unbound + inferredClientIds: fans out to rep, business and each NAMED client, in order', async () => {
+    await retrieveRelevantMemoriesStructured('what did Dana say?', {
+      contactId: null,
+      inferredClientIds: ['c-acme', 'c-globex']
+    })
+    const scopes = mocks.search.mock.calls.map((c) => (c[2] as { scope: string }).scope)
+    expect(scopes).toEqual(['rep', 'business', 'client:c-acme', 'client:c-globex'])
+  })
+  it('bound: inferredClientIds is ignored — a scoped chat searches its own client and no other', async () => {
+    await retrieveRelevantMemoriesStructured('q', { contactId: 'c-1', inferredClientIds: ['c-acme'] })
+    const scopes = mocks.search.mock.calls.map((c) => (c[2] as { scope: string }).scope)
+    expect(scopes).toEqual(['rep', 'business', 'client:c-1'])
+  })
+  it('unbound with nothing inferred: rep and business only (a question that names nobody stays unscoped)', async () => {
+    await retrieveRelevantMemoriesStructured('do they need SOC 2?', { contactId: null, inferredClientIds: [] })
+    const scopes = mocks.search.mock.calls.map((c) => (c[2] as { scope: string }).scope)
+    expect(scopes).toEqual(['rep', 'business'])
+  })
+  it('THE INVARIANT: a result from a scope this call did not ask for THROWS — it is never filtered quietly', async () => {
+    mocks.search.mockImplementation((_db, _e, opts) =>
+      opts.scope === 'business'
+        ? [{ memory: { ...mem('leak', 'other client secret'), scope: 'client:c-other' }, distance: 0.2 }]
+        : []
+    )
+    await expect(retrieveRelevantMemoriesStructured('q', { contactId: null })).rejects.toThrow(
+      /cross-scope result refused: memory leak is in scope "client:c-other"/
+    )
   })
 
   it('defaults to active-only; includeHypotheses widens the status filter', async () => {
@@ -142,6 +188,101 @@ describe('retrieveRelevantMemoriesStructured', () => {
     mocks.enabled = true
     expect(await retrieveRelevantMemoriesStructured('   ')).toEqual([])
     expect(mocks.embed).not.toHaveBeenCalled()
+  })
+})
+
+// M36 Stage 3 item 2 — the lexical channel, at the orchestration level. The
+// real FTS5 behaviour (a name found by string, "Priyanka" not matching
+// "Priya", scope respected, migration backfill) is proven against a real db
+// in lexical-channel.test.ts; what THIS block pins is how rag.ts fuses the
+// two channels and that the invariant covers both.
+describe('lexical channel fusion', () => {
+  const lex = (id: string, statement: string, distance: number, score: number, terms: string[], scope = 'rep') => ({
+    memory: { ...mem(id, statement), scope: scope as Memory['scope'] },
+    distance,
+    score,
+    matchedTerms: terms
+  })
+
+  it('a name the vector channel cannot see surfaces from the lexical channel, with its REAL distance and via: lexical', async () => {
+    mocks.lexical.mockImplementation((_db, terms, _e, opts) =>
+      opts.scope === 'client:c-globex' && terms.includes('okafor')
+        ? [lex('okafor', 'Sam Okafor is the internal champion', 1.41, -1.2, ['okafor', 'sam'], 'client:c-globex')]
+        : []
+    )
+    const results = await retrieveRelevantMemoriesStructured('Who is Sam Okafor?', { contactId: 'c-globex' })
+    expect(results.map((r) => r.memory.id)).toEqual(['okafor'])
+    expect(results[0].via).toBe('lexical')
+    expect(results[0].distance).toBe(1.41) // over MAX_DISTANCE — exactly why the vector channel missed it
+    expect(results[0].matchedTerms).toEqual(['okafor', 'sam'])
+    // the terms handed to the store are the question minus its function words
+    expect(mocks.lexical.mock.calls[0][1]).toEqual(['sam', 'okafor'])
+  })
+
+  it('a question made only of function words never touches the lexical channel', async () => {
+    await retrieveRelevantMemoriesStructured('what is it?', { contactId: null })
+    expect(mocks.lexical).not.toHaveBeenCalled()
+    expect(mocks.search).toHaveBeenCalled()
+  })
+
+  it('the lexical channel searches exactly the scopes the vector channel does, and a cross-scope lexical result THROWS', async () => {
+    mocks.lexical.mockImplementation((_db, _t, _e, opts) =>
+      opts.scope === 'business' ? [lex('leak', 'Okafor at another client', 0.9, -1, ['okafor'], 'client:c-other')] : []
+    )
+    await expect(retrieveRelevantMemoriesStructured('Who is Okafor?', { contactId: 'c-1' })).rejects.toThrow(
+      /cross-scope result refused: memory leak/
+    )
+    const scopes = mocks.lexical.mock.calls.map((c) => (c[3] as { scope: string }).scope)
+    expect(scopes).toEqual(['rep', 'business', 'client:c-1'])
+  })
+
+  it('fuseChannels: agreement outranks either channel alone; ties break on distance; the cap holds', () => {
+    const v = [
+      { memory: mem('a', 'a'), distance: 0.5 },
+      { memory: mem('b', 'b'), distance: 0.6 },
+      { memory: mem('c', 'c'), distance: 0.7 }
+    ]
+    const l = [lex('b', 'b', 0.6, -2, ['x']), lex('d', 'd', 1.5, -1, ['x'])]
+    const fused = fuseChannels(v, l, 3)
+    // b: 1/62 + 1/61 (both) > a: 1/61 (vector #1) = d: 1/62 (lexical #2)... a beats d on rank; c: 1/63
+    expect(fused.map((r) => `${r.memory.id}:${r.via}`)).toEqual(['b:both', 'a:vector', 'd:lexical'])
+    expect(fused.find((r) => r.memory.id === 'b')?.matchedTerms).toEqual(['x'])
+  })
+
+  it('fuseChannels with an empty lexical list is exactly the old behaviour: by distance, capped', () => {
+    const v = [
+      { memory: mem('a', 'a'), distance: 0.5 },
+      { memory: mem('b', 'b'), distance: 0.6 }
+    ]
+    expect(fuseChannels(v, [], 1).map((r) => r.memory.id)).toEqual(['a'])
+    expect(fuseChannels(v, [], 5).every((r) => r.via === 'vector')).toBe(true)
+  })
+})
+
+// M36 Stage 3 item 5, step 3 — asOf at the orchestration level. The window
+// filter itself is SQL (retrieval-eval-temporal.test.ts proves it on real
+// rows); what THIS pins is that an untimed call hands the store exactly what
+// it always has, and a timed one hands both channels the moment and widens
+// the status list to superseded facts.
+describe('asOf', () => {
+  it('untimed: the store receives the exact option object it always has — no asOf key, no widened status', async () => {
+    await retrieveRelevantMemoriesStructured('what is the budget', { contactId: 'c-1' })
+    expect(mocks.search.mock.calls[0][2]).toEqual({ scope: 'rep', limit: 5, statuses: ['active'] })
+    expect(mocks.lexical.mock.calls[0][3]).toEqual({ scope: 'rep', limit: 5, statuses: ['active'] })
+  })
+  it('timed: both channels receive asOf, and invalidated joins the statuses', async () => {
+    await retrieveRelevantMemoriesStructured('what is the budget', { contactId: 'c-1', asOf: '2026-06-15T00:00:00.000Z' })
+    expect(mocks.search.mock.calls[0][2]).toEqual({
+      scope: 'rep',
+      limit: 5,
+      statuses: ['active', 'invalidated'],
+      asOf: '2026-06-15T00:00:00.000Z'
+    })
+    expect(mocks.lexical.mock.calls[0][3]).toMatchObject({ asOf: '2026-06-15T00:00:00.000Z', statuses: ['active', 'invalidated'] })
+  })
+  it('timed + hypotheses: active, hypothesis, invalidated — in that order', async () => {
+    await retrieveRelevantMemoriesStructured('q', { includeHypotheses: true, asOf: '2026-06-15T00:00:00.000Z' })
+    expect((mocks.search.mock.calls[0][2] as { statuses: string[] }).statuses).toEqual(['active', 'hypothesis', 'invalidated'])
   })
 })
 

@@ -38,6 +38,9 @@ export type NavId =
   | 'calls'
   | 'pipeline'
   | 'library'
+  // M36 Stage 1 — the read-only sample call (features/sample-call). Not a
+  // sidebar item: reached from Home's card and the live view's no-key state.
+  | 'sample-call'
 
 export interface NavItem {
   id: NavId

@@ -20,6 +20,20 @@
 that needs a running app or the founder's profile is run by a session, by hand, and its result
 is pasted into the tracker with the screenshot hashes — see "THE SECOND RULE" below.
 
+**Two rules added 2026-09-06, each after the failure that earned it:**
+
+- **Never `Stop-Process` / `taskkill` anything named electron, CallRiseAI or node by hand.** Use
+  `node scripts/verification/protected-instances.mjs --list | --stop-sandboxes | --stop <pid>`.
+  It refuses the founder's dev app (the writer on 9333), its children, the dev server and the
+  installed app unless you pass `--i-asked-the-founder` — a phrase, not a flag, so it cannot be
+  passed by habit. Why: three months of "one writer" as a convention produced two violations; the
+  second (2026-09-06 00:50) killed the dev app with a path-matched sweep meant for a sandbox. Self-test:
+  `src/__tests__/protected-instances.test.ts` runs that exact sweep against fake rows.
+- **Never write code through a shell heredoc.** Use the file tool (Write/Edit). Why: four times in
+  one night a heredoc turned an escape into a real character — a backslash-b into a backspace byte inside a
+  regex, a backslash-n into a newline inside a string — and the file parsed nowhere or matched nothing.
+  `src/__tests__/no-control-bytes-in-source.test.ts` catches the byte; this rule prevents the hour.
+
 **The three rules in one line each:** an instrument that writes names its target and refuses
 when it cannot (species 53); test the instrument's refusals before trusting its results
 (species 79); read the answer, not a number next to it (species 69).

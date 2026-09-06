@@ -6,6 +6,7 @@
 // the model can cite it and the renderer can make every citation tappable —
 // the Memory Center trust rule ("every claim traceable") made visible in chat.
 import type { VectorSearchResult } from '../memory/memories-store'
+import { describeValidity, TEMPORAL_RULE } from '../memory/validity-window'
 import type { AssistantCitation } from './conversations-fs'
 import type { LookupSection } from './tools'
 
@@ -75,8 +76,11 @@ export function buildAssistantContext(input: AssistantContextInput): AssistantCo
     input.retrieved.forEach((r, i) => {
       const n = i + 1
       const hedge = r.memory.status === 'hypothesis' ? ' (still unconfirmed)' : ''
+      // M36 Stage 3 item 5, step 5 — the validity window rides on the line
+      // ("true since 2026-03-14", "true from … until …, then superseded"),
+      // so an as-of answer can name its period; "" for an undated row.
       lines.push(
-        `[${n}] ${r.memory.statement}${hedge} (confidence: ${Math.round(r.memory.confidence * 100)}%)`
+        `[${n}] ${r.memory.statement}${hedge}${describeValidity(r.memory)} (confidence: ${Math.round(r.memory.confidence * 100)}%)`
       )
       citationsByMarker.set(n, {
         kind: 'memory',
@@ -86,8 +90,11 @@ export function buildAssistantContext(input: AssistantContextInput): AssistantCo
       })
     })
     const hasHypotheses = input.retrieved.some((r) => r.memory.status === 'hypothesis')
+    // the temporal rule appears only when a closed window is in the context —
+    // an untimed turn never retrieves one, so its prompt is unchanged
+    const hasClosedWindow = input.retrieved.some((r) => !!r.memory.validUntil)
     sections.push(
-      `--- CONTEXT: MEMORIES RELEVANT TO THIS QUESTION (numbered for citation) ---\n${lines.join('\n')}${hasHypotheses ? `\n\n${HEDGE_RULE}` : ''}`
+      `--- CONTEXT: MEMORIES RELEVANT TO THIS QUESTION (numbered for citation) ---\n${lines.join('\n')}${hasHypotheses ? `\n\n${HEDGE_RULE}` : ''}${hasClosedWindow ? `\n\n${TEMPORAL_RULE}` : ''}`
     )
   }
 

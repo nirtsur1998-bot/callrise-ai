@@ -8,47 +8,67 @@
 // pushed a scoped-conversation test past the 5s timeout under full-suite load
 // — passing 3/3 in isolation, failing in the suite.
 //
-// Same split, and the same reason, as capability-copy.ts: when the only way
-// to assert real copy is to load a subsystem the test replaced, the copy is
-// in the wrong module.
+// M36 Stage 3 (2026-09-06) — OPTION B IS ON, by the founder's decision. An
+// unbound chat now SEARCHES the memories of the clients the question names
+// (client-inference.ts → rag.ts inferredClientIds). The notice's job changed
+// with it, under the founder's third condition — "keep C's honest refusal as
+// the fallback": it now says which clients were searched and why (never a
+// silent widening), keeps "nothing learned yet" for a named client with no
+// memories, and — when the question names nobody — tells the model to say it
+// cannot reach a client from here rather than answer a client question from
+// general context.
 import type { LookupSection } from './tools'
 
 export interface UnboundClientMention {
   contactId: string
   label: string
-  /** How many memories this client actually has. 0 = none exist; > 0 = they
-   *  exist and are simply unreachable from an unbound conversation. */
+  /** How many memories this client has. 0 = nothing learned yet; > 0 = these
+   *  were searched for this question because the question named the client. */
   memoryCount: number
 }
 
 /**
- * The CONTEXT section that tells the model what it cannot see and why.
+ * The CONTEXT section for an UNBOUND conversation.
  *
- * Instructing rather than answering: this does not put the client's data in
- * the prompt (it has none to put), it tells the model to STOP answering from
- * general context and say what is actually true. That is the whole fix —
- * BUG-096's damage was never the missing recall, it was the confident answer
- * built from the wrong memories.
+ * With mentions: the named clients' memories were searched — say so, so the
+ * widening is never silent; a named client with no memories is still "nothing
+ * learned yet", not "out of reach".
+ *
+ * Without mentions: option C's refusal, kept as the fallback. The model is
+ * told that no client scope was searched, so a question that is about a
+ * specific client the words did not identify gets "I can't reach that client
+ * from here" instead of a confident general answer.
  */
-export function unboundClientNotice(mentions: UnboundClientMention[]): LookupSection | null {
-  if (mentions.length === 0) return null
+export function unboundClientNotice(mentions: UnboundClientMention[]): LookupSection {
+  if (mentions.length === 0) {
+    return {
+      title: 'CLIENT SCOPE FOR THIS QUESTION',
+      lines: [
+        {
+          text:
+            'This chat is not bound to a client and the question did not name one that CallRise knows, so ' +
+            'only rep-wide and business-wide memories were searched. If the user is asking about a specific ' +
+            'client, say plainly that you cannot reach that client from here and that naming them, or opening ' +
+            'a chat from their record, would — do NOT answer a client question from general context.'
+        }
+      ]
+    }
+  }
   const lines = mentions.map((m) => ({
     text:
       m.memoryCount > 0
-        ? `${m.label}: ${m.memoryCount} memor${m.memoryCount === 1 ? 'y' : 'ies'} exist for this client, but they are NOT reachable in this conversation because it is not bound to them.`
-        : `${m.label}: no memories have been learned about this client yet — there is nothing to reach, in this conversation or any other.`
+        ? `${m.label}: ${m.memoryCount} memor${m.memoryCount === 1 ? 'y' : 'ies'} exist for this client and were searched for this question because the question named them.`
+        : `${m.label}: no memories have been learned about this client yet — there is nothing to search, in this conversation or any other.`
   }))
   return {
-    title: 'CLIENTS NAMED IN THE QUESTION THAT THIS CONVERSATION CANNOT REACH',
+    title: 'CLIENTS NAMED IN THE QUESTION — THEIR MEMORIES WERE SEARCHED',
     lines: [
       ...lines,
       {
         text:
-          'This chat is not bound to a client, so client-specific memories are out of scope for it. ' +
-          'Say this plainly instead of answering from general context, and keep the distinction above: ' +
-          '"memories exist but are out of reach here" means the user should open a chat scoped to that ' +
-          'client from their record; "nothing learned yet" means there is nothing to open. ' +
-          'Do NOT present rep-wide or business-wide facts as if they were about this client.'
+          'Retrieved client memories carry their client; use them only for that client. A client with ' +
+          '"nothing learned yet" has no facts to draw on — say so rather than inferring them from rep-wide ' +
+          'or business-wide memories.'
       }
     ]
   }

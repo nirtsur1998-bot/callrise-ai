@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { AudioLines } from 'lucide-react'
 import { useAuth } from '@renderer/features/auth/useAuth'
 import { AuthScreen } from '@renderer/features/auth/AuthScreen'
+import { GuestSampleCall } from '@renderer/features/sample-call/GuestSampleCall'
 import { useTheme } from '@renderer/features/settings/useTheme'
 import { useDesignPreview } from '@renderer/features/settings/useDesignPreview'
 import { useTitleBarOverlay } from '@renderer/features/settings/useTitleBarOverlay'
@@ -44,6 +45,12 @@ function App(): React.JSX.Element {
   // Per-device: has onboarding been finished (or skipped) already?
   const [onboarded, setOnboarded] = useState(isOnboardingComplete)
   const [initialNav, setInitialNav] = useState<NavId>('home')
+  // M36 — the sample call before the account (the founder, 2026-09-06: "a
+  // stranger should reach the sample call without an account"). A logged-out
+  // visitor can step from the auth screen to the sample and back; the sample
+  // page's "Create an account" returns to the SIGNUP form, one click.
+  const [guest, setGuest] = useState<'auth' | 'sample'>('auth')
+  const [guestAuthMode, setGuestAuthMode] = useState<'login' | 'signup'>('login')
 
   const handleOnboardingComplete = (exit: OnboardingExit): void => {
     setInitialNav(exit === 'live-calls' ? 'live-calls' : 'home')
@@ -59,7 +66,25 @@ function App(): React.JSX.Element {
       {loading ? (
         <Splash />
       ) : !user ? (
-        <AuthScreen configured={configured} />
+        guest === 'sample' ? (
+          <GuestSampleCall
+            onCreateAccount={() => {
+              setGuestAuthMode('signup')
+              setGuest('auth')
+            }}
+            onLogin={() => {
+              setGuestAuthMode('login')
+              setGuest('auth')
+            }}
+          />
+        ) : (
+          <AuthScreen
+            key={guestAuthMode}
+            configured={configured}
+            initialMode={guestAuthMode}
+            onSample={() => setGuest('sample')}
+          />
+        )
       ) : !onboarded ? (
         <OnboardingFlow onComplete={handleOnboardingComplete} />
       ) : (

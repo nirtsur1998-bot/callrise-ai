@@ -82,6 +82,14 @@ import { configureEmbeddingsCacheDir, embedText } from '../embeddings'
 import { openMemoryDb, migrate } from '../db'
 import { insertMemory } from '../memories-store'
 import { retrieveRelevantMemoriesStructured } from '../rag'
+import { buildClientDirectory, inferClientIds } from '../client-inference'
+
+/** The two corpus clients as a contact directory: the company, and the
+ *  decision-maker's name the corpus questions use ("What did Dana say"). */
+const EVAL_DIRECTORY = buildClientDirectory([
+  { id: 'eval-acme', name: 'Dana Levy', company: 'Acme' },
+  { id: 'eval-globex', name: '', company: 'Globex' }
+])
 
 // Repo-local persistent cache so repeat runs never re-download the model.
 configureEmbeddingsCacheDir(join(__dirname, '..', '..', '..', '..', 'node_modules', '.cache', 'callrise-eval'))
@@ -110,8 +118,24 @@ let measured = false
  * to 0/14, which is far below both floors — the exact regression this file
  * exists to catch.
  */
-const MIN_HITS_ACTIVE_ONLY = 11
-const MIN_HITS_RISE = 12
+/*
+ * 2026-09-06 (M36 Stage 3 item 2) — the corpus grew from 14 to 26 questions
+ * (24 scored): ten proper-noun questions, two lexical controls, sixteen
+ * per-client distractors so each client scope holds 13–14 facts (more than
+ * the vector channel's k = 5 — below that, a scope returns whole and no
+ * miss can show). Re-measured on this machine with the lexical channel
+ * (FTS5, rag.ts fusion) stashed and then live — docs/M36-lexical-channel.md:
+ *
+ *   active-only bound   21/24 → 22/24, MRR 0.83 → 0.83
+ *   Rise bound          22/24 → 23/24, MRR 0.83 → 0.86
+ *   Rise unscoped       13/24 → 13/24 (client scopes unreachable by design)
+ *   option B            18/24 → 19/24, MRR 0.65 → 0.69
+ *   violations 0 in every row, both before and after.
+ *
+ * Floors are one below the live values, as before.
+ */
+const MIN_HITS_ACTIVE_ONLY = 21
+const MIN_HITS_RISE = 22
 /**
  * UNSCOPED Rise — a conversation with no client bound. This floor is
  * deliberately set at the CURRENT measured value, not an aspirational one:
@@ -130,7 +154,7 @@ const MIN_HITS_RISE = 12
  * bound to exactly the client being asked about. Both numbers are real; they
  * describe different situations, and only this one describes "New chat".
  */
-const MIN_HITS_RISE_UNSCOPED = 8
+const MIN_HITS_RISE_UNSCOPED = 12 // 13/24 measured 2026-09-06 on the grown corpus (was 8/14)
 const MAX_SCOPE_VIOLATIONS = 0
 const MAX_EMPTY_ANSWERS = 0
 /** fixture key → inserted row id */
@@ -187,12 +211,21 @@ async function runConfig(
    * (assistant-ipc.ts), so this is the shape of every general conversation —
    * the default one a user gets by clicking "New chat".
    */
-  unscoped = false
+  unscoped = false,
+  /**
+   * M36 Stage 3 — option B measured: the unbound conversation searches the
+   * clients the QUESTION names, inferred from the words typed
+   * (client-inference.ts). ON in production since 2026-09-06 (the founder's
+   * decision, made on this row's number); this row is now the regression gate
+   * for it, with the cross-scope invariant asserted inside rag.ts as well.
+   */
+  inferClients = false
 ): Promise<QuestionResult[]> {
   const results: QuestionResult[] = []
   for (const q of QUESTIONS) {
     const retrieved = await retrieveRelevantMemoriesStructured(q.question, {
       contactId: unscoped ? null : q.contactId,
+      inferredClientIds: unscoped && inferClients ? inferClientIds(q.question, EVAL_DIRECTORY) : undefined,
       includeHypotheses,
       maxDistance
     })
@@ -289,6 +322,15 @@ describe('retrieval quality eval (offline, real embeddings + real sqlite-vec)', 
       'Rise, UNSCOPED — *** THE DEFAULT "New chat" SHAPE ***',
       await runConfig(true, undefined, true)
     )
+    const inferredMetrics = report(
+      "Rise, UNSCOPED + named-client inference (option B — ON in production since 2026-09-06)",
+      await runConfig(true, undefined, true, true)
+    )
+    // The option-B row must recover what the question names and leak nothing:
+    // at least as many hits as the plain unscoped row, zero scope violations,
+    // and a floor that a regression in the inference would break.
+    expect(inferredMetrics.violations, 'option B must not surface another client').toBe(0)
+    expect(inferredMetrics.totalHits, 'option B recovers the named clients').toBeGreaterThanOrEqual(18) // 19/24 live, 2026-09-06
 
     // Structural sanity (kept, but it was never the real gate).
     expect(activeOnly).toHaveLength(QUESTIONS.length)

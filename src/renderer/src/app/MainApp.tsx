@@ -47,6 +47,9 @@ import type { SettingsPageId } from '@renderer/features/settings/settings-nav'
 // loads this SAME bundle (see main.tsx) to render one small floating card,
 // yet paid to parse the entire CRM/Calendar/Coaching/Analytics/Settings/
 // Knowledge/Team code along with everything else.
+const SampleCallView = lazy(() =>
+  import('@renderer/features/sample-call/SampleCallView').then((m) => ({ default: m.SampleCallView }))
+)
 const HomeView = lazy(() =>
   import('@renderer/features/home/HomeView').then((m) => ({ default: m.HomeView }))
 )
@@ -602,8 +605,14 @@ export function MainApp({
               userName={user.name?.trim() || user.email.split('@')[0]}
               onNavigate={navigateTo}
             />
+          ) : active === 'sample-call' ? (
+            <SampleCallView
+              onStartCall={() => navigateTo('live-calls')}
+              onAddKey={() => navigateTo('settings')}
+            />
           ) : active === 'live-calls' ? (
             <LiveView
+              onOpenSample={() => navigateTo('sample-call')}
               onSaved={handleCallSaved}
               autoStartFromDetection={pendingCallAutoStart}
               onAutoStartFromDetectionConsumed={() => setPendingCallAutoStart(false)}
@@ -621,6 +630,7 @@ export function MainApp({
             />
           ) : active === 'calls' ? (
             <CallsHub
+              onOpenSample={() => navigateTo('sample-call')}
               initialTab={pendingHubTab}
               onInitialTabConsumed={() => setPendingHubTab(null)}
               onSaved={handleCallSaved}

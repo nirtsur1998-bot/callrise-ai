@@ -43,6 +43,43 @@ describe('buildAssistantContext', () => {
     expect(ctx.system).toContain('--- REP ---')
   })
 
+  // M36 Stage 3 item 5, step 5 — the validity window on the citation line,
+  // and the temporal rule only when a closed window is present.
+  it('an undated memory renders exactly as before — no window, no temporal rule', () => {
+    const ctx = buildAssistantContext({
+      repProfile: '',
+      businessProfile: '',
+      retrieved: [{ memory: mem('m-a', 'Solid fact'), distance: 0.1 }]
+    })
+    expect(ctx.system).toContain('[1] Solid fact (confidence: 70%)')
+    expect(ctx.system).not.toContain('TEMPORAL RULE')
+  })
+
+  it('a dated live fact says since when; a superseded one says its window, and the temporal rule follows', () => {
+    const live = { ...mem('m-live', 'Budget is 55k'), validFrom: '2026-07-02T15:30:00.000Z', validFromSource: 'call' as const }
+    const old = {
+      ...mem('m-old', 'Budget is 40k', 'invalidated'),
+      validFrom: '2026-03-14T10:00:00.000Z',
+      validFromSource: 'call' as const,
+      validUntil: '2026-07-02T15:30:00.000Z',
+      validUntilSource: 'call' as const
+    }
+    const liveOnly = buildAssistantContext({ repProfile: '', businessProfile: '', retrieved: [{ memory: live, distance: 0.1 }] })
+    expect(liveOnly.system).toContain('[1] Budget is 55k (true since 2026-07-02) (confidence: 70%)')
+    expect(liveOnly.system).not.toContain('TEMPORAL RULE')
+
+    const asOf = buildAssistantContext({ repProfile: '', businessProfile: '', retrieved: [{ memory: old, distance: 0.1 }] })
+    expect(asOf.system).toContain('[1] Budget is 40k (true from 2026-03-14 until 2026-07-02, then superseded) (confidence: 70%)')
+    expect(asOf.system).toContain('TEMPORAL RULE')
+    expect(asOf.system).toContain('not true now')
+  })
+
+  it('an approximate date reads "around", never a precise day', () => {
+    const approx = { ...mem('m-x', 'Wants a pilot'), validFrom: '2026-05-12T10:00:00.000Z', validFromSource: 'approx' as const }
+    const ctx = buildAssistantContext({ repProfile: '', businessProfile: '', retrieved: [{ memory: approx, distance: 0.1 }] })
+    expect(ctx.system).toContain('Wants a pilot (true since around 2026-05-12)')
+  })
+
   it('flags hypotheses inline and appends the hedge rule only when needed', () => {
     const withHyp = buildAssistantContext({
       repProfile: '',

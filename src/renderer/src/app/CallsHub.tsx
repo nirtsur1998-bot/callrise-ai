@@ -11,6 +11,8 @@ const TABS: { id: CallsTab; label: string }[] = [
 ]
 
 interface CallsHubProps {
+  /** M36 Stage 1 — threaded to the live tab's no-key state. */
+  onOpenSample?: () => void
   /** M31 — the tab a redirected navigation asked for (OLD_TO_HUB_TAB). */
   initialTab?: string | null
   onInitialTabConsumed?: () => void
@@ -51,6 +53,7 @@ interface CallsHubProps {
  *  specific past call — so merging the screens doesn't silently change
  *  behavior a user already relies on. */
 export function CallsHub({
+  onOpenSample,
   onSaved,
   autoStartFromDetection,
   onAutoStartFromDetectionConsumed,
@@ -90,6 +93,7 @@ export function CallsHub({
       <SegmentedControl options={TABS} value={tab} onChange={setTab} className="mb-4" />
       {tab === 'live' ? (
         <LiveView
+          onOpenSample={onOpenSample}
           onSaved={onSaved}
           autoStartFromDetection={autoStartFromDetection}
           onAutoStartFromDetectionConsumed={onAutoStartFromDetectionConsumed}

@@ -29,11 +29,17 @@ import { getMemoryDb } from '../memory/memory-runtime'
 import { isSalesBrainEnabled } from '../app-settings'
 import { listMemories } from '../memory/memories-store'
 import { clientScope } from '../memory/types'
+import { buildClientDirectory } from '../memory/client-inference'
 import type { UnboundClientMention } from './unbound-client-notice'
 
-/** Longest-first so "Acme Health" wins over "Acme" when both are contacts. */
+/** The phrases a contact can be recognised by — the company, and each name
+ *  token of three letters or more, generic words excluded. ONE source for
+ *  this, shared with retrieval's client inference (M36 Stage 3): two
+ *  detectors for one question would be taxonomy species 42. Before M36 this
+ *  matched only the full name or company, so "What did Dana say?" named
+ *  nobody. */
 function candidateTerms(c: Contact): string[] {
-  return [c.name, c.company].filter((t): t is string => typeof t === 'string' && t.trim().length > 1)
+  return buildClientDirectory([c])[0]?.keys ?? []
 }
 
 /** Whole-word, case-insensitive. Substring matching would fire on "Art" inside

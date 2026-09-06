@@ -138,10 +138,13 @@ vi.mock('../../memory/memory-runtime', () => ({
 const memStore = vi.hoisted(() => ({
   byCall: [] as { id: string }[],
   deleted: [] as string[],
-  extraction: vi.fn(async (): Promise<void> => {})
+  extraction: vi.fn(async (): Promise<void> => {}),
+  /** M36 step 4 — what earliestValidFrom answers for the refusal boundary */
+  earliest: '2026-03-14T10:00:00.000Z' as string | null
 }))
 vi.mock('../../memory/memories-store', () => ({
   getMemoryById: () => null,
+  earliestValidFrom: () => memStore.earliest,
   listMemoriesByCallId: (_db: unknown, callId: string) =>
     callId.startsWith('assistant:') ? memStore.byCall : [],
   deleteMemory: (_db: unknown, id: string) => {
@@ -1102,13 +1105,75 @@ describe('BUG-096 fix C — naming clients an unbound chat cannot reach', () => 
 
     expect(unboundMock.calls).toEqual(['who makes the buying decisions at Acme?'])
     const req = streamControl.lastRequest as { system: string }
-    expect(req.system).toContain('CLIENTS NAMED IN THE QUESTION THAT THIS CONVERSATION CANNOT REACH')
+    // M36 Stage 3 — option B ON (founder, 2026-09-06): the named client's
+    // memories were SEARCHED, the notice says so, and the client's id reached
+    // the retriever as an inferred scope while the chat stayed unbound.
+    expect(req.system).toContain('CLIENTS NAMED IN THE QUESTION — THEIR MEMORIES WERE SEARCHED')
     expect(req.system).toContain('Acme')
     expect(
       req.system,
-      'the model was not told to stop answering from general context — which is ' +
-        'the entire fix, since the damage was a confident answer from the wrong memories'
-    ).toContain('Do NOT present rep-wide or business-wide facts')
+      'the model was not told to use client memories only for their client'
+    ).toContain('use them only for that client')
+    const ragCall = vi.mocked(ragMod.retrieveRelevantMemoriesStructured).mock.calls.at(-1)!
+    expect(ragCall[1]).toMatchObject({ contactId: null, inferredClientIds: ['acme'] })
+  })
+
+  it("names nobody → option C's refusal is the fallback: no client scope searched, the model told to say so", async () => {
+    const { convId, invoke } = await setup()
+    unboundMock.detect.mockResolvedValue([])
+    const pending = invoke('assistant:send', convId, 'do they need SOC 2 before signing?')
+    streamControl.push('ok')
+    streamControl.end()
+    await pending
+    const req = streamControl.lastRequest as { system: string }
+    expect(req.system).toContain('CLIENT SCOPE FOR THIS QUESTION')
+    expect(req.system).toContain('cannot reach that client from here')
+    const ragCall = vi.mocked(ragMod.retrieveRelevantMemoriesStructured).mock.calls.at(-1)!
+    expect(ragCall[1]).toMatchObject({ contactId: null, inferredClientIds: [] })
+  })
+
+  // M36 Stage 3 item 5, step 4 — the as-of question, end to end through the
+  // turn: parsed from the words typed, handed to retrieval, and the notice
+  // (real text, nothing mocked) tells the model which moment and what to do
+  // when nothing was valid then.
+  it('"in June" → retrieval gets asOf = the end of June, and the model is told to answer from what was true then', async () => {
+    const { convId, invoke } = await setup()
+    unboundMock.detect.mockResolvedValue([])
+    const pending = invoke('assistant:send', convId, 'what was the budget in June?')
+    streamControl.push('ok')
+    streamControl.end()
+    await pending
+    const ragCall = vi.mocked(ragMod.retrieveRelevantMemoriesStructured).mock.calls.at(-1)!
+    expect((ragCall[1] as { asOf?: string }).asOf).toMatch(/-06-30T23:59:59\.999Z$/)
+    const req = streamControl.lastRequest as { system: string }
+    expect(req.system).toContain('AS-OF QUESTION — ANSWER FROM WHAT WAS TRUE THEN')
+    expect(req.system).toContain('"in june", read as the end of that period')
+  })
+
+  it('an untimed question hands retrieval no asOf at all, and no as-of notice is written', async () => {
+    const { convId, invoke } = await setup()
+    unboundMock.detect.mockResolvedValue([])
+    const pending = invoke('assistant:send', convId, 'what is the budget?')
+    streamControl.push('ok')
+    streamControl.end()
+    await pending
+    const ragCall = vi.mocked(ragMod.retrieveRelevantMemoriesStructured).mock.calls.at(-1)!
+    expect(ragCall[1]).not.toHaveProperty('asOf')
+    expect((streamControl.lastRequest as { system: string }).system).not.toContain('AS-OF QUESTION')
+  })
+
+  it('nothing valid at that moment → the refusal with the boundary, never a current fact dressed as a past one', async () => {
+    const { convId, invoke } = await setup()
+    unboundMock.detect.mockResolvedValue([])
+    vi.mocked(ragMod.retrieveRelevantMemoriesStructured).mockResolvedValueOnce([])
+    const pending = invoke('assistant:send', convId, 'who was the decision maker back in January?')
+    streamControl.push('ok')
+    streamControl.end()
+    await pending
+    const req = streamControl.lastRequest as { system: string }
+    expect(req.system).toContain('AS-OF QUESTION — NOTHING KNOWN FOR THAT TIME')
+    expect(req.system).toContain("I can't tell you what was true then — the earliest fact I have is from 2026-03-14")
+    expect(req.system).toContain('Do NOT answer from current facts as if they applied at that time')
   })
 
   it('a SCOPED chat never runs it — the cross-client path is untouched', async () => {

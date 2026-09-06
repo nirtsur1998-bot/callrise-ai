@@ -127,6 +127,16 @@ export async function extractOnboardingFacts(topic: OnboardingTopic, answer: str
         scope: scopeKind,
         category: category as MemoryCategory,
         statement,
+        // M36 Stage 3 item 5 — deliberately NO `at` on this evidence. The five
+        // onboarding questions all ask about the PRESENT (what you sell, how
+        // it is priced, who you sell to, the objection you hear, what you are
+        // working on), so the memory's valid_from becomes the moment typed,
+        // source 'stated'. READ 'stated' AS A LOWER BOUND ON THE WINDOW, NOT
+        // AS "BEGAN THEN": the product existed before the user typed about it.
+        // The consequence is intended — an as-of question earlier than
+        // onboarding gets the refusal ("the earliest fact I have is from …"),
+        // the honest failure for history that was never recorded. Do not
+        // "fix" this by inventing an earlier date. (The founder, step 3 review.)
         evidence: [{ type: 'transcript', callId: `onboarding:${topic.id}`, quote: text.slice(0, 400) }],
         confidence: 0.95,
         importance: 7,

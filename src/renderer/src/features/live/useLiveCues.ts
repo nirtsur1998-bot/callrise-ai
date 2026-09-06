@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CueLatencyTracker, type CueLatencyReport } from './cue-latency'
 import { BattlecardMatcher, type Battlecard } from './battlecards/match'
+import type { CueEvidence } from './hud/hudCore'
 import { STARTER_TRIGGERS } from './battlecards/library'
 import { otherPartyObservable } from './other-party-capture'
 import { MonologueTracker, type MonologueState } from './monologue'
@@ -36,6 +37,13 @@ export interface LiveCue {
   text: string
   /** Monotonic ms when this cue was rendered — used for the side rail's age. */
   at: number
+  /** M36 Stage 2 — what this cue was made from: a transcript excerpt it was
+   *  matched against or asked about, or the measurement that fired it. The
+   *  glance HUD refuses to render a cue without it (hud/hudCore.ts). */
+  evidence: CueEvidence
+  /** 'heard' = deterministic (phrase match, measurement); 'suggestion' = a
+   *  model's output. The two vocabularies are never mixed on screen. */
+  source: 'heard' | 'suggestion'
 }
 
 /**
@@ -503,13 +511,13 @@ export function useLiveCues(
     // interruption mid-sentence is expensive and has to earn its place. Only
     // reachable for kinds `tierFor` classifies as deterministic; there is no
     // path from a model response to here.
-    const emitInterrupt = (kind: CueKind, text: string): boolean => {
+    const emitInterrupt = (kind: CueKind, text: string, evidence: CueEvidence): boolean => {
       if (tierFor(kind) !== 'interrupt') return false // unreachable by construction
       const now = Date.now()
       if (cueRef.current) return false // one cue at a time
       if (now - lastCueAtRef.current < cfgRef.current.cooldownMs) return false // hard cooldown
       lastCueAtRef.current = now
-      const next: LiveCue = { id: ++idRef.current, kind, text, at: performance.now() }
+      const next: LiveCue = { id: ++idRef.current, kind, text, at: performance.now(), evidence, source: 'heard' }
       cueRef.current = next
       setCue(next)
       noteLatency('deterministic')
@@ -535,10 +543,18 @@ export function useLiveCues(
     const pushSuggestion = (
       kind: CueKind,
       text: string,
-      source: 'deterministic' | 'model'
+      source: 'deterministic' | 'model',
+      evidence: CueEvidence
     ): void => {
       const at = performance.now()
-      const next: LiveCue = { id: ++idRef.current, kind, text, at }
+      const next: LiveCue = {
+        id: ++idRef.current,
+        kind,
+        text,
+        at,
+        evidence,
+        source: source === 'model' ? 'suggestion' : 'heard'
+      }
       setSuggestions((prev) =>
         [next, ...prev.filter((s) => at - s.at < SUGGESTION_TTL_MS)].slice(0, MAX_SUGGESTIONS)
       )
@@ -547,8 +563,8 @@ export function useLiveCues(
 
     // A battlecard is deterministic and therefore fast, but it is reference
     // material rather than a nudge — so it takes the rail, not the interrupt.
-    const pushBattlecard = (card: Battlecard): void => {
-      pushSuggestion('battlecard', `${card.label} — ${card.say}`, 'deterministic')
+    const pushBattlecard = (card: Battlecard, heard: string): void => {
+      pushSuggestion('battlecard', `${card.label} — ${card.say}`, 'deterministic', { kind: 'heard', quote: heard })
     }
 
     const windowText = (): string => {
@@ -646,7 +662,16 @@ export function useLiveCues(
           // Side rail, always. This is the line §4.3 exists to enforce: a
           // model response arrives 1.5-2.5s after the moment it describes,
           // which is too late to justify taking over the rep's attention.
-          if (res.cue !== 'none' && res.text) pushSuggestion(res.cue, res.text, 'model')
+          if (res.cue !== 'none' && res.text) {
+            // Evidence for a model cue: the other party's most recent turn in
+            // the window the model was asked about. A window with no such
+            // turn yields no cue — a suggestion about nothing heard is not shown.
+            const rep = repSpeakerRef.current
+            const lastOther = [...turnsRef.current].reverse().find((t) => rep === null || t.speaker !== rep)
+            if (lastOther && lastOther.text.trim()) {
+              pushSuggestion(res.cue, res.text, 'model', { kind: 'heard', quote: lastOther.text })
+            }
+          }
         })
         .catch(() => {
           /* ignore — try again on the next turn */
@@ -676,7 +701,12 @@ export function useLiveCues(
       const rep = repSpeakerRef.current
       if (rep !== null && endedSpeaker === rep) {
         // The rep just finished — the only deterministic cue, on the rep alone.
-        if (repWpm(now) > cfgRef.current.paceWpm) emitInterrupt('pace', 'Slow down a touch')
+        const wpm = repWpm(now)
+        if (wpm > cfgRef.current.paceWpm)
+          emitInterrupt('pace', 'Slow down a touch', {
+            kind: 'measured',
+            label: `you: ${wpm} words/min over the last ${Math.round(PACE_WINDOW_MS / 1000)} s (limit ${cfgRef.current.paceWpm})`
+          })
       } else {
         // The client just finished (or we don't know the rep yet) — coach it.
         scheduleBrain()
@@ -703,7 +733,7 @@ export function useLiveCues(
           const cards = battlecardsRef.current.match(partial, now)
           if (cards.length > 0) {
             lastTurnEndAtRef.current = performance.now()
-            for (const card of cards) pushBattlecard(card)
+            for (const card of cards) pushBattlecard(card, partial)
           }
         }
       }

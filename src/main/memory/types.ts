@@ -101,8 +101,29 @@ export type MemorySource = 'auto' | 'user_stated' | 'user_confirmed'
  *  user can view (spec section 5) — a 'reflection' memory's evidence trail
  *  is traceable transitively, through the memories it cites. */
 export type MemoryEvidence =
-  | { type: 'transcript'; callId: string; chatMessageId?: string; quote: string }
+  | {
+      type: 'transcript'
+      callId: string
+      chatMessageId?: string
+      quote: string
+      /** M36 Stage 3 item 5 — EVENT time: when the call (or chat message) this
+       *  evidence came from happened, ISO. Distinct from the memory's
+       *  createdAt, which is when we LEARNED it — an import can learn a March
+       *  fact in September. Optional: evidence recorded before this field
+       *  existed has none, and the temporal backfill resolves the call's date
+       *  from the calls store instead. */
+      at?: string
+    }
   | { type: 'reflection'; memoryIds: string[] }
+
+/** M36 Stage 3 item 5 — where a validity date came from. The founder's
+ *  condition for the backfill: "a dated fact whose date is wrong is worse
+ *  than an undated one", so an approximate date is never silently a date.
+ *    'call'   — the evidence call's own start time (real event time)
+ *    'stated' — the user said it themselves, at that moment (exact by definition)
+ *    'approx' — the LEARNING time (createdAt / invalidatedAt) used because
+ *               no event time could be recovered; shown as approximate. */
+export type ValidityDateSource = 'call' | 'stated' | 'approx'
 
 export interface Memory {
   id: string
@@ -118,7 +139,20 @@ export interface Memory {
   invalidatedBy?: string
   createdAt: string
   lastConfirmedAt: string
+  /** M36 — when retrieval last surfaced this memory to a feature; null until
+   *  it has been. Decay runs from the later of this and lastConfirmedAt. */
+  lastRetrievedAt?: string | null
   invalidatedAt?: string
+  /** M36 Stage 3 item 5 — EVENT time (when the fact was true), beside the
+   *  SYSTEM time above (when we learned / invalidated it). Both kept, neither
+   *  overwritten — the bi-temporal split. NULL validFrom on a row that
+   *  predates migration 6 and has not been backfilled yet means "true since
+   *  at least when we learned it". validUntil NULL means still true as far as
+   *  we know. Each date carries its source (see ValidityDateSource). */
+  validFrom?: string | null
+  validFromSource?: ValidityDateSource | null
+  validUntil?: string | null
+  validUntilSource?: ValidityDateSource | null
 }
 
 /** What extraction.ts produces BEFORE it's ever written to the DB — no id,

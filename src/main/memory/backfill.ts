@@ -316,7 +316,12 @@ export async function runBackfill(
             // call, not transient, so retryFailedAttempts leaves these alone.
             recordAttempt(db, withTranscripts[i].id, 'skipped')
           } else {
-            const outcome = await extractMemoriesFromCall(full.segments, full.id, full.contactId ?? null)
+            // M36 Stage 3 item 5 — an imported call's memories are born with
+            // the CALL's date, not the import's: this is exactly the case where
+            // learning time and event time differ by months.
+            const outcome = await extractMemoriesFromCall(full.segments, full.id, full.contactId ?? null, {
+              at: full.createdAt
+            })
             if (outcome.aiFailed) {
               if (!firstFailureReason) firstFailureReason = outcome.failureReason
               verdict = tally.record({ kind: 'failed' })
