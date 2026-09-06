@@ -43,11 +43,34 @@ export const MEMORY_CATEGORIES = [
   'objection-and-response',
   'competitor',
   'terminology',
-  // client
-  'client-fact'
+  // client — BUG-196 shape (c), the founder's decision 2026-09-06 night:
+  // the five topics the extraction harness has scored since M27, as real
+  // names, plus 'client-fact' as the RESIDUAL. A client fact that fits none
+  // of the five is 'client-fact' and is never refused for not fitting; the
+  // residual's share of a store is the measurable signal that this list is
+  // wrong for that user (shown in the Memory Center).
+  'client-budget', // money: budget, expected spend, price sensitivity
+  'client-timeline', // any dated intent: go-live, deadline, follow-up date, "before peak season"
+  'client-decision', // who decides, approval thresholds, the process
+  'client-need', // the pain and the goal it implies: current tools, process, constraints, what they want fixed
+  'client-concern', // what they are worried about, hesitant on, objecting to
+  'client-fact' // the residual: everything else about the client
 ] as const
 
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number]
+
+/** The residual client category — where shape (b)'s remap lands a
+ *  client-claimed rep/business category, and where a client fact that fits
+ *  none of the named client categories belongs. Never a refusal reason. */
+export const CLIENT_RESIDUAL_CATEGORY: MemoryCategory = 'client-fact'
+
+/** Every category bound to the client scope kind — derived from
+ *  CATEGORY_SCOPE_KIND below, never listed twice. Consolidation checks
+ *  contradictions across this whole family (the founder's call: a budget
+ *  filed as a need must still supersede a budget filed as a budget). */
+export function isClientCategory(category: MemoryCategory): boolean {
+  return CATEGORY_SCOPE_KIND[category] === 'client'
+}
 
 /** Which rep/business categories are legal for which scope — enforced in
  *  extraction.ts so a candidate memory can never be saved under a scope its
@@ -67,6 +90,11 @@ export const CATEGORY_SCOPE_KIND: Record<MemoryCategory, 'rep' | 'business' | 'c
   'objection-and-response': 'business',
   competitor: 'business',
   terminology: 'business',
+  'client-budget': 'client',
+  'client-timeline': 'client',
+  'client-decision': 'client',
+  'client-need': 'client',
+  'client-concern': 'client',
   'client-fact': 'client'
 }
 

@@ -17,7 +17,14 @@
 import type { AITool } from '../ai/types'
 import { completeWithFallback } from '../ai/complete-with-fallback'
 import { speechSegments, type CallSegment } from '../calls-fs'
-import { MEMORY_CATEGORIES, CATEGORY_SCOPE_KIND, clientScope, type MemoryCandidate, type MemoryCategory } from './types'
+import {
+  MEMORY_CATEGORIES,
+  CATEGORY_SCOPE_KIND,
+  CLIENT_RESIDUAL_CATEGORY,
+  clientScope,
+  type MemoryCandidate,
+  type MemoryCategory
+} from './types'
 
 const MAX_CANDIDATES_PER_PASS = 5
 const MIN_QUOTE_WORDS = 3
@@ -42,6 +49,19 @@ export function verifyEvidenceQuote(quote: string, sourceText: string): boolean 
 
 const CATEGORY_LIST = MEMORY_CATEGORIES.join(', ')
 
+/** BUG-196 shape (c) — the client categories, stated once and used in both
+ *  the tool schema and the guardrail prompt so they cannot drift apart. The
+ *  rules the founder approved: a dated goal is a timeline; a client fact that
+ *  fits none of the five is 'client-fact' and is NEVER refused for not
+ *  fitting. */
+const CLIENT_CATEGORY_RULE =
+  "'client-budget' (money: their budget, expected spend, price sensitivity), " +
+  "'client-timeline' (any dated intent: go-live, deadline, follow-up date, 'before peak season' — a goal with a date or period is a timeline), " +
+  "'client-decision' (who decides on their side, approval thresholds, the process), " +
+  "'client-need' (their pain and the goal it implies: current tools, process, constraints, what they want fixed), " +
+  "'client-concern' (what they are worried about, hesitant on, or objecting to), " +
+  "or 'client-fact' for any other fact about the client. Never refuse a client fact because it fits none of the five — use 'client-fact'."
+
 const EXTRACT_TOOL: AITool = {
   name: 'record_candidate_memories',
   description:
@@ -64,7 +84,7 @@ const EXTRACT_TOOL: AITool = {
             category: {
               type: 'string',
               enum: [...MEMORY_CATEGORIES],
-              description: `Must be exactly one of: ${CATEGORY_LIST}. Never invent a category outside this list. A fact about the CLIENT (scopeKind 'client') always uses category 'client-fact' — their budget, timeline, decision process, current tools and pains are all 'client-fact'; the other categories describe the rep or the rep's own business.`
+              description: `Must be exactly one of: ${CATEGORY_LIST}. Never invent a category outside this list. A fact about the CLIENT (scopeKind 'client') uses one of the client categories: ${CLIENT_CATEGORY_RULE} The other categories describe the rep or the rep's own business.`
             },
             statement: {
               type: 'string',
@@ -98,7 +118,7 @@ const GUARDRAIL_PROMPT = `
 You are extracting durable, useful facts for a sales rep's personal "Sales Brain" memory — facts that will help THEM sell better in the future, and facts about their business and their clients.
 
 Only extract facts that clearly fit one of these categories: ${CATEGORY_LIST}.
-A fact about the CLIENT — their budget, their timeline, who decides on their side, what they use today, what is painful for them — is scopeKind 'client' and category 'client-fact', always. The other categories are about the rep and the rep's own business.
+A fact about the CLIENT is scopeKind 'client' and uses one of the client categories: ${CLIENT_CATEGORY_RULE} The other categories are about the rep and the rep's own business.
 
 HARD RULES, never break these:
 - NEVER extract inferences about mental or emotional state, health, family, or personal life — even if it's visible in the transcript. If someone mentions being tired, stressed, sick, or anything personal, do NOT record it as a memory, no matter how it might seem useful.
@@ -195,7 +215,9 @@ export function resolveScopeAndCategory(
   if (scopeKind === 'client') {
     // the safe direction: keep the model's scope claim, generalise its category
     if (!contactId) return { rejected: 'client-fact-without-contact' }
-    return { expectedKind: 'client', category: 'client-fact', remappedFrom: category }
+    // shape (c): the remap lands in the RESIDUAL, never in a named client
+    // category — the rule does not guess a topic; the prompt does that work
+    return { expectedKind: 'client', category: CLIENT_RESIDUAL_CATEGORY, remappedFrom: category }
   }
   return { rejected: 'category-scope-mismatch' }
 }

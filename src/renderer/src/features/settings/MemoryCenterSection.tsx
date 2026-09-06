@@ -62,6 +62,34 @@ export function validityText(memory: Memory): string | null {
 
 /** The header line built from the backfill's record — the counts the founder
  *  asked to see rather than find in a log. */
+/** BUG-196 shape (c) — of the facts in client scopes, how many carry a named
+ *  client category and how many sit in the residual 'client-fact'. Facts
+ *  extracted before the named categories existed are ALL residual, so the
+ *  number is honest about history, not only about the extractor. */
+export function clientResidualShare(memories: ReadonlyArray<{ scope: string; category: string }>): {
+  total: number
+  residual: number
+} {
+  let total = 0
+  let residual = 0
+  for (const m of memories) {
+    if (!m.scope.startsWith('client:')) continue
+    total++
+    if (m.category === 'client-fact') residual++
+  }
+  return { total, residual }
+}
+
+export function clientResidualText(share: { total: number; residual: number }): string {
+  const named = share.total - share.residual
+  const pct = share.total > 0 ? Math.round((share.residual / share.total) * 100) : 0
+  return (
+    `${named} of ${share.total} client fact${share.total === 1 ? '' : 's'} carr${named === 1 ? 'ies' : 'y'} a kind (budget, timeline, decision, need, concern); ` +
+    `${share.residual} (${pct}%) ${share.residual === 1 ? 'has' : 'have'} no kind yet. ` +
+    `Facts learned before kinds existed have none; a high share on new facts means these five kinds do not fit your business.`
+  )
+}
+
 export function temporalSummaryText(record: TemporalBackfillRecord | null): string | null {
   if (!record) return null
   if (record.status === 'skipped') return `Dating of facts was skipped at last launch (${record.reason}) and runs at the next one.`
@@ -236,6 +264,11 @@ export function MemoryCenterSection(): React.JSX.Element {
     return (memories ?? []).filter((m) => new Date(m.createdAt).getTime() >= weekAgo).length
   }, [memories, openedAt])
 
+  // BUG-196 shape (c) — the residual's share of client facts is the one
+  // measurable signal that the five named client categories do not fit this
+  // user's business. Counted, never judged: a high number is information.
+  const clientResidual = useMemo(() => clientResidualShare(memories ?? []), [memories])
+
   const forgetEverything = async (): Promise<void> => {
     if (
       !window.confirm(
@@ -269,6 +302,15 @@ export function MemoryCenterSection(): React.JSX.Element {
             <span className="font-medium text-ink">When facts were true. </span>
             {temporalSummaryText(temporal)} A replaced fact keeps its row and says the period it covered; an
             approximate date says “around”.
+          </p>
+        </Card>
+      )}
+
+      {clientResidual.total > 0 && (
+        <Card className="mb-5">
+          <p data-testid="memory-client-residual" className="text-[12px] text-faint">
+            <span className="font-medium text-ink">Client facts by kind. </span>
+            {clientResidualText(clientResidual)}
           </p>
         </Card>
       )}

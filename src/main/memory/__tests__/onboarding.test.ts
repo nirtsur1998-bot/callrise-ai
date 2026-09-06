@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ONBOARDING_TOPICS, topicById } from '../onboarding'
+import { CATEGORY_SCOPE_KIND, MEMORY_CATEGORIES } from '../types'
 
 describe('ONBOARDING_TOPICS', () => {
   it('has 5 topics with unique ids', () => {
@@ -16,11 +17,15 @@ describe('ONBOARDING_TOPICS', () => {
   })
 
   it('never includes a client-scoped category — onboarding is never about a specific call contact', () => {
-    // client-fact is the only client-scope category in the whole allowlist
-    // (types.ts's CATEGORY_SCOPE_KIND) — onboarding must never ask about a
-    // specific contact, only the rep/business in general.
+    // every category bound to the client scope kind (types.ts's
+    // CATEGORY_SCOPE_KIND — six of them since BUG-196 shape (c)) — onboarding
+    // must never ask about a specific contact, only the rep/business in general.
+    // Enumerated from the taxonomy, so a seventh client category cannot slip
+    // into a topic unnoticed.
+    const clientCategories = MEMORY_CATEGORIES.filter((c) => CATEGORY_SCOPE_KIND[c] === 'client')
+    expect(clientCategories.length).toBeGreaterThanOrEqual(6)
     for (const topic of ONBOARDING_TOPICS) {
-      expect(topic.categories).not.toContain('client-fact')
+      for (const c of clientCategories) expect(topic.categories).not.toContain(c)
     }
   })
 })

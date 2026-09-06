@@ -159,6 +159,19 @@ interface ScenarioReport {
   /** BUG-196 shape (b) — kept as client-fact in the client scope after a rep/business category
    *  claim; how much of the recall the remap is responsible for */
   remapped: { statement: string; from: string }[]
+  /** BUG-196 shape (c) — for every HIT, whether the model filed it under the named client
+   *  category the ground truth expects (budget → client-budget …), the residual, or another
+   *  name. The first real category measurement: before (c) every hit was 'client-fact'. */
+  categoryOnHits: { description: string; expected: string; got: string; verdict: 'named' | 'residual' | 'other' }[]
+}
+
+/** The ground truth's topics as the taxonomy names them (shape (c)). */
+const TOPIC_CATEGORY: Record<EvalTopic, string> = {
+  budget: 'client-budget',
+  timeline: 'client-timeline',
+  'decision-maker': 'client-decision',
+  'pain-point': 'client-need',
+  objection: 'client-concern'
 }
 
 /** BUG-195 — two of the first three real runs failed INSIDE a model (malformed
@@ -266,10 +279,20 @@ describe('Memory Quality Eval Harness (M27 audit — Sales Brain extraction base
 
         const truePositives: ScenarioReport['truePositives'] = []
         const falseNegatives: ScenarioReport['falseNegatives'] = []
+        const categoryOnHits: ScenarioReport['categoryOnHits'] = []
         for (const fact of scenario.expected) {
           const match = hits(outcome.candidates, fact.hitIfContainsAllOf)
-          if (match) truePositives.push({ description: fact.description, matchedStatement: match.statement })
-          else falseNegatives.push({ description: fact.description })
+          if (match) {
+            truePositives.push({ description: fact.description, matchedStatement: match.statement })
+            const expected = TOPIC_CATEGORY[fact.topic]
+            const got = match.category
+            categoryOnHits.push({
+              description: fact.description,
+              expected,
+              got,
+              verdict: got === expected ? 'named' : got === 'client-fact' ? 'residual' : 'other'
+            })
+          } else falseNegatives.push({ description: fact.description })
         }
 
         const unexpectedByTopic: ScenarioReport['unexpectedByTopic'] = []
@@ -292,7 +315,8 @@ describe('Memory Quality Eval Harness (M27 audit — Sales Brain extraction base
           servedBy: outcome.servedBy ?? '(model not recorded)',
           attempts,
           rejected,
-          remapped: outcome.remapped
+          remapped: outcome.remapped,
+          categoryOnHits
         })
       }
 
@@ -318,6 +342,9 @@ function printReport(reports: ScenarioReport[]): void {
   let totalRefused = 0
   let totalRefusedWouldHaveHit = 0
   let totalRemapped = 0
+  let totalCategoryNamed = 0
+  let totalCategoryResidual = 0
+  let totalCategoryOther = 0
 
   for (const r of reports) {
     totalExpected += r.truePositives.length + r.falseNegatives.length
@@ -353,6 +380,16 @@ function printReport(reports: ScenarioReport[]): void {
     totalRemapped += r.remapped.length
     console.log(`  Kept by the client-fact remap (would have been refused before): ${r.remapped.length}`)
     for (const x of r.remapped) console.log(`    - "${x.statement}" (was filed as ${x.from})`)
+    // BUG-196 shape (c) — is a budget stored AS a budget? Per hit: the named
+    // category the ground truth expects, the residual, or another name.
+    const named = r.categoryOnHits.filter((c) => c.verdict === 'named').length
+    const residual = r.categoryOnHits.filter((c) => c.verdict === 'residual').length
+    totalCategoryNamed += named
+    totalCategoryResidual += residual
+    totalCategoryOther += r.categoryOnHits.length - named - residual
+    console.log(`  Category on hits: ${named} named as expected, ${residual} residual (client-fact), ${r.categoryOnHits.length - named - residual} other`)
+    for (const c of r.categoryOnHits.filter((x) => x.verdict !== 'named'))
+      console.log(`    - ${c.description}: expected ${c.expected}, got ${c.got}`)
     console.log('')
   }
 
@@ -366,6 +403,10 @@ function printReport(reports: ScenarioReport[]): void {
       `(0 here means the misses are the MODEL's omissions, not the guardrails')`
   )
   console.log(`Kept by the client-fact remap across all scenarios: ${totalRemapped}`)
+  console.log(
+    `Category on hits: ${totalCategoryNamed} named as expected, ${totalCategoryResidual} residual, ${totalCategoryOther} other ` +
+      `(of ${totalHit} hits; before shape (c) every hit was residual)`
+  )
   console.log(`Served by: ${[...new Set(reports.map((r) => r.servedBy))].join(', ')}`)
   console.log('===================================================\n')
 }

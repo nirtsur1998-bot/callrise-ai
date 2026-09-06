@@ -27,6 +27,7 @@ import {
   updateConfidence,
   upsertCompiledProfile
 } from './memories-store'
+import { isClientCategory } from './types'
 import type { CompiledProfile, Memory, MemoryCandidate, MemoryEvidence, MemoryScope, ProfileSize } from './types'
 
 function normalizeStatement(s: string): string {
@@ -151,14 +152,21 @@ async function detectContradiction(
   db: Database.Database,
   candidate: MemoryCandidate
 ): Promise<Memory | null> {
+  // BUG-196 shape (c), the founder's call (2026-09-06 night): within a CLIENT
+  // scope the check runs across the whole client family, not one category.
+  // A budget filed as a need and the same budget filed as a budget are the
+  // pair most likely to contradict each other, and a wrong category must cost
+  // a label, never a store that holds two incompatible truths. Rep and
+  // business scopes keep the same-category rule (cross-category contradiction
+  // there is nonsensical by construction).
   const comparable = listMemories(db, {
     scope: candidate.scope,
     statuses: ['active', 'hypothesis'],
-    category: candidate.category
+    ...(isClientCategory(candidate.category) ? {} : { category: candidate.category })
   }).filter(
     (m) =>
-      m.status === 'active' ||
-      distinctEpisodeCount(m.evidence) >= CONTRADICTION_MIN_EPISODES_FOR_HYPOTHESIS
+      (isClientCategory(candidate.category) ? isClientCategory(m.category) : m.category === candidate.category) &&
+      (m.status === 'active' || distinctEpisodeCount(m.evidence) >= CONTRADICTION_MIN_EPISODES_FOR_HYPOTHESIS)
   )
   if (comparable.length === 0) return null
 

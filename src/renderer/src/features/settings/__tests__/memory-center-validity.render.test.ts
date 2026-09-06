@@ -16,7 +16,9 @@ vi.mock('../useAppSettings', () => ({
   useAppSettings: () => ({ settings: { salesBrain: { enabled: true } } })
 }))
 
-const { MemoryCenterSection, temporalSummaryText, validityText } = await import('../MemoryCenterSection')
+const { MemoryCenterSection, clientResidualShare, clientResidualText, temporalSummaryText, validityText } = await import(
+  '../MemoryCenterSection'
+)
 
 function mem(id: string, statement: string, extra: Partial<Memory> = {}): Memory {
   return {
@@ -104,7 +106,45 @@ describe('temporalSummaryText (pure)', () => {
   })
 })
 
+// BUG-196 shape (c) — the residual's share is the signal that the five named
+// client categories do not fit a business; counted over client scopes only.
+describe('clientResidualShare / clientResidualText (pure)', () => {
+  it('counts client-scoped facts only, residual = client-fact; rep and business facts never count', () => {
+    const share = clientResidualShare([
+      mem('a', 'x', { scope: 'client:acme', category: 'client-budget' }),
+      mem('b', 'x', { scope: 'client:acme', category: 'client-fact' }),
+      mem('c', 'x', { scope: 'client:globex', category: 'client-fact' }),
+      mem('d', 'x', { scope: 'rep', category: 'stated-goal' }),
+      mem('e', 'x', { scope: 'business', category: 'pricing-model' })
+    ])
+    expect(share).toEqual({ total: 3, residual: 2 })
+    expect(clientResidualText(share)).toBe(
+      '1 of 3 client facts carries a kind (budget, timeline, decision, need, concern); 2 (67%) have no kind yet. ' +
+        'Facts learned before kinds existed have none; a high share on new facts means these five kinds do not fit your business.'
+    )
+    expect(clientResidualShare([mem('d', 'x')])).toEqual({ total: 0, residual: 0 })
+  })
+})
+
 describe('MemoryCenterSection (rendered)', () => {
+  it('shows the client-facts-by-kind card only when client facts exist, with the residual count', async () => {
+    api.list.mockResolvedValue([
+      mem('a', 'Budget is 40k', { scope: 'client:acme', category: 'client-budget' }),
+      mem('b', 'Uses spreadsheets', { scope: 'client:acme', category: 'client-fact' })
+    ])
+    api.temporalRecord.mockResolvedValue(null)
+    await renderSection()
+    const card = container.querySelector('[data-testid="memory-client-residual"]')!
+    expect(card.textContent).toContain('1 of 2 client facts carries a kind')
+    expect(card.textContent).toContain('1 (50%) has no kind yet')
+  })
+  it('no client facts → no card', async () => {
+    api.list.mockResolvedValue([mem('u', 'Prefers morning calls')])
+    api.temporalRecord.mockResolvedValue(null)
+    await renderSection()
+    expect(container.querySelector('[data-testid="memory-client-residual"]')).toBeNull()
+  })
+
   it('a superseded fact keeps its row, is marked Replaced, and says the period it covered; a live fact says since when', async () => {
     api.list.mockResolvedValue([
       mem('live', 'Budget ceiling is 55k', { validFrom: '2026-07-02T15:30:00.000Z', validFromSource: 'call' }),

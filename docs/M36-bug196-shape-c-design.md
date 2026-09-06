@@ -1,6 +1,13 @@
 # BUG-196 shape (c) — client categories: the design, for the founder's decision
 
-**2026-09-06, night. Nothing here is built.** The founder asked for the design, not the direction:
+**2026-09-06, night. APPROVED by the founder the same night ("build it before re-extraction";
+"check contradictions across the whole client family — do that") and BUILT on `claude/m36-shape-c`:
+the five categories + residual in `types.ts`, the rule stated once for the tool schema and the
+prompt (`CLIENT_CATEGORY_RULE`), the family-wide contradiction check in `consolidation.ts`
+(red-checked: the test fails with the change stashed), the three leak pins plus two controls in
+`shape-c-client-categories.test.ts`, the residual's share in the Memory Center, and the harness's
+"category on hits" line. NOT measured live: that is the pinned Gemini run once the paid key exists.**
+The founder asked for the design, not the direction:
 what the categories are, what happens to existing rows, what a miscategorised fact costs, what
 breaks — and two things they will weigh: whether a category can be wrong in a way that leaks
 across clients, and whether the categories are ours or the user's.
