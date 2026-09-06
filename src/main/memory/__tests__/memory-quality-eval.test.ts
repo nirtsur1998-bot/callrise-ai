@@ -124,7 +124,22 @@ interface ScenarioReport {
   truePositives: { description: string; matchedStatement: string }[]
   falseNegatives: { description: string }[]
   unexpectedByTopic: { topic: EvalTopic; statement: string }[]
+  /** BUG-196 — the model that answered; a number without its model is a number about nothing */
+  servedBy: string
+  /** BUG-195 — how many attempts the scenario took and why the earlier ones failed */
+  attempts: string[]
+  /** BUG-196 — what the model proposed and the guardrails refused, with the reason, and
+   *  whether the refused statement would have satisfied a ground-truth fact */
+  rejected: { statement: string; category: string; reason: string; wouldHaveHit: string | null }[]
 }
+
+/** BUG-195 — two of the first three real runs failed INSIDE a model (malformed
+ *  tool-call JSON from Groq, no structured output from OpenRouter's free
+ *  Nemotron). A harness that succeeds one run in three cannot measure a change,
+ *  so each scenario is retried, the failures are recorded and printed, and the
+ *  run fails only when every attempt failed. */
+const MAX_ATTEMPTS_PER_SCENARIO = 3
+const RETRY_BACKOFF_MS = 20_000
 
 describe('Memory Quality Eval Harness (M27 audit — Sales Brain extraction baseline)', () => {
   const hasKey = anyProviderKeyConfigured()
@@ -184,12 +199,36 @@ describe('Memory Quality Eval Harness (M27 audit — Sales Brain extraction base
       const reports: ScenarioReport[] = []
 
       for (const scenario of EVAL_SCENARIOS) {
-        const outcome = await extractMemoriesFromCall(scenario.segments, `eval:${scenario.id}`, scenario.contactId)
+        const attempts: string[] = []
+        let outcome = await extractMemoriesFromCall(scenario.segments, `eval:${scenario.id}`, scenario.contactId)
+        while (outcome.aiFailed && attempts.length < MAX_ATTEMPTS_PER_SCENARIO - 1) {
+          attempts.push(`attempt ${attempts.length + 1} failed: ${outcome.failureReason ?? '(no reason recorded)'}`)
+          // free tiers rate-limit a burst of three scenarios; an immediate retry
+          // just burns the remaining attempts inside the same window
+          await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS * attempts.length))
+          outcome = await extractMemoriesFromCall(scenario.segments, `eval:${scenario.id}`, scenario.contactId)
+        }
         // the pipeline itself must not error — a real failure here IS a bug, unlike a low score.
         // The provider's own reason rides on the assertion (2026-09-06): the first real run
         // failed in 200ms with "expected true to be false" and nothing else, which is a
         // shrug, not a finding.
-        expect(outcome.aiFailed, `AI call failed for ${scenario.id}: ${outcome.failureReason ?? '(no reason recorded)'}`).toBe(false)
+        expect(
+          outcome.aiFailed,
+          `AI call failed for ${scenario.id} on every attempt: ${outcome.failureReason ?? '(no reason recorded)'}\n${attempts.join('\n')}`
+        ).toBe(false)
+
+        // BUG-196 — a refused candidate that would have satisfied a ground-truth
+        // fact is the difference between "the model omitted it" and "we threw it
+        // away"; name it per row
+        const rejected: ScenarioReport['rejected'] = outcome.rejected.map((r) => {
+          const statement = typeof r.raw.statement === 'string' ? r.raw.statement : JSON.stringify(r.raw)
+          // category AND the scope the model claimed — a 'category-scope-mismatch' has a
+          // direction, and the safe fix depends on which one
+          const category = `${typeof r.raw.scopeKind === 'string' ? r.raw.scopeKind : '?'}/${typeof r.raw.category === 'string' ? r.raw.category : '?'}`
+          const wouldHaveHit =
+            scenario.expected.find((fact) => hits([{ statement } as MemoryCandidate], fact.hitIfContainsAllOf))?.description ?? null
+          return { statement, category, reason: r.reason, wouldHaveHit }
+        })
 
         const truePositives: ScenarioReport['truePositives'] = []
         const falseNegatives: ScenarioReport['falseNegatives'] = []
@@ -215,13 +254,16 @@ describe('Memory Quality Eval Harness (M27 audit — Sales Brain extraction base
           extracted: outcome.candidates,
           truePositives,
           falseNegatives,
-          unexpectedByTopic
+          unexpectedByTopic,
+          servedBy: outcome.servedBy ?? '(model not recorded)',
+          attempts,
+          rejected
         })
       }
 
       printReport(reports)
     },
-    120_000
+    300_000 // three scenarios × up to two backed-off retries each
   )
 })
 
@@ -232,6 +274,8 @@ function printReport(reports: ScenarioReport[]): void {
   let totalHit = 0
   let totalExtracted = 0
   let totalForbiddenHits = 0
+  let totalRefused = 0
+  let totalRefusedWouldHaveHit = 0
 
   for (const r of reports) {
     totalExpected += r.truePositives.length + r.falseNegatives.length
@@ -244,7 +288,11 @@ function printReport(reports: ScenarioReport[]): void {
         ? (r.truePositives.length / (r.truePositives.length + r.falseNegatives.length)) * 100
         : 100
 
-    console.log(`--- ${r.label} (${r.id}) ---`)
+    totalRefused += r.rejected.length
+    totalRefusedWouldHaveHit += r.rejected.filter((x) => x.wouldHaveHit).length
+
+    console.log(`--- ${r.label} (${r.id}) --- served by ${r.servedBy}${r.attempts.length ? ` after ${r.attempts.length} failed attempt(s)` : ''}`)
+    for (const a of r.attempts) console.log(`  [ATTEMPT] ${a}`)
     console.log(`  Extracted ${r.extracted.length} candidate(s). Recall on ground truth: ${recall.toFixed(0)}%`)
     for (const tp of r.truePositives) console.log(`  [HIT ] ${tp.description}\n         -> "${tp.matchedStatement}"`)
     for (const fn of r.falseNegatives) console.log(`  [MISS] ${fn.description}`)
@@ -252,6 +300,13 @@ function printReport(reports: ScenarioReport[]): void {
     console.log('  All raw candidates:')
     for (const c of r.extracted)
       console.log(`    - [${c.category}] ${c.statement} (confidence ${c.confidence}, importance ${c.importance})`)
+    // BUG-196 — what the model proposed and the guardrails refused. This is the
+    // line that separates "never proposed" from "proposed and dropped".
+    console.log(`  Refused by verifyCandidate: ${r.rejected.length}`)
+    for (const x of r.rejected)
+      console.log(
+        `    - [${x.category}] "${x.statement}" — ${x.reason}${x.wouldHaveHit ? `  *** WOULD HAVE HIT: ${x.wouldHaveHit}` : ''}`
+      )
     console.log('')
   }
 
@@ -260,5 +315,10 @@ function printReport(reports: ScenarioReport[]): void {
   console.log(`Ground-truth facts: ${totalExpected}, hit: ${totalHit}, overall recall: ${overallRecall.toFixed(0)}%`)
   console.log(`Total candidates extracted across all scenarios: ${totalExtracted}`)
   console.log(`Forbidden-topic false positives: ${totalForbiddenHits}`)
+  console.log(
+    `Refused by the guardrails: ${totalRefused}, of which would have hit a ground-truth fact: ${totalRefusedWouldHaveHit} ` +
+      `(0 here means the misses are the MODEL's omissions, not the guardrails')`
+  )
+  console.log(`Served by: ${[...new Set(reports.map((r) => r.servedBy))].join(', ')}`)
   console.log('===================================================\n')
 }

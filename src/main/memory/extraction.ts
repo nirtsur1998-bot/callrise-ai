@@ -126,11 +126,37 @@ export interface RawCandidate {
  *  client-without-a-real-contact rejection, quote verification — is
  *  independently unit-testable without mocking an AI call, same convention
  *  as contact-intelligence.ts's verifyDetectedName(). */
+/**
+ * BUG-196 (2026-09-06) — WHY a candidate was dropped, named. The first real
+ * run of the extraction harness measured recall 0/15 and could not say
+ * whether the model never proposed the missing facts or proposed them and
+ * this function discarded them: it returned null for seven different
+ * reasons and printed none. Every guardrail below now names itself, so the
+ * harness (and any future diagnostic) can tell "the model omitted it" from
+ * "we refused it", which are opposite bugs with opposite fixes. The
+ * guardrails themselves are unchanged — this only makes them visible.
+ */
+export type CandidateRejectReason =
+  | 'missing-statement-or-quote'
+  | 'unknown-category'
+  | 'unknown-scope-kind'
+  | 'category-scope-mismatch'
+  | 'client-fact-without-contact'
+  | 'speaker-label-statement'
+  | 'quote-not-in-source'
+
+export type VerifyOutcome = { candidate: MemoryCandidate } | { rejected: CandidateRejectReason }
+
 export function verifyAndBuild(
   raw: RawCandidate,
   sourceText: string,
   contactId: string | null
 ): MemoryCandidate | null {
+  const outcome = verifyCandidate(raw, sourceText, contactId)
+  return 'candidate' in outcome ? outcome.candidate : null
+}
+
+export function verifyCandidate(raw: RawCandidate, sourceText: string, contactId: string | null): VerifyOutcome {
   const scopeKind = raw.scopeKind
   const category = raw.category
   const statement = typeof raw.statement === 'string' ? raw.statement.trim().slice(0, 500) : ''
@@ -138,9 +164,11 @@ export function verifyAndBuild(
   const confidence = typeof raw.confidence === 'number' ? Math.max(0, Math.min(1, raw.confidence)) : 0
   const importance = typeof raw.importance === 'number' ? Math.round(Math.max(1, Math.min(10, raw.importance))) : 1
 
-  if (!statement || !quote) return null
-  if (typeof category !== 'string' || !(MEMORY_CATEGORIES as readonly string[]).includes(category)) return null
-  if (scopeKind !== 'rep' && scopeKind !== 'business' && scopeKind !== 'client') return null
+  if (!statement || !quote) return { rejected: 'missing-statement-or-quote' }
+  if (typeof category !== 'string' || !(MEMORY_CATEGORIES as readonly string[]).includes(category)) {
+    return { rejected: 'unknown-category' }
+  }
+  if (scopeKind !== 'rep' && scopeKind !== 'business' && scopeKind !== 'client') return { rejected: 'unknown-scope-kind' }
 
   // The category's own allowed scope-kind is the source of truth, never the
   // model's separately-claimed scopeKind alone — a mismatch (e.g. category
@@ -148,8 +176,8 @@ export function verifyAndBuild(
   // which is reason enough to drop the candidate rather than guess which
   // half to trust.
   const expectedKind = CATEGORY_SCOPE_KIND[category as MemoryCategory]
-  if (expectedKind !== scopeKind) return null
-  if (expectedKind === 'client' && !contactId) return null // no real client to attach this to — drop it
+  if (expectedKind !== scopeKind) return { rejected: 'category-scope-mismatch' }
+  if (expectedKind === 'client' && !contactId) return { rejected: 'client-fact-without-contact' } // no real client to attach this to — drop it
 
   // BUG-167 — a memory that has to name a speaker LABEL is describing the
   // transcript, not the business. Found in the real store at confidence 1.0:
@@ -159,18 +187,20 @@ export function verifyAndBuild(
   // own input. No genuine fact about a rep, their company or their client
   // needs to say "Speaker 3". Structural, not a prompt request: the prompt
   // already asks for this and the model does it anyway.
-  if (/(?:^|[^a-z])speakers?\s*\d/i.test(statement)) return null
+  if (/(?:^|[^a-z])speakers?\s*\d/i.test(statement)) return { rejected: 'speaker-label-statement' }
 
-  if (!verifyEvidenceQuote(quote, sourceText)) return null
+  if (!verifyEvidenceQuote(quote, sourceText)) return { rejected: 'quote-not-in-source' }
 
   return {
-    scope: expectedKind === 'client' ? clientScope(contactId as string) : (expectedKind as 'rep' | 'business'),
-    category: category as MemoryCategory,
-    statement,
-    evidence: [{ type: 'transcript', callId: '', quote: quote.trim().slice(0, 400) }], // callId filled in by the caller, who knows it
-    confidence,
-    importance,
-    source: 'auto'
+    candidate: {
+      scope: expectedKind === 'client' ? clientScope(contactId as string) : (expectedKind as 'rep' | 'business'),
+      category: category as MemoryCategory,
+      statement,
+      evidence: [{ type: 'transcript', callId: '', quote: quote.trim().slice(0, 400) }], // callId filled in by the caller, who knows it
+      confidence,
+      importance,
+      source: 'auto'
+    }
   }
 }
 
@@ -191,6 +221,12 @@ export function verifyAndBuild(
  */
 export interface ExtractionOutcome {
   candidates: MemoryCandidate[]
+  /** BUG-196 — what the model proposed and verifyCandidate refused, with the
+   *  reason. Empty when nothing was refused (and on the failure paths). */
+  rejected: { raw: RawCandidate; reason: CandidateRejectReason }[]
+  /** BUG-196 — the concrete model that answered (AICompletionResult.model),
+   *  so a measurement is never "a number about nothing". */
+  servedBy?: string
   aiFailed: boolean
   /** The provider's own message, for the run summary. Never shown alone —
    *  always alongside a count, so "why" and "how much" arrive together. */
@@ -249,7 +285,7 @@ export async function extractMemoriesFromCall(
     .map((s) => `${speakerLabel(s, speechOnly)}: ${s.text}`)
     .join('\n')
     .slice(0, MAX_TRANSCRIPT_CHARS)
-  if (!transcript.trim()) return { candidates: [], aiFailed: false }
+  if (!transcript.trim()) return { candidates: [], rejected: [], aiFailed: false }
 
   try {
     const result = await completeWithFallback({
@@ -261,19 +297,26 @@ export async function extractMemoriesFromCall(
       ]
     })
     const raw = Array.isArray(result.toolInput?.candidates) ? (result.toolInput.candidates as RawCandidate[]) : []
-    const candidates = raw
-      .map((c) => verifyAndBuild(c, transcript, contactId))
-      .filter((c): c is MemoryCandidate => c !== null)
-      .map((c) => ({
-        ...c,
-        evidence: c.evidence.map((e) => ({ ...e, callId, ...(opts.at ? { at: opts.at } : {}) }))
-      }))
-    return { candidates, aiFailed: false }
+    const candidates: MemoryCandidate[] = []
+    const rejected: ExtractionOutcome['rejected'] = []
+    for (const c of raw) {
+      const outcome = verifyCandidate(c, transcript, contactId)
+      if ('rejected' in outcome) {
+        rejected.push({ raw: c, reason: outcome.rejected })
+        continue
+      }
+      candidates.push({
+        ...outcome.candidate,
+        evidence: outcome.candidate.evidence.map((e) => ({ ...e, callId, ...(opts.at ? { at: opts.at } : {}) }))
+      })
+    }
+    return { candidates, rejected, servedBy: result.model, aiFailed: false }
   } catch (err) {
     // best-effort, same as every other extraction module — never throw into
     // the fire-and-forget caller. But no longer SILENT: see ExtractionOutcome.
     return {
       candidates: [],
+      rejected: [],
       aiFailed: true,
       failureReason: err instanceof Error ? err.message : String(err)
     }
@@ -290,7 +333,7 @@ export async function extractMemoriesFromChatMessage(
   chatMessageId: string,
   contactId: string | null
 ): Promise<ExtractionOutcome> {
-  if (!message.trim()) return { candidates: [], aiFailed: false }
+  if (!message.trim()) return { candidates: [], rejected: [], aiFailed: false }
 
   try {
     const result = await completeWithFallback({
@@ -302,14 +345,24 @@ export async function extractMemoriesFromChatMessage(
       ]
     })
     const raw = Array.isArray(result.toolInput?.candidates) ? (result.toolInput.candidates as RawCandidate[]) : []
-    const candidates = raw
-      .map((c) => verifyAndBuild(c, message, contactId))
-      .filter((c): c is MemoryCandidate => c !== null)
-      .map((c) => ({ ...c, evidence: c.evidence.map((e) => ({ ...e, callId, chatMessageId })) }))
-    return { candidates, aiFailed: false }
+    const candidates: MemoryCandidate[] = []
+    const rejected: ExtractionOutcome['rejected'] = []
+    for (const c of raw) {
+      const outcome = verifyCandidate(c, message, contactId)
+      if ('rejected' in outcome) {
+        rejected.push({ raw: c, reason: outcome.rejected })
+        continue
+      }
+      candidates.push({
+        ...outcome.candidate,
+        evidence: outcome.candidate.evidence.map((e) => ({ ...e, callId, chatMessageId }))
+      })
+    }
+    return { candidates, rejected, servedBy: result.model, aiFailed: false }
   } catch (err) {
     return {
       candidates: [],
+      rejected: [],
       aiFailed: true,
       failureReason: err instanceof Error ? err.message : String(err)
     }
