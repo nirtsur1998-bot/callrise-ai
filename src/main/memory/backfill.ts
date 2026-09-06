@@ -22,7 +22,7 @@ import { listContacts, type Contact } from '../contacts-fs'
 import { listDeals, type Deal } from '../deals-fs'
 import { extractMemoriesFromCall } from './extraction'
 import { consolidateNewCandidate, runLightConsolidation } from './consolidation'
-import { clientScope, type MemoryCandidate, type MemoryEvidence, type MemoryScope } from './types'
+import { clientScope, type MemoryCandidate, type MemoryCategory, type MemoryEvidence, type MemoryScope } from './types'
 import { isSalesBrainEnabled } from '../app-settings'
 import { createScanTally, type ScanTally } from '../objection-scan-tally'
 import type Database from 'better-sqlite3'
@@ -136,7 +136,28 @@ export interface BackfillProgress {
   callsTotalFailure?: boolean
 }
 
-function fieldFact(contactId: string, label: string, value: string | number | undefined): MemoryCandidate | null {
+/**
+ * M37 — the category is now passed in, defaulting to the residual.
+ *
+ * BUG-196 shape (c) gave client facts five named categories, and this file was
+ * missed: every contact- and deal-derived fact was filed as `client-fact`
+ * regardless of what it said, so the first re-extraction of the founder's real
+ * store produced 18 residual rows with a budget, a timeline and a decision
+ * authority sitting among them. The mapping below needed no invention, which is
+ * the interesting part: the contact form, designed long before shape (c),
+ * already has "Budget indication", "Timeline", "Decision authority", "Known
+ * objections" and "Current tooling" as fields. The form and the taxonomy
+ * converged independently on the same five.
+ *
+ * Anything genuinely descriptive (industry, company size, how they like to be
+ * talked to) stays in the residual, which is what the residual is for.
+ */
+function fieldFact(
+  contactId: string,
+  label: string,
+  value: string | number | undefined,
+  category: MemoryCategory = 'client-fact'
+): MemoryCandidate | null {
   if (value === undefined || value === null || value === '') return null
   const evidence: MemoryEvidence = {
     type: 'transcript',
@@ -145,7 +166,7 @@ function fieldFact(contactId: string, label: string, value: string | number | un
   }
   return {
     scope: clientScope(contactId),
-    category: 'client-fact',
+    category,
     statement: `${label}: ${value}`,
     evidence: [evidence],
     confidence: 0.9,
@@ -167,21 +188,28 @@ function contactToCandidates(contact: Contact): MemoryCandidate[] {
   return [
     fieldFact(contact.id, 'Industry', contact.industry),
     fieldFact(contact.id, 'Company size', contact.companySize),
-    fieldFact(contact.id, 'Decision authority', contact.decisionAuthority),
-    fieldFact(contact.id, 'Other stakeholders', contact.otherStakeholders),
-    fieldFact(contact.id, 'Budget indication', contact.budgetIndication),
-    fieldFact(contact.id, 'Timeline', contact.timeline),
-    fieldFact(contact.id, 'Known competitors in play', contact.competitors),
-    fieldFact(contact.id, 'Known objections', contact.knownObjections),
-    fieldFact(contact.id, 'Current tooling', contact.currentTooling),
+    fieldFact(contact.id, 'Decision authority', contact.decisionAuthority, 'client-decision'),
+    fieldFact(contact.id, 'Other stakeholders', contact.otherStakeholders, 'client-decision'),
+    fieldFact(contact.id, 'Budget indication', contact.budgetIndication, 'client-budget'),
+    fieldFact(contact.id, 'Timeline', contact.timeline, 'client-timeline'),
+    fieldFact(contact.id, 'Known competitors in play', contact.competitors, 'client-concern'),
+    fieldFact(contact.id, 'Known objections', contact.knownObjections, 'client-concern'),
+    fieldFact(contact.id, 'Current tooling', contact.currentTooling, 'client-need'),
+    // how the CLIENT likes to be talked to — descriptive, and the rep-scope
+    // 'communication-style' category is about the REP, so the residual is right
     fieldFact(contact.id, 'Communication style', contact.communicationStyle)
   ].filter((c): c is MemoryCandidate => c !== null)
 }
 
 function dealToCandidates(deal: Deal): MemoryCandidate[] {
   return [
-    fieldFact(deal.contactId, 'Deal value', deal.value !== undefined ? `$${deal.value.toLocaleString()}` : undefined),
-    fieldFact(deal.contactId, 'Expected close date', deal.expectedCloseDate)
+    fieldFact(
+      deal.contactId,
+      'Deal value',
+      deal.value !== undefined ? `$${deal.value.toLocaleString()}` : undefined,
+      'client-budget'
+    ),
+    fieldFact(deal.contactId, 'Expected close date', deal.expectedCloseDate, 'client-timeline')
   ].filter((c): c is MemoryCandidate => c !== null)
 }
 

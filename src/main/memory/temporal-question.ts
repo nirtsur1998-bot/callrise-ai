@@ -16,9 +16,20 @@
 //     read as a time;
 //   - events as times — "before the proposal", "after the demo" (an event's
 //     date is a fact to look up, not a word to parse);
-//   - the future — "in December" when December has not happened resolves to
-//     a moment after now and is dropped: a validity window cannot answer
-//     what will be true;
+//   - the future — a question whose own words say it asks what WILL be true.
+//     See FUTURE_MARKERS below.
+//
+//     CORRECTION (M37, 2026-09-07). This line used to claim the future was
+//     handled: "'in December' when December has not happened resolves to a
+//     moment after now and is dropped." That protection did not exist.
+//     `yearForMonth` resolves a month later than the current one to LAST year,
+//     so the `at > now` guard in result() can never fire for a bare month — it
+//     has nothing to catch. Measured in September 2026: "What will our pricing
+//     be in December?" returned 2025-12-31, so the app answered a question
+//     about the future with a confident claim about ten months ago, and told
+//     the user it had "read December". Precisely the failure this module
+//     exists to prevent, described in its own header as already prevented.
+//     The marker check in parseAsOf is the protection the comment described;
 //   - numeric dates with ambiguous order — "6/7" is June 7th or 6th July.
 
 export interface AsOfQuestion {
@@ -41,6 +52,19 @@ const MONTH_RE = '(january|february|march|april|may|june|july|august|september|o
 const PREP = '(?:in|on|during|as of|back in|since|from|by|last|at the end of|end of|at the start of|start of|early|late|mid)'
 const DAY = '(\\d{1,2})(?:st|nd|rd|th)?'
 const YEAR = '(\\d{4})'
+
+/**
+ * The words that say a question is about what WILL be true. Explicit markers
+ * only — this is read from the words typed, never inferred from context, the
+ * same discipline as the rest of the module.
+ *
+ * Kept deliberately narrow. "Can we deliver in early October?" is future in
+ * INTENT and carries no marker, so it still parses to last October; that gap
+ * is recorded in the corpus test rather than closed by guessing at modals,
+ * because "can/should/could" are routinely used about the past and present
+ * too ("should we have discounted in June?").
+ */
+const FUTURE_MARKERS = /\b(?:will|won't|'ll|shall|going to|gonna|expects? to|expecting to|plans? to|planning to|next (?:week|month|quarter|year)|upcoming)\b/
 
 const endOfDay = (y: number, m: number, d: number): Date => new Date(Date.UTC(y, m, d, 23, 59, 59, 999))
 const endOfMonth = (y: number, m: number): Date => new Date(Date.UTC(y, m + 1, 0, 23, 59, 59, 999))
@@ -68,6 +92,17 @@ function result(at: Date, phrase: string, precision: AsOfQuestion['precision'], 
  */
 export function parseAsOf(question: string, now: Date): AsOfQuestion | null {
   const q = question.toLowerCase()
+
+  // The words say the question is about the future, and nothing in a store of
+  // what WAS true can answer it. Refusing means retrieval runs untimed, which
+  // is the same behaviour as any other unparsed question and the correct
+  // failure. Without this the month-rolling convention turns "in December"
+  // into last December and answers confidently about the wrong year.
+  //
+  // The cost is a false refusal when a marker is also a name ("What did Will
+  // say in April?") — the same shape as the deliberate "April is a person"
+  // refusal, and it fails the same safe way: untimed, never wrongly dated.
+  if (FUTURE_MARKERS.test(q)) return null
 
   // ISO date: 2026-06-15
   let m = q.match(/\b(\d{4})-(\d{2})-(\d{2})\b/)

@@ -57,10 +57,22 @@ describe('parseAsOf — the refusals (each of these would be a guess)', () => {
     expect(parseAsOf('What was the budget before the proposal?', NOW)).toBeNull()
     expect(parseAsOf('What changed after the demo?', NOW)).toBeNull()
   })
+  // CORRECTED, M37 2026-09-07. This test's NAME stated the guarantee and its
+  // BODY pinned the violation: it asserted that "What will the budget be in
+  // December?" resolves to 2025-12-31, with an inline comment rationalising it
+  // as "the last December that happened". So the app answered a question about
+  // the future with a confident claim about ten months earlier, and the suite
+  // called that correct — while the module header separately claimed the
+  // future was dropped. The name, the header and the behaviour disagreed, and
+  // the two prose documents agreed with each other rather than with the code.
   it('the future is not answerable from validity windows', () => {
-    expect(parseAsOf('What will the budget be in December?', new Date('2026-09-06T12:00:00.000Z'))).toMatchObject({ asOf: '2025-12-31T23:59:59.999Z' }) // "in December" = the last December that happened
+    const now = new Date('2026-09-06T12:00:00.000Z')
+    expect(parseAsOf('What will the budget be in December?', now)).toBeNull()
+    expect(parseAsOf('Are we going to close in November?', now)).toBeNull()
     expect(parseAsOf('What happens in December 2027?', NOW)).toBeNull()
     expect(parseAsOf('What is planned for Q4 2026?', NOW)).toBeNull()
+    // the past form of the same words still works: the marker decides, not the month
+    expect(parseAsOf('What was the budget in December?', now)).toMatchObject({ asOf: '2025-12-31T23:59:59.999Z' })
   })
   it('ambiguous numeric dates are not parsed', () => {
     expect(parseAsOf('What happened on 6/7?', NOW)).toBeNull()
