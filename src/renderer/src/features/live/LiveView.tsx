@@ -857,6 +857,31 @@ export function LiveView({
     void enableOtherParty()
   }
 
+  // M36 Stage 2 — the glance HUD, behind the M31 design preview: glance by
+  // default, full as the switch (the founder's decision). Transcript stays ON
+  // by default and its collapse is remembered (the founder's amendment).
+  //
+  // THESE HOOKS MUST STAY ABOVE THE EARLY RETURNS BELOW. On 2026-09-06 they
+  // sat after the `if (!hasTranscript)` block; the idle screen returned
+  // before reaching them, the first frame after pressing the mic reached
+  // them, React counted more hooks than the previous render (error #310) and
+  // the whole Live screen fell into the error boundary — on the clean VM, for
+  // a stranger, on the first click. Found by the Stage 1 re-walk; pinned by
+  // live-view-hooks-order.test.ts.
+  const { enabled: designPreview } = useDesignPreview()
+  const [hudLayout, setHudLayoutState] = useState<HudLayout>(() => loadHudLayout())
+  const setHudLayout = (l: HudLayout): void => {
+    saveHudLayout(l)
+    setHudLayoutState(l)
+  }
+  const glance = designPreview && hudLayout === 'glance'
+  const [transcriptCollapsed, setTranscriptCollapsedState] = useState(() => loadTranscriptCollapsed())
+  const setTranscriptCollapsed = (c: boolean): void => {
+    saveTranscriptCollapsed(c)
+    setTranscriptCollapsedState(c)
+  }
+  const glanceCue = useGlanceCue(cue, suggestions, segments, glance)
+
   const hasTranscript = segments.length > 0
 
   // Full-screen states — only when there's no transcript worth preserving.
@@ -941,23 +966,6 @@ export function LiveView({
       )
     }
   }
-
-  // M36 Stage 2 — the glance HUD, behind the M31 design preview: glance by
-  // default, full as the switch (the founder's decision). Transcript stays ON
-  // by default and its collapse is remembered (the founder's amendment).
-  const { enabled: designPreview } = useDesignPreview()
-  const [hudLayout, setHudLayoutState] = useState<HudLayout>(() => loadHudLayout())
-  const setHudLayout = (l: HudLayout): void => {
-    saveHudLayout(l)
-    setHudLayoutState(l)
-  }
-  const glance = designPreview && hudLayout === 'glance'
-  const [transcriptCollapsed, setTranscriptCollapsedState] = useState(() => loadTranscriptCollapsed())
-  const setTranscriptCollapsed = (c: boolean): void => {
-    saveTranscriptCollapsed(c)
-    setTranscriptCollapsedState(c)
-  }
-  const glanceCue = useGlanceCue(cue, suggestions, segments, glance)
 
   const stoppable =
     status === 'listening' ||
