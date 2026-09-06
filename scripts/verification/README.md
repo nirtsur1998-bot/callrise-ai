@@ -30,9 +30,8 @@ is pasted into the tracker with the screenshot hashes — see "THE SECOND RULE" 
   second (2026-09-06 00:50) killed the dev app with a path-matched sweep meant for a sandbox. Self-test:
   `src/__tests__/protected-instances.test.ts` runs that exact sweep against fake rows.
 - **Never write code through a shell heredoc.** Use the file tool (Write/Edit). Why: four times in
-  one night a heredoc turned an escape into a real character — `` into a backspace byte inside a
-  regex, `
-` into a newline inside a string — and the file parsed nowhere or matched nothing.
+  one night a heredoc turned an escape into a real character — a backslash-b into a backspace byte inside a
+  regex, a backslash-n into a newline inside a string — and the file parsed nowhere or matched nothing.
   `src/__tests__/no-control-bytes-in-source.test.ts` catches the byte; this rule prevents the hour.
 
 **The three rules in one line each:** an instrument that writes names its target and refuses
