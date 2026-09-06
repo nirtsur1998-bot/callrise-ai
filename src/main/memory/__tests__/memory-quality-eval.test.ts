@@ -42,8 +42,33 @@ import { PROVIDER_REGISTRY } from '../../ai/registry'
 import { EVAL_SCENARIOS, type EvalTopic } from './fixtures/memory-eval-transcripts'
 import type { MemoryCandidate } from '../types'
 
+/** BUG-195 workaround (2026-09-06, the founder's "fix or work around 195"):
+ *  CALLRISE_EVAL_CHAIN=<catalog id[,id…]> pins which models may serve the
+ *  run, through the app's REAL settings path — a private userData dir
+ *  holding an app-settings.json whose memory-extract assignment names the
+ *  chain, exactly what a user does in the model picker. Production code
+ *  reads nothing test-specific; without the variable the bundled default
+ *  chain serves, as before. Pair it with CALLRISE_EVAL_MODEL, which still
+ *  refuses a run that any other model answered. */
+const evalUserData = vi.hoisted(() => {
+  const os = require('node:os') as typeof import('node:os')
+  const fs = require('node:fs') as typeof import('node:fs')
+  const path = require('node:path') as typeof import('node:path')
+  const chain = (process.env.CALLRISE_EVAL_CHAIN ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (chain.length === 0) return os.tmpdir()
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'callrise-eval-'))
+  fs.writeFileSync(
+    path.join(dir, 'app-settings.json'),
+    JSON.stringify({ aiModelAssignments: { 'memory-extract': { chain } } })
+  )
+  return dir
+})
+
 vi.mock('electron', () => ({
-  app: { getPath: () => require('node:os').tmpdir() },
+  app: { getPath: () => evalUserData },
   BrowserWindow: { getAllWindows: () => [] },
   Notification: class {
     on(): void {}

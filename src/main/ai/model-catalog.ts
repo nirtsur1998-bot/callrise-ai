@@ -225,6 +225,36 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     // general fallback-chain mechanism handles the failover, not a special
     // case. Verified present on Groq's live model list, 2026-07-30.
   },
+  // BUG-195 (2026-09-06, night): Groq's live /models list that night, read
+  // with a real key, carried these text models and NO Llama at all:
+  // qwen/qwen3.8-27b, qwen/qwen3.6-27b, openai/gpt-oss-20b, openai/gpt-oss-120b,
+  // groq/compound, groq/compound-mini, allam-2-7b (plus whisper/guard/orpheus).
+  // The entry below exists so the extraction harness can be PINNED to a
+  // second live Groq model, since gpt-oss-120b returns malformed tool-call
+  // JSON often enough that no before/after on it is a measurement. In no
+  // bundled chain; a user can pick it in the model picker like any other.
+  // openai/gpt-oss-20b was measured the same night and deliberately NOT
+  // added: pinned run 26 answered "400 Tool choice is required, but model
+  // did not…" on 3 of 3 attempts, and a third live Groq entry trips the
+  // BUG-154 fact-pin (deadProvidersPhase2.test.ts: no provider has three live
+  // models), whose own instruction — move those fixtures back to real ids —
+  // is a separate change.
+  {
+    id: 'groq-qwen3.8-27b',
+    displayName: 'Qwen 3.8 27B',
+    brand: 'qwen',
+    providerId: 'groq',
+    lane: 'speed',
+    modelId: 'qwen/qwen3.8-27b',
+    contextWindow: 128_000,
+    retentionPosture: 'unknown',
+    retentionUrl: 'https://groq.com/privacy-policy/',
+    keyUrl: 'https://console.groq.com/keys'
+    // Tool calling on the memory-extract prompt is UNVERIFIED: the three
+    // pinned harness runs the same night (23–25) hit Groq's free-tier daily
+    // cap for this model ("try again in about 4 hours") before any scenario
+    // reported, so nothing is known either way. Not flagged, not vouched for.
+  },
   {
     id: 'cerebras-gpt-oss-120b',
     displayName: 'GPT-OSS 120B',
