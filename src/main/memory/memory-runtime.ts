@@ -4,8 +4,15 @@
 // on the master flag — see initSalesBrain()'s own doc comment for exactly
 // where and why.
 import { app } from 'electron'
+import { join } from 'node:path'
 import type Database from 'better-sqlite3'
 import { memoryDbPath, openMemoryDb, migrate, type MigrateResult } from './db'
+import {
+  describeTemporalBackfill,
+  loadCallStartTimes,
+  runTemporalBackfill,
+  temporalBackfillRecord
+} from './temporal-backfill'
 import { configureEmbeddingsCacheDir, warmUpEmbeddings } from './embeddings'
 import { isSalesBrainEnabled } from '../app-settings'
 import { runNightlyConsolidation } from './consolidation'
@@ -136,7 +143,32 @@ export async function initSalesBrain(): Promise<{ ok: boolean; detail: string }>
   registerWarmUpEmbeddingsJob(warmUpEmbeddings)
   enqueueWarmUpEmbeddings()
 
+  // M36 Stage 3 item 5, step 1 — date the existing rows ONCE, after the
+  // schema is current. Not awaited: it reads the calls directory, and startup
+  // must not wait on that. Not inside the migration: the calls store is
+  // outside memory.db. Its record (the counts) lands in memory_meta and in
+  // the log, so what got a real date and what got an approximate one is
+  // never a matter of trust.
+  void runTemporalBackfillOnce(handle, join(userDataDir, 'calls'))
+
   return lastInitResult
+}
+
+async function runTemporalBackfillOnce(handle: Database.Database, callsDir: string): Promise<void> {
+  try {
+    // a handle that is not open is never read or written through (a test's
+    // stand-in object, or a connection closed during startup)
+    if (!handle.open) return
+    if (temporalBackfillRecord(handle)) return
+    const callStartTimes = await loadCallStartTimes(callsDir)
+    // the connection may have been closed by a test reset or a shutdown
+    // while the directory was being read — never write through a dead handle
+    if (db !== handle || !handle.open) return
+    const counts = runTemporalBackfill(handle, callStartTimes)
+    console.log(`[sales-brain] ${describeTemporalBackfill(counts)}`)
+  } catch (err) {
+    console.error('[sales-brain] temporal backfill failed (memories stay undated until the next launch):', err)
+  }
 }
 
 /** Returns null if Sales Brain is off, or if init failed/hasn't run yet —

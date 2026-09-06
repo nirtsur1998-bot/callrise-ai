@@ -136,6 +136,42 @@ INSERT INTO memories_fts(memories_fts) VALUES ('rebuild');
 `
 }
 
-export const MIGRATIONS: Migration[] = [MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005]
+/** M36 Stage 3 item 5 — temporal validity, step 1 (the founder approved the
+ *  design in docs/M36-temporal-validity-design.md, 2026-09-06). EVENT time
+ *  beside the existing SYSTEM time: `valid_from` / `valid_until` say when a
+ *  fact was true; `created_at` / `invalidated_at` keep saying when we learned
+ *  it. Each date carries a `_source` ('call' | 'stated' | 'approx') because an
+ *  approximate date must never pass as a real one. All four nullable; this
+ *  migration adds columns only. The BACKFILL — dating existing rows from
+ *  their evidence calls — is deliberately NOT here: the calls store lives
+ *  outside memory.db, so it runs as a one-time job after migration
+ *  (temporal-backfill.ts), records its counts in `memory_meta`, and can be
+ *  inspected before anyone trusts a date. Reversible: drop the four columns
+ *  and the meta table. */
+const MIGRATION_006: Migration = {
+  version: 6,
+  description:
+    'M36 Stage 3 item 5 — temporal validity: valid_from/valid_until (event time) with their sources, plus memory_meta for the one-time backfill record',
+  sql: `
+ALTER TABLE memories ADD COLUMN valid_from TEXT;
+ALTER TABLE memories ADD COLUMN valid_from_source TEXT;
+ALTER TABLE memories ADD COLUMN valid_until TEXT;
+ALTER TABLE memories ADD COLUMN valid_until_source TEXT;
+
+CREATE TABLE memory_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+`
+}
+
+export const MIGRATIONS: Migration[] = [
+  MIGRATION_001,
+  MIGRATION_002,
+  MIGRATION_003,
+  MIGRATION_004,
+  MIGRATION_005,
+  MIGRATION_006
+]
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version

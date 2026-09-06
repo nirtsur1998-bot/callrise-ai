@@ -124,11 +124,19 @@ describe('lexical channel (real FTS5 + sqlite-vec)', () => {
     const old = openMemoryDb(oldPath)
     const to4 = await migrate(old, oldPath, { migrations: MIGRATIONS.filter((m) => m.version <= 4), targetVersion: 4 })
     expect(to4).toMatchObject({ ok: true, toVersion: 4 })
-    insertMemory(old, candidate('client:eval-globex', 'Sam Okafor is the internal champion'), unit(1))
+    // written the way a version-4 build wrote it (today's insertMemory also
+    // fills migration 6's validity columns, which do not exist yet here)
+    old
+      .prepare(
+        `INSERT INTO memories (id, scope, category, statement, evidence, confidence, importance, status, source, pinned, created_at, last_confirmed_at)
+         VALUES ('old-okafor', 'client:eval-globex', 'client-fact', 'Sam Okafor is the internal champion', '[]', 0.9, 5, 'active', 'user_confirmed', 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+      )
+      .run()
+    old.prepare('INSERT INTO vec_memories(rowid, embedding) VALUES (?, ?)').run(BigInt(1), Buffer.from(unit(1).buffer))
     expect(old.prepare("SELECT name FROM sqlite_master WHERE name = 'memories_fts'").all()).toEqual([])
 
     const to5 = await migrate(old, oldPath)
-    expect(to5).toMatchObject({ ok: true, migrated: true, fromVersion: 4, toVersion: 5 })
+    expect(to5).toMatchObject({ ok: true, migrated: true, fromVersion: 4 })
     expect(searchMemoriesByText(old, ['okafor'], unit(0), { scope: 'client:eval-globex' })).toHaveLength(1)
     old.close()
   })

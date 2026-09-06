@@ -4,7 +4,16 @@
 // shape, everything else goes through its functions).
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
-import type { CompiledProfile, Memory, MemoryCandidate, MemoryEvidence, MemoryScope, MemoryStatus, ProfileSize } from './types'
+import type {
+  CompiledProfile,
+  Memory,
+  MemoryCandidate,
+  MemoryEvidence,
+  MemoryScope,
+  MemoryStatus,
+  ProfileSize,
+  ValidityDateSource
+} from './types'
 import { ftsMatchQuery, matchedTerms } from './lexical-terms'
 
 interface MemoryRow {
@@ -24,6 +33,10 @@ interface MemoryRow {
   last_confirmed_at: string
   last_retrieved_at?: string | null
   invalidated_at: string | null
+  valid_from?: string | null
+  valid_from_source?: string | null
+  valid_until?: string | null
+  valid_until_source?: string | null
 }
 
 function rowToMemory(row: MemoryRow): Memory {
@@ -42,8 +55,74 @@ function rowToMemory(row: MemoryRow): Memory {
     createdAt: row.created_at,
     lastConfirmedAt: row.last_confirmed_at,
     lastRetrievedAt: row.last_retrieved_at ?? undefined,
-    invalidatedAt: row.invalidated_at ?? undefined
+    invalidatedAt: row.invalidated_at ?? undefined,
+    validFrom: row.valid_from ?? undefined,
+    validFromSource: (row.valid_from_source as ValidityDateSource | null | undefined) ?? undefined,
+    validUntil: row.valid_until ?? undefined,
+    validUntilSource: (row.valid_until_source as ValidityDateSource | null | undefined) ?? undefined
   }
+}
+
+/**
+ * M36 Stage 3 item 5 — the validity a NEW memory is born with. Event time
+ * first: the earliest `at` its transcript evidence carries (the call's own
+ * start). Failing that, a fact the user stated or confirmed themselves is
+ * exact at the moment they said it ('stated'). Failing both, the learning
+ * time stands in, marked 'approx' so nothing downstream mistakes it for a
+ * real date. Pure, so the rule is testable without a db.
+ */
+export function validityAtInsert(
+  candidate: Pick<MemoryCandidate, 'evidence' | 'source'>,
+  createdAtIso: string
+): { validFrom: string; validFromSource: ValidityDateSource } {
+  const eventTimes = candidate.evidence
+    .flatMap((e) => (e.type === 'transcript' && e.at && !Number.isNaN(Date.parse(e.at)) ? [e.at] : []))
+    .sort()
+  if (eventTimes.length > 0) return { validFrom: eventTimes[0], validFromSource: 'call' }
+  if (candidate.source === 'user_stated' || candidate.source === 'user_confirmed') {
+    return { validFrom: createdAtIso, validFromSource: 'stated' }
+  }
+  return { validFrom: createdAtIso, validFromSource: 'approx' }
+}
+
+/** Sets either or both validity bounds with their sources. Used by the
+ *  temporal backfill and by consolidation when a contradiction closes a
+ *  fact's window. Only the fields given are written. */
+export function setValidity(
+  db: Database.Database,
+  id: string,
+  validity: {
+    validFrom?: string | null
+    validFromSource?: ValidityDateSource | null
+    validUntil?: string | null
+    validUntilSource?: ValidityDateSource | null
+  }
+): void {
+  const sets: string[] = []
+  const params: Record<string, string | null> = { id }
+  if ('validFrom' in validity) {
+    sets.push('valid_from = @validFrom', 'valid_from_source = @validFromSource')
+    params.validFrom = validity.validFrom ?? null
+    params.validFromSource = validity.validFromSource ?? null
+  }
+  if ('validUntil' in validity) {
+    sets.push('valid_until = @validUntil', 'valid_until_source = @validUntilSource')
+    params.validUntil = validity.validUntil ?? null
+    params.validUntilSource = validity.validUntilSource ?? null
+  }
+  if (sets.length === 0) return
+  db.prepare(`UPDATE memories SET ${sets.join(', ')} WHERE id = @id`).run(params)
+}
+
+/** `memory_meta` (migration 6): small key/value facts about the store itself
+ *  — the temporal backfill's record lives here so its counts can be shown,
+ *  and so it never runs twice. */
+export function getMeta(db: Database.Database, key: string): string | null {
+  const row = db.prepare('SELECT value FROM memory_meta WHERE key = ?').get(key) as { value: string } | undefined
+  return row?.value ?? null
+}
+export function setMeta(db: Database.Database, key: string, value: string): void {
+  db.prepare('INSERT OR REPLACE INTO memory_meta (key, value) VALUES (?, ?)').run(key, value)
 }
 
 /**
@@ -99,13 +178,14 @@ export function insertMemory(
     source: candidate.source,
     pinned: false,
     createdAt: now,
-    lastConfirmedAt: now
+    lastConfirmedAt: now,
+    ...validityAtInsert(candidate, now)
   }
 
   const insertMemoryStmt = db.prepare(`
     INSERT INTO memories
-      (id, scope, category, statement, evidence, confidence, importance, status, source, pinned, created_at, last_confirmed_at)
-    VALUES (@id, @scope, @category, @statement, @evidence, @confidence, @importance, @status, @source, @pinned, @createdAt, @lastConfirmedAt)
+      (id, scope, category, statement, evidence, confidence, importance, status, source, pinned, created_at, last_confirmed_at, valid_from, valid_from_source)
+    VALUES (@id, @scope, @category, @statement, @evidence, @confidence, @importance, @status, @source, @pinned, @createdAt, @lastConfirmedAt, @validFrom, @validFromSource)
   `)
   const insertVecStmt = db.prepare('INSERT INTO vec_memories(rowid, embedding) VALUES (?, ?)')
 
@@ -122,7 +202,9 @@ export function insertMemory(
       source: memory.source,
       pinned: 0,
       createdAt: memory.createdAt,
-      lastConfirmedAt: memory.lastConfirmedAt
+      lastConfirmedAt: memory.lastConfirmedAt,
+      validFrom: memory.validFrom ?? null,
+      validFromSource: memory.validFromSource ?? null
     })
     // vec0 quirk (confirmed empirically, see db.ts's sibling module doc
     // comments / the Phase 1 checkpoint write-up): a bound rowid parameter
