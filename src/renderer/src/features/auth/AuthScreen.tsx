@@ -96,8 +96,21 @@ function NotConfigured(): React.JSX.Element {
   )
 }
 
-export function AuthScreen({ configured }: { configured: boolean }): React.JSX.Element {
-  const [mode, setMode] = useState<Mode>('login')
+export function AuthScreen({
+  configured,
+  initialMode = 'login',
+  onSample
+}: {
+  configured: boolean
+  /** M36 — the guest sample page hands back 'signup' so "Create an account"
+   *  from the sample lands on the form, not on Log in. */
+  initialMode?: Mode
+  /** M36 — "See a sample call first": the stranger's way past the wall
+   *  without an account (the founder's decision, 2026-09-06). Absent → no
+   *  link, so any other host of this screen is unchanged. */
+  onSample?: () => void
+}): React.JSX.Element {
+  const [mode, setMode] = useState<Mode>(initialMode)
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -375,6 +388,23 @@ export function AuthScreen({ configured }: { configured: boolean }): React.JSX.E
               </form>
             )}
           </div>
+        )}
+
+        {configured && onSample && mode !== 'confirm' && (
+          // M36 — the door past the wall. A stranger who has not decided yet
+          // can see what the app does with a call before giving it anything.
+          <p className="mt-4 text-center text-[13px] text-muted">
+            Not sure yet?{' '}
+            <button
+              type="button"
+              onClick={onSample}
+              data-testid="auth-see-sample"
+              className="font-medium text-accent transition hover:brightness-110"
+            >
+              See a sample call first
+            </button>
+            <span className="block text-[12px] text-faint">No account needed — nothing is saved.</span>
+          </p>
         )}
       </div>
     </div>
