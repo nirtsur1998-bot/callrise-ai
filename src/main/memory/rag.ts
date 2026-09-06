@@ -56,11 +56,13 @@ export interface RetrieveStructuredOptions {
   /** M36 Stage 3 — clients the QUESTION names, for an UNBOUND conversation
    *  (contactId null). Each becomes a client scope in the search. Computed by
    *  the caller from the words the user typed (client-inference.ts) and
-   *  never guessed here. Production does NOT set this yet: BUG-096's option C
-   *  (a note, no widening) is the founder's standing decision and widening
-   *  to a named client is option B, theirs to switch on — the retrieval
-   *  harness measures both shapes so that decision has a number on each
-   *  side. Ignored when contactId is set. */
+   *  never guessed here. Switched ON by the founder 2026-09-06 (option B,
+   *  measured 57% -> 93% on the harness with zero cross-client surfacing)
+   *  under three conditions: the cross-scope invariant is asserted, not
+   *  measured (assertScopeInvariant); a question that names nobody stays
+   *  unscoped (client-inference.test.ts pins it); and option C's refusal
+   *  stays as the fallback (unbound-client-notice.ts). Ignored when
+   *  contactId is set. */
   inferredClientIds?: string[]
   /** Also search still-hypothesis memories (they arrive flagged by their own
    *  `status`, so callers can hedge the phrasing — spec section 5). Default
@@ -125,11 +127,36 @@ export async function retrieveRelevantMemoriesStructured(
     'business',
     ...(contactId ? [clientScope(contactId)] : inferred.map((id) => clientScope(id)))
   ]
-  return scopes
+  const results = scopes
     .flatMap((scope) => searchMemoriesByVector(db, embedding, { scope, limit, statuses }))
     .filter((r) => r.distance <= maxDistance)
     .sort((a, b) => a.distance - b.distance)
     .slice(0, limit)
+  assertScopeInvariant(results, scopes)
+  return results
+}
+
+/**
+ * THE CROSS-CLIENT INVARIANT, as a hard check rather than a measured result
+ * (the founder's condition for switching option B on, 2026-09-06): every
+ * memory returned belongs to a scope this call asked for. A result from any
+ * other scope is not filtered out quietly — it throws, so a regression in
+ * the store or the fan-out fails the turn loudly instead of degrading into a
+ * confident answer built from another client's memories (BUG-096's original
+ * damage). Red-checked in rag.structured.test.ts by planting one.
+ */
+export function assertScopeInvariant(
+  results: ReadonlyArray<{ memory: { scope: string; id: string } }>,
+  scopes: ReadonlyArray<MemoryScope>
+): void {
+  const allowed = new Set<string>(scopes)
+  for (const r of results) {
+    if (!allowed.has(r.memory.scope)) {
+      throw new Error(
+        `[rag] cross-scope result refused: memory ${r.memory.id} is in scope "${r.memory.scope}" but this retrieval asked for [${scopes.join(', ')}]`
+      )
+    }
+  }
 }
 
 /** Returns a labeled context section (same shape as profile-injection.ts's

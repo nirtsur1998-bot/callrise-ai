@@ -1102,13 +1102,31 @@ describe('BUG-096 fix C — naming clients an unbound chat cannot reach', () => 
 
     expect(unboundMock.calls).toEqual(['who makes the buying decisions at Acme?'])
     const req = streamControl.lastRequest as { system: string }
-    expect(req.system).toContain('CLIENTS NAMED IN THE QUESTION THAT THIS CONVERSATION CANNOT REACH')
+    // M36 Stage 3 — option B ON (founder, 2026-09-06): the named client's
+    // memories were SEARCHED, the notice says so, and the client's id reached
+    // the retriever as an inferred scope while the chat stayed unbound.
+    expect(req.system).toContain('CLIENTS NAMED IN THE QUESTION — THEIR MEMORIES WERE SEARCHED')
     expect(req.system).toContain('Acme')
     expect(
       req.system,
-      'the model was not told to stop answering from general context — which is ' +
-        'the entire fix, since the damage was a confident answer from the wrong memories'
-    ).toContain('Do NOT present rep-wide or business-wide facts')
+      'the model was not told to use client memories only for their client'
+    ).toContain('use them only for that client')
+    const ragCall = vi.mocked(ragMod.retrieveRelevantMemoriesStructured).mock.calls.at(-1)!
+    expect(ragCall[1]).toMatchObject({ contactId: null, inferredClientIds: ['acme'] })
+  })
+
+  it("names nobody → option C's refusal is the fallback: no client scope searched, the model told to say so", async () => {
+    const { convId, invoke } = await setup()
+    unboundMock.detect.mockResolvedValue([])
+    const pending = invoke('assistant:send', convId, 'do they need SOC 2 before signing?')
+    streamControl.push('ok')
+    streamControl.end()
+    await pending
+    const req = streamControl.lastRequest as { system: string }
+    expect(req.system).toContain('CLIENT SCOPE FOR THIS QUESTION')
+    expect(req.system).toContain('cannot reach that client from here')
+    const ragCall = vi.mocked(ragMod.retrieveRelevantMemoriesStructured).mock.calls.at(-1)!
+    expect(ragCall[1]).toMatchObject({ contactId: null, inferredClientIds: [] })
   })
 
   it('a SCOPED chat never runs it — the cross-client path is untouched', async () => {

@@ -79,8 +79,13 @@ describe('detectUnboundClientMentions', () => {
 })
 
 describe('unboundClientNotice', () => {
-  it('is null when nothing was named — no notice on ordinary turns', () => {
-    expect(unboundClientNotice([])).toBeNull()
+  it("when nothing was named: option C's refusal stays as the FALLBACK (founder's condition, 2026-09-06)", () => {
+    const notice = unboundClientNotice([])
+    expect(notice.title).toBe('CLIENT SCOPE FOR THIS QUESTION')
+    const text = notice.lines.map((l) => l.text).join(' ')
+    expect(text).toContain('only rep-wide and business-wide memories were searched')
+    expect(text).toContain('cannot reach that client from here')
+    expect(text).toContain('do NOT answer a client question from general context')
   })
 
   it('DISTINGUISHES "exists but unreachable" from "nothing learned yet"', () => {
@@ -91,17 +96,19 @@ describe('unboundClientNotice', () => {
       { contactId: 'globex', label: 'Sam Park (Globex)', memoryCount: 0 }
     ])
     const text = notice!.lines.map((l) => l.text).join('\n')
-    expect(text).toContain('2 memories exist for this client, but they are NOT reachable')
+    // option B is ON: the named client's memories WERE searched, and the notice says so
+    expect(text).toContain('2 memories exist for this client and were searched for this question because the question named them')
     expect(text).toContain('no memories have been learned about this client yet')
-    expect(text).toContain('scoped to that')
+    expect(text).toContain('nothing to search')
   })
 
-  it('tells the model NOT to answer from rep/business context', () => {
+  it('tells the model a "nothing learned yet" client must not be inferred from rep/business memories', () => {
     const notice = unboundClientNotice([
       { contactId: 'acme', label: 'Acme', memoryCount: 1 }
     ])
     const text = notice!.lines.map((l) => l.text).join('\n')
-    expect(text).toContain('Do NOT present rep-wide or business-wide facts')
+    expect(text).toContain('use them only for that client')
+    expect(text).toContain('rather than inferring them from rep-wide')
   })
 
   it('singular/plural reads correctly for one memory', () => {

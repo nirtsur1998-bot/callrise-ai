@@ -199,9 +199,9 @@ async function runConfig(
   /**
    * M36 Stage 3 — option B measured: the unbound conversation searches the
    * clients the QUESTION names, inferred from the words typed
-   * (client-inference.ts). OFF in production until the founder switches it
-   * (BUG-096's option C is the standing decision); this row exists so that
-   * decision has a number on each side.
+   * (client-inference.ts). ON in production since 2026-09-06 (the founder's
+   * decision, made on this row's number); this row is now the regression gate
+   * for it, with the cross-scope invariant asserted inside rag.ts as well.
    */
   inferClients = false
 ): Promise<QuestionResult[]> {
@@ -307,7 +307,7 @@ describe('retrieval quality eval (offline, real embeddings + real sqlite-vec)', 
       await runConfig(true, undefined, true)
     )
     const inferredMetrics = report(
-      "Rise, UNSCOPED + named-client inference (option B — OFF in production, the founder's switch)",
+      "Rise, UNSCOPED + named-client inference (option B — ON in production since 2026-09-06)",
       await runConfig(true, undefined, true, true)
     )
     // The option-B row must recover what the question names and leak nothing:

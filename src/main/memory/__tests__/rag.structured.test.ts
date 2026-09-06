@@ -83,6 +83,36 @@ describe('retrieveRelevantMemoriesStructured', () => {
     expect(scopes).toEqual(['rep', 'business', 'client:c-1'])
   })
 
+  // M36 Stage 3 — option B, switched on by the founder under three conditions.
+  it('unbound + inferredClientIds: fans out to rep, business and each NAMED client, in order', async () => {
+    await retrieveRelevantMemoriesStructured('what did Dana say?', {
+      contactId: null,
+      inferredClientIds: ['c-acme', 'c-globex']
+    })
+    const scopes = mocks.search.mock.calls.map((c) => (c[2] as { scope: string }).scope)
+    expect(scopes).toEqual(['rep', 'business', 'client:c-acme', 'client:c-globex'])
+  })
+  it('bound: inferredClientIds is ignored — a scoped chat searches its own client and no other', async () => {
+    await retrieveRelevantMemoriesStructured('q', { contactId: 'c-1', inferredClientIds: ['c-acme'] })
+    const scopes = mocks.search.mock.calls.map((c) => (c[2] as { scope: string }).scope)
+    expect(scopes).toEqual(['rep', 'business', 'client:c-1'])
+  })
+  it('unbound with nothing inferred: rep and business only (a question that names nobody stays unscoped)', async () => {
+    await retrieveRelevantMemoriesStructured('do they need SOC 2?', { contactId: null, inferredClientIds: [] })
+    const scopes = mocks.search.mock.calls.map((c) => (c[2] as { scope: string }).scope)
+    expect(scopes).toEqual(['rep', 'business'])
+  })
+  it('THE INVARIANT: a result from a scope this call did not ask for THROWS — it is never filtered quietly', async () => {
+    mocks.search.mockImplementation((_db, _e, opts) =>
+      opts.scope === 'business'
+        ? [{ memory: { ...mem('leak', 'other client secret'), scope: 'client:c-other' }, distance: 0.2 }]
+        : []
+    )
+    await expect(retrieveRelevantMemoriesStructured('q', { contactId: null })).rejects.toThrow(
+      /cross-scope result refused: memory leak is in scope "client:c-other"/
+    )
+  })
+
   it('defaults to active-only; includeHypotheses widens the status filter', async () => {
     await retrieveRelevantMemoriesStructured('q')
     expect((mocks.search.mock.calls[0][2] as { statuses: string[] }).statuses).toEqual(['active'])
