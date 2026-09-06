@@ -18,10 +18,62 @@
 import { isSalesBrainEnabled } from '../app-settings'
 import { ensureMemoryDb, getMemoryDb } from './memory-runtime'
 import { embedText } from './embeddings'
-import { touchRetrieved, searchMemoriesByVector, type VectorSearchResult } from './memories-store'
+import {
+  touchRetrieved,
+  searchMemoriesByText,
+  searchMemoriesByVector,
+  type LexicalSearchResult,
+  type VectorSearchResult
+} from './memories-store'
+import { lexicalTerms } from './lexical-terms'
 import { clientScope, type MemoryScope, type MemoryStatus } from './types'
 
 const MAX_RESULTS = 5
+
+/** Reciprocal-rank-fusion constant (Cormack et al. 2009's 60). With two
+ *  channels this makes a memory both channels rank first score ~2/61, one
+ *  either channel ranks first ~1/61, and the tenth in one channel ~1/70 — a
+ *  gentle slope, so agreement between channels outranks a strong showing in
+ *  one, and a lexical-only hit (a name the vector channel cannot see) still
+ *  lands beside the vector channel's own top results rather than below all
+ *  of them. */
+const RRF_K = 60
+
+/**
+ * M36 Stage 3 item 2 — hybrid fusion. `vector` is already sorted by distance
+ * (the vector channel's rank order), `lexical` by bm25 (the lexical
+ * channel's). Each memory's score is the sum of 1/(K + rank) over the
+ * channels that surfaced it; ties break on the real vector distance. The
+ * result keeps every field the vector channel returned and adds `via` and
+ * `matchedTerms` so a consumer can say which channel spoke.
+ */
+export function fuseChannels(
+  vector: ReadonlyArray<VectorSearchResult>,
+  lexical: ReadonlyArray<LexicalSearchResult>,
+  limit: number
+): VectorSearchResult[] {
+  const fused = new Map<string, { result: VectorSearchResult; score: number }>()
+  vector.forEach((r, rank) => {
+    fused.set(r.memory.id, { result: { ...r, via: 'vector' }, score: 1 / (RRF_K + rank + 1) })
+  })
+  lexical.forEach((r, rank) => {
+    const contribution = 1 / (RRF_K + rank + 1)
+    const existing = fused.get(r.memory.id)
+    if (existing) {
+      existing.score += contribution
+      existing.result = { ...existing.result, via: 'both', matchedTerms: r.matchedTerms }
+    } else {
+      fused.set(r.memory.id, {
+        result: { memory: r.memory, distance: r.distance, via: 'lexical', matchedTerms: r.matchedTerms },
+        score: contribution
+      })
+    }
+  })
+  return [...fused.values()]
+    .sort((a, b) => b.score - a.score || a.result.distance - b.result.distance)
+    .slice(0, limit)
+    .map((f) => f.result)
+}
 
 /** BUG-080 — vec_memories is a plain `vec0` table, so distances are
  *  EUCLIDEAN (L2), not cosine: on MiniLM's unit vectors a natural-language
@@ -127,11 +179,20 @@ export async function retrieveRelevantMemoriesStructured(
     'business',
     ...(contactId ? [clientScope(contactId)] : inferred.map((id) => clientScope(id)))
   ]
-  const results = scopes
+  const vector = scopes
     .flatMap((scope) => searchMemoriesByVector(db, embedding, { scope, limit, statuses }))
     .filter((r) => r.distance <= maxDistance)
     .sort((a, b) => a.distance - b.distance)
-    .slice(0, limit)
+  // M36 Stage 3 item 2 — the lexical channel: the same scopes, by string.
+  // A question made only of function words has nothing to match and the
+  // channel is skipped, so such a question behaves exactly as before.
+  const terms = lexicalTerms(query)
+  const lexical = terms.length
+    ? scopes
+        .flatMap((scope) => searchMemoriesByText(db, terms, embedding, { scope, limit, statuses }))
+        .sort((a, b) => a.score - b.score)
+    : []
+  const results = fuseChannels(vector, lexical, limit)
   assertScopeInvariant(results, scopes)
   // M36 Stage 3 item 4 — what was surfaced is in use; say so for the decay
   // clock. Best-effort: a failed touch must never cost the turn its memories.

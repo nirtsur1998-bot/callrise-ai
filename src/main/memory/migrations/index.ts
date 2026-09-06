@@ -96,6 +96,46 @@ ALTER TABLE memories ADD COLUMN last_retrieved_at TEXT;
 `
 }
 
-export const MIGRATIONS: Migration[] = [MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004]
+/** M36 Stage 3 item 2 — the lexical channel's store half. An FTS5 index over
+ *  `memories.statement`, kept in step by triggers, so a proper noun ("Okafor",
+ *  "Tellus", "Marseille") can be found by STRING when the embedding has no
+ *  meaning to match on (see lexical-terms.ts for the measured gap). It is an
+ *  external-content table: the text lives in `memories` and nowhere else, the
+ *  index stores tokens and positions only — nothing new is stored about the
+ *  user, and dropping the table plus its triggers restores the previous file
+ *  exactly. The closing `rebuild` indexes every row that already exists, so
+ *  a user upgrading with 2,000 memories can find them by name the moment the
+ *  migration returns. `unicode61 remove_diacritics 2`: case-folded, accent-
+ *  insensitive ("Jose" finds "José"), no stemming, no prefixes. */
+const MIGRATION_005: Migration = {
+  version: 5,
+  description:
+    'M36 Stage 3 item 2 — memories_fts: FTS5 lexical index over memories.statement (external content, trigger-maintained, rebuilt over existing rows) so names, products and places retrieve by string beside the vector channel',
+  sql: `
+CREATE VIRTUAL TABLE memories_fts USING fts5(
+  statement,
+  content='memories',
+  content_rowid='rowid_pk',
+  tokenize='unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER memories_fts_ai AFTER INSERT ON memories BEGIN
+  INSERT INTO memories_fts(rowid, statement) VALUES (new.rowid_pk, new.statement);
+END;
+
+CREATE TRIGGER memories_fts_ad AFTER DELETE ON memories BEGIN
+  INSERT INTO memories_fts(memories_fts, rowid, statement) VALUES ('delete', old.rowid_pk, old.statement);
+END;
+
+CREATE TRIGGER memories_fts_au AFTER UPDATE OF statement ON memories BEGIN
+  INSERT INTO memories_fts(memories_fts, rowid, statement) VALUES ('delete', old.rowid_pk, old.statement);
+  INSERT INTO memories_fts(rowid, statement) VALUES (new.rowid_pk, new.statement);
+END;
+
+INSERT INTO memories_fts(memories_fts) VALUES ('rebuild');
+`
+}
+
+export const MIGRATIONS: Migration[] = [MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005]
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version

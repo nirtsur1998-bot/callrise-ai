@@ -5,6 +5,7 @@
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import type { CompiledProfile, Memory, MemoryCandidate, MemoryEvidence, MemoryScope, MemoryStatus, ProfileSize } from './types'
+import { ftsMatchQuery, matchedTerms } from './lexical-terms'
 
 interface MemoryRow {
   rowid_pk: number
@@ -190,7 +191,75 @@ export function listDistinctScopes(db: Database.Database): MemoryScope[] {
 
 export interface VectorSearchResult {
   memory: Memory
+  /** L2 distance between the question's embedding and this memory's — REAL
+   *  on every result, including ones the lexical channel surfaced (they
+   *  carry the distance the vector channel would have given them, which is
+   *  usually why the vector channel missed them). */
   distance: number
+  /** M36 Stage 3 item 2 — which channel(s) surfaced this result. Absent on
+   *  raw store results; set by rag.ts's fusion. */
+  via?: 'vector' | 'lexical' | 'both'
+  /** The question's terms this statement contains, when the lexical channel
+   *  had a say — so a citation can show WHY ("matched: okafor"). */
+  matchedTerms?: string[]
+}
+
+export interface LexicalSearchResult extends VectorSearchResult {
+  /** FTS5 bm25() — lower is better, always ≤ 0. */
+  score: number
+  matchedTerms: string[]
+}
+
+/**
+ * M36 Stage 3 item 2 — the lexical channel (hybrid retrieval's other half).
+ * Matches ANY of `terms` against `memories_fts` (migration 5), ranked by
+ * bm25, with the same status and scope filters as the vector search so the
+ * cross-scope invariant in rag.ts holds for both channels identically. Each
+ * row also carries its TRUE vector distance from `queryEmbedding` — a lexical
+ * hit is never given a made-up distance. `terms` come from
+ * lexical-terms.ts; an empty list returns [] without touching the db.
+ */
+export function searchMemoriesByText(
+  db: Database.Database,
+  terms: ReadonlyArray<string>,
+  queryEmbedding: Float32Array,
+  opts: { scope?: MemoryScope; limit?: number; statuses?: MemoryStatus[] } = {}
+): LexicalSearchResult[] {
+  if (terms.length === 0) return []
+  const limit = opts.limit ?? 10
+  const statuses = opts.statuses?.length ? opts.statuses : (['active'] as MemoryStatus[])
+  const statusParams: Record<string, string> = {}
+  statuses.forEach((s, i) => {
+    statusParams[`status${i}`] = s
+  })
+  const rows = db
+    .prepare(
+      `
+      SELECT m.*, bm25(memories_fts) AS score, vec_distance_L2(v.embedding, @embedding) AS distance
+      FROM memories_fts f
+      JOIN memories m ON m.rowid_pk = f.rowid
+      JOIN vec_memories v ON v.rowid = m.rowid_pk
+      WHERE memories_fts MATCH @match
+        AND m.status IN (${statuses.map((_, i) => `@status${i}`).join(', ')})
+        ${opts.scope ? 'AND m.scope = @scope' : ''}
+      ORDER BY bm25(memories_fts)
+      LIMIT @limit
+      `
+    )
+    .all({
+      match: ftsMatchQuery(terms),
+      embedding: toBlob(queryEmbedding),
+      limit,
+      ...statusParams,
+      ...(opts.scope ? { scope: opts.scope } : {})
+    }) as (MemoryRow & { score: number; distance: number })[]
+
+  return rows.map((row) => ({
+    memory: rowToMemory(row),
+    distance: row.distance,
+    score: row.score,
+    matchedTerms: matchedTerms(row.statement, terms)
+  }))
 }
 
 /** Hybrid-retrieval's vector half (spec section 2's RETRIEVE step) — ranking

@@ -21,7 +21,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../app-settings', () => ({ isSalesBrainEnabled: () => true }))
 vi.mock('../memory-runtime', () => ({ getMemoryDb: () => ({ fake: 'db' }) }))
 vi.mock('../embeddings', () => ({ embedText: async () => new Float32Array(384) }))
-vi.mock('../memories-store', () => ({ searchMemoriesByVector: mocks.search }))
+vi.mock('../memories-store', () => ({
+  searchMemoriesByVector: mocks.search,
+  searchMemoriesByText: () => [],
+  touchRetrieved: () => {}
+}))
 
 import { retrieveRelevantMemories } from '../rag'
 

@@ -20,6 +20,16 @@ const mocks = vi.hoisted(() => ({
       _opts: { scope: string; limit: number; statuses: string[] }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ) => [] as { memory: any; distance: number }[]
+  ),
+  // M36 Stage 3 item 2 — the lexical channel, quiet unless a test speaks.
+  lexical: vi.fn(
+    (
+      _db: unknown,
+      _terms: ReadonlyArray<string>,
+      _embedding: unknown,
+      _opts: { scope: string; limit: number; statuses: string[] }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ) => [] as { memory: any; distance: number; score: number; matchedTerms: string[] }[]
   )
 }))
 
@@ -29,9 +39,13 @@ vi.mock('../memory-runtime', () => ({
   ensureMemoryDb: mocks.ensured
 }))
 vi.mock('../embeddings', () => ({ embedText: mocks.embed }))
-vi.mock('../memories-store', () => ({ searchMemoriesByVector: mocks.search, touchRetrieved: vi.fn() }))
+vi.mock('../memories-store', () => ({
+  searchMemoriesByVector: mocks.search,
+  searchMemoriesByText: mocks.lexical,
+  touchRetrieved: vi.fn()
+}))
 
-import { retrieveRelevantMemories, retrieveRelevantMemoriesStructured } from '../rag'
+import { fuseChannels, retrieveRelevantMemories, retrieveRelevantMemoriesStructured } from '../rag'
 
 function mem(id: string, statement: string, status: Memory['status'] = 'active'): Memory {
   return {
@@ -58,6 +72,8 @@ beforeEach(() => {
   mocks.embed.mockImplementation(async () => new Float32Array(384))
   mocks.search.mockReset()
   mocks.search.mockReturnValue([])
+  mocks.lexical.mockReset()
+  mocks.lexical.mockReturnValue([])
 })
 
 afterEach(() => {
@@ -172,6 +188,74 @@ describe('retrieveRelevantMemoriesStructured', () => {
     mocks.enabled = true
     expect(await retrieveRelevantMemoriesStructured('   ')).toEqual([])
     expect(mocks.embed).not.toHaveBeenCalled()
+  })
+})
+
+// M36 Stage 3 item 2 — the lexical channel, at the orchestration level. The
+// real FTS5 behaviour (a name found by string, "Priyanka" not matching
+// "Priya", scope respected, migration backfill) is proven against a real db
+// in lexical-channel.test.ts; what THIS block pins is how rag.ts fuses the
+// two channels and that the invariant covers both.
+describe('lexical channel fusion', () => {
+  const lex = (id: string, statement: string, distance: number, score: number, terms: string[], scope = 'rep') => ({
+    memory: { ...mem(id, statement), scope: scope as Memory['scope'] },
+    distance,
+    score,
+    matchedTerms: terms
+  })
+
+  it('a name the vector channel cannot see surfaces from the lexical channel, with its REAL distance and via: lexical', async () => {
+    mocks.lexical.mockImplementation((_db, terms, _e, opts) =>
+      opts.scope === 'client:c-globex' && terms.includes('okafor')
+        ? [lex('okafor', 'Sam Okafor is the internal champion', 1.41, -1.2, ['okafor', 'sam'], 'client:c-globex')]
+        : []
+    )
+    const results = await retrieveRelevantMemoriesStructured('Who is Sam Okafor?', { contactId: 'c-globex' })
+    expect(results.map((r) => r.memory.id)).toEqual(['okafor'])
+    expect(results[0].via).toBe('lexical')
+    expect(results[0].distance).toBe(1.41) // over MAX_DISTANCE — exactly why the vector channel missed it
+    expect(results[0].matchedTerms).toEqual(['okafor', 'sam'])
+    // the terms handed to the store are the question minus its function words
+    expect(mocks.lexical.mock.calls[0][1]).toEqual(['sam', 'okafor'])
+  })
+
+  it('a question made only of function words never touches the lexical channel', async () => {
+    await retrieveRelevantMemoriesStructured('what is it?', { contactId: null })
+    expect(mocks.lexical).not.toHaveBeenCalled()
+    expect(mocks.search).toHaveBeenCalled()
+  })
+
+  it('the lexical channel searches exactly the scopes the vector channel does, and a cross-scope lexical result THROWS', async () => {
+    mocks.lexical.mockImplementation((_db, _t, _e, opts) =>
+      opts.scope === 'business' ? [lex('leak', 'Okafor at another client', 0.9, -1, ['okafor'], 'client:c-other')] : []
+    )
+    await expect(retrieveRelevantMemoriesStructured('Who is Okafor?', { contactId: 'c-1' })).rejects.toThrow(
+      /cross-scope result refused: memory leak/
+    )
+    const scopes = mocks.lexical.mock.calls.map((c) => (c[3] as { scope: string }).scope)
+    expect(scopes).toEqual(['rep', 'business', 'client:c-1'])
+  })
+
+  it('fuseChannels: agreement outranks either channel alone; ties break on distance; the cap holds', () => {
+    const v = [
+      { memory: mem('a', 'a'), distance: 0.5 },
+      { memory: mem('b', 'b'), distance: 0.6 },
+      { memory: mem('c', 'c'), distance: 0.7 }
+    ]
+    const l = [lex('b', 'b', 0.6, -2, ['x']), lex('d', 'd', 1.5, -1, ['x'])]
+    const fused = fuseChannels(v, l, 3)
+    // b: 1/62 + 1/61 (both) > a: 1/61 (vector #1) = d: 1/62 (lexical #2)... a beats d on rank; c: 1/63
+    expect(fused.map((r) => `${r.memory.id}:${r.via}`)).toEqual(['b:both', 'a:vector', 'd:lexical'])
+    expect(fused.find((r) => r.memory.id === 'b')?.matchedTerms).toEqual(['x'])
+  })
+
+  it('fuseChannels with an empty lexical list is exactly the old behaviour: by distance, capped', () => {
+    const v = [
+      { memory: mem('a', 'a'), distance: 0.5 },
+      { memory: mem('b', 'b'), distance: 0.6 }
+    ]
+    expect(fuseChannels(v, [], 1).map((r) => r.memory.id)).toEqual(['a'])
+    expect(fuseChannels(v, [], 5).every((r) => r.via === 'vector')).toBe(true)
   })
 })
 
