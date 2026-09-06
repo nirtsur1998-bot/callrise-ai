@@ -34,6 +34,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Make the destination before doing any work. Found by running this with an
+# -Out that did not exist: every file was gathered, and then Compress-Archive
+# failed on the last line. Failing at the end of a job is the worst place to fail.
+if (-not (Test-Path $Out)) { New-Item -ItemType Directory -Path $Out -Force | Out-Null }
 $stamp = Get-Date -Format 'yyyy-MM-dd-HHmmss'
 $work = Join-Path ([System.IO.Path]::GetTempPath()) "bugd-evidence-$stamp"
 New-Item -ItemType Directory -Path $work -Force | Out-Null

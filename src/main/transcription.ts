@@ -162,6 +162,44 @@ interface Session {
   pendingShedReason: GapReason
   /** True once a socket has opened, so we can tell a reconnect from a start. */
   connectedOnce: boolean
+
+  // ── BUG-D: THE TRAP (M37) ────────────────────────────────────────────────
+  // Six weeks, three dead hypotheses, every one killed by a measurement that
+  // did not exist. These fields exist so the NEXT thin call answers for
+  // itself. They are OBSERVATION ONLY: nothing reads them to make a decision,
+  // every write is inside a try, and deleting them would not change what the
+  // app does.
+  //
+  // The founder's branch question is "did multichannel capture actually
+  // work?", and Deepgram answers it unprompted on every connection: its
+  // Metadata frame carries the server's own `channels` count and a
+  // `request_id`. The message dispatch handled exactly two frame types
+  // ('Results' and 'UtteranceEnd'), so Metadata — along with Error, Warning,
+  // and the SpeechStarted this session explicitly asks for via
+  // vad_events=true — fell through both branches and was discarded three
+  // lines from where it would have been read.
+  /** Sockets opened across this session's whole life, reconnects included.
+   *  Distinct from `epoch`, which reaches disk only when a connection
+   *  produced a result — precisely the case BUG-D excludes. */
+  socketOpens: number
+  /** The channel count DEEPGRAM reports receiving, from its Metadata frame.
+   *  `s.multichannel` is what we asked for; this is what the server got.
+   *  When the two disagree, that gap is the answer. */
+  serverChannels: number | null
+  /** Deepgram's own request id for the most recent connection — the join key
+   *  for any support conversation with them. */
+  requestId: string | null
+  /** Close code and reason of the last socket close. `ws.on('close')` took no
+   *  arguments, so both were discarded at arrival. */
+  lastCloseCode: number | null
+  lastCloseReason: string | null
+  /** Socket-level errors. Previously console.error only, and this module
+   *  calls no logger, so in a packaged build they went nowhere at all. */
+  socketErrors: number
+  /** Frames that are neither Results nor UtteranceEnd, counted by type, so a
+   *  Deepgram Error or Warning frame is at least COUNTED rather than unseen. */
+  otherFrames: Record<string, number>
+
   /** The last state emitted to the renderer.
    *
    *  M26 4.3 — recorded because a renderer that mounts mid-call has to be told
@@ -527,7 +565,16 @@ function logSessionSummary(s: Session): void {
       `multichannel=${s.multichannel} submittedSec=${snap.submittedSec} ` +
       `acknowledgedSec=${snap.acknowledgedSec} maxLagSec=${snap.lagSec} ` +
       `medianLagSec=${snap.medianLagSec} resets=${snap.resets} driftPpm=${snap.driftPpm} ` +
-      `rejectedProducerFrames=${snap.rejectedProducerFrames}\n`
+      `rejectedProducerFrames=${snap.rejectedProducerFrames} ` +
+      // BUG-D trap (M37). `multichannel=` above is what we ASKED Deepgram for;
+      // `serverChannels=` is what Deepgram says it received. socketOpens counts
+      // every connection including ones that produced no result at all - the case
+      // a segment's `epoch` structurally cannot show. closeCode/closeReason say
+      // why the last connection ended; requestId is Deepgram's own join key.
+      `socketOpens=${s.socketOpens} serverChannels=${s.serverChannels ?? 'unknown'} ` +
+      `closeCode=${s.lastCloseCode ?? 'none'} closeReason=${JSON.stringify(s.lastCloseReason ?? '')} ` +
+      `socketErrors=${s.socketErrors} frames=${JSON.stringify(s.otherFrames)} ` +
+      `requestId=${s.requestId ?? 'none'}\n`
     appendFileSync(join(app.getPath('userData'), 'session-health.log'), line, 'utf8')
   } catch {
     /* logging must never break a real call */
@@ -704,6 +751,12 @@ function connect(s: Session): void {
       queueShed(s, dropped.droppedSec, 'reconnect')
     }
     s.connectedOnce = true
+    // BUG-D trap: observation only, wrapped so it can never affect the call.
+    try {
+      s.socketOpens += 1
+    } catch {
+      /* never */
+    }
 
     // Deepgram restarts its audio clock per connection; the tracker rebases
     // onto the cumulative scale so lag stays continuous across the reconnect.
@@ -901,6 +954,31 @@ function connect(s: Session): void {
         })
       } else if (msg.type === 'UtteranceEnd') {
         emit(s, 'transcription:utteranceEnd', {})
+      } else {
+        // BUG-D trap (M37) - everything that is NOT Results or UtteranceEnd
+        // used to fall through both branches and vanish. That silently
+        // included the ONE frame that answers the founder's branch question:
+        // Deepgram's `Metadata`, which reports the channel count THE SERVER
+        // IS RECEIVING plus its own request_id. `s.multichannel` is what we
+        // asked for; `channels` here is what actually arrived, and when the
+        // two disagree that gap IS the answer. It was being discarded three
+        // lines from where it is now read. Error and Warning frames fell
+        // through the same hole; they are at least counted now.
+        //
+        // Observation only: recorded, never acted on, and wrapped so a
+        // malformed frame cannot reach reportFault through this new path.
+        try {
+          const kind = typeof msg.type === 'string' ? msg.type : 'unknown'
+          s.otherFrames[kind] = (s.otherFrames[kind] ?? 0) + 1
+          if (kind === 'Metadata') {
+            const ch = (msg as { channels?: unknown }).channels
+            if (typeof ch === 'number' && Number.isFinite(ch)) s.serverChannels = ch
+            const rid = (msg as { request_id?: unknown }).request_id
+            if (typeof rid === 'string' && rid.length > 0) s.requestId = rid.slice(0, 64)
+          }
+        } catch {
+          /* never */
+        }
       }
     } catch (err) {
       reportFault(s, 'wsMessage', err)
@@ -923,9 +1001,27 @@ function connect(s: Session): void {
   ws.on('error', (err: Error) => {
     // 'close' (or the watchdog) decides the user-facing outcome; just log here.
     console.error('[transcription] socket error:', err.message)
+    // BUG-D trap: console.error goes nowhere in a packaged build (this module
+    // calls no logger), so the count is the only durable trace.
+    try {
+      s.socketErrors += 1
+    } catch {
+      /* never */
+    }
   })
 
-  ws.on('close', () => {
+  ws.on('close', (code?: number, reason?: Buffer) => {
+    // BUG-D trap: Deepgram's close code says WHY the connection ended, and
+    // this handler took no arguments at all, so it was discarded at arrival.
+    // Recorded first and wrapped, because every decision below must behave
+    // exactly as it did.
+    try {
+      s.lastCloseCode = typeof code === 'number' ? code : null
+      const text = reason ? reason.toString('utf8').slice(0, 120) : ''
+      s.lastCloseReason = text.length > 0 ? text : null
+    } catch {
+      /* never */
+    }
     if (session !== s) return
     if (s.keepAlive) {
       clearInterval(s.keepAlive)
@@ -1195,6 +1291,13 @@ export function registerTranscription(): void {
       pendingShedMs: 0,
       pendingShedReason: 'shed',
       connectedOnce: false,
+      socketOpens: 0,
+      serverChannels: null,
+      requestId: null,
+      lastCloseCode: null,
+      lastCloseReason: null,
+      socketErrors: 0,
+      otherFrames: {},
       lastState: 'connecting',
       reconnectAttempts: 0,
       stopping: false,

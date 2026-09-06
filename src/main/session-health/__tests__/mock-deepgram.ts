@@ -141,6 +141,24 @@ export class MockDeepgram {
     }
   }
 
+  /**
+   * M37 / BUG-D — the Metadata frame real Deepgram sends on every connection,
+   * carrying the channel count THE SERVER received and its own request id.
+   * Explicit rather than automatic so existing tests see exactly the traffic
+   * they always did.
+   */
+  sendMetadata(channels: number, requestId: string): void {
+    const c = this.connections.at(-1)
+    if (!c) throw new Error('no connection to send Metadata on')
+    c.socket.send(JSON.stringify({ type: 'Metadata', channels, request_id: requestId }))
+  }
+
+  /** The channel count the CLIENT asked for on the newest connection, read
+   *  from its query string — so a test can assert ask-versus-got. */
+  get requestedChannels(): number {
+    return this.connections.at(-1)?.channels ?? 0
+  }
+
   /** Seconds acknowledged on the newest connection — the client's Y cursor. */
   get acknowledgedSec(): number {
     return this.connections.at(-1)?.processedSec ?? 0
