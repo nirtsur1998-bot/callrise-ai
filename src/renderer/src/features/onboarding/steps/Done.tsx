@@ -3,6 +3,7 @@ import { PhoneCall, Loader2, Check, User, Sparkles, Mic, KeyRound } from 'lucide
 import { Badge, type BadgeTone } from '@renderer/components/Badge'
 import { Button } from '@renderer/components/Button'
 import type { OnboardingState } from '../useOnboarding'
+import { MIC_OUTCOME_TEXT } from '@renderer/features/audio/micOutcome'
 
 /** Closing screen: a three-row recap of what got set, then the two exits. */
 export function Done({
@@ -26,6 +27,15 @@ export function Done({
     : 'Off'
   const cuesTone: BadgeTone = o.cuesEnabled ? 'positive' : 'neutral'
   const recording = o.recordBothSides ? 'Both sides, with consent' : 'My side only'
+  // BUG-190: the summary used to omit the microphone entirely, so "You're all
+  // set" was said to someone whose request had just failed.
+  const micLabel =
+    o.micOutcome === null
+      ? 'Not checked'
+      : o.micOutcome === 'ok'
+        ? 'Ready'
+        : MIC_OUTCOME_TEXT[o.micOutcome].title
+  const micTone: BadgeTone = o.micOutcome === 'ok' ? 'positive' : o.micOutcome === null ? 'neutral' : 'warning'
 
   // The previous step already offered to add this key — this only re-checks
   // in case it was skipped there too, so "Start my first call" failing with
@@ -71,6 +81,14 @@ export function Done({
             <Mic className="h-3.5 w-3.5 shrink-0 text-faint" /> Recording
           </span>
           <Badge>{recording}</Badge>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="flex items-center gap-2 text-[13px] text-muted">
+            <Mic className="h-3.5 w-3.5 shrink-0 text-faint" /> Microphone
+          </span>
+          <Badge tone={micTone} className="max-w-[60%] truncate">
+            {micLabel}
+          </Badge>
         </div>
       </div>
 

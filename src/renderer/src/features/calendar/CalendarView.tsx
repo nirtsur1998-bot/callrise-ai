@@ -22,6 +22,7 @@ import { CalendarConnectBar } from './CalendarConnectBar'
 import { QuickEventDialog } from './QuickEventDialog'
 import { AgendaRail } from './AgendaRail'
 import { buildChipContext } from './chipContext'
+import { orphanNoteOf, syncFailureOf } from './syncFailure'
 import { usePrepBriefStatuses } from './usePrepBriefStatuses'
 import { useContacts } from '@renderer/features/contacts/useContacts'
 import { useDeals } from '@renderer/features/deals/useDeals'
@@ -407,6 +408,19 @@ export function CalendarView({
               : undefined
           }
           syncEnabled={googleWritable || outlookWritable}
+          // BUG-169 — the failure the event carries, and the one manual retry.
+          // Main refreshes the calendar itself when the outcome changes
+          // (notifyEventsChanged), so nothing here re-pulls by hand.
+          syncFailure={dialog.event ? syncFailureOf(dialog.event) : null}
+          orphanNote={dialog.event ? orphanNoteOf(dialog.event) : null}
+          onRetryPush={
+            dialog.event
+              ? async () => {
+                  const r = await window.api.events.retryPush(dialog.event!.id)
+                  return { ok: r.ok, reason: r.reason }
+                }
+              : undefined
+          }
         />
       )}
 

@@ -5,6 +5,7 @@
 // accent bubbles; Rise's replies are flat document-style text with real
 // (block-progressive) markdown. The screen is disposable by design — main
 // owns conversations and in-flight turns; useAssistantChat re-attaches.
+import { Tooltip } from '@renderer/components/Tooltip'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Loader2,
@@ -1188,39 +1189,44 @@ export function AssistantView({
             <div className="flex min-w-0 items-center gap-2">
               {chat.scope && (
                 /* M28 Part 4 — the scope indicator: who Rise is talking about. */
-                <span
-                  className="flex shrink-0 items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 text-[11.5px] font-medium text-accent"
-                  title={`This conversation is only about ${chat.scope.contactName}. Other clients' memories are never used here.`}
+                <Tooltip
+                  content={`This conversation is only about ${chat.scope.contactName}. Other clients' memories are never used here.`}
                 >
-                  <UserRound className="h-3.5 w-3.5" />
-                  About {chat.scope.contactName}
-                  {chat.scope.company ? ` · ${chat.scope.company}` : ''}
-                </span>
+                  <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 text-[11.5px] font-medium text-accent">
+                    <UserRound className="h-3.5 w-3.5" />
+                    About {chat.scope.contactName}
+                    {chat.scope.company ? ` · ${chat.scope.company}` : ''}
+                  </span>
+                </Tooltip>
               )}
               <p className="truncate text-[12.5px] font-medium text-muted">
                 {activeMeta?.title ?? ''}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={toggleLearning}
-              title={
+            <Tooltip
+              content={
                 chat.learningExcluded
                   ? `${ASSISTANT_SECTION_NAME} is not learning from this conversation. Click to turn learning back on (it will not re-learn past messages).`
                   : `${ASSISTANT_SECTION_NAME} can save facts from this conversation to your Sales Brain — always visibly, never silently. Click to exclude this conversation and forget what it already taught.`
               }
-              className={cn(
-                'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px]',
-                chat.learningExcluded ? 'border-line text-faint' : 'border-accent/40 text-accent'
-              )}
+              className="max-w-sm"
             >
-              {chat.learningExcluded ? (
-                <BrainCog className="h-3.5 w-3.5" />
-              ) : (
-                <Brain className="h-3.5 w-3.5" />
-              )}
-              {chat.learningExcluded ? 'Not learning' : 'Learning'}
-            </button>
+              <button
+                type="button"
+                onClick={toggleLearning}
+                className={cn(
+                  'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px]',
+                  chat.learningExcluded ? 'border-line text-faint' : 'border-accent/40 text-accent'
+                )}
+              >
+                {chat.learningExcluded ? (
+                  <BrainCog className="h-3.5 w-3.5" />
+                ) : (
+                  <Brain className="h-3.5 w-3.5" />
+                )}
+                {chat.learningExcluded ? 'Not learning' : 'Learning'}
+              </button>
+            </Tooltip>
           </div>
         )}
 

@@ -27,6 +27,7 @@ import type { SettingsPageId } from '@renderer/features/settings/settings-nav'
  * This module is the pure part: the step definitions and the resolution from
  * app state to status. Kept separate from the card that renders it for the
  * reason BUG-140 forced — component render output cannot be tested in this
+ * CORRECTION 2026-09-05: components CAN be render-tested here — see live-header-pieces.render.test.ts (`@vitest-environment happy-dom`, react-dom/client, a `.test.ts` file). The pure/UI split below still stands on its own merits; it is no longer forced.
  * repo, so everything with a rule in it lives where a test can reach it.
  */
 

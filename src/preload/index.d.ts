@@ -1666,6 +1666,8 @@ export interface EventsApi {
   deleteExternal: (link: AdoptEventInput) => Promise<{ ok: boolean }>
   /** Retry any pending Google pushes/deletes (offline backlog). */
   reconcile: () => Promise<void>
+  /** BUG-169 — the one manual retry of a failed push, from the event. */
+  retryPush: (id: string) => Promise<{ ok: boolean; reason?: string }>
   /** Fires when a background Google sync changes events on disk. */
   onChanged: (cb: () => void) => () => void
 }
@@ -2035,7 +2037,8 @@ export interface Tier1Api {
   /** Collects noise-cancellation logs + audio state into one zip (save
    *  dialog). No call audio, recordings or transcripts are included. */
   exportDiagnostics: (info: {
-    deviceLabels?: string[]
+    /** BUG-122 — a keyword-derived classification, never the labels. */
+    devices?: { hasVirtualMic: boolean; inputCount: number; kinds: string[] }
     tier1Enabled?: boolean
     denoiseStrength?: string
   }) => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>

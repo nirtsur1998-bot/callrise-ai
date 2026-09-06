@@ -33,8 +33,8 @@ export interface HostileIdentity {
 export const HOSTILE_IDENTITIES: readonly HostileIdentity[] = [
   {
     id: 'space',
-    username: 'Nir Tsur',
-    homedir: 'C:\\Users\\Nir Tsur',
+    username: 'Dana Whitfield',
+    homedir: 'C:\\Users\\Dana Whitfield',
     breaks:
       'BUG-093 itself. WIN_PROFILE negates \\s so its capture stops at the space; the ' +
       'homedir and username rules both used a slash-only lookahead. All three failed together.'
@@ -69,11 +69,11 @@ export const HOSTILE_IDENTITIES: readonly HostileIdentity[] = [
   },
   {
     id: 'prefix-short',
-    username: 'Nir',
-    homedir: 'C:\\Users\\Nir',
+    username: 'Dana',
+    homedir: 'C:\\Users\\Dana',
     breaks:
-      'Prefix collision with `Nir Tsur`: the short name must not half-match the long one, ' +
-      'and redacting `Nir` must not leave a dangling ` Tsur`.'
+      'Prefix collision with `Dana Whitfield`: the short name must not half-match the long one, ' +
+      'and redacting `Dana` must not leave a dangling ` Whitfield`.'
   },
   {
     id: 'single-char',
@@ -92,6 +92,31 @@ export const HOSTILE_IDENTITIES: readonly HostileIdentity[] = [
     username: 'A'.repeat(200),
     homedir: `C:\\Users\\${'A'.repeat(200)}`,
     breaks: 'Length, and its interaction with the scrubber\u2019s 4096-char cap.'
+  },
+  // Founder's additions, 2026-09-05 (BUG-091 fix-shape item 4, answered).
+  {
+    id: 'hyphen-apostrophe',
+    username: "O'Neill-Smith",
+    homedir: "C:\\Users\\O'Neill-Smith",
+    breaks:
+      'A hyphen AND an apostrophe together: the hyphen is a word boundary to a naive rule, ' +
+      'so half the name can match on its own; the apostrophe is the quote hazard again.'
+  },
+  {
+    id: 'common-word-admin',
+    username: 'Admin',
+    homedir: 'C:\\Users\\Admin',
+    breaks:
+      "A second account name that is also an ordinary English word (this machine's `User` is " +
+      'the first). Over-redaction pressure: prose mentioning admins must not be scrubbed.'
+  },
+  {
+    id: 'corporate-dot',
+    username: 'dana.whitfield',
+    homedir: 'C:\\Users\\dana.whitfield',
+    breaks:
+      'A dot that is NOT a domain — the corporate first.last shape, and the one most likely ' +
+      'to be half-matched by a rule written against Administrator.DOMAIN.'
   }
 ] as const
 

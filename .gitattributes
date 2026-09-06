@@ -1,0 +1,16 @@
+# M35 Stage 3 - line endings are LF in every checkout, including GitHub's Windows runner,
+# whose default autocrlf turned every file CRLF and made vitest fail to load any test
+# importing an .mjs from scripts/ ("Invalid or unexpected token"; reproduced locally by
+# converting the files to CRLF). A .ts import from the same CRLF file was fine; the
+# .mjs path through vitest was not. Pin the checkout instead of chasing the runner.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.exe binary
+*.dll binary
+*.node binary
+*.wav binary
+*.zip binary
+*.asar binary

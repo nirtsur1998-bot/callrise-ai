@@ -8,6 +8,7 @@ import { useTitleBarOverlay } from '@renderer/features/settings/useTitleBarOverl
 import { OnboardingFlow, type OnboardingExit } from '@renderer/features/onboarding/OnboardingFlow'
 import { isOnboardingComplete } from '@renderer/features/onboarding/prefs'
 import { ToastProvider } from '@renderer/features/notifications/ToastProvider'
+import { TooltipProvider } from '@renderer/components/Tooltip'
 import type { NavId } from '@renderer/features/navigation/nav-items'
 import { ErrorBoundary } from '@renderer/components/ErrorBoundary'
 import { ActivityCenter } from '@renderer/features/jobs/ActivityCenter'
@@ -53,6 +54,8 @@ function App(): React.JSX.Element {
   // screen (auth, onboarding, and the main app).
   return (
     <ToastProvider>
+      {/* M35 — one tooltip provider for the whole app; see components/Tooltip.tsx */}
+      <TooltipProvider>
       {loading ? (
         <Splash />
       ) : !user ? (
@@ -91,6 +94,7 @@ function App(): React.JSX.Element {
           <LiveCallPill />
         </LiveCallProvider>
       )}
+      </TooltipProvider>
     </ToastProvider>
   )
 }

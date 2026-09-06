@@ -6,6 +6,7 @@ import {
   updateEvent,
   getEvent,
   setEventSync,
+  orphanEvent,
   markEventDeleted,
   type CalendarEvent,
   type EventCreateInput,
@@ -23,9 +24,53 @@ import { startEventReminders, refreshEventReminders } from './event-reminders'
 import { getJobManager } from './jobs/instance'
 import type { Job } from './jobs/types'
 import { NO_AI_PURPOSE } from './jobs/types'
+import {
+  describeSyncFailure,
+  noticeAlreadyShown,
+  PUSH_FAILED_JOB_TYPE,
+  shouldDrainOnReconcile,
+  type PushFailedNoticeInput
+} from './events-sync-failure'
 
 function eventsDir(): string {
   return join(app.getPath('userData'), 'events')
+}
+
+/** The words for an orphaned event, shared by the Activity row and (in its own
+ *  copy) the renderer's dialog line. */
+export function orphanNote(o: { provider: string; at: string }): string {
+  const where = o.provider.startsWith('google') ? 'Google Calendar' : o.provider.startsWith('outlook') ? 'Outlook' : 'your calendar'
+  return `Kept here only: the ${where} calendar it was on no longer exists (since ${o.at.slice(0, 10)}).`
+}
+
+/** Founder's decision, 2026-09-05: every linked event stuck in error:not-found
+ *  becomes local-only with the reason recorded. Returns how many changed. */
+export async function orphanNotFoundEvents(): Promise<number> {
+  const all = await listEvents(eventsDir(), { includeDeleted: false })
+  let n = 0
+  for (const e of all) {
+    if (e.sync?.state === 'error' && e.sync.lastError === 'not-found' && e.externalId) {
+      if (await withState(e.id, () => orphanEvent(eventsDir(), e.id))) n++
+    }
+  }
+  if (n) {
+    console.log(`[events] ${n} event(s) whose calendar no longer exists are now kept here only`)
+    notifyEventsChanged()
+  }
+  return n
+}
+
+/** BUG-169 — one Activity row per failed event, never a second while the
+ *  first is still standing, and never a push. Wrapped: a notice must never
+ *  break the push path that produced it. */
+function noteCalendarPushFailure(input: PushFailedNoticeInput): void {
+  try {
+    const manager = getJobManager()
+    if (noticeAlreadyShown(manager.list(), input.eventId)) return
+    manager.enqueue(PUSH_FAILED_JOB_TYPE, input)
+  } catch (err) {
+    console.error('[events] could not post the push-failed notice:', err)
+  }
 }
 
 /** Tell every window the events on disk changed, so the calendar re-reads. Used
@@ -104,9 +149,28 @@ async function recordPushResult(
         remoteUpdatedAt: res.remoteUpdatedAt,
         sync: { state: 'synced', lastPushedAt: new Date().toISOString() }
       })
+    } else if (res.error === 'not-found' && cur.externalId) {
+      // Founder's decision (2026-09-05): a LINKED event whose calendar no
+      // longer exists (the PATCH 404'd and the re-insert into the same
+      // calendar id 404'd) becomes local-only with the reason on the record,
+      // rather than an error nobody can retry out of. On the founder's own
+      // profile: ten events from Aug 6–13 pinned to two dead Outlook calendar
+      // ids. The Activity row below still fires once, and reads as "kept
+      // here only" once it looks at the record.
+      await orphanEvent(eventsDir(), id)
+      noteCalendarPushFailure({ eventId: id, title: cur.title, code: res.error, provider: cur.provider })
     } else {
       await setEventSync(eventsDir(), id, {
         sync: { state: res.retryable ? 'dirty' : 'error', lastError: res.error }
+      })
+      // BUG-169 — say so, ONCE, in the Activity feed. The event itself shows
+      // the failure through its sync state (chip + dialog); this is the second
+      // place the founder asked for, and it never retries anything.
+      noteCalendarPushFailure({
+        eventId: id,
+        title: cur.title,
+        code: res.error,
+        provider: cur.provider
       })
     }
     return res.ok
@@ -198,23 +262,23 @@ const RECONCILE_JOB_TYPE = 'calendar:reconcile'
  *  ⚠️ BUG-112 — THE THIRD REASON WAS FALSE, AND IT WAS THE LOAD-BEARING ONE.
  *  This comment used to read: "a failure already surfaces ON THE EVENT ITSELF
  *  in the Calendar UI via sync.state — which is a far better place for it than
- *  a generic Activity Center row." That surface was never built. Across the
- *  ENTIRE renderer, `sync` and `lastError` appear exactly once — the type
- *  declaration at renderer/features/calendar/types.ts:25. MonthGrid.tsx and
- *  WeekGrid.tsx do not mention `sync` at all. Nothing reads it. Ever.
+ *  a generic Activity Center row." For a year nobody had built that surface:
+ *  across the entire renderer, `sync` and `lastError` appeared exactly once —
+ *  the type declaration. A push that 403'd, hit a dead token, or took a Graph
+ *  500 was COMPLETELY SILENT: the event sat in the CallRise calendar looking
+ *  normal, absent from the rep's real calendar and their phone, no reminder.
+ *  On the founder's own profile, 12 of 21 events were in that state when
+ *  BUG-169 was opened (10 'error:not-found', 2 'dirty').
  *
- *  So today a push that 403s, or hits a dead token, or gets a Graph 500, is
- *  COMPLETELY SILENT: the event sits in the CallRise calendar looking normal,
- *  is not on the rep's real calendar, is not on their phone, and no reminder
- *  will fire. `events:delete` has the same shape — it returns {ok:true} before
- *  the remote delete is even attempted.
- *
- *  Deliberately NOT fixed here. Choosing where a sync failure appears, what it
- *  says, and whether it offers a retry is a product decision, not a bug fix,
- *  and it is written up as a fix shape in docs/OVERNIGHT-audit-findings.md
- *  rather than guessed at. What IS fixed is the comment: an argument that
- *  rests on a guarantee nobody built should not keep reading like a settled
- *  decision to the next person who opens this file. */
+ *  BUG-169 (2026-09-05) BUILT the surface, to the founder's shape: the chip
+ *  and agenda row carry a marker (features/calendar/chipContext.ts
+ *  `notSynced`), the event dialog says why and offers the one manual Retry
+ *  (SyncFailureLine -> `events:retryPush`), and the Activity feed gets ONE
+ *  failed row per event (events-sync-failure.ts, `noteCalendarPushFailure`).
+ *  The reconcile drain below no longer auto-retries failed pushes — see
+ *  `shouldDrainOnReconcile`. `events:delete` still returns {ok:true} before
+ *  the remote delete is attempted; its failure now shows the same way when
+ *  the un-tombstone path records a lastError. */
 function schedulePush(id: string): void {
   void enqueuePush(id, () => syncPush(id)).then((changed) => {
     if (changed) notifyEventsChanged()
@@ -239,7 +303,14 @@ async function reconcile(): Promise<void> {
       // Skip it (mirroring how syncPush special-cases the delete-path 403)
       // instead of silently retrying forever.
       if (state === 'error' && e.sync?.lastError === 'forbidden') continue
-      if (state === 'deleted' || state === 'dirty' || state === 'error') {
+      // BUG-169 — founder's rule (2026-09-05): a failed push is surfaced on
+      // the event and retried by the user, NEVER silently. This drain used
+      // to re-push every 'dirty' and 'error' event after each successful
+      // pull — the silent auto-retry the rule forbids, and the reason a
+      // failure could flicker between states with nobody told. Only pending
+      // DELETES still drain here: a deleted event has no dialog left to
+      // retry from, and an orphan left on Google forever is the worse harm.
+      if (shouldDrainOnReconcile(e.sync)) {
         if (await enqueuePush(e.id, () => syncPush(e.id))) changed = true
       }
     }
@@ -259,6 +330,13 @@ export function registerEvents(): void {
   // remind about (see event-reminders.ts). Started here rather than in
   // index.ts so it's owned by the same module that owns the event store.
   startEventReminders(eventsDir)
+
+  // Founder's decision (2026-09-05) for the events ALREADY in the not-found
+  // state when this shipped: same transition the push path now applies.
+  // Idempotent and cheap; fire-and-forget off the startup path.
+  void orphanNotFoundEvents().catch((err) =>
+    console.error('[events] orphan sweep failed:', err)
+  )
 
   ipcMain.handle('events:list', (): Promise<CalendarEvent[]> => listEvents(eventsDir()))
   // Each of these announces the change (notifyEventsChanged) rather than
@@ -398,6 +476,32 @@ export function registerEvents(): void {
     }
   })
 
+  // BUG-169 — the Activity row for a failed push. A REAL job that FAILS on
+  // purpose with the reason as its error, because a failed job is the feed's
+  // own unit: it shows once, reads like every other failure there, and its
+  // Retry re-checks the event rather than pushing (the push retry lives on the
+  // event, where the founder asked for it). Not silent — that is the point.
+  getJobManager().registerType<PushFailedNoticeInput, string>({
+    type: PUSH_FAILED_JOB_TYPE,
+    lane: 'MAINTENANCE',
+    aiPurpose: NO_AI_PURPOSE,
+    titleFor: (input) => `Calendar: "${input.title}" did not reach your calendar`,
+    cancellable: false,
+    executor: {
+      kind: 'inline-async',
+      run: async (input) => {
+        const e = await getEvent(eventsDir(), input.eventId)
+        if (!e || e.sync?.state === 'deleted') return 'The event was deleted.'
+        if (e.sync?.state === 'synced') return 'Now on your calendar.'
+        if (e.orphaned) return orphanNote(e.orphaned)
+        throw new Error(
+          describeSyncFailure(e.sync?.lastError ?? input.code, e.provider ?? input.provider) +
+            ' Open the event to retry.'
+        )
+      }
+    }
+  })
+
   // Founder-reported, 2026-08-29: the Activity Center showed ten identical
   // "Catching up calendar changes ✓" rows in a row.
   //
@@ -421,6 +525,24 @@ export function registerEvents(): void {
   // once per burst, and the point is that the burst needs zero of them.
   const RECONCILE_COOLDOWN_MS = 30_000
   let lastReconcileAt = 0
+
+  // BUG-169 — the ONE manual retry, from the event. Awaited, so the dialog can
+  // say what happened; the outcome handler above records the new state and
+  // (via notifyEventsChanged) the calendar redraws.
+  ipcMain.handle(
+    'events:retryPush',
+    async (_e, id: string): Promise<{ ok: boolean; reason?: string }> => {
+      if (typeof id !== 'string' || !id) return { ok: false, reason: 'Unknown event.' }
+      const ok = await enqueuePush(id, () => syncPush(id))
+      notifyEventsChanged()
+      if (ok) return { ok: true }
+      const e = await getEvent(eventsDir(), id)
+      // Found while driving: a bogus id answered "has not reached your
+      // calendar yet" — true of nothing. Name the case.
+      if (!e) return { ok: false, reason: 'Unknown event.' }
+      return { ok: false, reason: describeSyncFailure(e.sync?.lastError, e.provider) }
+    }
+  )
 
   ipcMain.handle('events:reconcile', () => {
     try {

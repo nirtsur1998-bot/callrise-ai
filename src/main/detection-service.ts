@@ -24,6 +24,7 @@ import {
 import { setOverlayInteractive } from './detection-overlay'
 import { CONFERENCING_APPS } from './detection/appRegistry'
 import { CallDetector } from './detection/CallDetector'
+import { shouldDeferPause } from './detection/pause-policy'
 import { MacAdapter } from './detection/adapters/MacAdapter'
 import { NullAdapter } from './detection/adapters/NullAdapter'
 import { WindowsAdapter } from './detection/adapters/WindowsAdapter'
@@ -57,6 +58,8 @@ let mainWindowRef: BrowserWindow | null = null
  *  ff_ambient_detection setting, since Pause/Resume (tray/overlay) toggle
  *  this without touching the persisted setting. */
 let running = false
+/** BUG-118 — a pause asked for mid-capture, applied when the capture ends. */
+let pauseWhenCaptureEnds = false
 
 /** Calls we've already run a policy decision for - a switch or a natural end-while-pending
  *  lands the FSM back in 'detected' WITHOUT a fresh 'call-detected' event, so this dedupes
@@ -172,6 +175,11 @@ function handleDetectorEvent(event: DetectorEvent): void {
   if (event.type === 'capture-ended' && event.reason !== 'user-stopped') {
     broadcast('detection:requestStopCapture', undefined)
   }
+  // BUG-118 — the deferred pause lands here, whatever ended the capture.
+  if (event.type === 'capture-ended' && pauseWhenCaptureEnds) {
+    pauseWhenCaptureEnds = false
+    pauseDetection()
+  }
   if (event.type === 'switch-offered') {
     broadcast('detection:switch-offered', { current: event.current, pending: event.pending })
   }
@@ -192,12 +200,21 @@ function openMainWindow(): void {
 }
 
 function pauseDetection(): void {
+  // BUG-118 — mid-capture, stopping the detector strands the capture (it
+  // stops ticking, never sees the call end, never asks the renderer to stop
+  // recording). Defer: keep ticking, apply the pause on capture-ended.
+  if (detector && shouldDeferPause(detector.getState().name)) {
+    pauseWhenCaptureEnds = true
+    return
+  }
+  pauseWhenCaptureEnds = false
   detector?.stop()
   running = false
   syncUi()
 }
 
 function resumeDetection(): void {
+  pauseWhenCaptureEnds = false
   detector?.start()
   running = true
   syncUi()

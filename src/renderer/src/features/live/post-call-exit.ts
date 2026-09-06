@@ -22,6 +22,7 @@ import type { LiveStatus } from './types'
  *
  * Extracted as a pure function because this repo cannot test component render
  * output (BUG-140), so the decision has to live somewhere a test can reach.
+ * CORRECTION 2026-09-05: components CAN be render-tested here — see live-header-pieces.render.test.ts (`@vitest-environment happy-dom`, react-dom/client, a `.test.ts` file). The pure/UI split below still stands on its own merits; it is no longer forced.
  */
 
 /** Statuses where the session is over and nothing is being captured. */

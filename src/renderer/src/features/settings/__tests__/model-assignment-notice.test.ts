@@ -2,6 +2,7 @@
 //
 // Tested as a pure function because this repo cannot assert on rendered output
 // (BUG-140), same as deriveStatusDot and demotionNotice.
+// CORRECTION 2026-09-05: components CAN be render-tested here — see live-header-pieces.render.test.ts (`@vitest-environment happy-dom`, react-dom/client, a `.test.ts` file). The pure/UI split below still stands on its own merits; it is no longer forced.
 //
 // What it must never do is fire when nothing is wrong. A notice that appears on
 // a healthy install is one people learn to dismiss, and then it is worth less

@@ -7,6 +7,7 @@
 // output through every normal channel (console, --enable-logging, Event
 // Viewer, WER) - remove once that's root-caused.
 import { statSync, writeFileSync } from 'fs'
+import { createStartupSplash, openSplashWindow } from './startup-splash'
 import { tmpdir } from 'os'
 import { join as joinPathForCrashLog } from 'path'
 const crashLogPath = joinPathForCrashLog(tmpdir(), 'callrise-startup-crash.log')
@@ -84,6 +85,14 @@ const devProfileOverride = app.isPackaged ? undefined : process.env['CALLRISE_US
 const userDataDir = devProfileOverride || join(app.getPath('appData'), 'sales-os')
 if (devProfileOverride) console.log(`[dev] userData overridden -> ${devProfileOverride}`)
 app.setPath('userData', userDataDir)
+// BUG-186 — a profile COPY must not reach the real cloud backup unless asked.
+// Told from here (the one override read above) rather than read again in
+// backup.ts; the allow flag is read exactly once, here.
+markSandboxProfile(devProfileOverride, process.env['CALLRISE_SANDBOX_ALLOW_SYNC'] === '1')
+{
+  const line = describeSandboxProfile()
+  if (line) console.log(line)
+}
 
 registerCrashLogging()
 
@@ -252,7 +261,12 @@ import { registerEvents } from './events'
 import { registerLiveCue } from './live-cue'
 import { registerLoopbackCapture } from './loopback'
 import { registerLiveTranscriptIpc } from './live/live-transcript-ipc'
-import { redactPendingClosedJournals, sweepJournalsForMissingCalls } from './live/call-journal'
+import {
+  redactPendingClosedJournals,
+  retireCompletedJournals,
+  sweepJournalsForMissingCalls
+} from './live/call-journal'
+import { describeSandboxProfile, markSandboxProfile } from './sandbox-profile'
 import { sweepOrphanedCompanions, recordIsGone } from './companion-files'
 import { registerGoogle } from './google'
 import { registerOutlook } from './outlook'
@@ -338,6 +352,12 @@ function handleDeepLink(url: string): void {
   }
 }
 
+// BUG-191 — a splash from app-ready until the main window paints; see
+// startup-splash.ts for why a 4 GB machine otherwise shows nothing for ~35 s.
+const startupSplash = createStartupSplash(
+  openSplashWindow({ BrowserWindow: BrowserWindow as never, version: app.getVersion() })
+)
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -407,6 +427,7 @@ function createWindow(): void {
 
   // Only show the window once the UI is painted (avoids a white flash).
   mainWindow.on('ready-to-show', () => {
+    startupSplash.mainWindowReady()
     mainWindow?.show()
     if (pendingDeepLinkEventId) {
       mainWindow?.webContents.send('prepBrief:openRequested', pendingDeepLinkEventId)
@@ -491,6 +512,10 @@ app.whenReady().then(async () => {
     app.exit(0)
     return
   }
+
+  // BUG-191 — first thing after the diagnose exit: something on screen NOW.
+  startupSplash.appReady()
+  writeCrashLog('splash shown', `startup splash state=${startupSplash.state()}`)
 
   // M26 — created before every other registerX() call below: several of
   // them (starting with Phase 3's adapters, e.g. calls.ts) register their
@@ -647,9 +672,20 @@ app.whenReady().then(async () => {
   // to createWindow() — see J2's own lesson about the Sales Brain init race
   // just above. Safe to run every launch regardless: already-redacted
   // journals are skipped instantly via their `.redacted` marker.
-  void redactPendingClosedJournals().catch((err) =>
-    console.error('[index] pending journal redaction sweep failed:', err)
-  )
+  // BUG-189 — retire what older builds retained (`.done` pairs and
+  // `.jsonl.recovered` copies of calls that were saved) BEFORE the redaction
+  // sweep looks at them: a journal that is about to be deleted does not need
+  // redacting, and an unrecovered crash journal is touched by neither.
+  void retireCompletedJournals()
+    .then((n) => {
+      if (n) console.log(`[index] BUG-189 retired ${n} journal file(s) of saved calls`)
+    })
+    .catch((err) => console.error('[index] journal retirement sweep failed:', err))
+    .finally(() => {
+      void redactPendingClosedJournals().catch((err) =>
+        console.error('[index] pending journal redaction sweep failed:', err)
+      )
+    })
 
   // BUG-139 (privacy) — the backlog half of the companion-file fix. Purging on
   // delete only protects calls deleted from NOW ON: anything deleted before

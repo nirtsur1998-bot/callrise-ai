@@ -1,3 +1,4 @@
+import { Tooltip } from '@renderer/components/Tooltip'
 import { useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
@@ -116,15 +117,16 @@ export function OutcomeReasonPrompt({
           >
             Save
           </button>
-          <button
-            type="button"
-            onClick={onSkip}
-            aria-label="Skip — don't record a reason"
-            title="Skip — don't record a reason"
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-faint transition-colors hover:text-ink"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <Tooltip content="Skip — don't record a reason">
+            <button
+              type="button"
+              onClick={onSkip}
+              aria-label="Skip — don't record a reason"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-faint transition-colors hover:text-ink"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </Tooltip>
         </div>
       </div>
       <p className="mt-1.5 text-[11px] text-faint">

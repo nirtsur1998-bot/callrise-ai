@@ -395,6 +395,8 @@ const api = {
     deleteExternal: (link: unknown) => ipcRenderer.invoke('events:deleteExternal', link),
     // Retry any pending Google pushes/deletes (offline backlog). Fire-and-forget.
     reconcile: () => ipcRenderer.invoke('events:reconcile'),
+    // BUG-169 — the ONE manual retry of a failed push, from the event itself.
+    retryPush: (id: string) => ipcRenderer.invoke('events:retryPush', id),
     // Fires when a background Google sync changes events on disk (re-pull needed).
     onChanged: (cb: () => void) => subscribe('events:changed', cb)
   },
@@ -578,10 +580,10 @@ const api = {
     stop: () => ipcRenderer.invoke('tier1:stop'),
     getStatus: () => ipcRenderer.invoke('tier1:getStatus'),
     // Collects engine logs + status + app state into one zip via a save
-    // dialog. The renderer passes device LABELS (names only) because
-    // enumerateDevices() only exists on its side of the bridge.
+    // dialog. The renderer passes a device CLASSIFICATION (BUG-122: never a
+    // label) because enumerateDevices() only exists on its side of the bridge.
     exportDiagnostics: (info: {
-      deviceLabels?: string[]
+      devices?: { hasVirtualMic: boolean; inputCount: number; kinds: string[] }
       tier1Enabled?: boolean
       denoiseStrength?: string
     }) => ipcRenderer.invoke('tier1:exportDiagnostics', info),

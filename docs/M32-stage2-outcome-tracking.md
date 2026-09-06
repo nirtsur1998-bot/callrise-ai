@@ -245,7 +245,7 @@ passed vacuously against zero rows. Both fixture writes now check themselves.
 
 Stated as an open gap after the review workflow: `CallDealPicker` and `DealCallsSection` had
 never been rendered or driven, only typechecked. This repo cannot unit-test component render
-output (BUG-140), so live driving was the only verification method available — closed by
+output (BUG-140), so live driving was the only verification method available *(correction 2026-09-05: render tests were possible all along — `@vitest-environment happy-dom` + react-dom/client in a `.test.ts` file; BUG-140 was stale)* — closed by
 navigating to a real call and a real deal in the signed-in app and exercising both directions.
 
 **`DealCallsSection`, on a real Won deal:** empty state read correctly (0 linked, 3 candidates,

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { classifyMicError, MIC_OUTCOME_TEXT } from '@renderer/features/audio/micOutcome'
 import { startRecorder, type Recorder } from './audio/recorder'
 import { supportsOtherPartyCapture } from '@renderer/lib/platform'
 import type { LiveStatus } from './types'
@@ -631,15 +632,11 @@ export function useTranscription(
       )
     } catch (err) {
       finishStartup()
-      const name = err instanceof DOMException ? err.name : ''
-      if (name === 'NotAllowedError' || name === 'SecurityError') setPhase('denied')
-      else if (name === 'NotFoundError' || name === 'OverconstrainedError') setPhase('no-device')
+      // BUG-190: one classifier for every getUserMedia failure (micOutcome.ts).
+      const failure = classifyMicError(err)
+      if (failure === 'denied' || failure === 'no-device') setPhase(failure)
       else {
-        setErrorMessage(
-          name === 'NotReadableError'
-            ? 'Your microphone is being used by another app. Close it and try again.'
-            : 'Could not start the microphone. Please try again.'
-        )
+        setErrorMessage(`${MIC_OUTCOME_TEXT[failure].title}. ${MIC_OUTCOME_TEXT[failure].body}`)
         setPhase('error')
       }
       return

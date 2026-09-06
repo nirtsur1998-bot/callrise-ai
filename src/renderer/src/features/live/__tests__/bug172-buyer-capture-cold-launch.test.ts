@@ -17,6 +17,7 @@
 //   6. The one attempt was spent. The call ran mono to the end.
 //
 // A renderer-render test cannot be written here (BUG-140), so these are
+// CORRECTION 2026-09-05: components CAN be render-tested here — see live-header-pieces.render.test.ts (`@vitest-environment happy-dom`, react-dom/client, a `.test.ts` file). The pure/UI split below still stands on its own merits; it is no longer forced.
 // source-level assertions on the ORDERING that was wrong, plus the constant
 // that has to be time-based. The behavioural proof is three driven cold
 // launches recorded in the commit message: before the fix the saved call was

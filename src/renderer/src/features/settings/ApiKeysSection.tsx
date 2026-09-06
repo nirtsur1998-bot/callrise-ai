@@ -1,3 +1,4 @@
+import { Tooltip } from '@renderer/components/Tooltip'
 import { useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Eye, EyeOff, ExternalLink, Loader2, FlaskConical } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
@@ -88,18 +89,19 @@ const RETENTION_CLASS: Record<RetentionPosture, string> = {
 
 function RetentionBadge({ posture, url }: { posture: RetentionPosture; url: string }): React.JSX.Element {
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noreferrer"
-      className={cn(
-        'inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[11px] font-medium hover:underline',
-        RETENTION_CLASS[posture]
-      )}
-      title="Opens the provider's own data-usage terms"
-    >
-      {RETENTION_LABEL[posture]}
-    </a>
+    <Tooltip content="Opens the provider's own data-usage terms">
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        className={cn(
+          'inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[11px] font-medium hover:underline',
+          RETENTION_CLASS[posture]
+        )}
+      >
+        {RETENTION_LABEL[posture]}
+      </a>
+    </Tooltip>
   )
 }
 
@@ -302,6 +304,7 @@ type KeyStatusDot = 'connected' | 'no-key' | 'invalid' | 'rate-limited' | 'unche
  */
 // Exported for `api-key-status-dot.test.ts`. This repo cannot assert on
 // component render output (BUG-140), so the mapping that decides whether a card
+// CORRECTION 2026-09-05: components CAN be render-tested here — see live-header-pieces.render.test.ts (`@vitest-environment happy-dom`, react-dom/client, a `.test.ts` file). The pure/UI split below still stands on its own merits; it is no longer forced.
 // says "Connected" or "Key invalid" is tested as the pure function it is — and
 // the two call sites below (`title=` and the visible label) both read
 // STATUS_DOT_LABEL[deriveStatusDot(...)], so pinning the function pins the text.

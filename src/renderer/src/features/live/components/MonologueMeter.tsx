@@ -1,3 +1,4 @@
+import { Tooltip } from '@renderer/components/Tooltip'
 import { cn } from '@renderer/lib/cn'
 import { formatMonologue, type MonologueState } from '../monologue'
 
@@ -32,20 +33,24 @@ const DOT_CLASS: Record<MonologueState['tone'], string> = {
  */
 export function MonologueMeter({ state, className }: MonologueMeterProps): React.JSX.Element {
   return (
-    <div
-      className={cn(
-        'flex items-center gap-2 rounded-xl border border-line-soft bg-surface px-2.5 py-1.5',
-        className
-      )}
-      title="How long you've been talking without the other side getting a word in. Never interrupts — glance, don't wait for it to tell you."
+    <Tooltip
+      content="How long you've been talking without the other side getting a word in. Never interrupts — glance, don't wait for it to tell you."
+      className="max-w-sm"
     >
-      <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', DOT_CLASS[state.tone])} />
-      <div className="flex flex-col leading-tight">
-        <span className={cn('text-[11px] font-medium tabular-nums', TONE_CLASS[state.tone])}>
-          {formatMonologue(state.ms)}
-        </span>
-        <span className="text-[10px] text-faint">you, uninterrupted</span>
+      <div
+        className={cn(
+          'flex items-center gap-2 rounded-xl border border-line-soft bg-surface px-2.5 py-1.5',
+          className
+        )}
+      >
+        <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', DOT_CLASS[state.tone])} />
+        <div className="flex flex-col leading-tight">
+          <span className={cn('text-[11px] font-medium tabular-nums', TONE_CLASS[state.tone])}>
+            {formatMonologue(state.ms)}
+          </span>
+          <span className="text-[10px] text-faint">you, uninterrupted</span>
+        </div>
       </div>
-    </div>
+    </Tooltip>
   )
 }

@@ -1,3 +1,4 @@
+import { Tooltip } from './Tooltip'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Pencil } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
@@ -8,7 +9,7 @@ import {
   SPEAKER_SOURCE_LABEL,
   type SpeakerIdentities
 } from '@renderer/features/coaching/meta'
-import { speakerKey } from '@renderer/features/live/segments'
+import { speakerKey } from '@renderer/features/live/speakerKey'
 
 const CONFIDENCE_DOT: Record<'high' | 'medium' | 'low', string> = {
   high: 'bg-positive',
@@ -196,12 +197,9 @@ const SegmentRow = memo(function SegmentRow({
           />
         )}
         {!identity && seg.role === 'unknown' && (
-          <span
-            className="text-[10px] font-medium uppercase tracking-wide text-faint"
-            title="We could not tell who was speaking here, so this turn is not attributed to anyone."
-          >
-            unsure
-          </span>
+          <Tooltip content="We could not tell who was speaking here, so this turn is not attributed to anyone.">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-faint">unsure</span>
+          </Tooltip>
         )}
       </div>
       <p className="text-[17px] leading-[1.7] text-ink">

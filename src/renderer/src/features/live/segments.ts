@@ -3,7 +3,10 @@
 // M26 Phase 4.3 moved transcript accumulation into the main process
 // (main/live/transcript-accumulator.ts). Nothing in the running app calls this
 // file any more: the renderer mirrors what main sends instead of building
-// anything itself.
+// anything itself. (True since 2026-09-06 — speakerKey, the one helper
+// production still used, now lives in speakerKey.ts; a test in
+// src/__tests__/frozen-modules-have-no-production-callers.test.ts keeps this
+// claim honest.)
 //
 // It is kept deliberately, because it is the ORACLE. The tests that prove the
 // transcript survived changing processes byte-for-byte
@@ -16,18 +19,11 @@
 // live long enough that the comparison has stopped earning its keep.
 import type { CallSegment, SpeakerRole } from '@renderer/features/calls/types'
 
-/**
- * A segment's identity is the (channel, speaker) PAIR, never the speaker
- * alone. In mono, `speaker` is a diarized guess; in multichannel it is the
- * channel index — so two segments both labelled "speaker 0" from either side
- * of a mid-call switch to buyer capture are different people.
- *
- * Rendered as a string so it can key a Map or a Set without anyone
- * accidentally comparing the integer half on its own.
- */
-export function speakerKey(seg: { speaker: number; channel?: number }): string {
-  return seg.channel === undefined ? `mono/spk${seg.speaker}` : `ch${seg.channel}/spk${seg.speaker}`
-}
+// speakerKey lives in ./speakerKey.ts (moved 2026-09-06, species 12); the oracle
+// below still uses the identical function, and the tests that import it from
+// here keep working through this re-export.
+import { speakerKey } from './speakerKey'
+export { speakerKey }
 
 /**
  * Whether two segments belong to the same person.

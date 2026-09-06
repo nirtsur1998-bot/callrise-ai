@@ -40,7 +40,7 @@ describe('buildEvent — the shape is the privacy policy', () => {
         errorClass: 'TypeError',
         count: 3,
         fatal: false,
-        stack: '    at x (C:\\Users\\nirtsur\\a.js:1:1)'
+        stack: '    at x (C:\\Users\\danawhitfield\\a.js:1:1)'
       },
       fixed
     )
@@ -107,7 +107,7 @@ describe('buildEvent — the shape is the privacy policy', () => {
   it("the 'stack' prop is reduced to frames: a whole stack loses its message line, a bare message vanishes", () => {
     const stack = [
       'TypeError: secret message with spaces',
-      '    at f (C:\\Users\\nirtsur\\x.js:1:1)',
+      '    at f (C:\\Users\\danawhitfield\\x.js:1:1)',
       '    at g (y.js:2:2)'
     ].join('\n')
     expect(stack).toContain('secret message') // control
@@ -234,7 +234,7 @@ describe('front door — off means off, proven both ways', () => {
 
     const off = record('error', 'main.uncaughtException', {
       errorClass: 'X',
-      stack: '    at x (C:\\Users\\nirtsur\\x.js:1:1)'
+      stack: '    at x (C:\\Users\\danawhitfield\\x.js:1:1)'
     })
     expect(off).toEqual({ ok: false, reason: 'disabled' })
     expect(listQueued()).toEqual([])
@@ -243,14 +243,14 @@ describe('front door — off means off, proven both ways', () => {
     enabled = true // the consent gate is read fresh on every call
     const on = record('error', 'main.uncaughtException', {
       errorClass: 'X',
-      stack: '    at x (C:\\Users\\nirtsur\\x.js:1:1)'
+      stack: '    at x (C:\\Users\\danawhitfield\\x.js:1:1)'
     })
     expect(on.ok).toBe(true)
     expect(listQueued()).toHaveLength(1)
     const bytes = await readFile(join(dir, 'telemetry-queue.jsonl'), 'utf8')
     expect(bytes).toContain('main.uncaughtException') // the control: bytes really landed
     expect(bytes).toContain('at x (') // the frame landed
-    expect(bytes).not.toContain('nirtsur') // and it was scrubbed on the way in
+    expect(bytes).not.toContain('danawhitfield') // and it was scrubbed on the way in
 
     enabled = false // opt-out is immediate, no restart, no cache
     expect(record('usage', 'feature.rise.opened')).toEqual({ ok: false, reason: 'disabled' })

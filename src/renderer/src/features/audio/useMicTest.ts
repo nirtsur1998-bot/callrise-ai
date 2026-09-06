@@ -3,6 +3,7 @@
 // may be stopped afterwards, whether the denoised take is playable) lives in
 // mic-test.ts where it is unit-tested; this file is the Web Audio glue.
 import { useCallback, useRef, useState } from 'react'
+import { classifyMicError, MIC_OUTCOME_TEXT } from './micOutcome'
 import { resolveTier1MicName } from '@renderer/features/live/audio/recorder'
 import { getTier1Enabled, getDenoiseStrength, DENOISE_ATTEN_DB } from '@renderer/features/settings/prefs'
 import {
@@ -46,7 +47,14 @@ export function useMicTest(): UseMicTest {
       let unsubPcm: (() => void) | null = null
       let engineStartedByUs = false
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        } catch (err) {
+          // BUG-190: the Audio page printed "Requested device not found" verbatim.
+          const t = MIC_OUTCOME_TEXT[classifyMicError(err)]
+          setPhase({ id: 'error', message: `${t.title}. ${t.body}` })
+          return
+        }
         const label = stream.getAudioTracks()[0]?.label ?? ''
 
         // Raw take: MediaRecorder is the simplest correct capture for a
@@ -104,7 +112,11 @@ export function useMicTest(): UseMicTest {
         const rawUrl = URL.createObjectURL(new Blob(rawParts, { type: recorder.mimeType }))
         try {
           const audio = new Audio(rawUrl)
-          await audio.play()
+          // A machine with no playback device (or an empty take) rejects here
+          // with a media-element error; that is a playback fact, said plainly.
+          await audio.play().catch(() => {
+            throw new Error('The recording could not be played back on this computer — check that a speaker or headset is set as the output device.')
+          })
           await new Promise<void>((resolve) => {
             audio.onended = () => resolve()
             audio.onerror = () => resolve()

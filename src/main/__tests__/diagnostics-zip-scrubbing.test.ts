@@ -66,7 +66,7 @@ vi.mock('../tier1', () => ({
     connected: false,
     denoisingActive: null,
     // The absolute path that used to ship unscrubbed.
-    enginePath: 'C:\\Users\\Nir Tsur\\AppData\\Local\\CallRiseAI\\kern_bridge.exe'
+    enginePath: 'C:\\Users\\Dana Whitfield\\AppData\\Local\\CallRiseAI\\kern_bridge.exe'
   })
 }))
 
@@ -98,7 +98,7 @@ async function runExport(): Promise<Record<string, string>> {
   process.env['LOCALAPPDATA'] = localAppData
   zipped = {}
   const r = await exportTier1Diagnostics({
-    deviceLabels: ['Realtek HD Audio'],
+    devices: { hasVirtualMic: false, inputCount: 1, kinds: ['builtin'] },
     tier1Enabled: true,
     denoiseStrength: 'medium'
   })
@@ -162,49 +162,35 @@ describe('BUG-094 — the diagnostics zip must scrub the engine logs', () => {
   })
 })
 
-describe('BUG-094 — app-diagnostics.json must not ship paths or device names raw', () => {
-  it('enginePath and a person-named device label are both scrubbed', () => {
+describe('BUG-094 / BUG-122 — app-diagnostics.json must not ship paths raw, and cannot ship device names at all', () => {
+  it('enginePath is scrubbed; a device label has no field to travel in', () => {
     const raw = buildAppDiagnostics({
-      deviceLabels: ["Nir Tsur's AirPods", 'Realtek HD Audio'],
+      devices: { hasVirtualMic: true, inputCount: 2, kinds: ['bluetooth', 'builtin'] },
       tier1Enabled: true,
       denoiseStrength: 'medium'
     })
-    // CONTROL: the raw builder output really does carry both.
-    expect(raw).toContain('Nir Tsur')
-
-    // What the zip now writes.
     // createScrubber, not createLocalScrubber: this test simulates a DIFFERENT
     // machine's identity, and createLocalScrubber deliberately binds this one's
     // (its type omits homedir/username for exactly that reason).
     const scrubDocument = createScrubber({
-      homedir: 'C:\\Users\\Nir Tsur',
-      username: 'Nir Tsur',
+      homedir: 'C:\\Users\\Dana Whitfield',
+      username: 'Dana Whitfield',
       maxLength: Number.MAX_SAFE_INTEGER
     })
     const out = scrubDocument(raw)
-
-    expect(out, 'enginePath shipped the username').not.toContain('C:\\Users\\Nir Tsur')
-    // Still useful: the non-identifying half survives.
-    expect(out).toContain('Realtek HD Audio')
-
-    // NOT FIXED, and asserted as-is rather than papered over. A device
-    // LABEL carries a bare name with no path separator in front of it, and
-    // scrub.ts documents that it deliberately never matches a username as a
-    // BARE WORD — on this machine the account is literally "User", so a
-    // bare-word rule would mangle every sentence containing it. The
-    // scrubber therefore cannot catch "Nir Tsur's AirPods", structurally.
-    //
-    // This is the strip-not-scrub lesson again: you cannot scrub a name,
-    // only refuse to include it. Surfaced as its own finding rather than
-    // decided here — dropping deviceLabels costs the zip its main
-    // diagnostic value (which microphone the engine actually grabbed), so
-    // it is a product call, not a cleanup.
-    expect(out, 'documenting the known gap, not endorsing it').toContain("AirPods")
+    expect(out, 'enginePath shipped the username').not.toContain('C:\\Users\\Dana Whitfield')
+    // BUG-122 — the strip-not-scrub lesson, applied: the scrubber cannot
+    // catch a bare name ("Dana Whitfield's AirPods"), so the bundle no longer
+    // has a field a name could sit in. The classification survives intact.
+    expect(JSON.parse(out).devices).toEqual({ hasVirtualMic: true, inputCount: 2, kinds: ['bluetooth', 'builtin'] })
+    expect(out).not.toContain('deviceLabels')
   })
 
   it('is not truncated — a document scrubber, not the 4096-char field one', () => {
-    const many = Array.from({ length: 160 }, (_, i) => `Microphone Array ${i} (Realtek HD Audio)`)
-    const raw = buildAppDiagnostics({ deviceLabels: many })
+    const raw = buildAppDiagnostics({
+      devices: { hasVirtualMic: false, inputCount: 64, kinds: Array.from({ length: 64 }, () => 'builtin') },
+      denoiseStrength: 'x'.repeat(4200)
+    })
     expect(raw.length).toBeGreaterThan(4096) // control: over the field cap
     const out = createLocalScrubber({ maxLength: Number.MAX_SAFE_INTEGER })(raw)
     expect(out).not.toContain('truncated')

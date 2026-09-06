@@ -3,6 +3,8 @@ import AppShell from './AppShell'
 import { Sidebar } from '@renderer/features/navigation/Sidebar'
 import { CopilotPanel } from '@renderer/features/copilot/CopilotPanel'
 import { useVoiceAiCollapsed } from '@renderer/features/copilot/useVoiceAiCollapsed'
+import { useWindowWidth } from '@renderer/features/copilot/useWindowWidth'
+import { effectiveVoiceAiCollapsed } from '@renderer/features/copilot/voiceAiFit'
 import { CommandPalette, type PaletteAction } from '@renderer/features/navigation/CommandPalette'
 import { ShortcutsOverlay } from '@renderer/features/navigation/ShortcutsOverlay'
 import { PhoneCall, SunMoon, CalendarPlus } from 'lucide-react'
@@ -108,6 +110,11 @@ export function MainApp({
 }): React.JSX.Element {
   const [active, setActive] = useState<NavId>(initialNav)
   const [copilotCollapsed, setCopilotCollapsed] = useVoiceAiCollapsed()
+  // BUG-171 — the rail folds on its own when the window cannot hold it beside
+  // a usable centre column, and unfolds when it can. `copilotCollapsed` stays
+  // the user's own choice; only what the shell SHOWS follows the width.
+  const windowWidth = useWindowWidth()
+  const effectiveCopilotCollapsed = effectiveVoiceAiCollapsed(copilotCollapsed, windowWidth)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   // M31 Slice A — "New event" from the palette (or ⌘⇧E) works from ANY
@@ -565,11 +572,12 @@ export function MainApp({
       }
       copilot={
         <CopilotPanel
-          collapsed={copilotCollapsed}
+          collapsed={effectiveCopilotCollapsed}
+          forcedCollapsed={effectiveCopilotCollapsed && !copilotCollapsed}
           onToggleCollapsed={() => setCopilotCollapsed(!copilotCollapsed)}
         />
       }
-      copilotCollapsed={copilotCollapsed}
+      copilotCollapsed={effectiveCopilotCollapsed}
       fullBleed={active === 'assistant'}
     >
       {/* Keyed on the active screen so each view fades/slides in on switch.

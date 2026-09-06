@@ -18,6 +18,7 @@
 // key" button already writes, so there is one display path with one meaning.
 // This file pins that mapping. It is a pure function on purpose: this repo
 // cannot assert on component render output (BUG-140), and both render sites
+// CORRECTION 2026-09-05: components CAN be render-tested here — see live-header-pieces.render.test.ts (`@vitest-environment happy-dom`, react-dom/client, a `.test.ts` file). The pure/UI split below still stands on its own merits; it is no longer forced.
 // read `STATUS_DOT_LABEL[deriveStatusDot(...)]`, so pinning the function pins
 // the words on screen.
 import { describe, expect, it } from 'vitest'

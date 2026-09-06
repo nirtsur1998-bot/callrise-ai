@@ -1,3 +1,4 @@
+import { Tooltip } from '@renderer/components/Tooltip'
 import { cn } from '@renderer/lib/cn'
 
 interface EngagementGaugeProps {
@@ -25,13 +26,16 @@ export function EngagementGauge({ score, className }: EngagementGaugeProps): Rea
   const offset = circumference * (1 - clamped / 100)
 
   return (
-    <div
-      className={cn(
-        'flex items-center gap-2 rounded-xl border border-line-soft bg-surface px-2.5 py-1.5',
-        className
-      )}
-      title="Engagement (approximate) — a rough, local estimate from talk balance, questions asked, and reply pace in this call. Not an AI or coaching score."
+    <Tooltip
+      content="Engagement (approximate) — a rough, local estimate from talk balance, questions asked, and reply pace in this call. Not an AI or coaching score."
+      className="max-w-sm"
     >
+      <div
+        className={cn(
+          'flex items-center gap-2 rounded-xl border border-line-soft bg-surface px-2.5 py-1.5',
+          className
+        )}
+      >
       <div
         className="relative grid shrink-0 place-items-center"
         style={{ width: size, height: size }}
@@ -69,6 +73,7 @@ export function EngagementGauge({ score, className }: EngagementGaugeProps): Rea
         </span>
         <span className="text-[10px] text-faint">approx., not AI</span>
       </div>
-    </div>
+      </div>
+    </Tooltip>
   )
 }

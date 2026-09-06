@@ -8,6 +8,7 @@ import {
   resolveMic,
   type MicResolution
 } from './devices'
+import { dedupeInputDevices } from './micOutcome'
 
 export interface AudioDevice {
   deviceId: string
@@ -54,10 +55,14 @@ export function useAudioDevices(preferCallRiseMic = false): UseAudioDevices {
       .enumerateDevices()
       .then((devices) => {
         const ins = devices.filter((d) => d.kind === 'audioinput')
-        const list = ins.map((d, i) => ({
-          deviceId: d.deviceId,
-          label: d.label || `Microphone ${i + 1}`
-        }))
+        // BUG-190: Chromium lists the default input three times ("Default -",
+        // "Communications -", and the device itself); show it once.
+        const list = dedupeInputDevices(
+          ins.map((d, i) => ({
+            deviceId: d.deviceId,
+            label: d.label || `Microphone ${i + 1}`
+          }))
+        )
         setMics(list)
 
         // Labels are empty until mic permission is granted; resolving against a

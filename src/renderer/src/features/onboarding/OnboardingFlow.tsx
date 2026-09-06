@@ -80,7 +80,7 @@ export function OnboardingFlow({
             {o.step === 'about' && <AboutYou o={o} />}
             {o.step === 'sell' && <WhatYouSell o={o} />}
             {o.step === 'recording' && <RecordingConsent o={o} />}
-            {o.step === 'mic' && <MicAccess />}
+            {o.step === 'mic' && <MicAccess o={o} />}
             {o.step === 'cues' && <CoachingCues o={o} />}
             {o.step === 'apiKey' && <ApiKey />}
             {o.step === 'done' && (

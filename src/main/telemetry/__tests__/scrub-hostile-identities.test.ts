@@ -50,7 +50,7 @@ describe('BUG-093 — no hostile identity survives any shape it reaches a log in
             expect(out, `full name survived in: ${shape.label}`).not.toContain(identity.username)
           }
           // ...and so must its TAIL, which is the specific BUG-093 leak: the
-          // capture stopped at the space and left ` Tsur` behind.
+          // capture stopped at the space and left ` Whitfield` behind.
           const tail = tailOf(identity.username)
           if (tail !== identity.username) {
             expect(out, `the tail "${tail}" leaked — the BUG-093 shape`).not.toContain(tail)
@@ -65,11 +65,11 @@ describe('the fix must not over-redact — prose has to survive', () => {
   // This is the other half. The generic rules stay conservative precisely so
   // they do not eat sentences; if a fix trades a leak for shredded logs, the
   // log stops being worth shipping.
-  const scrub = createScrubber({ homedir: 'C:\\Users\\Nir Tsur', username: 'Nir Tsur' })
+  const scrub = createScrubber({ homedir: 'C:\\Users\\Dana Whitfield', username: 'Dana Whitfield' })
 
   it('keeps the words that follow a redacted path', () => {
-    const out = scrub('profile root is C:\\Users\\Nir Tsur and it is fine')
-    expect(out).not.toContain('Nir')
+    const out = scrub('profile root is C:\\Users\\Dana Whitfield and it is fine')
+    expect(out).not.toContain('Dana')
     expect(out).toContain('and it is fine')
   })
 
@@ -86,13 +86,13 @@ describe('the fix must not over-redact — prose has to survive', () => {
   })
 
   it('a short name must not HALF-match a longer one (no dangling remainder)', () => {
-    const s = createScrubber({ homedir: 'C:\\Users\\Nir', username: 'Nir' })
-    const out = s('ENOENT open C:\\Users\\Nirvana\\Desktop\\a.txt')
-    // The exact-literal rules must NOT fire here: `Nir` is a prefix of
-    // `Nirvana`, and a half-match would leave a dangling `vana` behind. That
+    const s = createScrubber({ homedir: 'C:\\Users\\Dana', username: 'Dana' })
+    const out = s('ENOENT open C:\\Users\\Danaher\\Desktop\\a.txt')
+    // The exact-literal rules must NOT fire here: `Dana` is a prefix of
+    // `Danaher`, and a half-match would leave a dangling `vana` behind. That
     // is exactly what the `(?![A-Za-z0-9])` boundary prevents.
     expect(out, 'the exact rule half-matched and left a remainder').not.toMatch(/vana/)
-    // Nirvana IS still redacted — by the generic profile rule, which redacts
+    // Danaher IS still redacted — by the generic profile rule, which redacts
     // any name in a Users path including other people's. Correct: the point
     // of the boundary is no half-matches, not that other names survive.
     expect(out).toContain('<user>')
@@ -134,20 +134,20 @@ describe('B3 — shapes the sweep found and dropped as "no egress path today"', 
 
 describe('the two identity mechanisms are genuinely independent', () => {
   // The A1 red-check credited "two independent mechanisms". They were not:
-  // the generic WIN_PROFILE ran FIRST and rewrote `\Nir` to `\<user>`, so the
+  // the generic WIN_PROFILE ran FIRST and rewrote `\Dana` to `\<user>`, so the
   // exact-literal rule's input no longer existed. Order is now exact-first,
   // and each rule is asserted to work with the other absent.
   it('the exact-username rule alone redacts a spaced name', () => {
-    const s = createScrubber({ username: 'Nir Tsur' }) // no homedir
-    const out = s("EPERM scandir 'D:\\Profiles\\Nir Tsur'")
-    expect(out).not.toContain('Nir Tsur')
-    expect(out).not.toContain('Tsur')
+    const s = createScrubber({ username: 'Dana Whitfield' }) // no homedir
+    const out = s("EPERM scandir 'D:\\Profiles\\Dana Whitfield'")
+    expect(out).not.toContain('Dana Whitfield')
+    expect(out).not.toContain('Whitfield')
   })
 
   it('the homedir rule alone redacts a spaced name', () => {
-    const s = createScrubber({ homedir: 'C:\\Users\\Nir Tsur' }) // no username
-    const out = s(JSON.stringify({ dir: 'C:\\Users\\Nir Tsur' }))
-    expect(out).not.toContain('Nir Tsur')
-    expect(out).not.toContain('Tsur')
+    const s = createScrubber({ homedir: 'C:\\Users\\Dana Whitfield' }) // no username
+    const out = s(JSON.stringify({ dir: 'C:\\Users\\Dana Whitfield' }))
+    expect(out).not.toContain('Dana Whitfield')
+    expect(out).not.toContain('Whitfield')
   })
 })

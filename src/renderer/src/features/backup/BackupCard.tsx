@@ -57,6 +57,10 @@ function friendlyError(code: string, direction: 'backup' | 'restore'): string {
       return 'Cloud backup needs your account set up first.'
     case 'not-signed-in':
       return "You're not signed in, so nothing could sync."
+    case 'sandbox':
+      // BUG-186 — a dev build on a profile COPY. Never reachable in a packaged
+      // build; worded so a developer sees the refusal instead of a stale green.
+      return 'This is a dev sandbox copy: cloud backup is switched off here on purpose (CALLRISE_SANDBOX_ALLOW_SYNC=1 to allow).'
     default:
       return direction === 'backup'
         ? "The last backup didn't finish. It will retry automatically, or click Sync now."

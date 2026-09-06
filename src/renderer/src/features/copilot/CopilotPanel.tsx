@@ -9,6 +9,7 @@ import {
   PhoneCall
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { micSelectorOptions } from '@renderer/features/audio/micOutcome'
 import { isMac, isWindows } from '@renderer/lib/platform'
 import { ToggleSwitch } from '@renderer/components/ToggleSwitch'
 import { SegmentedControl } from '@renderer/components/SegmentedControl'
@@ -20,6 +21,8 @@ import { useTier1 } from '@renderer/features/audio/useTier1'
 import { useAudioDevices } from '@renderer/features/audio/useAudioDevices'
 import { useCueSettings } from '@renderer/features/live/useCueSettings'
 import type { Sensitivity } from '@renderer/features/live/useLiveCues'
+import { VOICE_AI_FITS_FROM_PX } from './voiceAiFit'
+import { useToast } from '@renderer/features/notifications/useToast'
 
 const SENSITIVITY_LEVELS: { id: Sensitivity; label: string }[] = [
   { id: 'low', label: 'Calm' },
@@ -29,6 +32,10 @@ const SENSITIVITY_LEVELS: { id: Sensitivity; label: string }[] = [
 
 interface CopilotPanelProps {
   collapsed: boolean
+  /** BUG-171 — collapsed by the WINDOW, not by the user: too narrow to hold the
+   *  rail beside a usable centre column. The expand control says so instead of
+   *  silently doing nothing. */
+  forcedCollapsed?: boolean
   onToggleCollapsed: () => void
 }
 
@@ -70,8 +77,10 @@ const CAPTION_SAFE_RIGHT: React.CSSProperties = {
 
 export function CopilotPanel({
   collapsed,
+  forcedCollapsed = false,
   onToggleCollapsed
 }: CopilotPanelProps): React.JSX.Element {
+  const toast = useToast()
   const [autoStart, setAutoStart] = useAutoStartListening()
   const [autoTranscribeCalls, setAutoTranscribeCalls] = useAutoTranscribeCalls()
   const cues = useCueSettings()
@@ -101,10 +110,20 @@ export function CopilotPanel({
             the 136px caption strip. Push it down BELOW the 40px overlay rather
             than sideways: there is no horizontal room left in a 64px rail. */}
         <div style={{ height: 'env(titlebar-area-height, 0px)' }} aria-hidden="true" />
+        {/* BUG-171 — when the WINDOW folded the rail, the chevron stays a live,
+            normal-looking control: a greyed-out one read as broken (founder,
+            2026-09-05). Clicking it says what would open the panel instead
+            of silently doing nothing. */}
         <button
           type="button"
-          onClick={onToggleCollapsed}
-          title="Expand Voice AI"
+          onClick={() => {
+            if (forcedCollapsed) {
+              toast.info(`Widen the window to open Voice AI — it needs ${VOICE_AI_FITS_FROM_PX}px.`)
+              return
+            }
+            onToggleCollapsed()
+          }}
+          title={forcedCollapsed ? 'Voice AI needs a wider window' : 'Expand Voice AI'}
           aria-label="Expand Voice AI"
           className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-faint transition hover:bg-elevated hover:text-ink"
         >
@@ -276,10 +295,9 @@ export function CopilotPanel({
             aria-label="Microphone"
             className={cn(fieldClass, 'text-[13px]')}
           >
-            <option value="">System default</option>
-            {mics.map((m) => (
-              <option key={m.deviceId} value={m.deviceId}>
-                {m.label}
+            {micSelectorOptions(mics).map((opt) => (
+              <option key={opt.value || '__default'} value={opt.value} disabled={opt.disabled}>
+                {opt.label}
               </option>
             ))}
           </select>

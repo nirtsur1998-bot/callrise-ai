@@ -156,12 +156,12 @@ That is the cutover VM's job, and it stays owed.
 
 ## The defect
 
-Three rules are meant to cover the username; on `C:\Users\Nir Tsur` all three
+Three rules are meant to cover the username; on `C:\Users\Dana Whitfield` all three
 fail together for any spelling not immediately followed by a slash:
 
 1. `homedirPattern` ends with `(?=[\\/]|$)` — a quote or space after the path defeats it.
-2. `WIN_PROFILE`'s capture class is `[^\\/\s"'<>|:*?]+` — `\s` is negated, so the capture **stops at the space** and only `Nir` is replaced.
-3. `userPathRe` carries the same lookahead **and runs last**, after `WIN_PROFILE` has already rewritten `\Nir` → `\<user>`, so the literal it searches for no longer exists.
+2. `WIN_PROFILE`'s capture class is `[^\\/\s"'<>|:*?]+` — `\s` is negated, so the capture **stops at the space** and only `Dana` is replaced.
+3. `userPathRe` carries the same lookahead **and runs last**, after `WIN_PROFILE` has already rewritten `\Dana` → `\<user>`, so the literal it searches for no longer exists.
 
 The "two independent mechanisms" the A1 red-check credits are not independent:
 the generic rule destroys the exact rule's input.
@@ -175,7 +175,7 @@ gets first claim on the text it can match exactly.
 
 **B2 — fix the boundary, don't widen the capture.** The tempting fix — dropping
 `\s` from `WIN_PROFILE`'s class so it spans spaces — is wrong: it would swallow
-prose (`C:\Users\Nir Tsur and it is fine` → the capture eats the whole sentence).
+prose (`C:\Users\Dana Whitfield and it is fine` → the capture eats the whole sentence).
 Over-redaction is a real cost; it destroys the diagnostic value of the log.
 
 Instead, for the *exact-literal* rules (`userPathRe`, `homedirPattern`) replace
@@ -187,7 +187,7 @@ the slash-only lookahead with a **word-boundary-style** one:
 
 The next character after the known username must not be alphanumeric. That
 allows a quote, a space, a comma, or end-of-string to terminate the match, while
-still refusing to match `Nir Tsur` inside `Nir Tsurson` or `Nir Tsur2`.
+still refusing to match `Dana Whitfield` inside `Dana Whitfieldson` or `Dana Whitfield2`.
 
 `WIN_PROFILE` keeps its current conservative class — it remains the generic
 fallback for *other* people's names in paths, where we have no literal to anchor
@@ -210,12 +210,12 @@ one-line note on what it is designed to break:
 
 | fixture | breaks |
 |---|---|
-| `Nir Tsur` | space in the account name (this bug) |
+| `Dana Whitfield` | space in the account name (this bug) |
 | `O'Brien` | apostrophe — also a regex-escaping hazard |
 | `José García` | non-ASCII **and** a space |
 | `李明` | non-ASCII, no Latin characters at all |
 | `User` | a name that is also a common English word (this machine's happy accident, kept deliberately) |
-| `Nir` / `Nir Tsur` pair | prefix collision — the short name must not half-match the long one |
+| `Dana` / `Dana Whitfield` pair | prefix collision — the short name must not half-match the long one |
 | `a` | single character, maximal false-positive pressure |
 | `Administrator.DOMAIN` | dot in the name |
 | `\\ACME-FS01\Deals` | UNC path, no drive letter |
@@ -248,7 +248,7 @@ nothing. Two unscrubbed writes:
 - `:136` — `buildAppDiagnostics(renderer)` is a plain `JSON.stringify` of
   `tier1Status` (which includes `enginePath`, an absolute path) and the
   renderer-supplied `deviceLabels` (microphone names, which routinely contain a
-  person's name — "Nir's AirPods").
+  person's name — "Dana's AirPods").
 
 It was concealed by a phantom citation: `M29-A1-plan.md` claimed all three
 egress paths shared one `buildOutbound()`. That function never existed.
@@ -285,7 +285,7 @@ asymmetry is the proof the two paths are independently covered.
 - Red-check the boundary fix by restoring `(?=[\\/]|$)` — the quoted and prose
   cases go red while the plain-path case stays green, proving the two are
   independent failures.
-- Assert **no over-redaction**: a control asserting `…\Nir Tsur and it is fine`
+- Assert **no over-redaction**: a control asserting `…\Dana Whitfield and it is fine`
   keeps ` and it is fine` intact after the username is replaced.
 - Every existing scrubber test must stay green — 24 of them, including the
   prefix-collision and bare-word cases that exist precisely to stop

@@ -3,6 +3,7 @@
 // M34 3c / 3d / 3e — the small live-screen pieces, rendered for real through
 // react-dom (the same harness useCueSettings.test.ts uses). LiveView itself
 // cannot be render-tested (BUG-140); these pieces can, so they are.
+// CORRECTION 2026-09-05: components CAN be render-tested here — see live-header-pieces.render.test.ts (`@vitest-environment happy-dom`, react-dom/client, a `.test.ts` file). The pure/UI split below still stands on its own merits; it is no longer forced.
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
