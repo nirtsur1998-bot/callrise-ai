@@ -1,0 +1,286 @@
+// BUG-200 — the app must not tell a user their data stays on their device
+// when it does not.
+//
+// WHY THIS IS A TEST AND NOT A REVIEW. Three strings were found by reading
+// the Sales Brain card. Two MORE were found only by sweeping the whole
+// renderer for the VOCABULARY of the claim rather than for the sentence
+// already known — activationSteps.ts and MemoryCenterSection.tsx, neither of
+// which anyone had thought to look at. That is memory
+// `absence-tests-enumerate-the-container`: "nothing says X" cannot be checked
+// by grepping the strings you happen to know. It has to enumerate.
+//
+// WHAT IS ACTUALLY FALSE, so this is not cargo-culted. Seven categories of
+// user data can be uploaded to Supabase (BackupSyncScope). Two of them
+// default ON, including the whole Sales Brain (memory.db, uploaded verbatim
+// to Storage on every push). Any copy telling a Sales Brain user their data
+// stays on their device is false for the DEFAULT configuration.
+//
+// Every hit is accounted for by a written reason, so allowlisting is an
+// argument someone has to make rather than a line someone can add. A bare
+// "known-good" list is how the two extra sites would have been hidden
+// instead of found.
+import { describe, it, expect } from 'vitest'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+
+const RENDERER = join(__dirname, '..', '..', '..')
+
+/** The vocabulary of "your data stays here". Deliberately broad: a false
+ *  positive costs one entry with a reason, a false negative ships a lie
+ *  about where someone's calls live. */
+const LOCALITY_CLAIMS: RegExp[] = [
+  /entirely on your (own )?device/i,
+  /only on your (own )?device/i,
+  /stays? on your (own )?device/i,
+  /on-?device only/i,
+  /never (leaves|leave|uploaded|sent|transmitted|shared)/i,
+  /nothing is (sent|uploaded|shared|stored)/i,
+  /not (sent|uploaded|shared) anywhere/i,
+  /(100%|fully|purely|entirely) local/i,
+  /locally only/i,
+  /no cloud/i,
+  /never (goes|go) to the cloud/i,
+  /we (never|do not|don'?t) (see|store|upload|collect|keep a copy|have a copy)/i,
+  /stored (and searched )?locally/i,
+  // ── Added after the adversarial red check documented below. Each of these
+  //    defeated the list above on the first attempt.
+  /on (this|your) (computer|machine|laptop|pc|mac)( and nowhere else)?/i,
+  /nowhere else/i,
+  /stays? (right )?(here|put)/i,
+  /no servers?/i,
+  /yours alone/i
+]
+
+/* ── WHAT THIS GUARD IS, MEASURED ─────────────────────────────────────────
+ *
+ * It is a NET, not a proof, and its escape rate was measured rather than
+ * assumed. Five false sentences were written in wording the list had not
+ * been built against:
+ *
+ *   "Everything is kept on this computer and nowhere else."
+ *   "Your memories stay put. We do not keep a copy."
+ *   "Processed on your machine, full stop."
+ *   "Your data is yours alone and stays right here."
+ *   "No servers involved."
+ *
+ * The guard caught ZERO of the five. All five now have a pattern above.
+ *
+ * Then a SECOND round was written against the EXTENDED list, to measure
+ * whether extending helps or merely chases:
+ *
+ *   "What you say here goes no further than the app itself."
+ *   "The only copy of this lives where you are sitting."
+ *   "Held close: your notes are for your eyes."
+ *   "This information is confined to the installation you are using."
+ *   "Offline by design, and it stays that way."
+ *
+ * Round 1 after extension: 5 caught of 5.   Round 2: 0 caught of 5.
+ *
+ * That is the number to keep. Extending closes exactly the holes already
+ * found and does nothing for the next one. Round 2 is deliberately NOT added
+ * to the patterns — a list tuned until its own examples pass would report a
+ * coverage it does not have, which is the failure this milestone is about.
+ *
+ * The honest statement of what it does: it catches a REPHRASING of a known
+ * claim (it found BackupCard.tsx on its first run, which a hand sweep for
+ * "never leaves" had missed because that sentence says "never leave"), and
+ * it does not catch a genuinely novel way of saying the same thing. The rest
+ * of the coverage is a human reading privacy copy, which is the founder's
+ * standing rule and the reason it is a rule.
+ * ────────────────────────────────────────────────────────────────────── */
+
+/** Hits that are NOT a false statement about where user data lives, each
+ *  with the reason. The key is a `file` + `contains` pair, specific enough
+ *  that rewriting the sentence invalidates the entry and brings the guard
+ *  back rather than blessing the new wording. */
+const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
+  {
+    file: 'features/assistant/AssistantView.tsx',
+    contains: 'Nothing is sent until you press',
+    because:
+      'True, and about the Deepgram live stream: the websocket in src/main/transcription.ts is ' +
+      'not opened until the user starts a session.'
+  },
+  {
+    file: 'features/backup/BackupCard.tsx',
+    contains: 'never leave this computer unless you turn that on above',
+    because:
+      'True, conditional on syncScope.transcripts being FALSE, and correctly scoped to the two ' +
+      'things it names. Transcripts: with the toggle off backup.ts picks callBackupPayload, ' +
+      'which hard-blanks `preview` and `segments`. Recordings: there is no audio upload path at ' +
+      'all — the app writes to exactly two buckets, `attachments` (user-added files, keyed by ' +
+      'attachment id and extension) and `sales-brain` (memory.db); neither ever carries call ' +
+      'audio. FOUND BY THIS GUARD on its first run, after a hand sweep missed it because that ' +
+      'sweep matched "never leaves" and this sentence says "never leave".'
+  },
+  {
+    file: 'features/settings/TelemetrySection.tsx',
+    contains: 'nothing is sent',
+    because:
+      'True: the telemetry-off branch of the same function. Telemetry defaults off and has no ' +
+      'remote toggle (see memory structurally-unflaggable-switches).'
+  },
+  {
+    file: 'features/settings/TelemetrySection.tsx',
+    contains: 'A random number made on this computer',
+    because:
+      'Describes where the anonymous diagnostics id is GENERATED, not where user data is kept. ' +
+      'True as written, and the id is deleted when diagnostics go off.'
+  },
+  {
+    file: 'features/settings/telemetry-copy.ts',
+    contains: 'or files on your computer',
+    because: 'An enumeration of what is NOT sent. True, and the opposite of a false locality claim.'
+  },
+  {
+    file: 'features/settings/SalesBrainSection.tsx',
+    contains: 'has no memories on this machine',
+    because:
+      'An empty state about the LOCAL store having nothing to export. Says nothing about whether ' +
+      'a copy exists elsewhere.'
+  },
+  {
+    file: 'features/audio/useMicTest.ts',
+    contains: 'could not be played back on this computer',
+    because:
+      'Not a data-location claim — an audio OUTPUT device error. Caught by the broadened ' +
+      '"on this computer" pattern, which is the price of a net wide enough to catch a rephrasing.'
+  },
+  {
+    file: 'features/calendar/EventDialog.tsx',
+    contains: 'Notifies you on this computer, only while CallRise AI is open',
+    because:
+      'Describes where a NOTIFICATION appears, not where data is kept. True: local notifications ' +
+      'need the app running.'
+  }
+]
+
+/** Sites that ARE false and are NOT YET FIXED, because privacy copy is
+ *  approved word by word by the founder and these two have not been.
+ *
+ *  Pinned to their exact contents on purpose. The guard goes red when a
+ *  THIRD false site appears, and ALSO when either of these is finally fixed
+ *  — which forces the list to shrink rather than rot. Debt visible in the
+ *  gate, not debt hidden by an allowlist. */
+const PENDING_FOUNDER_APPROVAL: { file: string; contains: string }[] = [
+  { file: 'features/home/activationSteps.ts', contains: 'Runs entirely on your own device' },
+  { file: 'features/settings/MemoryCenterSection.tsx', contains: 'Nothing is sent anywhere' }
+]
+
+/** Directories holding SIMULATED sales dialogue rather than UI copy. A
+ *  fixture buyer saying "we don't have a ton of time" is not the app making
+ *  a claim, and allowlisting each line of invented speech would bury the
+ *  real hits under noise. */
+const NOT_UI_COPY = ['simulator', 'fixtures', '__fixtures__', 'transcripts']
+
+function walk(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    if (entry === 'node_modules' || entry === '__tests__') continue
+    if (NOT_UI_COPY.includes(entry)) continue
+    const full = join(dir, entry)
+    if (statSync(full).isDirectory()) walk(full, out)
+    else if (entry.endsWith('.ts') || entry.endsWith('.tsx')) out.push(full)
+  }
+  return out
+}
+
+/** Blank out every character of a matched comment except its newlines, so
+ *  line numbers in the report stay exact. */
+function blankKeepingLines(text: string): string {
+  return text.replace(/[^\r\n]/g, ' ')
+}
+
+/** Every line making a locality claim, comments removed — a comment is not
+ *  something a user reads. (Comments that lie are species 77 and have their
+ *  own guards; this one is about the screen.)
+ *
+ *  Comments are stripped PROPERLY rather than by skipping lines that start
+ *  with a marker: a wrapped block comment whose continuation line has no
+ *  leading `*` walked straight through the line test and was reported as UI
+ *  copy. That was this guard's own first false positive. */
+function findClaims(): { file: string; line: number; text: string }[] {
+  const found: { file: string; line: number; text: string }[] = []
+  for (const file of walk(RENDERER)) {
+    const rel = file.slice(RENDERER.length + 1).split('\\').join('/')
+    const stripped = readFileSync(file, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, blankKeepingLines)
+      .replace(/^([^\r\n]*?)\/\/[^\r\n]*$/gm, (_m, before: string) =>
+        // Only treat `//` as a comment when it is not inside a string or a
+        // URL. Crude, and deliberately biased toward KEEPING the line: a
+        // kept comment costs an allowlist entry, a dropped string is a miss.
+        /['"`]/.test(before) ? _m : before
+      )
+    stripped.split(/\r?\n/).forEach((line, i) => {
+      if (!line.trim()) return
+      if (LOCALITY_CLAIMS.some((re) => re.test(line))) {
+        found.push({ file: rel, line: i + 1, text: line.trim() })
+      }
+    })
+  }
+  return found
+}
+
+describe('the app makes no false claim about where the user data lives', () => {
+  const claims = findClaims()
+
+  it('the sweep finds claims at all — otherwise this guard is vacuous', () => {
+    // Without this, a pattern list that stops matching (a rename, a rewrite,
+    // a directory move) turns the whole file green while checking nothing.
+    expect(claims.length, 'the locality sweep matched nothing at all').toBeGreaterThan(4)
+  })
+
+  it('every locality claim is accounted for, or is a pinned known-false site', () => {
+    const unaccounted = claims.filter((c) => {
+      if (ACCOUNTED_FOR.some((t) => c.file === t.file && c.text.includes(t.contains))) return false
+      if (PENDING_FOUNDER_APPROVAL.some((p) => c.file === p.file && c.text.includes(p.contains)))
+        return false
+      return true
+    })
+
+    expect(
+      unaccounted.map((c) => `${c.file}:${c.line}`),
+      'NEW copy claims the user data stays on their device. Seven categories are uploadable and ' +
+        'two default ON, so this is false for the default configuration. Either fix the sentence, ' +
+        'or add an ACCOUNTED_FOR entry stating why it is not a false claim:\n  ' +
+        unaccounted.map((c) => `${c.file}:${c.line}\n    ${c.text.slice(0, 160)}`).join('\n  ')
+    ).toEqual([])
+  })
+
+  it('the two sites awaiting founder approval are still exactly two, and still there', () => {
+    // Red in BOTH directions, so listed debt cannot quietly become permanent.
+    for (const p of PENDING_FOUNDER_APPROVAL) {
+      const hit = claims.find((c) => c.file === p.file && c.text.includes(p.contains))
+      expect(
+        hit,
+        `"${p.contains}" is no longer in ${p.file}. If it was FIXED, delete its entry from ` +
+          'PENDING_FOUNDER_APPROVAL — the pin exists to keep the debt visible, not to outlive it.'
+      ).toBeDefined()
+    }
+    expect(
+      PENDING_FOUNDER_APPROVAL.length,
+      'the count of known-false, unapproved copy sites changed'
+    ).toBe(2)
+  })
+
+  it('the three approved strings say where the data actually goes', () => {
+    // The positive half. Removing a lie is not the same as telling the truth,
+    // and a later edit could drop the honest clause while leaving the
+    // negative check above perfectly green.
+    const nav = readFileSync(join(RENDERER, 'features/settings/settings-nav.ts'), 'utf8')
+    const card = readFileSync(join(RENDERER, 'features/settings/SalesBrainSection.tsx'), 'utf8')
+    const clause = /included in your CallRise backup unless you turn that off/g
+    expect(
+      [...nav.matchAll(clause)].length,
+      'settings-nav.ts lost a sentence saying the backup includes the Sales Brain'
+    ).toBe(2)
+    expect(
+      [...card.matchAll(clause)].length,
+      'SalesBrainSection.tsx lost the sentence saying the backup includes the Sales Brain'
+    ).toBe(1)
+    // And it must point at a page that EXISTS. "Settings → Backup" was the
+    // approved wording and there is no such page — the settings-paths-in-copy
+    // guard caught it on all three strings. Pinned here beside the sentence.
+    expect(nav + card).not.toMatch(/Settings → Backup/)
+    expect([...(nav + card).matchAll(/Settings → Privacy & data/g)].length).toBe(3)
+  })
+})
