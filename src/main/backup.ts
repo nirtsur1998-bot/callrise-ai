@@ -439,6 +439,25 @@ async function scrubSalesBrainDb(
  *  removed from the queue once its scrub succeeded. Runs at the START of a
  *  push, so e.g. the transcripts scrub (touch + re-push quote-free rows)
  *  takes effect in the same push that follows. */
+/**
+ * BUG-205 — switching TRANSCRIPTS off must also remove the Sales Brain that is
+ * already uploaded.
+ *
+ * The brain upload is gated on the transcripts toggle as well as its own,
+ * because a memory's `evidence` is a verbatim span of the transcript. Gating
+ * the upload alone would stop FUTURE uploads and leave the verbatim quotes
+ * already sitting in the account — which is BUG-200's exact shape reappearing
+ * inside its own fix, and the reason this expansion exists rather than being
+ * left to the user to work out.
+ *
+ * Pure and exported so it can be tested directly: the listener it feeds is
+ * registered inside registerBackup and is not reachable from a test.
+ */
+export function expandDisabledScrubKeys(keys: ScrubKey[]): ScrubKey[] {
+  if (!keys.includes('transcripts') || keys.includes('salesBrain')) return keys
+  return [...keys, 'salesBrain']
+}
+
 async function drainPendingScrubs(
   client: NonNullable<ReturnType<typeof getSupabaseClient>>,
   userId: string
@@ -769,24 +788,32 @@ export async function uploadSalesBrainDb(
   // the restore guard above on purpose: if that one is ever wrong, this still
   // refuses. Founder's call — a hard block, not a warning: an upload we skip
   // is recoverable, an overwrite is not.
+  //
+  // 2026-09-07, BUG-206 — this is now a BLANKET block, and that reverses a
+  // recorded decision deliberately, with the founder's explicit word.
+  //
+  // It used to refuse only when the cloud already held something, so that an
+  // empty brain could still reach an empty bucket. The reasoning that was
+  // written under had no erase path in it: uploading nothing was the only way
+  // the cloud copy could ever be made to go away, so blocking it completely
+  // would have meant "Forget everything" could never propagate.
+  //
+  // There is now a verified erase path (BUG-200's scrub through BUG-204's
+  // eraseStoragePrefixProven), and an erasure travels as a DELETE rather than
+  // as an upload of emptiness. So the question this gate used to ask — "is it
+  // safe to overwrite the cloud with this empty file?" — no longer needs an
+  // answer in either direction: nothing legitimate uploads an empty brain.
+  // An empty local store means one of "not started yet", "corrupt", "husked",
+  // or "just erased", and uploading it serves none of them.
+  //
+  // The consequence, stated because it is the cost: a genuinely fresh install
+  // with an empty brain and an empty bucket now uploads nothing at all until
+  // it learns its first fact. That is fine; there was nothing to preserve.
   const localForUpload = localMemoryCount(dbPath)
   if (localForUpload.ok && localForUpload.count === 0) {
-    let cloudHasSomething = false
-    try {
-      const { data } = await client.storage.from('sales-brain').list(userId, { limit: 100 })
-      cloudHasSomething = Array.isArray(data) && data.some((o) => o?.name === 'memory.db')
-    } catch {
-      // Cannot tell what is up there — assume something is, and refuse. The
-      // safe direction when uncertain is "do not overwrite".
-      cloudHasSomething = true
-    }
-    if (cloudHasSomething) {
-      console.error(
-        '[backup] refusing to upload an EMPTY Sales Brain over an existing cloud copy'
-      )
-      reportBackupStep('salesBrainUploadRefusedEmpty', { code: 'empty-local' })
-      return
-    }
+    console.error('[backup] refusing to upload an EMPTY Sales Brain')
+    reportBackupStep('salesBrainUploadRefusedEmpty', { code: 'empty-local' })
+    return
   }
 
   const snapshotPath = `${dbPath}.upload-snapshot`
@@ -1093,7 +1120,20 @@ export async function pushAll(): Promise<BackupResult> {
         reportBackupStep('attachmentUpload', err)
       }
     }
-    if (syncScope.salesBrain) {
+    // BUG-205 — gated on the TRANSCRIPTS toggle as well as its own, and this
+    // is the founder's decision of 2026-09-07, for the same reason the
+    // objection queue is gated that way: a Sales Brain memory's `evidence` is
+    // a VERBATIM span of the transcript (extraction.ts, up to 400 characters),
+    // which is the buyer's words, which is precisely the category the
+    // transcripts toggle already governs.
+    //
+    // Before this, someone who deliberately switched transcript backup off —
+    // having made an explicit decision about verbatim buyer speech — still had
+    // word-for-word quotes going up inside memory.db, labelled only "Sales
+    // Brain memories". Seven separate pieces of copy tried to describe that
+    // truthfully and every one of them came back false or misleading, which is
+    // what made it a behaviour problem rather than a wording problem.
+    if (syncScope.salesBrain && syncScope.transcripts) {
       try {
         await uploadSalesBrainDb(client, userId)
       } catch (err) {
@@ -1575,7 +1615,7 @@ export function registerBackup(): void {
 
   // A privacy toggle turned OFF locally → queue a durable cloud scrub of that
   // category (drained at the start of the next push, retried until done).
-  setSyncScopeDisabledListener(queuePendingScrubs)
+  setSyncScopeDisabledListener((keys) => queuePendingScrubs(expandDisabledScrubKeys(keys)))
 
   // M26 Phase 3 — the MANUAL "Sync now" button is a MAINTENANCE-lane job so
   // its progress is visible (and survives leaving Settings). Deliberately

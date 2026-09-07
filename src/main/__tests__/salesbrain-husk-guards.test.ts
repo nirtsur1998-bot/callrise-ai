@@ -182,13 +182,40 @@ describe('BUG-092 — the upload refusal (the irreversible half)', () => {
     expect(steps).toContain('salesBrainUploadRefusedEmpty') // counted, not silent
   })
 
-  it('still uploads an empty DB when the cloud has nothing to lose', async () => {
+  // ── DECISION REVERSED 2026-09-07, by the founder, explicitly ────────────
+  //
+  // This test used to assert the OPPOSITE: "still uploads an empty DB when the
+  // cloud has nothing to lose", with the message "the refusal must not become
+  // a blanket block". That was the right call under the reasoning it was
+  // written with, and it is kept here rather than deleted so the reversal is
+  // legible instead of looking like drift.
+  //
+  // WHY IT WAS RIGHT THEN. There was no erase path. Uploading an empty brain
+  // was the only way a cloud copy could ever be made to go away, so blocking
+  // it completely would have meant "Forget everything" could never propagate
+  // past this machine.
+  //
+  // WHY IT IS WRONG NOW. BUG-200 built an erase path and BUG-204 made it
+  // prove itself, so an erasure travels as a DELETE. Nothing legitimate
+  // uploads an empty brain any more: an empty local store means "not started
+  // yet", "corrupt", "husked" or "just erased", and an upload serves none of
+  // them. The founder's words: "An empty brain reaching the cloud has no
+  // legitimate cause I can see — say so if you can see one." I could not.
+  //
+  // THE COST, so it is not rediscovered as a bug: a genuinely fresh install
+  // now uploads nothing until it learns its first fact. There was nothing to
+  // preserve, and the first real memory triggers a normal upload.
+  it('NEVER uploads an empty DB, even when the cloud has nothing to lose', async () => {
     makeDb([])
     let uploaded = false
+    let listed = false
     const client = {
       storage: {
         from: () => ({
-          list: async () => ({ data: [], error: null }), // nothing up there
+          list: async () => {
+            listed = true
+            return { data: [], error: null } // nothing up there
+          },
           upload: async () => {
             uploaded = true
             return { error: null }
@@ -197,7 +224,12 @@ describe('BUG-092 — the upload refusal (the irreversible half)', () => {
       }
     }
     await uploadSalesBrainDb(client as never, 'uid-1')
-    expect(uploaded, 'the refusal must not become a blanket block').toBe(true)
+    expect(uploaded, 'an empty brain must never be uploaded, whatever is up there').toBe(false)
+    expect(steps).toContain('salesBrainUploadRefusedEmpty')
+    // The cloud is not even consulted any more: the answer does not depend on
+    // it, and a probe whose result cannot change the outcome is a round trip
+    // that can only fail.
+    expect(listed, 'the cloud listing is no longer needed to decide this').toBe(false)
   })
 
   it('refuses when the cloud listing FAILS — uncertainty resolves to "do not overwrite"', async () => {
