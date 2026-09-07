@@ -49,7 +49,14 @@ const LOCALITY_CLAIMS: RegExp[] = [
   /nowhere else/i,
   /stays? (right )?(here|put)/i,
   /no servers?/i,
-  /yours alone/i
+  /yours alone/i,
+  // ── Added 2026-09-07 after an independent sweep found SIX sites this list
+  //    did not catch. Round 3 of the measurement, and this one was not a
+  //    fixture: every sentence below is real shipped copy.
+  /nothing new leaves your (device|computer)/i,
+  /completely unaffected/i,
+  /nothing has been sent/i,
+  /no extra AI calls/i
 ]
 
 /* ── WHAT THIS GUARD IS, MEASURED ─────────────────────────────────────────
@@ -101,18 +108,6 @@ const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
     because:
       'True, and about the Deepgram live stream: the websocket in src/main/transcription.ts is ' +
       'not opened until the user starts a session.'
-  },
-  {
-    file: 'features/backup/BackupCard.tsx',
-    contains: 'never leave this computer unless you turn that on above',
-    because:
-      'True, conditional on syncScope.transcripts being FALSE, and correctly scoped to the two ' +
-      'things it names. Transcripts: with the toggle off backup.ts picks callBackupPayload, ' +
-      'which hard-blanks `preview` and `segments`. Recordings: there is no audio upload path at ' +
-      'all — the app writes to exactly two buckets, `attachments` (user-added files, keyed by ' +
-      'attachment id and extension) and `sales-brain` (memory.db); neither ever carries call ' +
-      'audio. FOUND BY THIS GUARD on its first run, after a hand sweep missed it because that ' +
-      'sweep matched "never leaves" and this sentence says "never leave".'
   },
   {
     file: 'features/backup/BackupCard.tsx',
@@ -183,7 +178,25 @@ const PENDING_FOUNDER_APPROVAL: { file: string; contains: string }[] = [
   // conversations are stored in your cloud account, not just this device."
   // Unconditional, and its doc comment calls it "a short, honest recap".
   // Three of the four categories it names were syncing when it was read.
-  { file: 'features/settings/PrivacyNoticeCard.tsx', contains: 'live only on this' }
+  { file: 'features/settings/PrivacyNoticeCard.tsx', contains: 'live only on this' },
+  // ── Added 2026-09-07. Four more, all found by an independent adversarial
+  //    sweep rather than by this guard, and one of them had been recorded HERE
+  //    as true.
+  //
+  // BackupCard: "never leave this computer unless you turn that on above" was
+  // in ACCOUNTED_FOR with a written argument for why it was true. The argument
+  // checked the transcripts toggle and the absence of an audio upload path and
+  // stopped there. It missed that a Sales Brain memory's evidence is a
+  // VERBATIM 400-character span of the transcript (extraction.ts:269), that
+  // memory.db uploads to the sales-brain bucket, and that salesBrain sync
+  // defaults ON. So with Sales Brain switched on, which is a headline feature,
+  // word-for-word transcript text leaves the computer while this sentence says
+  // it does not. An allowlist entry with a reason is still only as good as the
+  // reason.
+  { file: 'features/backup/BackupCard.tsx', contains: 'never leave this computer' },
+  { file: 'features/coaching/CoachingView.tsx', contains: 'nothing new leaves your device' },
+  { file: 'features/home/AccountMigrationNoticeCard.tsx', contains: 'completely unaffected' },
+  { file: 'features/settings/TelemetrySection.tsx', contains: 'Nothing has been sent from this computer' }
 ]
 
 /** Directories holding SIMULATED sales dialogue rather than UI copy. A
@@ -229,10 +242,21 @@ function findClaims(): { file: string; line: number; text: string }[] {
         // kept comment costs an allowlist entry, a dropped string is a miss.
         /['"`]/.test(before) ? _m : before
       )
-    stripped.split(/\r?\n/).forEach((line, i) => {
+    // Each line is tested ON ITS OWN and JOINED TO THE NEXT, because a JSX
+    // sentence that wraps was invisible to a line-at-a-time test: in
+    // AccountMigrationNoticeCard.tsx "live on" ended one line and "this
+    // computer" began the next, so no single line held both halves of a
+    // pattern that needs both. An independent sweep found that site; this
+    // guard walked straight past it. Two lines is not "enough" - a sentence
+    // wrapped over three would still escape - but it is the width that
+    // actually occurs in this codebase's JSX, and saying so is better than
+    // implying the hole is closed.
+    const lines = stripped.split(/\r?\n/)
+    lines.forEach((line, i) => {
       if (!line.trim()) return
-      if (LOCALITY_CLAIMS.some((re) => re.test(line))) {
-        found.push({ file: rel, line: i + 1, text: line.trim() })
+      const joined = (line + ' ' + (lines[i + 1] ?? '')).replace(/\s+/g, ' ')
+      if (LOCALITY_CLAIMS.some((re) => re.test(line) || re.test(joined))) {
+        found.push({ file: rel, line: i + 1, text: joined.trim() })
       }
     })
   }
@@ -265,7 +289,7 @@ describe('the app makes no false claim about where the user data lives', () => {
     ).toEqual([])
   })
 
-  it('the three sites awaiting founder approval are still exactly three, and still there', () => {
+  it('the seven sites awaiting founder approval are still exactly seven, and still there', () => {
     // Red in BOTH directions, so listed debt cannot quietly become permanent.
     for (const p of PENDING_FOUNDER_APPROVAL) {
       const hit = claims.find((c) => c.file === p.file && c.text.includes(p.contains))
@@ -278,7 +302,7 @@ describe('the app makes no false claim about where the user data lives', () => {
     expect(
       PENDING_FOUNDER_APPROVAL.length,
       'the count of known-false, unapproved copy sites changed'
-    ).toBe(3)
+    ).toBe(7)
   })
 
   it('the three approved strings say where the data actually goes', () => {
