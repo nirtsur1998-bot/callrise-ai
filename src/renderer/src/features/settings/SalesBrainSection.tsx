@@ -171,7 +171,7 @@ export function SalesBrainSection(): React.JSX.Element {
       <Card className="mb-5">
         <SettingRow
           title="Sales Brain (Beta)"
-          description="Learns who you are, how you sell, your business, and each client — every AI feature in the app (live cues, coaching, chat, briefs) gets smarter from it over time. Runs entirely on your own device: facts are extracted through your own connected AI provider, but everything is stored and searched locally, never uploaded anywhere by default."
+          description="Learns who you are, how you sell, your business, and each client — every AI feature in the app (live cues, coaching, chat, briefs) gets smarter from it over time. Facts are extracted through your own connected AI provider. Stored on your device, and included in your CallRise backup unless you turn that off in Settings → Privacy & data."
           control={
             <ToggleSwitch
               checked={enabled}

@@ -197,7 +197,7 @@ const ALL_GROUPS: SettingsGroup[] = [
         label: 'Sales Brain (Beta)',
         icon: Brain,
         description:
-          'Learns who you are, how you sell, your business, and each client — every AI feature gets smarter from it. Runs entirely on your own device. Off by default.'
+          'Learns who you are, how you sell, your business, and each client — every AI feature gets smarter from it. Stored on your device and included in your CallRise backup unless you turn that off in Settings → Privacy & data. Off by default.'
       },
       {
         id: 'sales-brain-memories',
@@ -416,7 +416,7 @@ const V2_GROUPS: SettingsGroup[] = [
         label: 'What CallRise remembers',
         icon: Brain,
         description:
-          'Beta: learns who you are, how you sell, your business, and each client — every AI feature gets smarter from it. Runs entirely on your own device. Off by default.'
+          'Beta: learns who you are, how you sell, your business, and each client — every AI feature gets smarter from it. Stored on your device and included in your CallRise backup unless you turn that off in Settings → Privacy & data. Off by default.'
       },
       {
         // DELIBERATELY NOT merged into 'sales-brain'. This is the one merge the
