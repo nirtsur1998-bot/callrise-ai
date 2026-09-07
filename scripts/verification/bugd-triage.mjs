@@ -53,11 +53,16 @@ const CALLS_DIR = resolve(
 
 /** The verdicts. Exported so the test can enumerate them. */
 export const VERDICT = {
-  CAPTURE_WORKED: 'CAPTURE WORKED — channels attached; the fault is DOWNSTREAM',
+  CAPTURE_WORKED: 'CAPTURE WORKED — the multichannel socket attached and Deepgram attributed a side; the fault is DOWNSTREAM',
   NEVER_ATTACHED: 'CAPTURE FAILED — buyer capture was promised and NO channel ever attached',
   MONO_BY_DESIGN: 'mono by design — buyer capture was not switched on for this call',
-  CANNOT_JUDGE: 'CANNOT JUDGE — call predates channel attribution',
-  NO_SPEECH: 'NO SPEECH AT ALL — nothing was transcribed'
+  CANNOT_JUDGE: 'CANNOT JUDGE — buyer capture was promised but the call predates channel attribution',
+  // Split from a single NO_SPEECH bucket after an audit pointed out that the
+  // headline "zero capture failures" depended on which bucket these landed in.
+  // A call that promised buyer capture and produced NOT ONE turn cannot be
+  // told apart from a capture failure, and must not be counted as if it could.
+  NO_SPEECH_UNDECIDABLE: 'NOTHING TRANSCRIBED, buyer capture was promised — INDISTINGUISHABLE from a capture failure',
+  NO_SPEECH_MONO: 'NOTHING TRANSCRIBED, and buyer capture was not switched on'
 }
 
 /**
@@ -110,11 +115,20 @@ function normalize(call) {
 /**
  * The branch, and nothing else.
  *
- * A channel on ANY segment is a hardware fact: the multichannel path attached
- * and audio was attributed to a side. Words can still be missing after that —
- * which is the whole point of the branch: it says the restart is NOT the
- * suspect and the fault lies downstream, in what Deepgram did with audio it
- * received.
+ * A channel on ANY segment is a hardware fact: `deterministic` in
+ * transcription.ts requires BOTH the multichannel request flag AND Deepgram
+ * returning a channel_index of 0 or 1, so a label proves the multichannel
+ * socket was running and the server was attributing results to a side. Words
+ * can still be missing after that — which is the whole point of the branch: it
+ * says the restart is NOT the suspect.
+ *
+ * WHAT IT DOES NOT PROVE, stated because an audit was right to press on it:
+ * that the BUYER's channel carried audio. A call where only channel 0 ever
+ * produced results still earns a label, so a bit-silent buyer channel — the
+ * app's own documented Windows endpoint problem — reads as CAPTURE WORKED.
+ * That is why `channelEvidence` reports "both sides" / "one side" / "ONE turn
+ * only" beside every verdict, and why the summary now prints that split
+ * instead of leaving the qualifier in the detail rows.
  *
  * Deliberately NOT "channel 1 has no segments": a quiet buyer produces that,
  * and calling a working recording a failure is its own harm (the same
@@ -128,10 +142,22 @@ export function branch(raw) {
   const dateOk =
     created && !Number.isNaN(created.getTime()) && created.toISOString().slice(0, 10) >= CHANNEL_ATTRIBUTION_SINCE
 
-  if (speech.length === 0) return VERDICT.NO_SPEECH
+  // ORDER CORRECTED after an adversarial audit, M37. Two bugs were in the old
+  // ordering, and both flattered the headline:
+  //  - the date gate ran BEFORE the "was buyer capture even promised" gate, so
+  //    a pre-attribution call that never asked for buyer capture was reported
+  //    as "cannot judge" when it is simply mono by design. Both of the two
+  //    unjudgeable thin calls on the founder's store were this.
+  //  - a single NO_SPEECH bucket absorbed calls that PROMISED buyer capture
+  //    and produced nothing at all, which is exactly what a capture failure
+  //    looks like. Counting them as "no speech" is what made the headline read
+  //    "zero capture failures".
+  // "Was capture even asked for" now decides first, because nothing downstream
+  // means anything when the answer is no.
+  if (!call.recordOtherParty) return speech.length === 0 ? VERDICT.NO_SPEECH_MONO : VERDICT.MONO_BY_DESIGN
+  if (speech.length === 0) return VERDICT.NO_SPEECH_UNDECIDABLE
   if (speech.some((s) => s.channel === 0 || s.channel === 1)) return VERDICT.CAPTURE_WORKED
   if (!dateOk) return VERDICT.CANNOT_JUDGE
-  if (!call.recordOtherParty) return VERDICT.MONO_BY_DESIGN
   return VERDICT.NEVER_ATTACHED
 }
 
@@ -289,6 +315,20 @@ if (typeof one === 'string') {
     for (const r of thin) thinByVerdict[r.verdict] = (thinByVerdict[r.verdict] ?? 0) + 1
     console.log('\nTHE ANSWER — the thin calls, by branch:')
     for (const [v, n] of Object.entries(thinByVerdict).sort((a, b) => b[1] - a[1])) console.log(`  ${String(n).padStart(4)}  ${v}`)
+    // How much the CAPTURE WORKED rows are standing on. The script computed
+    // this per row all along and printed it only in the detail rows; an audit
+    // was right that a summary reader takes the headline without it.
+    const worked = thin.filter((r) => r.verdict === VERDICT.CAPTURE_WORKED)
+    if (worked.length) {
+      const byEv = {}
+      for (const r of worked) byEv[r.channelEvidence] = (byEv[r.channelEvidence] ?? 0) + 1
+      console.log('')
+      console.log('  of those CAPTURE WORKED rows, how strong the channel evidence is:')
+      for (const [e, n] of Object.entries(byEv).sort((a, b) => b[1] - a[1]))
+        console.log(`    ${String(n).padStart(4)}  ${e}${e === 'ONE turn only' ? '   <- one labelled turn carries the verdict' : ''}`)
+      console.log('    A label proves the multichannel socket attached and Deepgram attributed a side.')
+      console.log('    It does NOT prove the BUYER channel carried audio.')
+    }
   }
 
   const worst = Number(flag('--worst', has('--all') ? String(eligible.length) : '20'))

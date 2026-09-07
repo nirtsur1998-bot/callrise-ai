@@ -28,14 +28,39 @@
 //   CALLRISE_REEXTRACT_PROFILE=<profile dir holding calls/ contacts/ deals/> \
 //   [CALLRISE_REEXTRACT_LIMIT=N] [CALLRISE_EVAL_CHAIN=<catalog id>] \
 //   npx vitest run src/main/memory/__tests__/reextract-runner.test.ts
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 /** The app's real profile. A database under here is the founder's live store
- *  and is never opened by this file. */
-const REAL_PROFILE = resolve(process.env.APPDATA ?? join(process.env.USERPROFILE ?? '', 'AppData', 'Roaming'), 'sales-os')
+ *  and is never opened by this file.
+ *
+ *  HARDENED after an adversarial audit, M37. The first version compared
+ *  `resolve(DB)` against this with a case-SENSITIVE `startsWith`, on a
+ *  case-INSENSITIVE filesystem. Measured: both
+ *  `...\Roaming\SALES-OS\memory.db` and `c:\users\user\...\sales-os\memory.db`
+ *  got past the guard and `existsSync` returned true for both — Windows
+ *  resolves them to the founder's real file. The red check that "proved" the
+ *  guard used the exact-case path, which is the one spelling it did catch.
+ *
+ *  Now: compared case-insensitively, and through `realpathSync` where the path
+ *  exists, so a junction, a symlink, a mapped drive or an 8.3 short name
+ *  resolves to its true location before the comparison. */
+const REAL_PROFILE_RAW = process.env.APPDATA ?? (process.env.USERPROFILE ? join(process.env.USERPROFILE, 'AppData', 'Roaming') : null)
+
+/** The canonical form of a path for comparison: resolved, real (following
+ *  links), and lowercased because Windows paths are case-insensitive. */
+function canonical(p: string): string {
+  const abs = resolve(p)
+  try {
+    return realpathSync.native(abs).toLowerCase()
+  } catch {
+    // does not exist yet — resolve() is the best we can do, and a
+    // non-existent path cannot be the live store anyway
+    return abs.toLowerCase()
+  }
+}
 
 const runnerUserData = vi.hoisted(() => {
   const fs = require('node:fs') as typeof import('node:fs')
@@ -140,13 +165,22 @@ describe('M37 — re-extraction of a real store, on a COPY', () => {
       expect(PROFILE, 'CALLRISE_REEXTRACT_PROFILE is required').not.toBe('')
 
       // ── the refusal ──────────────────────────────────────────────────────
-      // Resolved, so `..` cannot walk back into the real profile. This is the
-      // guard that makes everything below safe to run at all.
+      // The guard that makes everything below safe to run at all. It FAILS
+      // CLOSED: if the live profile cannot be located, nothing runs, because a
+      // guard that cannot find what it is protecting must not wave things
+      // through. (The audit found the previous version failed OPEN when both
+      // APPDATA and USERPROFILE were absent.)
+      expect(
+        REAL_PROFILE_RAW,
+        'REFUSED: neither APPDATA nor USERPROFILE is set, so the live profile cannot be located and nothing can be proven safe.'
+      ).not.toBeNull()
+      const realProfile = canonical(join(REAL_PROFILE_RAW as string, 'sales-os'))
       const dbPath = resolve(DB)
-      const inRealProfile = dbPath === REAL_PROFILE || dbPath.startsWith(REAL_PROFILE + sep)
+      const dbCanonical = canonical(dbPath)
+      const inRealProfile = dbCanonical === realProfile || dbCanonical.startsWith(realProfile + sep)
       expect(
         inRealProfile,
-        `REFUSED: ${dbPath} is inside the live profile ${REAL_PROFILE}. Re-extraction runs on a snapshot copy, never on the founder's store.`
+        `REFUSED: ${dbPath} resolves to ${dbCanonical}, inside the live profile ${realProfile}. Re-extraction runs on a snapshot copy, never on the founder's store.`
       ).toBe(false)
       expect(existsSync(dbPath), `no such database: ${dbPath}`).toBe(true)
 
