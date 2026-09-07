@@ -2,6 +2,12 @@
 
 ## THE TOOLS (M35 Stage 3 — the one index; the lessons below are why each exists)
 
+> **Driving a Monaco editor in a browser (Supabase SQL editor, a web IDE, any in-page code field)?
+> Read "DRIVING A MONACO EDITOR IN A BROWSER" at the end of this file FIRST.** Three silent failure
+> modes, all producing plausible output, one of them in the exact check you would otherwise reach
+> for. The working instrument is `monaco.editor.getModels()[0].getValue()` — never the rendered
+> `.view-line` DOM, and never a screenshot.
+
 | Tool | The question it answers | Needs | Run | How it refuses |
 |---|---|---|---|---|
 | `verify-green.mjs` | Is the branch green? Read from the typecheck's own `error TS` lines and the suite's own `Test Files` / `Tests` lines, never a wrapper's exit or a count beside the answer (species 4, 14, 69). | nothing | `node scripts/verification/verify-green.mjs` (`--tests`, `--types`, `-- <vitest args>`) | prints `VERDICT: NOT GREEN`, exit 1, on any failed/missing summary or a stray `Errors N error` line. Also the CI gate (`.github/workflows/verify.yml`). Self-test: `src/__tests__/verify-green.test.ts`. |
@@ -733,3 +739,101 @@ Rules that follow from it, for anything this script does not cover:
 - never `| grep -c` a gate — print the matching lines, or none;
 - never read `$?` after a pipe — the last command's code is what you get;
 - when a command prints a count, print the thing counted next to it.
+
+---
+
+# DRIVING A MONACO EDITOR IN A BROWSER — three silent failures in one tool
+
+**Added 2026-09-07, from running a production Supabase migration.** This applies to any Monaco
+editor reached through a browser: the Supabase SQL editor, VS Code in the browser, a web IDE, an
+in-page code field. It cost most of an hour and would have cost a wrong migration.
+
+**The meta-finding first, because it is the part that generalises.** Three distinct failure modes,
+in one tool, in one sitting. All three were **silent**. All three produced **plausible output** —
+the tool reported success and the screen looked right. That is not a flaky editor. That is an
+instrument that cannot be trusted without an independent read, and the independent read has to come
+from somewhere other than the surface you are driving.
+
+## The working instrument, first
+
+```js
+monaco.editor.getModels()[0].getValue()
+```
+
+`monaco` is a page global wherever Monaco is embedded. This returns the editor's **logical model**:
+exactly the text that will be submitted, with the editor's own line endings (`\r\n`). Compare THAT
+against your intended text, programmatically, before you act. Everything below is a reason not to
+use anything else.
+
+## 1. `Ctrl+A` does not reach Monaco — so select-all-then-type APPENDS
+
+Pressing `ctrl+a` and then typing looks like a replace and is an **append**. The keystroke is
+reported as delivered; the selection never happens.
+
+Measured: after `ctrl+a` + `Delete` + typing a new statement, the model held
+`create policy "p" …;create policy "x" …` — the previous probe still there, the new text glued to
+its end with no separator.
+
+**What to do instead:** navigate to a fresh editor URL for a clean model rather than trying to
+clear one. Reloading is reliable; clearing is not. If you must clear, verify the model is `''`
+before typing.
+
+*(This is the same failure recorded in M32, where `ctrl+a` and `ctrl+End` silently failed to reach
+Monaco and appended a REVOKE onto an unrelated SELECT. It has now cost two sessions.)*
+
+## 2. Auto-indent rewrites your whitespace — typed multi-line text is never what you typed
+
+Monaco indents continuation lines itself, **on top of** the indentation in the text you send. Type
+four spaces after an open paren and you get six; type two before a closing paren and you get eight.
+
+Measured, typing `\n    a = 'b' …\n  );`:
+
+```
+  for delete using (
+      a = 'b' and (f(n))[1] = c      <- 6 spaces, 4 were sent
+        );                            <- 8 spaces, 2 were sent
+```
+
+For SQL this is cosmetic. For anything whitespace-significant — YAML, Python, a Markdown code fence
+— it is a corruption. And it defeats a byte-for-byte comparison against a source file even when the
+meaning is identical.
+
+**What to do instead:** send text with **no leading whitespace and one logical statement per line**,
+so auto-indent has nothing to add. Derive that form mechanically from the source file rather than
+retyping it, and say plainly that the comparison is against the derived text.
+
+## 3. The rendered DOM shows a soft wrap as a real line break — RECORD THIS ONE HARDEST
+
+`document.querySelectorAll('.view-line')` returns one node per **rendered** line, not per logical
+line. With word wrap on, a single long statement spans several `.view-line` nodes, and joining them
+with `\n` inserts newlines **that do not exist in the document**.
+
+Measured, on one 68-character statement typed as a single line:
+
+```
+DOM lines  : "…(f(n))[1] \n= c);"     <- a newline mid-statement
+model value: "…(f(n))[1] = c);"        <- the truth
+```
+
+**This is the one that matters**, and it is why it is recorded hardest: reading `.view-line` is the
+check a careful person reaches for. It is the DOM, it is the real text on screen, it feels like
+ground truth. It would have reported a difference that did not exist, on a production migration —
+and had the wrap fallen elsewhere it would have reported a match that did not exist. A confident
+wrong answer from the very instrument chosen to prevent one.
+
+A screenshot is worse again: it shows the same wrapped rendering, plus it lags. During this session
+the screenshot showed a placeholder for an editor that already contained text.
+
+## The procedure, for a migration or anything else that must be exact
+
+1. Navigate to a **fresh** editor URL. Confirm `getValue() === ''`.
+2. Click the editor by its accessibility ref, then confirm
+   `document.activeElement.classList.contains('inputarea')`.
+3. Type the text, one logical statement per line, no leading whitespace.
+4. Read `monaco.editor.getModels()[0].getValue()` and compare **programmatically** — not by eye,
+   not from a screenshot, not from `.view-line` — against text derived from the committed source.
+5. Only then act. If the comparison fails, or if any input reported success and did not land, stop
+   and hand it back rather than retrying.
+
+Step 4 is the whole point. Steps 1–3 are workarounds for failures that will probably differ in the
+next editor; step 4 is what makes any of them survivable.
