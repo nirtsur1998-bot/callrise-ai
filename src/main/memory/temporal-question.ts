@@ -64,7 +64,7 @@ const YEAR = '(\\d{4})'
  * because "can/should/could" are routinely used about the past and present
  * too ("should we have discounted in June?").
  */
-const FUTURE_MARKERS = /\b(?:will|won't|'ll|shall|going to|gonna|expects? to|expecting to|plans? to|planning to|next (?:week|month|quarter|year)|upcoming)\b/
+const FUTURE_MARKERS = /\b(?:will|won[’']t|[’']ll|shall|going to|gonna|expects? to|expecting to|plans? to|planning to|next (?:week|month|quarter|year)|upcoming)\b/
 
 const endOfDay = (y: number, m: number, d: number): Date => new Date(Date.UTC(y, m, d, 23, 59, 59, 999))
 const endOfMonth = (y: number, m: number): Date => new Date(Date.UTC(y, m + 1, 0, 23, 59, 59, 999))
@@ -91,7 +91,13 @@ function result(at: Date, phrase: string, precision: AsOfQuestion['precision'], 
  * first), so "on June 10 2025" is a day, not a month.
  */
 export function parseAsOf(question: string, now: Date): AsOfQuestion | null {
-  const q = question.toLowerCase()
+  // Typographic apostrophes are normalised first. An audit found that
+  // pasting a question from a document, where the apostrophe in "won't" or
+  // "we'll" is U+2019 rather than U+0027, defeated the marker check and
+  // reproduced BUG-198 exactly: "We’ll close in December" was answered as of
+  // 2025-12-31. The markers also accept U+2019 directly, so this is belt and
+  // braces rather than the only defence.
+  const q = question.toLowerCase().replace(/’/g, "'")
 
   // The words say the question is about the future, and nothing in a store of
   // what WAS true can answer it. Refusing means retrieval runs untimed, which

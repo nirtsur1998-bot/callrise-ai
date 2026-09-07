@@ -88,7 +88,12 @@ const REFUSES: Case[] = [
   { q: 'I expect to close in October', at: null, why: 'was 2025-10-31' },
   { q: 'What do they plan to do in Q4?', at: null, why: 'was 2025-12-31' },
   { q: 'What will they need next quarter?', at: null },
-  { q: 'What is the upcoming renewal in March?', at: null }
+  { q: 'What is the upcoming renewal in March?', at: null },
+  // M37 audit — a typographic apostrophe (U+2019), which is what you get
+  // pasting from a document, defeated the marker check and reproduced
+  // BUG-198 exactly: both of these returned 2025-12-31 before the fix.
+  { q: 'We’ll close this in December', at: null, why: 'was 2025-12-31 - smart apostrophe' },
+  { q: 'It won’t land before December', at: null, why: 'was 2025-12-31 - smart apostrophe' }
 ]
 
 /** Known and deliberately NOT closed — recorded so the gap is visible rather
