@@ -223,6 +223,53 @@ describe('forgetEverything', () => {
     expect(db.prepare('SELECT COUNT(*) as n FROM vec_memories').get()).toEqual({ n: 0 })
     expect(db.prepare('SELECT COUNT(*) as n FROM compiled_profiles').get()).toEqual({ n: 0 })
   })
+
+  it('also clears the import ledger — otherwise a rebuild silently does nothing', () => {
+    // BUG-206. `backfill_attempts` holds no memory CONTENT, only which of the
+    // user's calls the import has already tried. It survived the wipe, which
+    // had two consequences, and the second is the one that decided this:
+    //
+    // 1. a residue — a list of the user's call ids surviving a dialog that
+    //    said everything was deleted;
+    // 2. it BREAKS REBUILDING. The ledger is what makes the import skip calls
+    //    it has already attempted, so after Forget everything a re-import
+    //    skipped every call and quietly did nothing. The user erases and then
+    //    cannot get back to a working brain without knowing to clear a ledger
+    //    they have never heard of.
+    //
+    // Found by a completeness critic asking which REAL tables the wipe leaves,
+    // after four sweeps had looked for shadow FILES. The answer was not in the
+    // exotic virtual-table shadows everyone expected; it was a plain CREATE
+    // TABLE two migrations along in the same schema.
+    db.prepare(
+      'INSERT OR REPLACE INTO backfill_attempts (call_id, attempted_at, outcome) VALUES (?, ?, ?)'
+    ).run('call-A', new Date().toISOString(), 'ok')
+    insertMemory(db, candidate({ scope: 'rep' }), embedding(1))
+    expect(db.prepare('SELECT COUNT(*) as n FROM backfill_attempts').get()).toEqual({ n: 1 })
+
+    forgetEverything(db)
+
+    expect(
+      db.prepare('SELECT COUNT(*) as n FROM backfill_attempts').get(),
+      'the import ledger survived the wipe, so a re-import will skip every call'
+    ).toEqual({ n: 0 })
+  })
+
+  it('does NOT wipe memory_meta — that is app state, and it holds the erasure receipt', () => {
+    // The counterpart, and it matters as much as the line above: the wipe must
+    // be exhaustive over learned CONTENT and must stop there. memory_meta is
+    // key-value app state, and BUG-206's fix design puts the erasure receipt in
+    // it — a receipt deleted by the wipe it certifies would certify nothing.
+    db.prepare('INSERT OR REPLACE INTO memory_meta (key, value) VALUES (?, ?)').run(
+      'schema.note',
+      'kept'
+    )
+    forgetEverything(db)
+    expect(
+      db.prepare("SELECT value FROM memory_meta WHERE key = 'schema.note'").get(),
+      'memory_meta was wiped — the erasure receipt would not survive its own erasure'
+    ).toEqual({ value: 'kept' })
+  })
 })
 
 describe('listMemoriesByCallId (post-call review)', () => {

@@ -614,6 +614,22 @@ export function forgetEverything(db: Database.Database): void {
     db.exec('DELETE FROM vec_memories')
     db.exec('DELETE FROM memories')
     db.exec('DELETE FROM compiled_profiles')
+    // BUG-206 — the import ledger. It holds no memory CONTENT, only
+    // (call_id, attempted_at, outcome), but leaving it has two consequences
+    // and the second is the one that decided this.
+    //
+    // 1. It is a residue of the wipe: a list of which of the user's calls the
+    //    Sales Brain processed, and when, surviving a dialog that said
+    //    everything was deleted.
+    // 2. It BREAKS REBUILDING. listAttempted() is what makes the import skip
+    //    calls it has already tried, so after Forget everything a re-import
+    //    would skip every call and quietly do nothing — the user erases, then
+    //    cannot get back to a working brain without knowing to clear a ledger
+    //    they have never heard of.
+    //
+    // memory_meta is deliberately NOT wiped: it is key-value app state, not
+    // learned content, and it is where the erasure receipt lives.
+    db.exec('DELETE FROM backfill_attempts')
   })
   wipe()
 }
