@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { isSalesBrainEnabled } from '../app-settings'
 import { getCall, setCallSalesBrainExcluded } from '../calls-fs'
 import { getLastInitResult, getMemoryDb } from './memory-runtime'
+import { memoryDbPath, removeBrainShadowCopies } from './db'
 import { embedText } from './embeddings'
 import {
   buildChangelog,
@@ -146,6 +147,15 @@ export function registerMemoryCenter(): void {
     const db = getMemoryDb()
     if (!db) return { ok: false }
     forgetEverything(db)
+    // BUG-206 — the tables are only half of it. A complete copy of everything
+    // just deleted sits beside the live file, and db.ts will restore one of
+    // them by itself if a future migration fails. "Forget EVERYTHING" has to
+    // mean the shadows too, or the dialog's "This cannot be undone" is false
+    // in the one direction the user cannot see.
+    const removed = removeBrainShadowCopies(memoryDbPath(app.getPath('userData')))
+    if (removed.length) {
+      console.log(`[salesBrain] forget everything also removed ${removed.length} shadow copies`)
+    }
     return { ok: true }
   })
 

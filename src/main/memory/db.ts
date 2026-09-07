@@ -36,7 +36,8 @@
 // this module only ever reads/writes the separate memory.db file.
 import { signalNativeLoad } from '../telemetry/signals'
 import { errorClassOf } from '../telemetry/capture'
-import { copyFileSync, existsSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, readdirSync, rmSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 // M27 J3 — type-only. better-sqlite3's actual native module is loaded lazily
 // inside openMemoryDb(), below, not here — see that function's own doc
 // comment for why. A type-only import is erased entirely at compile time
@@ -159,6 +160,60 @@ export function removeWalSidecars(dbPath: string): void {
       /* best-effort */
     }
   }
+}
+
+/**
+ * BUG-206 — delete every SHADOW COPY of the Sales Brain sitting beside the
+ * live database.
+ *
+ * "Forget EVERYTHING Sales Brain has learned" emptied three tables and left
+ * complete copies of all of them on the same disk, and the app was willing to
+ * put one of them back by itself. `memory.db.pre-migration-backup` is written
+ * before EVERY schema migration of a non-empty store and never cleaned up, and
+ * `db.ts` restores it on top of the live file automatically when a migration
+ * fails. So: erase, then a later update ships a migration that fails on this
+ * machine, and the memories are back — one machine, no second device, no old
+ * build, no user action.
+ *
+ * WHY IT ENUMERATES THE DIRECTORY RATHER THAN NAMING THE SUFFIXES. Three are
+ * known today: `.pre-migration-backup`, `.upload-snapshot` and
+ * `.local-unreadable-<timestamp>`. Naming those three would be the same
+ * mistake as BUG-139, where a deletion test asserted on the companion
+ * filenames somebody had thought of while a complete copy sat under a name no
+ * assertion could have been written for. Anything a future change drops beside
+ * `memory.db` under a `memory.db.` prefix is covered the day it appears.
+ *
+ * WHAT IT DELIBERATELY DOES NOT TOUCH, and this is load-bearing:
+ * `memory.db-wal` and `memory.db-shm`. Those use a HYPHEN, so the dot-prefix
+ * test excludes them by construction — and it must, because the wipe that
+ * just ran is sitting IN the WAL until SQLite checkpoints it. Deleting the WAL
+ * here would undo the very deletion this function exists to complete.
+ *
+ * Best-effort by design: a file we cannot remove must not fail the erase the
+ * user just asked for. Returns what it removed so the caller can report.
+ */
+export function removeBrainShadowCopies(dbPath: string): string[] {
+  const dir = dirname(dbPath)
+  const base = basename(dbPath)
+  const removed: string[] = []
+  let names: string[]
+  try {
+    names = readdirSync(dir)
+  } catch {
+    return removed
+  }
+  for (const name of names) {
+    // `memory.db.` — the DOT is the whole guard. `memory.db-wal` does not
+    // match, `memory.db` itself does not match, and every shadow does.
+    if (!name.startsWith(`${base}.`)) continue
+    try {
+      rmSync(join(dir, name), { force: true, recursive: false })
+      removed.push(name)
+    } catch {
+      /* best-effort — a shadow we cannot remove must not fail the erase */
+    }
+  }
+  return removed
 }
 
 /** Runs any pending migrations. Safe to call on every app startup — a
