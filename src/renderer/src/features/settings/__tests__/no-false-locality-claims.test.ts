@@ -30,7 +30,8 @@ const RENDERER = join(__dirname, '..', '..', '..')
  *  about where someone's calls live. */
 const LOCALITY_CLAIMS: RegExp[] = [
   /entirely on your (own )?device/i,
-  /only on your (own )?device/i,
+  /only on (this|your) (own )?(device|computer|machine)/i,
+  /live only on/i,
   /stays? on your (own )?device/i,
   /on-?device only/i,
   /never (leaves|leave|uploaded|sent|transmitted|shared)/i,
@@ -114,6 +115,17 @@ const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
       'sweep matched "never leaves" and this sentence says "never leave".'
   },
   {
+    file: 'features/backup/BackupCard.tsx',
+    contains: 'Your Google Calendar connection — stays only on this device',
+    because:
+      'True in the sense a user reads it: the OAuth refresh token is stored separately by ' +
+      'google.ts (saveRefreshToken) and is never part of any backup payload, so a new device ' +
+      'genuinely must reconnect — which is what the next clause of the same sentence says. ' +
+      'The NUANCE, checked rather than assumed: the settings push uploads `payload: settings`, ' +
+      'the whole AppSettings object, which includes the boolean `googleCalendarConnected`. That ' +
+      'field is a non-secret marker and its own comment says so; the credential does not travel.'
+  },
+  {
     file: 'features/settings/TelemetrySection.tsx',
     contains: 'nothing is sent',
     because:
@@ -164,7 +176,14 @@ const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
  *  gate, not debt hidden by an allowlist. */
 const PENDING_FOUNDER_APPROVAL: { file: string; contains: string }[] = [
   { file: 'features/home/activationSteps.ts', contains: 'Runs entirely on your own device' },
-  { file: 'features/settings/MemoryCenterSection.tsx', contains: 'Nothing is sent anywhere' }
+  { file: 'features/settings/MemoryCenterSection.tsx', contains: 'Nothing is sent anywhere' },
+  // Found by DRIVING the app, not by reading source: it is the first thing on
+  // the Privacy & data page, two paragraphs above that same page's own line
+  // reading "Call recordings & transcripts sync is ON — your buyer
+  // conversations are stored in your cloud account, not just this device."
+  // Unconditional, and its doc comment calls it "a short, honest recap".
+  // Three of the four categories it names were syncing when it was read.
+  { file: 'features/settings/PrivacyNoticeCard.tsx', contains: 'live only on this' }
 ]
 
 /** Directories holding SIMULATED sales dialogue rather than UI copy. A
@@ -246,7 +265,7 @@ describe('the app makes no false claim about where the user data lives', () => {
     ).toEqual([])
   })
 
-  it('the two sites awaiting founder approval are still exactly two, and still there', () => {
+  it('the three sites awaiting founder approval are still exactly three, and still there', () => {
     // Red in BOTH directions, so listed debt cannot quietly become permanent.
     for (const p of PENDING_FOUNDER_APPROVAL) {
       const hit = claims.find((c) => c.file === p.file && c.text.includes(p.contains))
@@ -259,7 +278,7 @@ describe('the app makes no false claim about where the user data lives', () => {
     expect(
       PENDING_FOUNDER_APPROVAL.length,
       'the count of known-false, unapproved copy sites changed'
-    ).toBe(2)
+    ).toBe(3)
   })
 
   it('the three approved strings say where the data actually goes', () => {
