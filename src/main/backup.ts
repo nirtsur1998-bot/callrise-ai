@@ -250,20 +250,166 @@ function queuePendingScrubs(keys: ScrubKey[]): void {
   })()
 }
 
+/**
+ * BUG-204 — a scrub must prove the data is GONE, not merely that no error came
+ * back.
+ *
+ * MEASURED, against the live project, on three tables: a DELETE that row-level
+ * security filters down to zero rows returns HTTP 200, an empty body and
+ * `error === null`. That is byte-identical to a DELETE that removed every row.
+ * The old check was `if (error) throw`, so it could not tell "deleted
+ * everything" from "deleted nothing", cleared the key from the pending queue,
+ * and the Backup card reported an erase that never happened.
+ *
+ * It was correct only by accident: before 2026-09-erase-paths.sql the one table
+ * we hit also lacked the DELETE GRANT, and a missing grant DOES raise an error.
+ * Any table with the grant and no policy would have scrubbed silently.
+ *
+ * THE RULE, and it is not the obvious one. The pass condition is
+ * `after === 0`, NOT "the count went down".
+ *   - `before === 0 && after === 0` is a SUCCESS (`already-empty`), and it is
+ *     the common case. Treating "the count did not move" as failure would
+ *     re-queue it forever, and for the `transcripts` key that means
+ *     `touchAllCallsForRepush` rewriting and re-uploading the user's entire
+ *     call history on every push, which is the exact loop the comment in that
+ *     branch was written to avoid.
+ *   - `after === 0` is also strictly STRONGER than "moved": before 5, after 2
+ *     has moved and is not erased.
+ *
+ * `before` still earns its round trip, for a reason that only shows up in what
+ * the user is told: with three numbers we can separate "RLS filtered the
+ * delete" (`deleted === 0`, the BUG-204 fingerprint) from "the delete worked
+ * and another device re-added rows" (`deleted > 0`). With two we cannot, and
+ * we would tell someone their data was not deleted when the truth is that
+ * their other laptop is still syncing. A false alarm on a privacy promise is
+ * its own failure.
+ *
+ * THE FLOOR, stated because it should be: every count reads through the same
+ * JWT and the same `user_id = eq.<me>` predicate as the delete. A blind SELECT
+ * policy reads zero before and zero after, and this — or any other design that
+ * asks the same server the same way — retires the key confidently. Nothing
+ * here clears that, and nothing should claim to.
+ */
+export type ScrubOutcome = 'erased' | 'already-empty'
+
+/** Carries a short code so `reportBackupStep` can forward it: that helper only
+ *  passes through values matching /^[A-Za-z0-9_.-]{1,64}$/. */
+export class ScrubError extends Error {
+  constructor(
+    readonly code: string,
+    message: string
+  ) {
+    super(message)
+    this.name = 'ScrubError'
+  }
+}
+
+/** This user's row count for a table, exact, transferring no rows.
+ *  `n: null` means the count could not be READ — never treat it as zero. */
+async function countUserRows(
+  client: NonNullable<ReturnType<typeof getSupabaseClient>>,
+  table: string,
+  userId: string
+): Promise<{ n: number | null; why?: string }> {
+  const { count, error } = await client
+    .from(table)
+    .select('user_id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+  if (error) return { n: null, why: error.message }
+  return typeof count === 'number' ? { n: count } : { n: null, why: 'no count header' }
+}
+
+/** Delete this user's rows from `table` and PROVE the table is empty for them
+ *  afterwards. Throws a ScrubError on anything but a proven-empty outcome, so
+ *  the caller's existing catch re-queues the key unchanged. */
+export async function eraseUserRowsProven(
+  client: NonNullable<ReturnType<typeof getSupabaseClient>>,
+  table: string,
+  userId: string
+): Promise<ScrubOutcome> {
+  // Best effort, and tolerated when null: `before` never decides pass/fail, it
+  // only names WHICH failure happened.
+  const before = await countUserRows(client, table, userId)
+
+  // `delete({ count: 'exact' })` appends a Prefer header to a request already
+  // being sent, so the affected-row count costs no extra round trip and cannot
+  // change which rows are targeted.
+  const { count: deleted, error } = await client
+    .from(table)
+    .delete({ count: 'exact' })
+    .eq('user_id', userId)
+  if (error) throw new ScrubError('delete-error', `${table}: ${error.message}`)
+
+  const after = await countUserRows(client, table, userId)
+  if (after.n === null) {
+    throw new ScrubError('unverifiable', `${table}: could not read a count back (${after.why})`)
+  }
+  if (after.n === 0) return before.n === 0 ? 'already-empty' : 'erased'
+
+  if (deleted === 0) {
+    throw new ScrubError(
+      'survivors',
+      `${table}: the delete reported 0 rows affected and ${after.n} remain — a policy filtered it`
+    )
+  }
+  throw new ScrubError(
+    're-added',
+    `${table}: deleted ${deleted} but ${after.n} remain — another device is still pushing`
+  )
+}
+
+/** The Storage twin of eraseUserRowsProven. Same three numbers from different
+ *  primitives, and the same pass condition.
+ *
+ *  `remove()` needs BOTH delete and select permission on storage.objects, so a
+ *  bucket with a delete policy and a broken select policy returns 200 with an
+ *  empty `data` and no error — BUG-204's shape exactly, one layer over. The
+ *  confirming `list` after the loop is the assertion the old code never made:
+ *  it broke out of the loop immediately after a remove and never looked again. */
+export async function eraseStoragePrefixProven(
+  client: NonNullable<ReturnType<typeof getSupabaseClient>>,
+  bucketName: string,
+  userId: string
+): Promise<ScrubOutcome> {
+  const bucket = client.storage.from(bucketName)
+  let seen = 0
+  let removed = 0
+  for (;;) {
+    const { data, error } = await bucket.list(userId, { limit: 100 })
+    if (error) throw new ScrubError('list-error', `${bucketName}: ${error.message}`)
+    if (!data?.length) break
+    seen += data.length
+    const { data: gone, error: rmErr } = await bucket.remove(
+      data.map((o) => `${userId}/${o.name}`)
+    )
+    if (rmErr) throw new ScrubError('remove-error', `${bucketName}: ${rmErr.message}`)
+    const n = gone?.length ?? 0
+    removed += n
+    // A page that removed NOTHING would spin this loop forever on a full page.
+    // Break and let the confirming list below report it as survivors.
+    if (n === 0) break
+    if (data.length < 100) break
+  }
+
+  const { data: left, error: leftErr } = await bucket.list(userId, { limit: 1 })
+  if (leftErr) {
+    throw new ScrubError('unverifiable', `${bucketName}: could not re-list after removing`)
+  }
+  if (left?.length) {
+    throw new ScrubError(
+      removed === 0 ? 'survivors' : 're-added',
+      `${bucketName}: ${left.length}+ object(s) still under the prefix after removing ${removed}`
+    )
+  }
+  return seen === 0 ? 'already-empty' : 'erased'
+}
+
 /** Delete every object under this user's folder in the attachments bucket. */
 async function scrubAllAttachmentBlobs(
   client: NonNullable<ReturnType<typeof getSupabaseClient>>,
   userId: string
 ): Promise<void> {
-  const bucket = client.storage.from('attachments')
-  for (;;) {
-    const { data, error } = await bucket.list(userId, { limit: 100 })
-    if (error) throw new Error(error.message)
-    if (!data?.length) break
-    const { error: rmErr } = await bucket.remove(data.map((o) => `${userId}/${o.name}`))
-    if (rmErr) throw new Error(rmErr.message)
-    if (data.length < 100) break
-  }
+  await eraseStoragePrefixProven(client, 'attachments', userId)
 }
 
 /**
@@ -277,20 +423,16 @@ async function scrubAllAttachmentBlobs(
  * survive it silently.
  *
  * Throws on failure so the caller keeps the key queued and retries next push.
+ *
+ * BUG-204: it now also throws when the objects are still there after removing
+ * them, which the old loop could not notice because it broke out immediately
+ * after the remove and never re-listed.
  */
 async function scrubSalesBrainDb(
   client: NonNullable<ReturnType<typeof getSupabaseClient>>,
   userId: string
 ): Promise<void> {
-  const bucket = client.storage.from('sales-brain')
-  for (;;) {
-    const { data, error } = await bucket.list(userId, { limit: 100 })
-    if (error) throw new Error(error.message)
-    if (!data?.length) break
-    const { error: rmErr } = await bucket.remove(data.map((o) => `${userId}/${o.name}`))
-    if (rmErr) throw new Error(rmErr.message)
-    if (data.length < 100) break
-  }
+  await eraseStoragePrefixProven(client, 'sales-brain', userId)
 }
 
 /** Drain queued scrubs. Each key is retried independently; a key is only
@@ -304,6 +446,7 @@ async function drainPendingScrubs(
   const pending = await readPendingScrubs()
   if (!pending.length) return
   const remaining: ScrubKey[] = []
+  let lastError: string | undefined
   for (const key of pending) {
     try {
       if (key === 'transcripts') {
@@ -318,11 +461,7 @@ async function drainPendingScrubs(
         // scrub, and a missing table must not keep this key pending forever
         // (which would re-touch every call on every push).
         try {
-          const { error } = await client
-            .from('backup_objection_queue')
-            .delete()
-            .eq('user_id', userId)
-          if (error) throw new Error(error.message)
+          await eraseUserRowsProven(client, 'backup_objection_queue', userId)
         } catch (err) {
           console.error('[backup] objection queue scrub failed:', err)
           reportBackupStep('objectionQueueScrub', err)
@@ -330,16 +469,13 @@ async function drainPendingScrubs(
       } else if (key === 'attachments') {
         await scrubAllAttachmentBlobs(client, userId)
       } else if (key === 'knowledgeBase') {
-        const { error } = await client.from('backup_knowledge').delete().eq('user_id', userId)
-        if (error) throw new Error(error.message)
+        await eraseUserRowsProven(client, 'backup_knowledge', userId)
       } else if (key === 'contacts') {
         for (const table of ['backup_contacts', 'backup_deals', 'backup_deal_stages']) {
-          const { error } = await client.from(table).delete().eq('user_id', userId)
-          if (error) throw new Error(error.message)
+          await eraseUserRowsProven(client, table, userId)
         }
       } else if (key === 'settingsPersonalization') {
-        const { error } = await client.from('backup_settings').delete().eq('user_id', userId)
-        if (error) throw new Error(error.message)
+        await eraseUserRowsProven(client, 'backup_settings', userId)
       } else if (key === 'salesBrain') {
         // BUG-200. Storage, not a table: the brain is uploaded as a single
         // memory.db blob, so the erase is a bucket remove.
@@ -349,11 +485,11 @@ async function drainPendingScrubs(
         // supabase/2026-09-rise-conversations-delete-policy.sql. Without it
         // row-level security refuses this and the key stays queued, which is
         // the correct failure: it retries rather than reporting success.
-        const { error } = await client
-          .from('backup_rise_conversations')
-          .delete()
-          .eq('user_id', userId)
-        if (error) throw new Error(error.message)
+        // The table name stays a literal here on purpose: the guard in
+        // every-uploadable-category-can-be-erased.test.ts scans this function's
+        // source for it, and hiding it behind a lookup would turn that check
+        // green while checking nothing.
+        await eraseUserRowsProven(client, 'backup_rise_conversations', userId)
       } else {
         // BUG-200's near-miss, made impossible. This chain had NO else, so a
         // key added to SCRUB_KEYS without a branch fell through every test,
@@ -366,10 +502,29 @@ async function drainPendingScrubs(
       }
     } catch (err) {
       console.error(`[backup] scrub of '${key}' failed (will retry next push):`, err)
+      // BUG-203. Every other failing step in this file reports itself; this one
+      // did not, so a scrub failing on every push forever was invisible both to
+      // the user and to the aggregate signal. Without this, BUG-204's counts
+      // detect the failure on one machine and nobody ever hears about it.
+      reportBackupStep(`scrub.${key}`, err)
+      lastError = err instanceof ScrubError ? err.code : 'error'
       remaining.push(key)
     }
   }
   await writePendingScrubs(remaining)
+  // BUG-203. Separate from lastPushError for the same reason push and pull are
+  // separate above: a successful backup must never be able to imply a
+  // successful erase. Cleared explicitly when nothing is left queued, so a
+  // resolved failure does not stick on the card.
+  await writeState(
+    remaining.length
+      ? {
+          pendingScrubs: remaining,
+          lastScrubError: lastError ?? 'error',
+          lastScrubErrorAt: new Date().toISOString()
+        }
+      : { pendingScrubs: [], lastScrubError: undefined, lastScrubErrorAt: undefined }
+  )
 }
 
 async function processPendingBlobDeletes(
@@ -414,6 +569,14 @@ export interface BackupState {
    *  their clock is badly wrong. Absent = never successfully measured. */
   clockSkewMs?: number
   clockSkewCheckedAt?: string
+  /** BUG-203 — scrub keys whose removal has NOT succeeded yet, and why.
+   *  Deliberately its own field rather than folded into lastPushError, for
+   *  exactly the reason push and pull are separate above: a successful backup
+   *  must never be able to imply a successful erase. A user whose erase keeps
+   *  failing used to see "Backed up just now" and nothing else, forever. */
+  pendingScrubs?: ScrubKey[]
+  lastScrubError?: string
+  lastScrubErrorAt?: string
 }
 
 async function readState(): Promise<BackupState> {
@@ -875,19 +1038,27 @@ export async function pushAll(): Promise<BackupResult> {
     if (syncScope.riseConversations) {
       try {
         const dir = assistantConversationsDir(app.getPath('userData'))
-        const metas = await listConversations(dir)
+        // BUG-207 — includeDeleted, because a tombstone is the whole point:
+        // it is what tells every other device, and this device's own next
+        // restore, that the thread was deleted on purpose.
+        const metas = await listConversations(dir, { includeDeleted: true })
         const convRows: BackupRow[] = []
         for (const meta of metas) {
           // listConversations returns a LIST PROJECTION without the message
           // array — backing that up would sync titles and lose every word of
           // the actual conversation, which is the whole thing being protected.
-          const full = await getConversation(dir, meta.id)
+          const full = await getConversation(dir, meta.id, { includeDeleted: true })
           if (!full) continue
           convRows.push({
             id: full.id,
             user_id: userId,
             updated_at: full.updatedAt,
-            deleted: false, // no tombstone in this store — see importConversation
+            // BUG-207. This was hardcoded `false` with a comment explaining
+            // that the store had no tombstones, which was true and was the
+            // bug: the row for a deleted thread kept saying "not deleted", so
+            // the restore re-imported it onto the machine it had just been
+            // deleted from.
+            deleted: full.deleted === true,
             payload: full
           })
         }

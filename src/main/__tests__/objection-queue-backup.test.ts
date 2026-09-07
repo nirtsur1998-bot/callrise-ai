@@ -67,9 +67,18 @@ describe('the queue syncs under the transcripts toggle', () => {
   it('switching transcripts off deletes the queue rows in the same scrub that re-pushes the calls quote-free', () => {
     const scrub = backup.slice(backup.indexOf("if (key === 'transcripts') {"), backup.indexOf("} else if (key === 'attachments')"))
     expect(scrub).toContain('touchAllCallsForRepush(callsDir())')
-    expect(scrub).toContain(".from('backup_objection_queue')")
-    expect(scrub).toContain('.delete()')
-    expect(scrub).toContain(".eq('user_id', userId)")
+    // BUG-204 — the raw `.from(t).delete().eq(...)` this used to assert on is
+    // gone from every scrub branch, because a delete that row-level security
+    // filters to zero rows returns 200 with no error and the old check could
+    // not tell that from success. The assertion is now STRONGER, not merely
+    // different: the table must be erased through the helper that counts
+    // before, deletes with the count header, counts after, and refuses to
+    // retire the key unless the after-count is zero.
+    expect(scrub).toContain("eraseUserRowsProven(client, 'backup_objection_queue', userId)")
+    // And an unverified delete must not creep back in beside it.
+    expect(scrub, 'a bare unverified delete is back in the transcripts scrub').not.toMatch(
+      /\.from\([^)]*\)\s*\.delete\(\)/
+    )
   })
 })
 

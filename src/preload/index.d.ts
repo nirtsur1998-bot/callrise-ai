@@ -1808,6 +1808,13 @@ export interface BackupStatus {
    *  telling the user. Backup ORDERING is corrected for skew regardless — this
    *  is about times displayed in the app being wrong, so it never blocks. */
   clockSkewWarning?: boolean
+  /** BUG-203 - categories the user switched OFF whose removal from the server
+   *  has not succeeded yet, and why. Separate from lastPushError for the same
+   *  reason push and pull are separate above: a successful backup must never
+   *  be able to imply a successful erase. */
+  pendingScrubs?: string[]
+  lastScrubError?: string
+  lastScrubErrorAt?: string
 }
 
 export interface BackupApi {

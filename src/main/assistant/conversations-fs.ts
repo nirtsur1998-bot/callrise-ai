@@ -115,6 +115,18 @@ export interface AssistantConversation {
    *  forgets what the conversation already taught (assistant-ipc.ts). */
   salesBrainExcluded?: boolean
   scope?: AssistantScope
+  /** BUG-207 — a TOMBSTONE. Deleting a conversation used to unlink the file,
+   *  which is not a deletion once the store syncs: the cloud row survived with
+   *  `deleted: false`, reconcileStore saw no local counterpart and no tombstone,
+   *  and re-imported the thread on the next restore. On the same machine. The
+   *  dialog said "This cannot be undone."
+   *
+   *  Same shape as every other collection in the app (knowledge entries, the
+   *  objection queue, calls): the record stays, its CONTENT is dropped, and the
+   *  flag travels. reconcileStore already honours it — `if (!local) { if
+   *  (row.deleted) continue }` — so nothing downstream needed changing. The
+   *  store was simply the only one that never produced one. */
+  deleted?: true
 }
 
 /** List-row projection — everything the conversation list needs without
@@ -304,21 +316,29 @@ function sanitizeMessage(value: unknown): AssistantMessage | null {
 export function sanitizeConversation(value: unknown): AssistantConversation | null {
   const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
   if (!isSafeConversationId(v.id)) return null
-  const messages = Array.isArray(v.messages)
-    ? v.messages
-        .map(sanitizeMessage)
-        .filter((m): m is AssistantMessage => m !== null)
-        .slice(-MAX_MESSAGES)
-    : []
+  // BUG-207 — a tombstone carries NO words, whatever the payload claims. Doing
+  // this here rather than at the call site means a tombstone that arrives from
+  // the cloud, from an older build, or from a hand-edited file cannot smuggle
+  // message text back onto disk.
+  const deleted = v.deleted === true
+  const messages = deleted
+    ? []
+    : Array.isArray(v.messages)
+      ? v.messages
+          .map(sanitizeMessage)
+          .filter((m): m is AssistantMessage => m !== null)
+          .slice(-MAX_MESSAGES)
+      : []
   const now = new Date().toISOString()
   return {
     id: v.id,
-    title: clampText(v.title, MAX_TITLE_CHARS) || 'New conversation',
+    title: deleted ? '' : clampText(v.title, MAX_TITLE_CHARS) || 'New conversation',
     createdAt: typeof v.createdAt === 'string' ? v.createdAt : now,
     updatedAt: typeof v.updatedAt === 'string' ? v.updatedAt : now,
     messages,
     salesBrainExcluded: v.salesBrainExcluded === true ? true : undefined,
-    scope: sanitizeScope(v.scope)
+    scope: sanitizeScope(v.scope),
+    ...(deleted ? { deleted: true as const } : {})
   }
 }
 
@@ -338,15 +358,29 @@ async function writeConversation(dir: string, conversation: AssistantConversatio
   await writeJsonAtomic(join(dir, `${conversation.id}.json`), conversation)
 }
 
+/** BUG-207 — a tombstone reads as ABSENT unless explicitly asked for, so no UI
+ *  path can open a deleted thread and render it as an empty conversation. The
+ *  backup push is the one caller that passes includeDeleted, because it needs
+ *  the tombstone in order to send it. */
 export async function getConversation(
   dir: string,
-  id: string
+  id: string,
+  opts?: { includeDeleted?: boolean }
 ): Promise<AssistantConversation | null> {
   if (!isSafeConversationId(id)) return null
-  return readConversationFile(join(dir, `${id}.json`))
+  const conv = await readConversationFile(join(dir, `${id}.json`))
+  if (conv?.deleted && !opts?.includeDeleted) return null
+  return conv
 }
 
-export async function listConversations(dir: string): Promise<AssistantConversationMeta[]> {
+/** BUG-207 — tombstones are EXCLUDED unless asked for. The UI list must not
+ *  show a deleted thread; the backup push must, because the tombstone is the
+ *  only thing that makes the deletion travel. One flag, two callers, and the
+ *  default is the safe one. */
+export async function listConversations(
+  dir: string,
+  opts?: { includeDeleted?: boolean }
+): Promise<AssistantConversationMeta[]> {
   let names: string[]
   try {
     names = await fs.readdir(dir)
@@ -358,6 +392,7 @@ export async function listConversations(dir: string): Promise<AssistantConversat
     if (!name.endsWith('.json')) continue
     const conv = await readConversationFile(join(dir, name))
     if (!conv) continue
+    if (conv.deleted && !opts?.includeDeleted) continue
     const last = conv.messages[conv.messages.length - 1]
     metas.push({
       id: conv.id,
@@ -427,7 +462,12 @@ export async function importConversation(
   const incoming = sanitizeConversation(payload)
   if (!incoming) return null
   if (opts?.onlyIfNewer !== false) {
-    const existing = await getConversation(dir, incoming.id)
+    // includeDeleted, and it is load-bearing: without it a TOMBSTONE reads as
+    // absent here, the newer-check is skipped entirely, and a stale cloud copy
+    // overwrites the tombstone — resurrecting the exact thread BUG-207 is
+    // about. Caught by deleting-a-rise-conversation-sticks.test.ts on the
+    // first run, which is the only reason it is not shipping.
+    const existing = await getConversation(dir, incoming.id, { includeDeleted: true })
     // Strictly newer: an equal timestamp means the same version, and
     // rewriting it would churn the file and its mtime for no reason.
     if (existing && existing.updatedAt >= incoming.updatedAt) return null
@@ -455,15 +495,43 @@ export async function renameConversation(
 
 /** Hard delete — conversations are local-only (never in the cloud-backup
  *  allowlist, same posture as the coaching chat), so delete means delete. */
+/**
+ * BUG-207 — delete by TOMBSTONE, not by unlink.
+ *
+ * Unlinking is a deletion on this disk and nowhere else. With
+ * `riseConversations` sync on, which is the default, the cloud row survived
+ * with `deleted: false`, the restore found no local counterpart and no
+ * tombstone, and re-imported the thread — on the SAME machine, minutes later,
+ * under a dialog that said "This cannot be undone."
+ *
+ * The tombstone keeps the id and the timestamps and drops everything else: the
+ * title and every message. It is what actually travels, and it is what stops
+ * the restore putting the thread back.
+ *
+ * The file stays on disk, like the objection queue's tombstones. Small, and it
+ * is the price of the deletion being able to propagate at all.
+ */
 export async function deleteConversation(dir: string, id: string): Promise<boolean> {
   if (!isSafeConversationId(id)) return false
   return withConversationLock(id, async () => {
-    try {
-      await fs.unlink(join(dir, `${id}.json`))
-      return true
-    } catch {
+    const existing = await readConversationFile(join(dir, `${id}.json`))
+    if (!existing) {
+      // Nothing here, or already a tombstone we could not read. Either way
+      // there is nothing to delete and nothing to mark.
       return false
     }
+    if (existing.deleted) return true // already gone; idempotent
+    const tombstone: AssistantConversation = {
+      id: existing.id,
+      title: '',
+      createdAt: existing.createdAt,
+      updatedAt: new Date().toISOString(),
+      messages: [],
+      scope: existing.scope,
+      deleted: true
+    }
+    await writeConversation(dir, tombstone)
+    return true
   })
 }
 

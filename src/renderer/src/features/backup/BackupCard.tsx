@@ -164,6 +164,26 @@ export function BackupCard(): React.JSX.Element {
 
   const syncedCount = OPTIONAL_ITEMS.filter((i) => syncScope[i.key]).length
 
+  // BUG-203 — categories the user switched OFF whose removal has not succeeded
+  // yet. Named with the same words as the toggles above, so a user reads back
+  // the thing they switched off rather than an internal key.
+  //
+  // Shown only from the SECOND consecutive failure, so one offline push does
+  // not accuse the app of losing someone's data. `lastScrubErrorAt` older than
+  // the last push means the failure did not recur.
+  const pendingScrubs = status?.pendingScrubs ?? []
+  const scrubFailedTwice =
+    pendingScrubs.length > 0 &&
+    Boolean(status?.lastScrubErrorAt) &&
+    Boolean(status?.lastPushAt) &&
+    new Date(status!.lastScrubErrorAt!).getTime() >= new Date(status!.lastPushAt!).getTime()
+  const pendingScrubLabels = scrubFailedTwice
+    ? pendingScrubs
+        .map((k) => OPTIONAL_ITEMS.find((i) => i.key === k)?.label ?? k)
+        .join(', ')
+        .toLowerCase()
+    : null
+
   return (
     <Card>
       <div className="flex items-start justify-between gap-4">
@@ -192,6 +212,15 @@ export function BackupCard(): React.JSX.Element {
               <p className="text-[13px] text-faint">Checking status…</p>
             ) : errorMessage ? (
               <p className="text-[13px] text-warning">{errorMessage}</p>
+            ) : pendingScrubLabels ? (
+              // BUG-203. This takes the primary line rather than sitting below
+              // the fold, because "we did not remove what you asked us to
+              // remove" outranks "backed up just now" — and because the old
+              // behaviour was to show the reassuring line and nothing else,
+              // forever, while the erase failed on every single push.
+              <p className="text-[13px] text-warning">
+                Still removing {pendingScrubLabels} from your account
+              </p>
             ) : lastSyncedAt ? (
               <p className="text-[13px] text-muted">Backed up {agoLabel(lastSyncedAt)}</p>
             ) : (
@@ -283,6 +312,16 @@ export function BackupCard(): React.JSX.Element {
             backups are still ordered correctly — that&apos;s handled on the server — but times
             shown in the app will look wrong until you fix the clock in your system date &amp; time
             settings.
+          </p>
+        </div>
+      )}
+
+      {pendingScrubLabels && (
+        <div className="mt-4 rounded-lg border border-warning/20 bg-warning-soft px-3 py-2">
+          <p className="text-[12px] text-warning">
+            You switched off {pendingScrubLabels}, and removing the copy already in your account has
+            not succeeded yet. We keep trying on every backup. Until it does, that data is still
+            there.
           </p>
         </div>
       )}

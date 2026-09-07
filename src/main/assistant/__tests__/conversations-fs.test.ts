@@ -57,13 +57,25 @@ describe('create / list / rename / delete', () => {
     expect(back?.title).toBe('Q3 pipeline review')
   })
 
-  it('delete removes the file; deleting a missing id reports false', async () => {
+  it('delete leaves a TOMBSTONE, and the thread reads as absent', async () => {
+    // BUG-207 — this test used to assert the file was UNLINKED, and that
+    // assertion was the bug written down: an unlinked file is a deletion on
+    // this disk and nowhere else, so the cloud row survived saying
+    // `deleted: false` and the next restore re-imported the thread onto the
+    // same machine. The contract is now the one every other collection in the
+    // app already had.
     const conv = await createConversation(dir)
     expect(await deleteConversation(dir, conv.id)).toBe(true)
-    expect(await getConversation(dir, conv.id)).toBeNull()
-    expect(await deleteConversation(dir, conv.id)).toBe(false)
-    // No stray temp files left behind by the atomic writer either.
-    expect((await readdir(dir)).filter((n) => n.endsWith('.json'))).toEqual([])
+    expect(await getConversation(dir, conv.id), 'a deleted thread must not open').toBeNull()
+    // The record REMAINS, as a tombstone, because that is what travels.
+    const files = (await readdir(dir)).filter((n) => n.endsWith('.json'))
+    expect(files).toEqual([`${conv.id}.json`])
+    // Deleting again is idempotent rather than an error, and a genuinely
+    // absent id still reports false.
+    expect(await deleteConversation(dir, conv.id)).toBe(true)
+    expect(await deleteConversation(dir, '99999999-8888-4777-8666-555555555555')).toBe(false)
+    // Still no stray temp files from the atomic writer.
+    expect((await readdir(dir)).filter((n) => n.endsWith('.json'))).toEqual([`${conv.id}.json`])
   })
 })
 
