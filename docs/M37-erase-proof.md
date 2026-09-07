@@ -242,3 +242,37 @@ Restored and verified from the server at 10:15:52 UTC: sync scope identical to t
 before-read (`salesBrain: true`, `riseConversations: false`, the rest unchanged),
 `memory.db` back in the bucket at 1,736,704 bytes, Rise rows 0, planted object gone,
 scrub queue empty, light theme, design preview on.
+
+---
+
+## The four remaining strings, drafted for your word
+
+Not committed. Same rule as the first three: you read the words.
+
+**A. `PrivacyNoticeCard.tsx` — the Privacy & data page's opening card.** The current sentence is
+unconditional and false. The replacement keeps the reassurance but moves it to something that is
+actually true and checkable: there is no audio upload path anywhere in the app, and the calendar
+credential is stored separately and never travels.
+
+> Your call audio never leaves this device, and neither does your Google Calendar connection.
+> Everything else is listed below — what always backs up to your account, and what you can switch
+> off.
+
+**B. `MemoryCenterSection.tsx` — the "Sales Brain is switched off" empty state.** This is the
+consent moment, so it should say the same thing the card you approved says.
+
+> Facts are extracted through your own connected AI provider and stored on your device. Included in
+> your CallRise backup unless you turn that off in Settings → Privacy & data.
+
+**C. `activationSteps.ts` — the home activation checklist.** Shortest of the three; the checklist
+line has to stay one breath long.
+
+> Sales Brain remembers who you are, how you sell, and each client — so summaries and coaching stop
+> starting from scratch every time. Stored on your device, and included in your CallRise backup
+> unless you turn that off.
+
+**D. Nothing to change in `BackupCard.tsx`.** Its "never leave this computer unless you turn that on
+above" is true and correctly conditional. Recorded here so it is not swept up with the others.
+
+When you approve, the pins in `no-false-locality-claims.test.ts` come out in the same commit — the
+guard is red until they do, which is the point of pinning them.
