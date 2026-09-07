@@ -197,13 +197,34 @@ function pendingScrubsPath(): string {
   return join(app.getPath('userData'), 'backup-pending-scrubs.json')
 }
 
-const SCRUB_KEYS: ScrubKey[] = [
-  'transcripts',
-  'attachments',
-  'knowledgeBase',
-  'settingsPersonalization',
-  'contacts'
-]
+/**
+ * Every scope key whose data can be REMOVED from the cloud when the user
+ * switches it off.
+ *
+ * BUG-200 / BUG-202 — this listed five of the seven, and the two it omitted
+ * were exactly the two that default ON (`salesBrain`, `riseConversations`).
+ * Switching either off stopped future uploads and left everything already
+ * uploaded in place, with no path in the product to remove it. Both are here
+ * now, and both have a branch in drainPendingScrubs below; a key in this list
+ * WITHOUT a branch is a silent no-op, which is why that chain now ends in an
+ * `else` that throws rather than falling through.
+ */
+/** EXHAUSTIVE over BackupSyncScope on purpose, the same way CALL_FIELD_RULES
+ *  is exhaustive over Required<Call>: adding a sync scope key is a COMPILE
+ *  ERROR until it is given a removal path here, rather than a silent gap
+ *  nobody notices until someone asks where their data went. `true` means the
+ *  key can be scrubbed; there is no `false` case, because a category that can
+ *  be uploaded and not removed is the bug this replaces. */
+const SCRUB_KEY_SET: Record<ScrubKey, true> = {
+  transcripts: true,
+  attachments: true,
+  knowledgeBase: true,
+  settingsPersonalization: true,
+  contacts: true,
+  salesBrain: true,
+  riseConversations: true
+}
+export const SCRUB_KEYS = Object.keys(SCRUB_KEY_SET) as ScrubKey[]
 
 async function readPendingScrubs(): Promise<ScrubKey[]> {
   try {
@@ -235,6 +256,33 @@ async function scrubAllAttachmentBlobs(
   userId: string
 ): Promise<void> {
   const bucket = client.storage.from('attachments')
+  for (;;) {
+    const { data, error } = await bucket.list(userId, { limit: 100 })
+    if (error) throw new Error(error.message)
+    if (!data?.length) break
+    const { error: rmErr } = await bucket.remove(data.map((o) => `${userId}/${o.name}`))
+    if (rmErr) throw new Error(rmErr.message)
+    if (data.length < 100) break
+  }
+}
+
+/**
+ * BUG-200 — remove the uploaded Sales Brain from Storage.
+ *
+ * The upload writes exactly `${userId}/memory.db`, but this lists and removes
+ * EVERYTHING under the user's prefix, the same shape as the attachment scrub
+ * above. The founder asked for an account-erase path that actually works, and
+ * an erase that only deletes the one filename it expects is not one: an object
+ * written by an older build, or a partial upload under another name, would
+ * survive it silently.
+ *
+ * Throws on failure so the caller keeps the key queued and retries next push.
+ */
+async function scrubSalesBrainDb(
+  client: NonNullable<ReturnType<typeof getSupabaseClient>>,
+  userId: string
+): Promise<void> {
+  const bucket = client.storage.from('sales-brain')
   for (;;) {
     const { data, error } = await bucket.list(userId, { limit: 100 })
     if (error) throw new Error(error.message)
@@ -292,6 +340,29 @@ async function drainPendingScrubs(
       } else if (key === 'settingsPersonalization') {
         const { error } = await client.from('backup_settings').delete().eq('user_id', userId)
         if (error) throw new Error(error.message)
+      } else if (key === 'salesBrain') {
+        // BUG-200. Storage, not a table: the brain is uploaded as a single
+        // memory.db blob, so the erase is a bucket remove.
+        await scrubSalesBrainDb(client, userId)
+      } else if (key === 'riseConversations') {
+        // BUG-202. Needs a DELETE policy on the table — see
+        // supabase/2026-09-rise-conversations-delete-policy.sql. Without it
+        // row-level security refuses this and the key stays queued, which is
+        // the correct failure: it retries rather than reporting success.
+        const { error } = await client
+          .from('backup_rise_conversations')
+          .delete()
+          .eq('user_id', userId)
+        if (error) throw new Error(error.message)
+      } else {
+        // BUG-200's near-miss, made impossible. This chain had NO else, so a
+        // key added to SCRUB_KEYS without a branch fell through every test,
+        // threw nothing, was not pushed onto `remaining`, and was written out
+        // of the pending queue AS THOUGH ITS SCRUB HAD SUCCEEDED. The Backup
+        // card would have shown the erase done and nothing would have been
+        // deleted. Throwing keeps the key queued and surfaces it as a failed
+        // step, so the next person to add a key without a branch finds out.
+        throw new Error(`no scrub branch for sync scope key '${key}' — add one beside the others`)
       }
     } catch (err) {
       console.error(`[backup] scrub of '${key}' failed (will retry next push):`, err)
