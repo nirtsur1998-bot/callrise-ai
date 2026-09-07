@@ -210,7 +210,7 @@ function blankKeepingLines(text: string): string {
 }
 
 /** Every line making a locality claim, comments removed — a comment is not
- *  something a user reads. (Comments that lie are species 77 and have their
+ *  something a user reads. (Comments that lie are species 84 and have their
  *  own guards; this one is about the screen.)
  *
  *  Comments are stripped PROPERLY rather than by skipping lines that start

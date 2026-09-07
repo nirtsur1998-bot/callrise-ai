@@ -6,7 +6,7 @@
 // founder's real cloud backup within a minute of starting — it carried
 // `supabase-auth.json`, so it WAS the account, and nothing in the app knew it
 // was a sandbox. Founder: "a test copy reaching my real backend is one step
-// from a test copy overwriting it." Taxonomy species 76: the isolation of a
+// from a test copy overwriting it." Taxonomy species 87: the isolation of a
 // sandbox is decided by what it can REACH, not by where its files live.
 //
 // The rule: when the profile is overridden, backup.ts refuses push AND pull

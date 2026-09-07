@@ -1,6 +1,6 @@
 // The Bug Tracker's status mechanism: headings carry no status, one Status:
 // line per entry, the index is generated, and a body that has moved on from
-// its status line is REFUSED rather than silently disagreeing (species 77).
+// its status line is REFUSED rather than silently disagreeing (species 88).
 import { describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

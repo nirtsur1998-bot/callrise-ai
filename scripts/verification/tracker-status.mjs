@@ -7,7 +7,7 @@
 // WHY. On 2026-09-05, 23 of 141 tracker headings (16%) misreported status —
 // closures had been written into bodies, second entries, or "Last updated"
 // lines while the heading kept saying OPEN, and the founder had been
-// prioritising from the headings. Taxonomy species 77: a heading is a claim
+// prioritising from the headings. Taxonomy species 88: a heading is a claim
 // like any other and rots the same way. The founder's requirement: "either the
 // heading stops carrying status or something checks them against each other
 // … I don't want a process I have to remember."

@@ -26,7 +26,7 @@ failure has a *shape* in a file: an output line, an import, a byte, a step order
 | 53 | The fallback that succeeded at doing the wrong thing | a writing instrument names its target or refuses; the driver asserts the action changed state | `scripts/verification/state-guard.mjs`, `ui-driver.mjs` (`actAndExpectChange`), `state-guard-selftest.mjs` |
 | 69 | The adjacent measurement | the answer is read from the suite's/typecheck's own lines; a bare `1` is not an error | `verify-green.test.ts`; the Stage 2 RDP driver refuses to click or capture when its window is not the one on top |
 | 70 | The backslash that did not survive the journey | no control byte (0x00–0x1F except tab/LF/CR, 0x7F) in any source file | `src/__tests__/no-control-bytes-in-source.test.ts` |
-| 77 | The heading that rots | headings carry no status; one `**Status:**` line; the index is generated; disagreement refuses the write | `scripts/verification/tracker-status.mjs`, `src/__tests__/tracker-status.test.ts` |
+| 88 | The heading that rots | headings carry no status; one `**Status:**` line; the index is generated; disagreement refuses the write | `scripts/verification/tracker-status.mjs`, `src/__tests__/tracker-status.test.ts` |
 | 79 | The harness that can only fail | every instrument has a self-test that makes it refuse on purpose | `state-guard-selftest.mjs`, `verify-green.test.ts` (Errors rule removed → red), `tracker-status.test.ts` (planted closure → exit 2) |
 | 80 | The push before the check finished | CI runs the full gate on every push; a premature push is caught by the same gate the session skipped | `.github/workflows/verify.yml` |
 
