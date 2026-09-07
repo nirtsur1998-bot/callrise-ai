@@ -638,9 +638,15 @@ export interface BackupSyncScope {
  *
  *  This REVERSES the stance stated directly above ("All default OFF — opt-in
  *  only"), so it is recorded rather than quietly flipped, and the consequence
- *  is worth naming: on upgrade, an existing install that never touched these
- *  toggles begins uploading memory.db and Rise conversation text to the cloud.
- *  Both remain switchable off in Settings -> Backup, and every other category
+ *  is worth naming — and BUG-211 corrected WHICH population it lands on. A
+ *  FRESH profile uploads memory.db and Rise conversation text with no toggle
+ *  ever touched. An existing install on upgrade does NOT: sanitizeSyncScope
+ *  resolves an ABSENT key to false, and this object is only consulted when
+ *  there is no settings file at all. Reaching existing installs would need an
+ *  override-with-notice migration, which is the opposite of the intuition that
+ *  the default change is the risky half.
+ *  Both remain switchable off in Settings -> Privacy & data (there is no page
+ *  called Backup; that wording was wrong here too), and every other category
  *  (transcripts, attachments, knowledge base, personalization, contacts) keeps
  *  the original opt-in default.
  *

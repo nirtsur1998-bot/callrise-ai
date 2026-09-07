@@ -10,10 +10,19 @@
 // by grepping the strings you happen to know. It has to enumerate.
 //
 // WHAT IS ACTUALLY FALSE, so this is not cargo-culted. Seven categories of
-// user data can be uploaded to Supabase (BackupSyncScope). Two of them
-// default ON, including the whole Sales Brain (memory.db, uploaded verbatim
-// to Storage on every push). Any copy telling a Sales Brain user their data
-// stays on their device is false for the DEFAULT configuration.
+// user data can be uploaded to Supabase (BackupSyncScope).
+//
+// BUG-211, a correction to what this header said for most of a day: two of
+// them are ON in EMPTY_SYNC_SCOPE, but that object is reached ONLY when there
+// is no settings file at all. sanitizeSyncScope resolves an ABSENT key to
+// false, so an install that predates those keys has both OFF. "Defaults ON"
+// means a genuinely fresh profile, not everybody.
+//
+// So the claim is false for a fresh profile, and false for any user whose
+// toggles are on — which includes the founder's own. It is not false for an
+// upgraded install that never touched Backup settings. The copy was wrong for
+// all of them; the UPLOAD only happened for some, and conflating those two is
+// the mistake this note exists to stop repeating.
 //
 // Every hit is accounted for by a written reason, so allowlisting is an
 // argument someone has to make rather than a line someone can add. A bare
@@ -188,8 +197,9 @@ const PENDING_FOUNDER_APPROVAL: { file: string; contains: string }[] = [
   // checked the transcripts toggle and the absence of an audio upload path and
   // stopped there. It missed that a Sales Brain memory's evidence is a
   // VERBATIM 400-character span of the transcript (extraction.ts:269), that
-  // memory.db uploads to the sales-brain bucket, and that salesBrain sync
-  // defaults ON. So with Sales Brain switched on, which is a headline feature,
+  // memory.db uploads to the sales-brain bucket, and the salesBrain sync key
+  // is on for a fresh profile (BUG-211: an upgraded install has it off) and on
+  // for anyone who set it. So with Sales Brain switched on and that key set,
   // word-for-word transcript text leaves the computer while this sentence says
   // it does not. An allowlist entry with a reason is still only as good as the
   // reason.
@@ -282,8 +292,9 @@ describe('the app makes no false claim about where the user data lives', () => {
 
     expect(
       unaccounted.map((c) => `${c.file}:${c.line}`),
-      'NEW copy claims the user data stays on their device. Seven categories are uploadable and ' +
-        'two default ON, so this is false for the default configuration. Either fix the sentence, ' +
+      'NEW copy claims the user data stays on their device. Seven categories are uploadable; two ' +
+        'are on for a FRESH profile (an upgraded install has them off — BUG-211), and any of the ' +
+        'seven is on once its toggle is. Either fix the sentence, ' +
         'or add an ACCOUNTED_FOR entry stating why it is not a false claim:\n  ' +
         unaccounted.map((c) => `${c.file}:${c.line}\n    ${c.text.slice(0, 160)}`).join('\n  ')
     ).toEqual([])

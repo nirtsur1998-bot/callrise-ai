@@ -132,8 +132,12 @@ const OPTIONAL_ITEMS: { key: SyncScopeKey; icon: typeof ListChecks; label: strin
 /**
  * The backup/restore trust surface: status, a manual "Sync now", and a
  * plain-language, LIVE account of what does and doesn't leave this device —
- * Tasks/Calendar events/Call metadata always sync; four more categories are
- * opt-in toggles here, off by default. Google Calendar's connection is
+ * Tasks/Calendar events/Call metadata always sync; SEVEN more categories are
+ * toggles here. It said "four" for months while OPTIONAL_ITEMS above listed
+ * seven, and nothing checked the prose against the array. Five of the seven
+ * are off for everyone; riseConversations and salesBrain are on for a FRESH
+ * profile and off for an install predating those keys (BUG-211).
+ * Google Calendar's connection is
  * deliberately NOT one of them — the OAuth token stays local always; a new
  * device gets a "reconnect" prompt instead (see CalendarSection.tsx).
  */

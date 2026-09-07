@@ -14,8 +14,15 @@ export type Coach2Settings = AppSettings['coach2']
 export type ContactIntelligenceSettings = AppSettings['contactIntelligence']
 export type SpeakerIdSettings = AppSettings['speakerId']
 
-// The safe default (matches main's own fallback) shown until the real value
-// loads — never more permissive than what loadAppSettings() would return.
+// The safe placeholder shown until the real value loads. Never more permissive
+// than what loadAppSettings() would return, which is the property that matters
+// and which these values satisfy.
+//
+// It does NOT "match main's own fallback", which is what this comment claimed
+// until BUG-211: main's EMPTY_SYNC_SCOPE has riseConversations and salesBrain
+// TRUE and every key here is false. The VALUES are right — strictly safer is
+// the correct direction for a placeholder — and only the claim was wrong. Left
+// deliberately stricter rather than "fixed" to match.
 const DEFAULT_SETTINGS: AppSettings = {
   allowOtherPartyRecording: true,
   alwaysRecordOtherParty: false,
