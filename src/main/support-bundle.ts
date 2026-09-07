@@ -51,6 +51,14 @@ export const BUNDLE_FILES = [
   'ai-fallback-events.jsonl',
   'ai-purpose-health.json',
   'jobs-summary.json',
+  // M37 — the BUG-D trap writes the one line that answers "did multichannel
+  // capture actually work" (serverChannels, socketOpens, closeCode). It was
+  // written to a file that NOTHING could collect: not this bundle, not the
+  // BUG-D collector, not the triage instrument. An instrument whose output
+  // cannot leave the machine measures nothing. Safe to include without
+  // scrubbing prose because the line is key=value numbers only, pinned by
+  // bugd-trap.test.ts's "the log line never carries a transcript word".
+  'session-health.log',
   'kern_bridge.log',
   // The engine rotates to `kern_bridge.log.1` (kern_bridge.cpp: g_logPathPrev
   // = g_logPath + L".1"). This list previously said `kern_bridge.prev.log`, a
@@ -223,6 +231,8 @@ export async function buildSupportBundle(
       collected.push('ai-fallback-events.jsonl')
     if (scrubbedPurposeHealth(join(src.userDataDir, 'ai-purpose-health.json'), dest))
       collected.push('ai-purpose-health.json')
+    if (scrubbedCopy(join(src.userDataDir, 'session-health.log'), join(dest, 'session-health.log')))
+      collected.push('session-health.log')
     // Same file list M27's tier1-diagnostics export uses — one source of
     // truth for where the engine's logs live, so the two exports can't drift.
     for (const srcPath of engineDiagnosticFiles(src.localAppData)) {

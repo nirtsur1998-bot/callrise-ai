@@ -82,6 +82,16 @@ function plantAllSources(): void {
     })}\n`
   )
 
+  // M37 — the BUG-D trap's line. It is key=value numbers only by construction
+  // (bugd-trap.test.ts pins that it never carries a transcript word), but the
+  // POISON_PATH here proves the bundle still scrubs it like every other file
+  // rather than trusting that construction.
+  writeFileSync(
+    join(userDataDir, 'session-health.log'),
+    `2026-09-07T00:00:00.000Z session=1 multichannel=true socketOpens=2 serverChannels=2 closeCode=1000 path=${POISON_PATH}
+`
+  )
+
   // Purpose health — lastFailureDetail is the one free-text field.
   writeFileSync(
     join(userDataDir, 'ai-purpose-health.json'),
@@ -166,6 +176,23 @@ describe('the fixture actually plants poison (the control)', () => {
 })
 
 describe('buildSupportBundle — privacy pin', () => {
+  // M37 — ENUMERATE THE CONTAINER, do not name the hiding places you know
+  // about. The suite checked the poisoned path in ONE produced file
+  // (kern_bridge.log). Every other file was covered only by whichever
+  // assertion someone remembered to write, so a file added to the bundle
+  // later — session-health.log was, in M37 — inherited no scrubbing check at
+  // all. This walks whatever the bundle actually produced, so a new file is
+  // covered on the day it is added rather than the day someone notices.
+  it('NO file the bundle produces contains the poisoned path, whatever the file set is', async () => {
+    plantAllSources()
+    const r = await buildSupportBundle(src(), downloadsDir)
+    expect(r.ok, JSON.stringify(r)).toBe(true)
+    const names = [...bundleFiles(r.path!)]
+    expect(names.length, 'the bundle produced nothing — this test would pass vacuously').toBeGreaterThan(5)
+    const leaked = names.filter((n) => readFileSync(join(r.path!, n), 'utf8').includes(POISON_PATH))
+    expect(leaked, 'these bundle files carry an unscrubbed filesystem path').toEqual([])
+  })
+
   it('the produced file set is exactly the closed allowlist, nothing more', async () => {
     plantAllSources()
     const r = await buildSupportBundle(src(), downloadsDir)

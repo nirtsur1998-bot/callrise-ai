@@ -164,6 +164,33 @@ try {
 
 [System.IO.File]::WriteAllText((Join-Path $work 'machine.txt'), ($env_lines -join "`r`n"), $utf8NoBom)
 
+# ---- 2b. the BUG-D trap's own output -------------------------------------
+# session-health.log is where the M37 trap writes the line that answers the
+# branch question: serverChannels (what Deepgram said it RECEIVED) against
+# multichannel (what we asked for), socketOpens, closeCode, socketErrors.
+#
+# This was the hole: the trap wrote that line to a file NOTHING could collect --
+# not this script, not the app's support bundle, not the triage instrument. An
+# instrument whose output cannot leave the machine measures nothing.
+#
+# The file is key=value pairs. Its ONE free-text field is closeReason, which is
+# whatever the Deepgram server sent when it closed the socket -- protocol text,
+# not anything from the call. It is replaced by its length here anyway, so this
+# script keeps its promise that no prose leaves the machine.
+$healthSrc = Join-Path (Split-Path $CallsDir -Parent) 'session-health.log'
+if (Test-Path $healthSrc) {
+  $health = Get-Content -LiteralPath $healthSrc -Raw -Encoding UTF8
+  # The field order in the line is fixed (closeCode, closeReason, socketErrors),
+  # so the value is bounded by the next key. Redacting up to that key cannot
+  # leave a fragment behind, which a quote-matching pattern could.
+  $health = $health -replace 'closeReason=.*? socketErrors=', 'closeReason=<redacted> socketErrors='
+  [System.IO.File]::WriteAllText((Join-Path $work 'session-health.log'), $health, $utf8NoBom)
+  $lines = ($health -split "`n" | Where-Object { $_.Trim() }).Count
+  Write-Host "  collected session-health.log ($lines session lines, closeReason redacted)"
+} else {
+  Write-Host "  no session-health.log yet (the trap writes it when a call ends)"
+}
+
 # ---- 3. say plainly what this is -----------------------------------------
 @"
 BUG-D evidence, collected $stamp
@@ -174,6 +201,9 @@ WHAT THIS IS
                      WORDS it had. Never the words themselves.
   machine.txt        Windows version, installed CallRise build, and the audio
                      device names on this PC.
+  session-health.log one line per finished call: what we asked Deepgram for vs
+                     what Deepgram said it received, socket opens, close codes.
+                     This is the line that answers "did capture actually work".
 
 WHAT IS NOT IN HERE
   No transcript text. No call titles. No contact names or numbers. No

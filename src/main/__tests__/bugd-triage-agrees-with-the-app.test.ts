@@ -46,42 +46,63 @@ describe('bugd-triage.mjs mirrors the app', () => {
     ).toBe(app)
   })
 
-  it('the collector never copies a transcript field out of a call record', () => {
-    // The privacy claim in collect-bugd-evidence.ps1's header, as a test. It
-    // reads `text` for exactly two things — a WORD COUNT and a gap's duration
-    // — and must never place `text`, `title`, `summary`, `coaching`, `preview`
-    // or `notes` into the output object. Enumerated against the collector's
-    // source so a future edit that adds one is caught here rather than after
-    // the file has already been sent somewhere.
+  it('the collector writes ONLY the fields on an allowlist — a denylist was not enough', () => {
+    // REWRITTEN after an adversarial audit defeated the first version, M37.
+    //
+    // The first version was a DENYLIST: it flagged an assignment whose value
+    // read $c.text / .title / .summary / .coaching / .preview / .notes. An
+    // audit agent was asked to find a leak it would miss and found three in
+    // one attempt — it added `speakerIdentities = $c.speakerIdentities`
+    // (people's names), `commitments = $c.commitments` and
+    // `bookmarks = $c.bookmarks` (transcript excerpts), and the test stayed
+    // green on all three while catching only the fourth. A denylist of the
+    // field names someone happened to think of cannot fail on the field
+    // nobody thought of, which is this project's own rule about absence tests
+    // and the reason CALL_FIELD_RULES is exhaustive over Required<Call>
+    // rather than a list of the dangerous fields.
+    //
+    // So: an ALLOWLIST of the exact key=value pairs the collector may write.
+    // Anything else — any new field, however innocent-looking — fails here
+    // and has to be justified by editing this list.
     const ps = readFileSync(join(ROOT, 'scripts', 'verification', 'collect-bugd-evidence.ps1'), 'utf8')
-    // the assignment lines inside the two [ordered]@{...} literals
-    const assigned = [...ps.matchAll(/^\s{4,}(\w+)\s*=\s*(.+)$/gm)].map((x) => ({ key: x[1], value: x[2].trim() }))
-    expect(assigned.length, 'no assignments found — did the collector change shape?').toBeGreaterThan(10)
+    const assigned = [...ps.matchAll(/^\s{4,}(\w+)\s*=\s*(.+)$/gm)].map((x) => `${x[1]} = ${x[2].trim()}`)
 
-    // Every assignment that READS a content-bearing field at all.
-    const reads = assigned.filter((a) => /\$[cs]\.(text|title|summary|coaching|preview|notes)\b/.test(a.value))
-
-    // …of which exactly three FORMS are safe, because none of them can carry a
-    // word out: a word count, a gap's numeric duration, and a [bool] presence
-    // flag. Anything else placed in the output would be content.
-    const SAFE = [
-      /^\$\(if \(\$s\.kind -eq 'gap'.*\[double\]\$Matches\[1\].*\)$/, // a gap's numeric duration
-      /^\[bool\]\$c\.(summary|coaching)$/ // "there is one", never what it says
+    const ALLOWED = [
+      // per segment: shape only. `words` is a COUNT, never the words.
+      'speaker = $s.speaker',
+      'channel = $s.channel',
+      'epoch = $s.epoch',
+      'role = $s.role',
+      'kind = $s.kind',
+      'confidence = $s.confidence',
+      'unlabelled = $s.unlabelled',
+      'words = $wordCount',
+      // the ONLY read of $s.text in the output, and it yields a number
+      String.raw`gapSeconds = $(if ($s.kind -eq 'gap' -and [string]$s.text -match '\[gap:\s*([\d.]+)\s*s\]') { [double]$Matches[1] } else { $null })`,
+      // per call: identifiers, timing, and two presence booleans
+      'id = $c.id',
+      'createdAt = $c.createdAt',
+      'endedAt = $c.endedAt',
+      'durationMs = $c.durationMs',
+      'speakerCount = $c.speakerCount',
+      'hasSummary = [bool]$c.summary',
+      'hasCoaching = [bool]$c.coaching',
+      'recordOtherParty = $(if ($c.consent) { $c.consent.recordOtherParty } else { $null })',
+      'segmentCount = $segs.Count',
+      'segments = $segs'
     ]
-    const unsafe = reads.filter((r) => !SAFE.some((re) => re.test(r.value)))
-    expect(
-      unsafe.map((l) => `${l.key} = ${l.value}`),
-      'the collector would copy transcript content into the evidence file'
-    ).toEqual([])
-    expect(reads.length, 'expected the gap duration and the two presence flags').toBe(3)
 
-    // The word count is computed on its own line rather than inside the output
-    // literal, so it is checked separately — and it must still be a COUNT.
+    const unexpected = assigned.filter((a) => !ALLOWED.includes(a))
     expect(
-      /\$wordCount = \(\[regex\]::Matches\(\[string\]\$s\.text, '\\S\+'\)\)\.Count/.test(ps),
-      'the word count is the whole point of reading text at all — it must still be a count'
-    ).toBe(true)
-    expect(assigned.some((a) => a.key === 'words' && a.value === '$wordCount'), 'words must be the count, nothing else').toBe(true)
-    expect(assigned.some((a) => a.key === 'words'), 'the word COUNT is the point — it must still be collected').toBe(true)
+      unexpected,
+      'the collector writes a field that is not on the allowlist. If it is genuinely safe, add it ' +
+        'to ALLOWED with a reason; do not delete this assertion.'
+    ).toEqual([])
+
+    // and the allowlist is not stale: every entry must still be present, so a
+    // field silently REMOVED (e.g. the word count) is caught too.
+    const missing = ALLOWED.filter((a) => !assigned.includes(a))
+    expect(missing, 'the allowlist names fields the collector no longer writes').toEqual([])
+    expect(assigned.length, 'the collector writes nothing at all — this test would pass vacuously').toBe(ALLOWED.length)
   })
 })
