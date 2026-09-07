@@ -79,7 +79,9 @@ async function main() {
     'claim_due_deliveries',
     'derive_meeting_alerts',
     'server_now',
-    'mark_delivery_sent'
+    'mark_delivery_sent',
+    'telemetry_prune',
+    'telemetry_ingest_batch'
   ]) {
     const r = await fetch(cfg.url + '/rest/v1/rpc/' + fn, { headers: H })
     const body = await r.text()
