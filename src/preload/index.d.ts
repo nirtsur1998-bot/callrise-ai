@@ -1824,6 +1824,9 @@ export interface BackupStatus {
    *  reason push and pull are separate above: a successful backup must never
    *  be able to imply a successful erase. */
   pendingScrubs?: string[]
+  /** BUG-216 - whether a queued scrub CAN drain. A scrub needs a session, so
+   *  signed out is not "retrying", it is stopped, and the card says so. */
+  signedIn?: boolean
   lastScrubError?: string
   lastScrubErrorAt?: string
 }

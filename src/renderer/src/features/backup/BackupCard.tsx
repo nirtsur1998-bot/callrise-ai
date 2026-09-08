@@ -186,12 +186,17 @@ export function BackupCard(): React.JSX.Element {
     Boolean(status?.lastScrubErrorAt) &&
     Boolean(status?.lastPushAt) &&
     new Date(status!.lastScrubErrorAt!).getTime() >= new Date(status!.lastPushAt!).getTime()
-  const pendingScrubLabels = scrubFailedTwice
-    ? pendingScrubs
-        .map((k) => OPTIONAL_ITEMS.find((i) => i.key === k)?.label ?? k)
-        .join(', ')
-        .toLowerCase()
-    : null
+  // BUG-216 — signed out, a scrub cannot run at all: pushAll returns before
+  // the drain is reached. So it is not "retrying", it is stopped, and waiting
+  // for a second consecutive failure would wait for ever. Shown immediately.
+  const scrubStoppedBySignOut = pendingScrubs.length > 0 && status?.signedIn === false
+  const pendingScrubLabels =
+    scrubFailedTwice || scrubStoppedBySignOut
+      ? pendingScrubs
+          .map((k) => OPTIONAL_ITEMS.find((i) => i.key === k)?.label ?? k)
+          .join(', ')
+          .toLowerCase()
+      : null
 
   return (
     <Card>
@@ -228,7 +233,9 @@ export function BackupCard(): React.JSX.Element {
               // behaviour was to show the reassuring line and nothing else,
               // forever, while the erase failed on every single push.
               <p className="text-[13px] text-warning">
-                Still removing {pendingScrubLabels} from your account
+                {scrubStoppedBySignOut
+                  ? `Sign in to finish removing ${pendingScrubLabels} from your account`
+                  : `Still removing ${pendingScrubLabels} from your account`}
               </p>
             ) : lastSyncedAt ? (
               <p className="text-[13px] text-muted">Backed up {agoLabel(lastSyncedAt)}</p>
@@ -348,9 +355,19 @@ export function BackupCard(): React.JSX.Element {
       {pendingScrubLabels && (
         <div className="mt-4 rounded-lg border border-warning/20 bg-warning-soft px-3 py-2">
           <p className="text-[12px] text-warning">
-            You switched off {pendingScrubLabels}, and removing the copy already in your account has
-            not succeeded yet. We keep trying on every backup. Until it does, that data is still
-            there.
+            {scrubStoppedBySignOut ? (
+              <>
+                You switched off {pendingScrubLabels}, and the copy already in your account has not
+                been removed. Removing it needs you signed in, so nothing is being retried while you
+                are signed out. That data is still there.
+              </>
+            ) : (
+              <>
+                You switched off {pendingScrubLabels}, and removing the copy already in your account
+                has not succeeded yet. We keep trying on every backup. Until it does, that data is
+                still there.
+              </>
+            )}
           </p>
         </div>
       )}

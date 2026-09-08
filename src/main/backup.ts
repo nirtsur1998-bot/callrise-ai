@@ -1684,8 +1684,23 @@ export function registerBackup(): void {
   })
   ipcMain.handle('backup:getStatus', async () => {
     const state = await readState()
+    // BUG-216 — the pending list comes from the QUEUE FILE, not from whatever
+    // the last drain happened to leave in state.
+    //
+    // pushAll returns at `if (!userId)` BEFORE drainPendingScrubs is reached,
+    // so a signed-out user's scrub never runs and never writes state. Reading
+    // state alone meant the card said nothing at all: the user asked for an
+    // erase, signed out, and was shown "Backed up N minutes ago" forever while
+    // their data sat in the account. Reading the queue is true whether or not
+    // a push ever happens.
+    const queued = await readPendingScrubs()
     return {
       ...state,
+      pendingScrubs: queued,
+      // Whether the queue CAN drain. A scrub needs a session, so signed out is
+      // not "retrying" — it is stopped, and the card has to say a different
+      // thing.
+      signedIn: (await getSignedInUserId()) !== null,
       // Losing sides of two-device concurrent edits, kept as <id>.conflict —
       // surfaced in the Settings card so "kept" data isn't invisibly lost.
       conflictCount: await countConflictFiles(),
