@@ -60,11 +60,34 @@ function functions(): Fn[] {
   return out
 }
 
+/** A revoke can also be issued from a LOOP, which is how the alerts functions
+ *  are handled: their signatures sit in a text[] and the revoke is
+ *  `execute format('revoke all on function %s from public, anon, ...', fn)`.
+ *
+ *  That form is not optional dressing. The alerts objects do not exist on the
+ *  project yet, and a bare revoke against a missing function aborts the whole
+ *  script — which would have left the LIVE telemetry fix looking applied while
+ *  the run reported an error. So the loop, with an existence check, is the
+ *  correct shape and this guard has to understand it.
+ *
+ *  A function counts as covered by a loop when its quoted signature appears in
+ *  a file that also contains a templated revoke naming PUBLIC. That is looser
+ *  than the literal case, deliberately: the alternative is a guard that
+ *  demands the dangerous form. */
+function revokedByLoop(fnName: string): boolean {
+  return FILES.some(
+    (f) =>
+      /revoke\s+all\s+on\s+function\s+%s\s+from\s+[^']*\bpublic\b/i.test(f.sql) &&
+      new RegExp(String.raw`'public\.${fnName}\s*\(`).test(f.sql)
+  )
+}
+
 /** True when SOMETHING in the supabase tree revokes this function from PUBLIC.
  *  Deliberately loose about the argument list — matching signatures exactly is
  *  Postgres's job and it errors loudly on a mismatch, whereas a missing
  *  `public` in the from-list is the silent failure this test exists for. */
 function revokedFromPublic(fnName: string): boolean {
+  if (revokedByLoop(fnName)) return true
   const re = new RegExp(
     String.raw`revoke\s+[\s\S]{0,40}?on\s+function\s+public\.${fnName}\s*\([^)]*\)\s*from\s+([^;]+);`,
     'i'
@@ -121,6 +144,25 @@ describe('every SECURITY DEFINER function is revoked from PUBLIC', () => {
       false
     )
     expect(/\bpublic\b/i.test(from(withPublic))).toBe(true)
+  })
+
+  it('the looped revoke names PUBLIC too, or the loop protects nothing', () => {
+    // The loop form is only as good as its template. `from anon, authenticated`
+    // inside a format() string is the same no-op as BUG-213, just harder to
+    // see, so the template is pinned separately from the signatures it applies
+    // to.
+    const looped = FILES.filter((f) => /revoke\s+all\s+on\s+function\s+%s/i.test(f.sql))
+    expect(looped.length, 'no templated revoke found — this check has nothing to guard').toBeGreaterThan(0)
+    for (const f of looped) {
+      const templates = [...f.sql.matchAll(/revoke\s+all\s+on\s+function\s+%s\s+from\s+([^'\n]+)/gi)]
+      for (const t of templates) {
+        expect(
+          /\bpublic\b/i.test(t[1]),
+          `${f.name}: a templated revoke reads "from ${t[1].trim()}" — without PUBLIC it removes ` +
+            'nothing, because anon and authenticated inherit EXECUTE from PUBLIC'
+        ).toBe(true)
+      }
+    }
   })
 
   it('names the live instance explicitly, so fixing it cannot be quiet', () => {
