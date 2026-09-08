@@ -337,4 +337,35 @@ describe('the app makes no false claim about where the user data lives', () => {
     expect(nav + card).not.toMatch(/Settings → Backup/)
     expect([...(nav + card).matchAll(/Settings → Privacy & data/g)].length).toBe(3)
   })
+
+  it('the nightly reflection is disclosed, and the disclosure is tied to the code', () => {
+    // BUG-224. runNightlyConsolidation walks every scope — rep, business, and
+    // one per CLIENT — and runReflection posts every active memory statement to
+    // the user's AI provider. It is gated on isSalesBrainEnabled() and nothing
+    // else, so it fires for someone who never signed in and believes their
+    // Sales Brain is local. Nothing in the product said so; the only surface
+    // was the Job Inspector, as a raw job-type string.
+    //
+    // PAIRED rather than pinned alone. A sentence describing behaviour can
+    // outlive the behaviour, and then the copy is false in the other
+    // direction — a disclosure of something that no longer happens is its own
+    // kind of wrong. So the code half is asserted first: if reflection stops
+    // sending to the provider, THIS test goes red and asks for the sentence to
+    // come out, rather than leaving it there for ever.
+    const consolidation = readFileSync(
+      join(RENDERER, '..', '..', 'main', 'memory', 'consolidation.ts'),
+      'utf8'
+    )
+    const reflect = consolidation.slice(consolidation.indexOf('export async function runReflection'))
+    expect(
+      reflect.slice(0, 1200),
+      'runReflection no longer sends to the AI provider — the card still says it does'
+    ).toContain('completeWithFallback')
+
+    const card = readFileSync(join(RENDERER, 'features/settings/SalesBrainSection.tsx'), 'utf8')
+    expect(
+      card,
+      'the Sales Brain card no longer discloses the nightly pass to the AI provider'
+    ).toContain('Once a night it also sends the facts it has learned to your AI provider')
+  })
 })
