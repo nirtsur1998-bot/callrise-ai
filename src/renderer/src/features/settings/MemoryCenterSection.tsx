@@ -236,6 +236,7 @@ export function MemoryCenterSection(): React.JSX.Element {
   const [showChangelog, setShowChangelog] = useState(false)
   const [changelog, setChangelog] = useState<MemoryChangelogEntry[]>([])
   const [forgetting, setForgetting] = useState(false)
+  const [forgetError, setForgetError] = useState<string | null>(null)
   // M36 Stage 3 item 5 — what the backfill did to the store, shown here
   // because this page is where the user checks what the app thinks it knows
   const [temporal, setTemporal] = useState<TemporalBackfillRecord | null>(null)
@@ -278,9 +279,24 @@ export function MemoryCenterSection(): React.JSX.Element {
       return
     }
     setForgetting(true)
+    setForgetError(null)
     try {
-      await window.api.salesBrain.memories.forgetEverything()
+      // BUG-237 — the result is READ now. This was
+      // `await window.api.salesBrain.memories.forgetEverything(); refresh()`,
+      // discarding a `{ ok: false }` that the handler returns whenever Sales
+      // Brain is off or its database could not be opened. A user who confirmed
+      // "This cannot be undone" got an identical screen and no way to tell
+      // whether anything had happened.
+      const res = await window.api.salesBrain.memories.forgetEverything()
+      if (!res?.ok) {
+        setForgetError(
+          'Nothing was erased — the Sales Brain database could not be opened. Your memories are still here.'
+        )
+        return
+      }
       refresh()
+    } catch {
+      setForgetError('Nothing was erased — the request failed. Your memories are still here.')
     } finally {
       setForgetting(false)
     }
@@ -394,20 +410,57 @@ export function MemoryCenterSection(): React.JSX.Element {
         )}
       </Card>
 
-      <Card>
-        <div className="flex items-center gap-3">
-          <TriangleAlert className="h-4 w-4 shrink-0 text-danger" />
-          <div className="min-w-0 flex-1">
-            <h3 className="text-sm font-semibold">Forget everything</h3>
-            <p className="text-[12px] text-faint">
-              Deletes every memory across every scope. Your calls, contacts, and deals are untouched.
-            </p>
+      {/* BUG-237 — this card used to render its enabled danger button even with
+          Sales Brain SWITCHED OFF, and the handler's first line is
+          `if (!isSalesBrainEnabled()) return { ok: false }`. So a user could
+          confirm a dialog reading "This cannot be undone", have the IPC do
+          nothing, have the renderer discard the result, and see an identical
+          screen afterwards.
+
+          A destructive action that silently no-ops is the same failure shape as
+          BUG-204 (a delete filtered to zero rows returning success) and BUG-228
+          (a title failure indistinguishable from the toggle being off) — and it
+          was sitting in the erase path this milestone was largely about.
+
+          Two halves, because either alone leaves a hole: the button is not
+          OFFERED when there is nothing it could erase, and the result is READ
+          rather than discarded, so a failure with the feature on says so. */}
+      {salesBrainOn ? (
+        <Card>
+          <div className="flex items-center gap-3">
+            <TriangleAlert className="h-4 w-4 shrink-0 text-danger" />
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-semibold">Forget everything</h3>
+              <p className="text-[12px] text-faint">
+                Deletes every memory across every scope. Your calls, contacts, and deals are
+                untouched.
+              </p>
+              {forgetError && <p className="mt-1 text-[12px] text-danger">{forgetError}</p>}
+            </div>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => void forgetEverything()}
+              disabled={forgetting}
+            >
+              {forgetting ? 'Forgetting…' : 'Forget everything'}
+            </Button>
           </div>
-          <Button variant="danger" size="sm" onClick={() => void forgetEverything()} disabled={forgetting}>
-            {forgetting ? 'Forgetting…' : 'Forget everything'}
-          </Button>
-        </div>
-      </Card>
+        </Card>
+      ) : (
+        <Card>
+          <div className="flex items-center gap-3">
+            <TriangleAlert className="h-4 w-4 shrink-0 text-faint" />
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-semibold text-muted">Forget everything</h3>
+              <p className="text-[12px] text-faint">
+                Sales Brain is switched off, so there is nothing stored to forget. Turn it on above
+                if you want to erase what it learned before.
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
     </>
   )
 }
