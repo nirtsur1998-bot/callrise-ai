@@ -1300,8 +1300,16 @@ export function callBackupPayload(call: Call): Record<string, unknown> {
     updatedAt: call.updatedAt,
     durationMs: call.durationMs,
     speakerCount: call.speakerCount,
-    preview: '', // transcript-derived — never leaves the device
-    segments: [], // THE TRANSCRIPT — never leaves the device
+    // These two said "never leaves the device" until 2026-09-08, and that is
+    // false: the transcript goes to the user's AI provider on every summary,
+    // coaching run, task extraction, live cue and Sales Brain extraction, and
+    // the call's audio streams to Deepgram while it happens. What is true is
+    // the narrower thing this function does — it keeps them out of THIS
+    // payload. A wider sentence than the code earns, sitting in a permission-
+    // granting position beside the field it describes, is how a thorough
+    // search of the wrong container comes to read as high confidence.
+    preview: '', // transcript-derived — excluded from this payload
+    segments: [], // THE TRANSCRIPT — excluded from this payload
     summary: call.summary, // AI paraphrase; synced per the privacy decision
     coaching,
     // CRM link + mined marker are plain metadata; without them a pull that
@@ -1402,7 +1410,9 @@ function sanitizeBackupAttachment(value: unknown): Attachment | null {
     ext: ext as AttachmentExt,
     sizeBytes: Number.isFinite(v.sizeBytes) ? Math.max(0, Math.trunc(v.sizeBytes as number)) : 0,
     addedAt: isoOrUndefined(v.addedAt) ?? new Date().toISOString()
-    // no `summary` — the AI summary of the attached doc never leaves the device
+    // no `summary` — the AI summary of the attached doc is excluded from the
+    // backup payload. (Not "never leaves the device": the DOCUMENT was sent to
+    // the AI provider to produce it.)
   }
 }
 
@@ -1532,8 +1542,10 @@ export async function importCall(
             .filter((a): a is Attachment => a !== null)
         : []
       // Merge: an attachment's `summary` (an AI document summary — costs a
-      // Claude API call, and never leaves the device) is preserved from the
-      // matching LOCAL attachment id; the cloud's metadata otherwise wins.
+      // Claude API call, and is excluded from the backup payload) is preserved
+      // from the matching LOCAL attachment id; the cloud's metadata otherwise
+      // wins. The old wording here was "never leaves the device", in the same
+      // breath as naming the API call that produced it.
       const currentAttById = new Map((current?.attachments ?? []).map((a) => [a.id, a]))
       attachments = incoming.map((a) => {
         const localMatch = currentAttById.get(a.id)
