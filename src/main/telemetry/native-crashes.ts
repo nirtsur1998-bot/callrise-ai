@@ -11,10 +11,26 @@
 //
 // Pure-ish: directory and marker path are injected; no Electron import.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { dirname, join } from 'node:path'
 
 export const NATIVE_CRASH_MARKER = 'telemetry-native-crash-marker.json'
+
+/** How long a minidump is kept. Founder's decision, 2026-09-08.
+ *
+ *  Fourteen days is long enough that a crash reported by a user this week can
+ *  still be read on the machine that produced it, and short enough that a
+ *  snapshot of process memory containing a live transcript is not sitting on
+ *  disk a year later because nobody wrote the second half of the policy. */
+export const DUMP_RETENTION_DAYS = 14
 
 interface Marker {
   /** mtime (ms) of the newest dump seen at the last check. */
@@ -44,6 +60,59 @@ function listDumps(dir: string, depth = 0): Array<{ path: string; mtimeMs: numbe
     }
   }
   return out
+}
+
+/**
+ * Delete minidumps older than the retention window.
+ *
+ * WHY THIS EXISTS. The crash reporter was set up with a long, correct and
+ * emphatic warning about EGRESS — do not set uploadToServer, a dump is raw
+ * process memory holding live transcript text, buyer speech, contact and deal
+ * records and any AI key in use — and it concluded "the dumps are kept locally
+ * on purpose". The retention question was never asked beside it. Nothing in
+ * the product had ever deleted one: no age cap, no size cap, no sweep. The
+ * only code that touched them counted them.
+ *
+ * So `deleteCall`'s promise that a deleted call retains no buyer words was
+ * false for any call during which the app died hard, and stayed false forever,
+ * under a filename no assertion could have been written for.
+ *
+ * IT MUST NOT BE GATED ON TELEMETRY CONSENT, and that is the one thing most
+ * likely to be got wrong here. `checkNativeCrashes` is only reached through
+ * `recordLaunch`, which returns early unless consent is 'on' — so putting the
+ * purge there would mean the users who opted OUT of telemetry are exactly the
+ * users whose crash dumps are kept forever. Retention is a property of the
+ * data, not of a diagnostics preference. This runs unconditionally at startup.
+ *
+ * One interaction, stated rather than discovered later: a dump older than the
+ * window is deleted even if the crash count has not been reported. That can
+ * only happen when the app has not launched inside the window, so what is lost
+ * is a fortnight-old crash statistic, not a crash the user is still hitting.
+ *
+ * Never throws: a dump we cannot delete must not stop the app starting.
+ */
+export function purgeOldDumps(
+  crashDumpsDir: string,
+  maxAgeDays: number = DUMP_RETENTION_DAYS,
+  now: number = Date.now()
+): { deleted: number; kept: number; failed: number } {
+  const cutoff = now - maxAgeDays * 24 * 60 * 60 * 1000
+  let deleted = 0
+  let kept = 0
+  let failed = 0
+  for (const dump of listDumps(crashDumpsDir)) {
+    if (dump.mtimeMs >= cutoff) {
+      kept++
+      continue
+    }
+    try {
+      rmSync(dump.path, { force: true })
+      deleted++
+    } catch {
+      failed++
+    }
+  }
+  return { deleted, kept, failed }
 }
 
 function readMarker(markerPath: string): Marker {

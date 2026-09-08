@@ -44,6 +44,7 @@ import { clearActiveConsent } from './consent-gate'
 import { registerCrashLogging, registerLog } from './log'
 import { captureChildGone, captureRendererGone } from './telemetry/capture'
 import { setupTelemetry, recordLaunch, recordQuit } from './telemetry/setup'
+import { purgeOldDumps } from './telemetry/native-crashes'
 import { registerSalesBrainExport } from './memory/export-ipc'
 import { registerSupportBundle } from './support-bundle'
 import { setIngestConfig, startTelemetrySchedule, stopTelemetrySchedule } from './telemetry/flush'
@@ -130,6 +131,26 @@ try {
   // (telemetry/native-crashes.ts). If you need the dump itself, read it on the
   // machine that produced it.
   crashReporter.start({ uploadToServer: false, compress: true })
+
+  // ── AND THE SECOND QUESTION, answered 2026-09-08 ──────────────────────
+  //
+  // The warning above answers "does a dump ever LEAVE this machine": no.
+  // It did not answer "how long does it STAY on this machine", and for the
+  // whole life of the product the answer was FOREVER. No age cap, no size cap,
+  // no sweep; the only code that touched a dump counted it. A shadow-copy
+  // audit found it by asking which files outlive the records they shadow.
+  //
+  // The consequence is not abstract. `deleteCall` promises that a deleted call
+  // retains no buyer words. That was false for any call during which the app
+  // died hard, and stayed false forever, in a file named by Crashpad under a
+  // uuid no assertion could have been written for — the same shape as BUG-139.
+  //
+  // Kept for DUMP_RETENTION_DAYS (14), then deleted. Unconditional: it is
+  // deliberately NOT inside the telemetry path, because that path returns
+  // early unless consent is 'on', which would have meant the users who opted
+  // OUT keep their dumps forever. Retention is a property of the data, not of
+  // a diagnostics preference.
+  purgeOldDumps(app.getPath('crashDumps'))
 } catch {
   /* a crash reporter that can't start is not worth crashing over */
 }
