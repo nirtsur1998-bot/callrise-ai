@@ -372,7 +372,15 @@ export function MemoryCenterSection(): React.JSX.Element {
                     kind: 'off',
                     settingsPage: 'sales-brain',
                     what: 'Sales Brain learns who you are, how you sell, your business and each client, so every AI feature gets sharper over time.',
-                    cost: 'Runs entirely on your own device. Nothing is sent anywhere.',
+                    // Round five, founder-approved 2026-09-08, and their own
+                    // assessment: the worst of the three. Was 'Runs entirely on
+                    // your own device. Nothing is sent anywhere.' A COST line's
+                    // entire job is telling someone what turning this on will
+                    // cost them, and it is read at the exact moment they decide
+                    // — so a cost line that says 'nothing' when the answer is
+                    // 'two egresses' is the highest-leverage false sentence in
+                    // the set. Both are named here, in plain language.
+                    cost: 'Uses your own AI provider: it reads your calls to extract facts, and reviews those facts once a night.',
                     actionLabel: 'Turn on Sales Brain'
                   }
             }

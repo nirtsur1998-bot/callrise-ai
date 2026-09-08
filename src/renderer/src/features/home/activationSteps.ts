@@ -164,7 +164,14 @@ export function buildActivationSteps(state: ActivationState): ActivationStep[] {
     {
       id: 'sales-brain',
       title: 'Let it learn from your calls',
-      why: 'Sales Brain remembers who you are, how you sell, and each client — so summaries and coaching stop starting from scratch every time. Runs entirely on your own device.',
+      // Round five, founder-approved 2026-09-08. Was '... Runs entirely on
+      // your own device.', which was false three ways: extraction posts the
+      // transcript to the user's AI provider, the nightly reflection posts the
+      // derived facts, and memory.db uploads to the sales-brain bucket when
+      // both toggles are on. The locality claim is REMOVED rather than
+      // replaced — an activation step is one line, and the full account lives
+      // on the card this links to.
+      why: 'Sales Brain remembers who you are, how you sell, and each client — so summaries and coaching stop starting from scratch every time. Facts are extracted through your own AI provider.',
       doneLabel:
         'On — learning from your calls, and every AI feature gets sharper as it does.',
       settingsPage: 'sales-brain',

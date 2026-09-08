@@ -215,65 +215,25 @@ const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
  *  exclusivity. Both sat as debt for a week on nobody's argument. An unargued
  *  accusation rots exactly like an unargued exemption. */
 const PENDING_FOUNDER_APPROVAL: { file: string; contains: string; because: string }[] = [
-  {
-    file: 'features/home/activationSteps.ts',
-    contains: 'Runs entirely on your own device',
-    because:
-      'False three ways for Sales Brain: extraction posts the transcript to the AI provider, the ' +
-      'nightly reflection posts the derived facts, and memory.db uploads to the sales-brain ' +
-      'bucket when salesBrain AND transcripts are both on.'
-  },
-  {
-    file: 'features/settings/MemoryCenterSection.tsx',
-    contains: 'Nothing is sent anywhere',
-    because:
-      'The same falseness as activationSteps, and worse placed: this is the `cost` line of an ' +
-      'off-state — the one sentence whose whole job is to say what turning the feature on will ' +
-      'cost. It says it costs nothing.'
-  },
-  // Found by DRIVING the app, not by reading source: it is the first thing on
-  // the Privacy & data page, two paragraphs above that same page's own line
-  // reading "Call recordings & transcripts sync is ON — your buyer
-  // conversations are stored in your cloud account, not just this device."
-  // Unconditional, and its doc comment calls it "a short, honest recap".
-  // Three of the four categories it names were syncing when it was read.
-  // FIXED 2026-09-08 and removed from this list, which is what the pin exists
-  // to force: PrivacyNoticeCard.tsx's "live only on this device" is gone, and
-  // the card now names all three destinations. Pinned positively instead, by
-  // the Deepgram disclosure test below.
-  // ── Added 2026-09-07. Four more, all found by an independent adversarial
-  //    sweep rather than by this guard, and one of them had been recorded HERE
-  //    as true.
+  // EMPTY, 2026-09-08 — and getting here is the whole point of this list.
   //
-  // BackupCard: "never leave this computer unless you turn that on above" was
-  // in ACCOUNTED_FOR with a written argument for why it was true. The argument
-  // checked the transcripts toggle and the absence of an audio upload path and
-  // stopped there. It missed that a Sales Brain memory's evidence is a
-  // VERBATIM 400-character span of the transcript (extraction.ts:269), that
-  // memory.db uploads to the sales-brain bucket, and the salesBrain sync key
-  // is on for a fresh profile (BUG-211: an upgraded install has it off) and on
-  // for anyone who set it. So with Sales Brain switched on and that key set,
-  // word-for-word transcript text leaves the computer while this sentence says
-  // it does not. An allowlist entry with a reason is still only as good as the
-  // reason.
-  // FIXED 2026-09-08. BackupCard's "never leave this computer unless you turn
-  // that on above" is gone. It was the one rename in round five that had to
-  // change MEANING rather than wording — a locality promise replaced by what
-  // actually happens: "Your transcripts aren't included unless you turn that
-  // on above. Your AI provider still receives them whenever a feature reads a
-  // call."
-  {
-    file: 'features/settings/TelemetrySection.tsx',
-    contains: 'Nothing has been sent from this computer',
-    because:
-      'Worded absolutely on a privacy screen while scoped by its surroundings to diagnostics — ' +
-      'and false inside its own scope too: the sent log is user-deletable (sent-log.ts, the ' +
-      'Delete button in this same card), so clearing it makes the app say nothing was ever sent.'
-  }
-  // ── WITHDRAWN 2026-09-08, round five. Two entries left this list because
-  //    they are TRUE, not because they were fixed. Both are now in
-  //    ACCOUNTED_FOR with the argument that should have been required of the
-  //    pin in the first place. See this list's doc comment.
+  // It held SEVEN entries at its peak. Two turned out to be TRUE and moved
+  // to ACCOUNTED_FOR with the argument that should have been required of
+  // the pin in the first place (species 92). The other five were fixed and
+  // shipped, the last three on the founder’s approval:
+  //
+  //   activationSteps.ts       "Runs entirely on your own device"
+  //   MemoryCenterSection.tsx  "... Nothing is sent anywhere."
+  //   TelemetrySection.tsx     "Nothing has been sent from this computer."
+  //
+  // The founder on the second of those, and it is the lesson worth keeping:
+  // a COST line is read at the exact moment someone decides whether to turn
+  // a feature on, so a cost line that says "nothing" when the answer is two
+  // egresses is the highest-leverage false sentence in a set.
+  //
+  // KEEP THIS LIST. An empty debt list that still runs is worth more than a
+  // deleted one: the count assertion below is what turns the NEXT false
+  // locality claim into a red test rather than a conversation.
 ]
 
 /** Directories holding SIMULATED sales dialogue rather than UI copy. A
@@ -376,7 +336,7 @@ describe('the app makes no false claim about where the user data lives', () => {
     }
   })
 
-  it('the three sites awaiting founder approval are still exactly three, and still there', () => {
+  it('no site is awaiting founder approval — the debt list is empty and still armed', () => {
     // Red in BOTH directions, so listed debt cannot quietly become permanent.
     for (const p of PENDING_FOUNDER_APPROVAL) {
       const hit = claims.find((c) => c.file === p.file && c.text.includes(p.contains))
@@ -389,7 +349,7 @@ describe('the app makes no false claim about where the user data lives', () => {
     expect(
       PENDING_FOUNDER_APPROVAL.length,
       'the count of known-false, unapproved copy sites changed'
-    ).toBe(3)
+    ).toBe(0)
   })
 
   it('the Deepgram destination is disclosed in all three places, and tied to the code', () => {

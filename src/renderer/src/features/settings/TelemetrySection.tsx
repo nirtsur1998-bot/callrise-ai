@@ -257,7 +257,13 @@ export function TelemetrySection(): React.JSX.Element {
           title="View what's been sent"
           description={
             sent.length === 0
-              ? 'Nothing has been sent from this computer.'
+              ? // Round five, founder-approved 2026-09-08. Was 'Nothing has
+                // been sent from this computer.' — worded absolutely on a
+                // privacy screen while scoped by its surroundings to
+                // diagnostics, AND false inside its own scope: the sent log is
+                // deletable from this same card, so pressing Delete made the
+                // app claim nothing was ever sent.
+                'This log is empty — no diagnostics have been sent since it was last cleared.'
               : `The last ${sent.length} event${sent.length === 1 ? '' : 's'} that left this computer, exactly as they were sent — including the install ID and session ID that went with them.`
           }
           control={
