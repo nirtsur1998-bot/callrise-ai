@@ -5,7 +5,7 @@
 // where and why.
 import { app } from 'electron'
 import { join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import type Database from 'better-sqlite3'
 import { memoryDbPath, openMemoryDb, migrate, type MigrateResult } from './db'
 import {
@@ -208,6 +208,41 @@ export function quoteSweepRecord(handle: Database.Database): QuoteSweepRecord | 
  * the connection can be replaced or closed while the calls directory is being
  * read, and rows must never be written through a stale one.
  */
+/**
+ * BUG-236 — "is this call really gone?", answered against the disk rather than
+ * against a listing that swallows read errors.
+ *
+ * THREE OUTCOMES, and the middle one is the whole correction:
+ *
+ *   no file at all               -> GONE. Deleted long enough ago that even the
+ *                                   tombstone has been cleaned up.
+ *   a file that says deleted:true -> GONE. This is what deleting a call
+ *                                   actually leaves, and listCalls excludes it
+ *                                   by design. Treating it as "still here"
+ *                                   would refuse every legitimate redaction —
+ *                                   which is what the first version of this
+ *                                   check did, caught by rehearsing it on a
+ *                                   copy of a real store before it shipped.
+ *   a file that exists and is not
+ *   a tombstone (or will not parse) -> NOT GONE. The protected case: a call
+ *                                   whose file was momentarily unreadable must
+ *                                   never have its quotes destroyed.
+ *
+ * An unreadable file lands in the third branch on purpose. "I could not read
+ * it" is not evidence of deletion, and this function's whole job is to stop
+ * treating it as if it were.
+ */
+export function isCallGoneFromDisk(callsDir: string, callId: string): boolean {
+  const file = join(callsDir, `${callId}.json`)
+  if (!existsSync(file)) return true
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { deleted?: unknown }
+    return parsed?.deleted === true
+  } catch {
+    return false // unreadable — assume it is still a real call
+  }
+}
+
 async function runQuoteRedactionSweepOnce(
   handle: Database.Database,
   callsDir: string
@@ -260,10 +295,20 @@ async function runQuoteRedactionSweepOnce(
     // Windows a file briefly locked by antivirus on first launch after an
     // upgrade is exactly that. Before blanking anything, ask the filesystem
     // directly whether the call is really gone.
-    const r = redactOrphanedQuotes(
-      handle,
-      liveCallIds,
-      (callId) => !existsSync(join(callsDir, `${callId}.json`))
+    //
+    // CORRECTED before shipping, by rehearsing this on a copy of a real store:
+    // "the file exists" is NOT the test. A DELETED call leaves a TOMBSTONE —
+    // the file stays, carrying `deleted: true`, and listCalls excludes it by
+    // design. The first version of this check used existsSync alone and would
+    // therefore have rescued all 25 of that store's legitimately deleted
+    // calls, refusing every redaction and quietly undoing BUG-215 in the name
+    // of protecting it.
+    //
+    // So gone means: no file, OR a file that parses and says it is deleted.
+    // The protected case is narrower and exactly right — a file that exists,
+    // is not a tombstone, and merely failed to read.
+    const r = redactOrphanedQuotes(handle, liveCallIds, (callId) =>
+      isCallGoneFromDisk(callsDir, callId)
     )
     if (r.rescuedByFileCheck > 0) {
       // The signal. If this is ever above zero the bulk listing disagreed with
