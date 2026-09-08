@@ -99,6 +99,22 @@ function installMockApi(opts: MockOptions = {}): {
       postCallBrief: vi.fn(async () => ({ ok: true, copied: false }))
     },
     live: { repIdentified: vi.fn() },
+    // Species 93 — the mock that is missing a surface. This object had no
+    // `settings` key, so after BUG-227 the save handler's
+    // `window.api.settings.get()` threw, the throw landed in its trailing
+    // `.catch(() => {})`, and none of the three AI Note Taker behaviours ran.
+    // Every assertion in this file still passed, because none of them is
+    // about those behaviours — which is precisely the failure mode: a missing
+    // surface does not fail a test, it routes the code somewhere else.
+    // Measured: with the auto-title gate broken ON PURPOSE at the source, all
+    // 16 tests across the three useTranscription files passed.
+    // All three OFF here, matching the real default, so nothing this file
+    // asserts changes — the point is that the code now takes the REAL path.
+    settings: {
+      get: vi.fn(async () => ({
+        aiNoteTaker: { autoSummarize: false, autoGenerateTitle: false, autoPostCallBrief: false }
+      }))
+    },
     app: { getActiveApp: vi.fn(async () => null) }
   }
   ;(window as unknown as { api: typeof api }).api = api
