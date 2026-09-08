@@ -1,40 +1,36 @@
-# M37: what is done, what is blocked, and what is left
+# M37: what is done, and exactly what is left
 
 **2026-09-08.** Branch `claude/m37-close-prepare-wedge-imagine`, pushed. Gate green at 391 files
 and 3744 tests. **Nothing merged, nothing released.**
 
 ---
 
-## Blocked right now: the SQL
+## Done: the SQL is run and verified
 
-**I cannot run it.** The Claude extension in Chrome is not answering, on three attempts across two
-turns, so I have no way to reach your logged-in Supabase session. Neither browser window is on
-Supabase either — Chrome is on an OpenRouter key page and Firefox on a Groq key page, and I did not
-read or capture those.
+Run on production 2026-09-08 through the in-app browser, on the CallRise-AI project.
 
-**To unblock me:** open the Claude side panel in Chrome and sign in with the same account as this
-app. Then say go and I will drive it under the same two conditions as last time — read the editor's
-model text and compare it byte for byte against the committed file before pressing Run, and stop
-rather than retry if it does not match.
+**The two conditions were met before Run.** The editor model was hashed and compared against text
+derived mechanically from the committed file: sha256 `9e20a437…`, 3145 characters, identical. The
+hash was re-checked immediately before pressing Run and still matched.
 
-**Or run it yourself.** It is now self-verifying, which it was not when you approved it.
+**BUG-213 is fixed, proven with the instrument that found it:**
 
-### What changed in the file since you approved it, and why it had to
+| | Before | After |
+|---|---|---|
+| `GET /rest/v1/rpc/telemetry_prune`, shipped anon key, no session | `405 25006` — Postgres refusing the DELETE in a read-only transaction, so the permission check had PASSED | `401 42501 permission denied for function telemetry_prune` |
 
-As written it would have **aborted**. The alerts functions and tables do not exist on this project,
-so the first alerts statement raises "does not exist", the editor stops the script there, and every
-statement after it silently does not run.
+The run own verification select confirms `anon_can_execute = false` and an acl carrying only
+postgres and service_role.
 
-The dangerous part was the ordering. The live telemetry fix is section 1, so it would have applied
-while the run reported an error. A half-applied migration that looks like a failed one is the
-version nobody goes back and re-reads.
+**BUG-210 stayed skipped, as designed.** Its eight alerts functions do not exist on this project,
+so the guarded script announced the skip instead of aborting. Re-run the same file after deploying
+alerts-schema.sql and that half applies.
 
-Now every object is applied only if it exists, the script says which parts it skipped, and it
-**ends in its own verification**: a select listing every security-definer function with whether
-`anon` can execute it. That grid is what the editor shows when the run finishes. **Every row must
-read false.** One `true` is the finding.
-
----
+**One correction to the file, made after the run.** Its verification note said every row must read
+`false`. That is wrong: `telemetry_ingest_batch` legitimately reads `true`, because the same file
+grants execute back to anon for the app telemetry path. As written, the correct outcome would have
+looked like a finding. Corrected in place with the reasoning, rather than quietly reworded — a
+verification step that cries wolf on a good result gets ignored on a bad one.
 
 ## Built and green this milestone
 
@@ -45,8 +41,9 @@ read false.** One `true` is the finding.
 | **BUG-207** | Deleting a Rise thread leaves a tombstone, so the restore stops resurrecting it |
 | **BUG-205** | The Sales Brain upload follows the transcripts toggle, and switching transcripts off scrubs the brain already uploaded |
 | **BUG-206** | Empty brains never upload. Forget everything removes every shadow copy beside the live file, and the import ledger so a rebuild works |
-| **BUG-213** | The guard that finds definer functions relying on the default PUBLIC grant. The SQL that fixes them is written and not run |
+| **BUG-213** | FIXED ON PRODUCTION. A definer function the shipped anon key could call is now denied. Plus the guard that parses every definer function and fails when one relies on the default PUBLIC grant |
 | **BUG-211** | The defaults-ON correction propagated to the six places it was load-bearing |
+| **BUG-210** | The revokes for the eight alerts functions and five alerts tables are written, guarded, and will apply the moment that schema is deployed |
 
 Three copy strings shipped in the branch, with the destination corrected to a page that exists.
 
@@ -54,29 +51,26 @@ Three copy strings shipped in the branch, with the destination corrected to a pa
 
 ## Waiting on you, in the order I would take them
 
-**1. The SQL.** One live issue: anyone holding the key from the shipped app can delete this
-project's telemetry today.
-
-**2. The copy, round three.** Now that the brain follows the transcripts toggle, the sentence the
+**1. The copy, round three.** Now that the brain follows the transcripts toggle, the sentence the
 app failed to say in seven places gets short. I have not drafted it because the behaviour changed
 under it twice already, and a third round against a moving target wastes your reading. Say go and
 you get five sentences.
 
-**3. BUG-206's remaining half.** The erasure receipt itself is designed and not built. The shape is
+**2. BUG-206's remaining half.** The erasure receipt itself is designed and not built. The shape is
 approved, four panel corrections carried, and one open question: making zero-row brains unuploadable
 reverses a recorded decision, which you approved, but the receipt work also needs the tombstone
 ordering decision confirmed.
 
-**4. BUG-212.** The scope question. "Tasks, Calendar events, Call titles, summaries & coaching
+**3. BUG-212.** The scope question. "Tasks, Calendar events, Call titles, summaries & coaching
 scores" carries full event notes, a free-text client name, and the AI summary of every conversation
 with resolved buyer names. Three options in the entry, cheapest first.
 
-**5. The shadow families.** 79 found, two fixed. The one that outranks the rest is that Sales Brain
+**4. The shadow families.** 79 found, two fixed. The one that outranks the rest is that Sales Brain
 memories survive the call they were mined from, which makes deleting a call's own stated promise
 false. The cheapest large win is a retention cap on crash dumps, which hold live transcript text and
 any AI key in use and which nothing has ever deleted.
 
-**6. The release.** It waits behind all of the above, on your instruction.
+**5. The release.** It waits behind all of the above, on your instruction.
 
 ---
 

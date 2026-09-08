@@ -181,8 +181,29 @@ end $$;
 -- 4. VERIFY, in the same run. This SELECT is the proof, and it is the last
 --    statement so its result grid is what the editor shows.
 --
---    EVERY ROW MUST READ false IN THE `anon_can_execute` COLUMN.
---    A `true` on any row is the finding, not a warning.
+--    HOW TO READ IT, corrected 2026-09-08 after the first run: it is NOT
+--    "every row must be false". This file itself GRANTS execute back to anon
+--    for telemetry_ingest_batch, because that is how the desktop app ships
+--    telemetry — it posts batches with the anon key and no user session. So
+--    that row reads true BY DESIGN.
+--
+--    The instruction as first written said every row must read false, which
+--    would have made the correct outcome look like a finding. Recorded rather
+--    than quietly reworded, because a verification step that cries wolf on a
+--    good result gets ignored on a bad one.
+--
+--    THE RULE: anon_can_execute must be false for every definer function
+--    EXCEPT telemetry_ingest_batch(jsonb). Any other true is a finding.
+--
+--    Result of the first run, 2026-09-08:
+--      telemetry_ingest_batch(rows jsonb)  anon=true   <- by design
+--      telemetry_prune()                   anon=false  <- BUG-213 fixed
+--      (the 8 alerts functions did not appear: not deployed, so skipped)
+--
+--    Confirmed independently with the shipped anon key and no session, which
+--    is how the bug was found in the first place:
+--      before  GET /rest/v1/rpc/telemetry_prune -> 405 25006 (permission PASSED)
+--      after   GET /rest/v1/rpc/telemetry_prune -> 401 42501 permission denied
 -- ============================================================================
 select
   p.proname                                                as function_name,
