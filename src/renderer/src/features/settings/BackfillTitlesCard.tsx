@@ -196,10 +196,21 @@ export function BackfillTitlesCard(): React.JSX.Element | null {
 
       {summary && (
         <div className="flex flex-col items-start gap-1.5">
+          {/* "Named 0 of 0 before you stopped it" is what the general sentence
+              produced when Stop landed inside the very first request — which is
+              now the common case, because cancel reaches the AI call (BUG-235)
+              and lands in under a second. Accurate, and it reads like a
+              malfunction. */}
           <p className="text-[13px] text-positive">
-            Named <span className="tabular-nums">{summary.titled}</span> of{' '}
-            <span className="tabular-nums">{summary.attempted}</span>
-            {summary.stoppedEarly ? ' before you stopped it.' : '.'}
+            {summary.attempted === 0 && summary.stoppedEarly ? (
+              'Stopped before any call was named.'
+            ) : (
+              <>
+                Named <span className="tabular-nums">{summary.titled}</span> of{' '}
+                <span className="tabular-nums">{summary.attempted}</span>
+                {summary.stoppedEarly ? ' before you stopped it.' : '.'}
+              </>
+            )}
           </p>
           {summary.failures.length > 0 && (
             <>
