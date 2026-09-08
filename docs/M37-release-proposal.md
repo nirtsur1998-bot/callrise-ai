@@ -10,10 +10,23 @@ cut — so this release carries all three milestones.
 `git merge-tree` against the merge base produces **zero conflict markers** — it is a fast-forward.
 Gate on the branch tip (`dd505f8`): **GREEN, 400 test files, 3802 tests, typecheck exit 0.**
 
-**Not yet done, and it is the standard this project holds:** the gate has not been run on `main`'s
-own checkout after `npm ci` from `main`'s lockfile, and CI has not run on the merge commit. Both
-should happen before a tag. On a fast-forward the tree is identical, so this is a formality — but a
-formality that has caught a lockfile drift before.
+### DONE, 2026-09-08 — merged, gated on main's own checkout, installer built
+
+- **Merged.** `origin/main` `edc65da → 3d12ce5`, fast-forward. `git diff` between `main` and the
+  branch tip is empty: identical trees.
+- **Gate on `main`'s OWN checkout**, in the `callrise-release` worktree, after a full `npm ci` from
+  `main`'s lockfile — not the branch's `node_modules`: **GREEN, 400 test files, 3809 tests,
+  typecheck exit 0.**
+- **Installer built from that same clean checkout**, tree clean at build time, so the walked build
+  is the tagged tree rather than a branch's:
+
+  | file | size | sha256 |
+  |---|---|---|
+  | `CallRise AI Windows.exe` | 170 MB | `2a5e0de02664257b9ddfeeaf13add2145d618d53aad8d6d8d464410b50bf3069` |
+  | `CallRise AI Windows Portable.exe` | 334 MB | `49b46105a5ec5797b0b351e93ae209b77727c9c4ef6d5e1f80f8d30d62dd7c76` |
+
+**Still not done:** CI has not run on the merge commit, and the VM walk has not happened. Both
+before a tag.
 
 ---
 
