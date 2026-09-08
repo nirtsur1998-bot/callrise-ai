@@ -17,7 +17,7 @@
 //   a file that is neither, or is
 //   unreadable                     -> NOT gone (the protected case)
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isCallGoneFromDisk } from '../memory-runtime'
