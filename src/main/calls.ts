@@ -17,6 +17,7 @@ import {
   setCallCommitments,
   setCallDealIntelligence,
   setCallTitle,
+  isDefaultCallTitle,
   setCallContact,
   setCallDeal,
   setCallCallType,
@@ -66,6 +67,11 @@ import { selectFocusSkill, type FocusSkillState } from './coaching/focus-skill'
 import { loadFocusSkill, saveFocusSkill } from './coaching/focus-skill-fs'
 import { getJobManager } from './jobs/instance'
 import { createScanTally } from './objection-scan-tally'
+import {
+  runTitleBackfill,
+  titleBackfillResultRef,
+  type TitleBackfillSummary
+} from './title-backfill'
 import { beginSave, currentTranscript, endCall, endSave, liveCallInfo } from './live/live-transcript'
 import type { Job } from './jobs/types'
 
@@ -90,6 +96,11 @@ const miningInFlight = new Set<string>()
  *  Registered once, from registerCalls(), which always runs after main has
  *  created and set the shared JobManager (see main/index.ts). */
 const SCAN_JOB_TYPE = 'objections:scanPastCalls'
+/** BUG-232 — the manual "give my untitled calls a title" backfill. A JOB and
+ *  not a loop in the renderer, for the reason every backfill here is one: it
+ *  is the rep's AI budget, one call at a time, and they must be able to watch
+ *  it and stop it. Never runs automatically. */
+const TITLE_BACKFILL_JOB_TYPE = 'calls:backfillTitles'
 const SUMMARIZE_JOB_TYPE = 'calls:summarize'
 const COACH_JOB_TYPE = 'calls:coach'
 const FIND_COMMITMENTS_JOB_TYPE = 'calls:findCommitments'
@@ -1103,6 +1114,131 @@ export function registerCalls(): void {
     }
   })
 
+  /**
+   * Title ONE call and save it. The single implementation, used by both the
+   * `calls:generateTitle` IPC (the automatic path at call end, and the manual
+   * button) and the backfill job below.
+   *
+   * BUG-228 — the reason travels, and every failure says so out loud. This
+   * used to be a bare `{ ok: false }` returned from three separate places, so
+   * "the transcript was empty", "the provider refused" and "the save failed"
+   * were one indistinguishable outcome, logged nowhere. Together with the
+   * renderer's `.catch(() => {})` that is how five weeks of silent failure
+   * hid: the user saw a default title and had four equally plausible
+   * explanations, none of them checkable.
+   */
+  async function titleOneCall(callId: string): Promise<GenerateTitleResult> {
+    try {
+      const call = await getCall(callsDir(), callId)
+      if (!call?.segments?.length) {
+        console.warn(`[title] ${callId}: no transcript to title`)
+        return { ok: false, reason: 'no-transcript' }
+      }
+      const result = await generateCallTitle(speechSegments(call.segments))
+      if (!result.ok) {
+        console.warn(
+          `[title] ${callId}: ${result.reason}${result.detail ? ` — ${result.detail}` : ''}`
+        )
+        return result
+      }
+      const saved = await setCallTitle(callsDir(), callId, result.title)
+      if (!saved) {
+        console.warn(`[title] ${callId}: generated "${result.title}" but the call would not save`)
+        return { ok: false, reason: 'save-failed' }
+      }
+      scheduleBackup() // the new title reaches the cloud like any other metadata edit
+      return { ok: true, title: saved.title }
+    } catch (err) {
+      console.error(`[title] ${callId}: unexpected failure`, err)
+      return {
+        ok: false,
+        reason: 'ai-failed',
+        detail: err instanceof Error ? err.message : String(err)
+      }
+    }
+  }
+
+  // ── BUG-232: the title backfill ──────────────────────────────────────────
+  //
+  // 128 calls on the founder's machine carry the date-based placeholder,
+  // because the auto-title preference silently resolved to false for five
+  // weeks (BUG-227). Once titling works, those calls are still untitled, and
+  // nothing in the app would ever revisit them.
+  //
+  // AN OFFER, NOT A BACKGROUND JOB — founder's decision, and the right one:
+  // "128 untitled calls at roughly one cheap call each is a decision I want to
+  // make deliberately." So: the count is shown first, one action starts it,
+  // and it stops partway on request. It is never enqueued automatically, by
+  // anything, ever.
+  //
+  // AND IT REPORTS ITS FAILURES INDIVIDUALLY. "If 20 of 128 fail, I want to
+  // see which and why rather than ending with 108 titles and no explanation."
+  // That is the direct lesson of this bug: an aggregate count is exactly what
+  // hid five weeks of silence. Each failure carries the call, the reason and
+  // the provider's own words, in resultData.
+  getJobManager().registerType<Record<string, never>, TitleBackfillSummary>({
+    type: TITLE_BACKFILL_JOB_TYPE,
+    lane: 'BATCH',
+    titleFor: () => 'Naming your untitled calls',
+    cancellable: true,
+    executor: {
+      kind: 'inline-async',
+      run: async (_input, handle) => {
+        // Recomputed HERE rather than passed in, so a Cancel-then-Start does
+        // the right thing and a call titled since the estimate is skipped
+        // rather than re-titled. Same resumability the objection scan gets
+        // from recomputing eligibility per run.
+        const eligible = (await listCalls(callsDir())).filter(
+          (c) => isDefaultCallTitle(c.title) && (c.preview ?? '').trim().length > 0
+        )
+        // The loop itself lives in title-backfill.ts as pure logic, so
+        // cancellation and the failure list are covered by tests rather than
+        // only by this having been read. Same precedent as the objection
+        // scan's tally. Everything below is wiring.
+        return runTitleBackfill(
+          eligible.map((c) => ({ id: c.id, title: c.title })),
+          {
+            isAborted: () => handle.signal.aborted,
+            titleOne: titleOneCall,
+            onProgress: (itemsDone, itemsTotal) =>
+              handle.reportProgress({ mode: 'determinate', itemsDone, itemsTotal })
+          }
+        )
+      }
+    },
+    // The one-line version the Activity Center shows. Deliberately names the
+    // failures rather than only the successes — "108 titled" alone is the
+    // shape of report this milestone exists to stop writing.
+    resultRefFor: titleBackfillResultRef
+  })
+
+  /** How many calls still carry the date-based placeholder AND have something
+   *  to read. Shown before the user commits to spending the AI calls. */
+  ipcMain.handle('calls:titleBackfillEstimate', async (): Promise<{ eligibleCount: number }> => {
+    const calls = await listCalls(callsDir())
+    return {
+      eligibleCount: calls.filter(
+        (c) => isDefaultCallTitle(c.title) && (c.preview ?? '').trim().length > 0
+      ).length
+    }
+  })
+
+  ipcMain.handle('calls:backfillTitles', async (): Promise<{ ok: boolean; jobId?: string }> => {
+    const manager = getJobManager()
+    // A second click hands back the SAME job rather than queueing a redundant
+    // one behind it — the objection scan's rule, for the same reason: this
+    // spends money.
+    const already = manager
+      .list()
+      .find(
+        (j: Job) =>
+          j.type === TITLE_BACKFILL_JOB_TYPE && (j.state === 'running' || j.state === 'queued')
+      )
+    if (already) return { ok: true, jobId: already.id }
+    const job = manager.enqueue(TITLE_BACKFILL_JOB_TYPE, {})
+    return { ok: true, jobId: job.id }
+  })
+
   // How many past calls are eligible (have a transcript, not yet mined) —
   // shown before the user confirms the manual scan below.
   ipcMain.handle('objections:scanEstimate', async (): Promise<{ eligibleCount: number }> => {
@@ -1174,40 +1310,13 @@ export function registerCalls(): void {
   )
 
   // AI Note Taker's auto-title feature: generate + save a title in one step.
+  // Thin on purpose — titleOneCall() above is the one implementation, shared
+  // with the backfill job, so the two can never drift into disagreeing about
+  // what "titling a call" means.
   ipcMain.handle(
     'calls:generateTitle',
     async (_event, callId: string): Promise<GenerateTitleResult> => {
-      // BUG-228 — the reason travels now, and every failure says so out loud.
-      // This used to return a bare `{ ok: false }` from three separate places,
-      // so "the transcript was empty", "the provider refused" and "the save
-      // failed" were one indistinguishable outcome, logged nowhere. Together
-      // with the renderer's `.catch(() => {})` that is how five weeks of
-      // silent failure hid: the user saw a default title and had four equally
-      // plausible explanations, none of them checkable.
-      try {
-        const call = await getCall(callsDir(), callId)
-        if (!call?.segments?.length) {
-          console.warn(`[title] ${callId}: no transcript to title`)
-          return { ok: false, reason: 'no-transcript' }
-        }
-        const result = await generateCallTitle(speechSegments(call.segments))
-        if (!result.ok) {
-          console.warn(
-            `[title] ${callId}: ${result.reason}${result.detail ? ` — ${result.detail}` : ''}`
-          )
-          return result
-        }
-        const saved = await setCallTitle(callsDir(), callId, result.title)
-        if (!saved) {
-          console.warn(`[title] ${callId}: generated "${result.title}" but the call would not save`)
-          return { ok: false, reason: 'save-failed' }
-        }
-        scheduleBackup() // the new title reaches the cloud like any other metadata edit
-        return { ok: true, title: saved.title }
-      } catch (err) {
-        console.error(`[title] ${callId}: unexpected failure`, err)
-        return { ok: false, reason: 'ai-failed' }
-      }
+      return titleOneCall(callId)
     }
   )
 }

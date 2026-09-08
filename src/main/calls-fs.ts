@@ -575,6 +575,23 @@ export function isSafeId(id: unknown): id is string {
   return typeof id === 'string' && ID_RE.test(id)
 }
 
+/** The prefix every auto-generated placeholder title starts with. Exported so
+ *  "has this call never been titled?" is answered against the thing that
+ *  PRODUCES the placeholder rather than against a hand-copied regex.
+ *
+ *  BUG-232 — there is no stored flag saying whether a title was generated,
+ *  typed, or defaulted, so matching the prefix is the honest available test.
+ *  A user who deliberately types a title beginning "Call · " is offered a
+ *  regeneration they do not need, which costs them nothing; the alternative
+ *  (a flag) would have to be back-filled onto 191 existing calls to be worth
+ *  anything. */
+export const DEFAULT_TITLE_PREFIX = 'Call · '
+
+/** True when this title is still the date-based placeholder. */
+export function isDefaultCallTitle(title: string | undefined | null): boolean {
+  return typeof title === 'string' && title.startsWith(DEFAULT_TITLE_PREFIX)
+}
+
 function formatTitle(date: Date): string {
   const when = date.toLocaleString('en-US', {
     month: 'short',
@@ -583,7 +600,10 @@ function formatTitle(date: Date): string {
     hour: 'numeric',
     minute: '2-digit'
   })
-  return `Call · ${when}`
+  // Built FROM the exported prefix, so isDefaultCallTitle() cannot drift away
+  // from the thing it is meant to recognise. The two used to be a literal here
+  // and a hand-copied regex in the renderer.
+  return `${DEFAULT_TITLE_PREFIX}${when}`
 }
 
 function sanitizeSegments(value: unknown): CallSegment[] {

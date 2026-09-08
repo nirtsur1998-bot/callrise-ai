@@ -1113,6 +1113,13 @@ export interface CallsApi {
    *  explicitly clicks the button. If a scan is already running/queued,
    *  hands back that job's id instead of starting a second one. */
   scanPastCallsForObjections: () => Promise<{ ok: boolean; jobId?: string }>
+  /** BUG-232 — how many calls still carry the date-based placeholder AND
+   *  have a transcript to read. Shown BEFORE the rep commits the AI calls. */
+  titleBackfillEstimate: () => Promise<{ eligibleCount: number }>
+  /** BUG-232 — start naming the untitled calls. Enqueues a cancellable BATCH
+   *  job and returns immediately; track it through window.api.jobs, and read
+   *  its resultData for the per-call failure list. Never runs automatically. */
+  backfillTitles: () => Promise<{ ok: boolean; jobId?: string }>
   /** AI Note Taker's auto-title feature: generate + save a title in one step. */
   generateTitle: (
     callId: string

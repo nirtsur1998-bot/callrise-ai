@@ -14,6 +14,7 @@ import {
   getSeenApps
 } from './prefs'
 import { useAppSettings } from './useAppSettings'
+import { BackfillTitlesCard } from './BackfillTitlesCard'
 
 export function AINoteTakerSection(): React.JSX.Element {
   const [autoStart, setAutoStart] = useAutoStartListening()
@@ -114,6 +115,12 @@ export function AINoteTakerSection(): React.JSX.Element {
                 />
               }
             />
+            {/* BUG-232 — the offer sits directly under the switch that creates
+                the backlog, because that is where someone is thinking about
+                titles. Renders nothing when there is nothing to name. */}
+            <div className="mt-3">
+              <BackfillTitlesCard />
+            </div>
           </div>
           <div className="pt-4">
             <SettingRow

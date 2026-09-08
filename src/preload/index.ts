@@ -165,6 +165,8 @@ const api = {
       ipcRenderer.invoke('objections:enqueue', callId, candidates),
     objectionScanEstimate: () => ipcRenderer.invoke('objections:scanEstimate'),
     scanPastCallsForObjections: () => ipcRenderer.invoke('objections:scanPastCalls'),
+    titleBackfillEstimate: () => ipcRenderer.invoke('calls:titleBackfillEstimate'),
+    backfillTitles: () => ipcRenderer.invoke('calls:backfillTitles'),
     generateTitle: (callId: string) => ipcRenderer.invoke('calls:generateTitle', callId),
     postCallBrief: (callId: string) => ipcRenderer.invoke('calls:postCallBrief', callId),
     setContact: (callId: string, contactId: string | null) =>
