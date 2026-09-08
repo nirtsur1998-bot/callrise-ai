@@ -12,6 +12,37 @@ import {
   type AIValidateKeyResult
 } from '../types'
 
+/**
+ * BUG-234 — which Claude models take a schema as an OUTPUT FORMAT rather than
+ * as a tool they are forced to call.
+ *
+ * WHY THIS MATTERS AT ALL. Every structured feature in this app asks for a
+ * forced single tool call: `AICompletionRequest.tool` is singular (types.ts)
+ * and every adapter pins `tool_choice` to that one name. The app has never
+ * used tool CHOICE — it has been spelling structured output through the API
+ * surface providers guarantee least. Measured consequence: 7 of 8 title
+ * failures on 2026-09-08 were a model declining to emit a tool call.
+ * Structured output is constrained-decoded, so the schema is enforced rather
+ * than requested.
+ *
+ * VERIFIED AGAINST THE INSTALLED SDK, not a docs page: `output_config.format`
+ * is on the non-beta MessageCreateParams in @anthropic-ai/sdk 0.107.0, and the
+ * response carries `parsed_output`.
+ *
+ * A PREFIX ALLOWLIST, deliberately, and the direction of its rot is the point.
+ * A model missing from this list keeps the forced-tool path — exactly today's
+ * behaviour. So a stale list costs reliability we already lack; it can never
+ * send a schema to a model that cannot honour it. That is the safe direction
+ * for a list that will inevitably fall behind (species 90's lesson pointed at
+ * a capability list rather than a sentence).
+ */
+const STRUCTURED_OUTPUT_MODEL_PREFIXES = ['claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5']
+
+export function supportsStructuredOutput(model: string | undefined): boolean {
+  if (!model) return false
+  return STRUCTURED_OUTPUT_MODEL_PREFIXES.some((p) => model.startsWith(p))
+}
+
 // Same two tiers every call site already used before this migration —
 // preserved exactly, just centralized. Haiku for latency-sensitive/cheap
 // work, Sonnet for anything that can afford to think longer.
@@ -135,8 +166,24 @@ export class AnthropicProvider implements AIProvider {
     this.client = new Anthropic({ apiKey })
   }
 
-  private toolChoice(req: AICompletionRequest): Anthropic.MessageCreateParams['tool_choice'] {
-    return req.tool ? { type: 'tool', name: req.tool.name } : undefined
+  private toolChoice(
+    req: AICompletionRequest,
+    model: string
+  ): Anthropic.MessageCreateParams['tool_choice'] {
+    // BUG-234 — omitted when structured output carries the schema instead.
+    // Sending both would ask for a tool call and a JSON format at once.
+    if (!req.tool || supportsStructuredOutput(model)) return undefined
+    return { type: 'tool', name: req.tool.name }
+  }
+
+  /** BUG-234 — the schema, sent as an OUTPUT FORMAT rather than as a tool the
+   *  model is forced to call. Same schema object either way; the difference is
+   *  which guarantee the provider applies to it. */
+  private outputConfig(req: AICompletionRequest, model: string): Anthropic.OutputConfig | undefined {
+    if (!req.tool || !supportsStructuredOutput(model)) return undefined
+    return {
+      format: { type: 'json_schema', schema: req.tool.inputSchema as Record<string, unknown> }
+    }
   }
 
   private messages(req: AICompletionRequest): Anthropic.MessageParam[] {
@@ -180,8 +227,8 @@ export class AnthropicProvider implements AIProvider {
     return messages
   }
 
-  private tools(req: AICompletionRequest): Anthropic.Tool[] | undefined {
-    if (!req.tool) return undefined
+  private tools(req: AICompletionRequest, model: string): Anthropic.Tool[] | undefined {
+    if (!req.tool || supportsStructuredOutput(model)) return undefined
     return [
       {
         name: req.tool.name,
@@ -205,8 +252,9 @@ export class AnthropicProvider implements AIProvider {
           temperature: req.temperature,
           system: req.system,
           messages: this.messages(req),
-          tools: this.tools(req),
-          tool_choice: this.toolChoice(req)
+          tools: this.tools(req, model),
+          tool_choice: this.toolChoice(req, model),
+          output_config: this.outputConfig(req, model)
         },
         // BUG-058/BUG-059 — always the literal 0, never a variable. Anthropic's own
         // sleep() DOES accept a signal (unlike OpenAI's), but the retry call
@@ -218,8 +266,19 @@ export class AnthropicProvider implements AIProvider {
       )
       const usage = usageFrom(model, response.usage.input_tokens, response.usage.output_tokens)
       if (req.tool) {
+        // BUG-234 — the structured-output path first. Constrained decoding
+        // means `parsed_output` is the schema-valid object, with no tool call
+        // involved. The result SHAPE is unchanged (`toolInput`), which is why
+        // none of the 28 call sites had to move.
+        const parsed = (response as { parsed_output?: unknown }).parsed_output
+        if (parsed && typeof parsed === 'object') {
+          return { text: '', toolInput: parsed as Record<string, unknown>, model, usage }
+        }
         const block = response.content.find((b) => b.type === 'tool_use')
         if (!block || block.type !== 'tool_use') {
+          // Reached when a model on the structured-output path returned a bare
+          // text block instead. Left as the same error it always was — the
+          // caller's own fallback (see call-title.ts) decides what to do.
           throw new AIProviderError(
             'failed',
             'The model did not return the expected structured output.',
@@ -241,8 +300,14 @@ export class AnthropicProvider implements AIProvider {
     const policy = LATENCY_POLICY[req.purpose]
     const model = req.model ?? MODEL_BY_PURPOSE[req.purpose]
     const client = this.client
-    const tools = this.tools(req)
-    const toolChoice = this.toolChoice(req)
+    // BUG-234 — the STREAMING path deliberately keeps the forced-tool
+    // behaviour: passing `model` here means supportsStructuredOutput() is
+    // consulted, and the one streaming consumer (coaching-chat) reads text
+    // rather than toolInput, so there is nothing for a schema to constrain.
+    // Threaded anyway so the two paths cannot drift into disagreeing about
+    // which model they are talking to.
+    const tools = this.tools(req, model)
+    const toolChoice = this.toolChoice(req, model)
     // AUDIT FIX (2026-08-24) — hoisted so the generator below can use it.
     //
     // stream() built its messages inline as
