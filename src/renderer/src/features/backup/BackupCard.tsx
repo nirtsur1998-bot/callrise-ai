@@ -166,7 +166,12 @@ export function BackupCard(): React.JSX.Element {
     void updateSettings({ syncScope: { [key]: value } })
   }
 
-  const syncedCount = OPTIONAL_ITEMS.filter((i) => syncScope[i.key]).length
+  // BUG-214 — the count has to agree with the rows. A category whose upload is
+  // blocked by another toggle is not synced, and counting it made "2 of 7
+  // synced" true of the switches and false of the account.
+  const syncedCount = OPTIONAL_ITEMS.filter(
+    (i) => syncScope[i.key] && !(i.key === 'salesBrain' && !syncScope.transcripts)
+  ).length
 
   // BUG-203 — categories the user switched OFF whose removal has not succeeded
   // yet. Named with the same words as the toggles above, so a user reads back
@@ -274,19 +279,39 @@ export function BackupCard(): React.JSX.Element {
           Optional — {syncedCount} of {OPTIONAL_ITEMS.length} synced
         </p>
         <ul className="space-y-1.5">
-          {OPTIONAL_ITEMS.map(({ key, icon: Icon, label }) => (
-            <li key={key} className="flex items-center justify-between gap-2 text-[13px]">
-              <span className="flex items-center gap-2 text-muted">
-                <Icon className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
-                {label}
-              </span>
-              <ToggleSwitch
-                checked={syncScope[key]}
-                onChange={(v) => setScope(key, v)}
-                label={`Sync ${label} to the cloud`}
-              />
-            </li>
-          ))}
+          {OPTIONAL_ITEMS.map(({ key, icon: Icon, label }) => {
+            // BUG-214 — a row whose switch is ON while nothing is being
+            // uploaded is the readout lying, and this one was introduced by
+            // the fix directly above it: the Sales Brain push now requires
+            // BOTH its own toggle and the transcripts toggle (backup.ts), and
+            // this list was not told. On a fresh profile that is the SHIPPED
+            // state — salesBrain defaults on, transcripts defaults off — so
+            // the card read "Sales Brain memories: on" while the brain had
+            // never left the machine and never would.
+            //
+            // Blocked rather than forced off: the user's preference is real
+            // and is honoured the moment transcripts goes on. What is wrong is
+            // showing a preference as if it were an outcome.
+            const blocked = key === 'salesBrain' && !syncScope.transcripts
+            return (
+              <li key={key} className="flex items-center justify-between gap-2 text-[13px]">
+                <span className="flex items-center gap-2 text-muted">
+                  <Icon className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
+                  {label}
+                  {blocked && (
+                    <span className="text-[11px] text-faint" data-testid="scope-blocked">
+                      not syncing while transcripts are off
+                    </span>
+                  )}
+                </span>
+                <ToggleSwitch
+                  checked={syncScope[key] && !blocked}
+                  onChange={(v) => setScope(key, v)}
+                  label={`Sync ${label} to the cloud`}
+                />
+              </li>
+            )
+          })}
           <li className="flex items-center gap-2 text-[13px] text-muted">
             <Lock className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
             Your Google Calendar connection — stays only on this device
