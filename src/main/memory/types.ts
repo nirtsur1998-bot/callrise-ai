@@ -185,6 +185,18 @@ export type MemoryEvidence =
        *  existed has none, and the temporal backfill resolves the call's date
        *  from the calls store instead. */
       at?: string
+      /** BUG-215 — set when the CALL this quote came from was deleted. The
+       *  quote is blanked and this records when, so the evidence trail stays
+       *  honest: the fact keeps its episode (distinctEpisodeCount keys on
+       *  callId, not on the quote, so promotion thresholds and decay
+       *  resistance are unchanged) while the buyer's words are gone.
+       *
+       *  Blanking rather than removing the ENTRY is deliberate. Removing it
+       *  would silently drop a memory sitting at the 2-episode promotion
+       *  threshold back to 1, demoting a fact as a side effect of deleting a
+       *  recording — the user would lose knowledge they never asked to lose,
+       *  which is the whole reason this option was chosen over deletion. */
+      redactedAt?: string
     }
   | { type: 'reflection'; memoryIds: string[] }
 

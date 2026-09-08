@@ -50,6 +50,8 @@ import { generateCrmNote } from './crm-notes'
 import { resolveAndSaveIdentities } from './speaker-identity/resolve-for-call'
 import { runFullAutoContactIntelligence } from './contact-intelligence-ipc'
 import { enqueueMemoryExtraction } from './memory/memory-extraction-job'
+import { getMemoryDb } from './memory/memory-runtime'
+import { redactCallQuotes } from './memory/memories-store'
 import {
   computePersonalTalkRatioTarget,
   computePersonalQuestionTarget
@@ -538,6 +540,34 @@ export function registerCalls(): void {
     // could delete the evidence and then fail to delete the call.
     await purgeCompanionFiles(callsDir(), id).catch(() => 0)
     await purgeJournalForCall(id).catch(() => 0)
+    // BUG-215 — the fourth store, and the one that held the words longest.
+    // A Sales Brain memory's evidence is a verbatim span of this transcript
+    // stamped with this call id, so the same guarantee the three purges above
+    // exist for was false here too. Measured on the founder's machine before
+    // the fix: 25 of the 43 cited calls had already been deleted and their
+    // buyer speech was still in the brain.
+    //
+    // The FACT survives, only the quote goes. Deleting the memories would cost
+    // a median of one fact per call and up to five, and the user deleted a
+    // recording, not the knowledge.
+    //
+    // Best-effort and last, like the others: if Sales Brain is off or the DB
+    // will not open there is nothing to redact, and a failure here must not
+    // undo a deletion that has already happened.
+    try {
+      const db = getMemoryDb()
+      if (db) {
+        const r = redactCallQuotes(db, id)
+        if (r.quotesRedacted > 0) {
+          console.log(
+            `[calls] deleted ${id}: redacted ${r.quotesRedacted} quote(s) ` +
+              `(${r.charactersRemoved} chars) across ${r.memoriesTouched} memories`
+          )
+        }
+      }
+    } catch (err) {
+      console.error('[calls] Sales Brain quote redaction failed:', err)
+    }
     scheduleBackup() // propagate the deletion tombstone
     return res
   })

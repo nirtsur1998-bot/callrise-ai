@@ -15,6 +15,8 @@ import {
   temporalBackfillRecord
 } from './temporal-backfill'
 import { configureEmbeddingsCacheDir, warmUpEmbeddings } from './embeddings'
+import { getMeta, listMemories, redactOrphanedQuotes, setMeta } from './memories-store'
+import { listCalls } from '../calls-fs' 
 import { isSalesBrainEnabled } from '../app-settings'
 import { runNightlyConsolidation } from './consolidation'
 import { getScheduler } from '../jobs/scheduler-instance'
@@ -152,7 +154,119 @@ export async function initSalesBrain(): Promise<{ ok: boolean; detail: string }>
   // never a matter of trust.
   void runTemporalBackfillOnce(handle, join(userDataDir, 'calls'))
 
+  // BUG-215's BACKLOG. Redact quotes whose call was deleted before the
+  // delete-time redaction existed. Same one-shot shape as the backfill above,
+  // same reasons: it reads the calls directory, so startup must not wait on
+  // it, and it cannot live in a migration because the calls store is outside
+  // memory.db.
+  void runQuoteRedactionSweepOnce(handle, join(userDataDir, 'calls'))
+
   return lastInitResult
+}
+
+/** memory_meta key holding the sweep's record. Its presence is what stops the
+ *  sweep re-running; its CONTENTS are the counts, so "it ran and found
+ *  nothing" and "it never ran" are different states rather than both being
+ *  silence. */
+const QUOTE_SWEEP_KEY = 'bug215.quoteSweep'
+
+export interface QuoteSweepRecord {
+  status: 'ran' | 'skipped'
+  at: string
+  reason?: string
+  callsSwept?: number
+  memoriesTouched?: number
+  quotesRedacted?: number
+  charactersRemoved?: number
+  memoriesTotal?: number
+}
+
+export function quoteSweepRecord(handle: Database.Database): QuoteSweepRecord | null {
+  try {
+    const raw = getMeta(handle, QUOTE_SWEEP_KEY)
+    return raw ? (JSON.parse(raw) as QuoteSweepRecord) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * One-shot: every transcript quote whose call no longer exists is redacted.
+ *
+ * These are calls the user deleted under a dialog promising the buyer's words
+ * went with them, before the delete path knew about the Sales Brain. On the
+ * founder's own store when this was written, 25 of the 43 cited calls were
+ * already gone and their speech was still here.
+ *
+ * Follows runTemporalBackfillOnce exactly, including its two handle checks:
+ * the connection can be replaced or closed while the calls directory is being
+ * read, and rows must never be written through a stale one.
+ */
+async function runQuoteRedactionSweepOnce(
+  handle: Database.Database,
+  callsDir: string
+): Promise<void> {
+  try {
+    if (!handle.open) return
+    if (quoteSweepRecord(handle)) return
+
+    const summaries = await listCalls(callsDir, { includeDeleted: false })
+    const liveCallIds = new Set(summaries.map((c) => c.id))
+
+    if (!handle.open) return
+    if (db !== handle) {
+      setMeta(
+        handle,
+        QUOTE_SWEEP_KEY,
+        JSON.stringify({
+          status: 'skipped',
+          at: new Date().toISOString(),
+          reason: 'connection replaced during startup'
+        } satisfies QuoteSweepRecord)
+      )
+      return
+    }
+
+    // A calls directory that reads as EMPTY would orphan every quote in the
+    // store and redact the lot. That is the one way this sweep could destroy
+    // something it should not, so it refuses rather than guesses: an empty
+    // list with memories present means the read failed or the store moved,
+    // not that the user deleted every call.
+    const total = listMemories(handle, { statuses: ['active', 'hypothesis', 'invalidated'] }).length
+    if (summaries.length === 0 && total > 0) {
+      setMeta(
+        handle,
+        QUOTE_SWEEP_KEY,
+        JSON.stringify({
+          status: 'skipped',
+          at: new Date().toISOString(),
+          reason: 'calls directory read as empty while memories exist — refusing to sweep',
+          memoriesTotal: total
+        } satisfies QuoteSweepRecord)
+      )
+      console.error('[sales-brain] quote sweep refused: no calls found but memories exist')
+      return
+    }
+
+    const r = redactOrphanedQuotes(handle, liveCallIds)
+    const record: QuoteSweepRecord = {
+      status: 'ran',
+      at: new Date().toISOString(),
+      callsSwept: r.callsSwept,
+      memoriesTouched: r.memoriesTouched,
+      quotesRedacted: r.quotesRedacted,
+      charactersRemoved: r.charactersRemoved,
+      memoriesTotal: total
+    }
+    setMeta(handle, QUOTE_SWEEP_KEY, JSON.stringify(record))
+    console.log(
+      `[sales-brain] BUG-215 quote sweep: ${r.callsSwept} deleted call(s), ` +
+        `${r.quotesRedacted} quote(s) redacted (${r.charactersRemoved} chars) ` +
+        `across ${r.memoriesTouched} memories; ${total} memories total, all kept`
+    )
+  } catch (err) {
+    console.error('[sales-brain] quote redaction sweep failed:', err)
+  }
 }
 
 async function runTemporalBackfillOnce(handle: Database.Database, callsDir: string): Promise<void> {

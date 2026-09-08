@@ -666,8 +666,21 @@ function EvidenceModal({
             {evidence.evidence.map((e, i) =>
               e.type === 'transcript' ? (
                 <div key={i} className="rounded-xl border border-line-soft bg-elevated p-3">
-                  <p className="text-[12.5px] italic text-muted">&ldquo;{e.quote}&rdquo;</p>
-                  {onOpenCall && !e.callId.includes(':') && (
+                  {/* BUG-215 — a redacted entry must not render empty quote
+                      marks over a dead link. That is the hollow-green shape in
+                      the one widget built to prove evidence: a card asserting
+                      it has a source and then showing nothing. The fact is
+                      still real and still supported by an episode; what is
+                      gone is the wording, because the call was deleted. */}
+                  {e.redactedAt ? (
+                    <p className="text-[12.5px] text-faint">
+                      The call this came from was deleted, so its words were removed. The fact
+                      itself is still here.
+                    </p>
+                  ) : (
+                    <p className="text-[12.5px] italic text-muted">&ldquo;{e.quote}&rdquo;</p>
+                  )}
+                  {onOpenCall && !e.redactedAt && !e.callId.includes(':') && (
                     <button
                       type="button"
                       onClick={() => {

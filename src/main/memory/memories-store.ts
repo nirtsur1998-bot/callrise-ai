@@ -647,6 +647,97 @@ export function listMemoriesByCallId(db: Database.Database, callId: string): Mem
 }
 
 /**
+ * BUG-215 — the call is gone, so its words go with it. The FACT stays.
+ *
+ * `deleteCall` promises, in its own words, that "a deleted call must not
+ * retain buyer words." It already purges the objection queue, the conflict
+ * copies and the call journal for exactly that reason. The Sales Brain was the
+ * one store it never reached, and a memory's evidence is a verbatim span of
+ * the transcript stamped with that call's id.
+ *
+ * MEASURED ON THE FOUNDER'S OWN STORE before this was written: 73 memories,
+ * 81 transcript evidence entries, 5,532 characters of verbatim buyer speech —
+ * and 25 of the 43 cited calls were ALREADY DELETED. The backlog was real and
+ * present, not hypothetical, which is what decided the design.
+ *
+ * WHY REDACT RATHER THAN DELETE THE MEMORY. Deleting every memory a call
+ * taught costs a median of one fact per call and up to five, and not one of
+ * those facts is something the user chose to delete: they deleted a recording
+ * and would be charged learning. Redaction satisfies the promise on 68 of 69
+ * rows in the measured store without destroying a single fact.
+ *
+ * WHY THE ENTRY SURVIVES, BLANKED. `distinctEpisodeCount` keys on
+ * `call:<callId>` and never reads the quote, so promotion thresholds and decay
+ * resistance keep their exact values. Removing the entry instead would demote
+ * a memory sitting at the 2-episode threshold — a fact quietly weakened as a
+ * side effect of deleting a recording.
+ */
+export function redactCallQuotes(
+  db: Database.Database,
+  callId: string
+): { memoriesTouched: number; quotesRedacted: number; charactersRemoved: number } {
+  const at = new Date().toISOString()
+  let memoriesTouched = 0
+  let quotesRedacted = 0
+  let charactersRemoved = 0
+
+  const redact = db.transaction(() => {
+    for (const m of listMemoriesByCallId(db, callId)) {
+      let touched = false
+      const next = m.evidence.map((e) => {
+        if (e.type !== 'transcript' || e.callId !== callId) return e
+        if (!e.quote) return e // already redacted, or never had one
+        touched = true
+        quotesRedacted++
+        charactersRemoved += e.quote.length
+        return { ...e, quote: '', redactedAt: at }
+      })
+      if (!touched) continue
+      memoriesTouched++
+      db.prepare('UPDATE memories SET evidence = ? WHERE id = ?').run(JSON.stringify(next), m.id)
+    }
+  })
+  redact()
+  return { memoriesTouched, quotesRedacted, charactersRemoved }
+}
+
+/**
+ * BUG-215's BACKLOG. Redact every transcript quote whose call no longer
+ * exists, for calls deleted before the fix above existed.
+ *
+ * `liveCallIds` is the set of call ids the calls store still holds. Anything
+ * cited by a memory and absent from it was deleted at some point under a
+ * dialog that promised the buyer's words went with it.
+ *
+ * Chat and onboarding sources are deliberately untouched: their ids are
+ * prefixed (`assistant:`, `onboarding:`) and they are not calls, so no
+ * deletion promise was ever made about them here.
+ */
+export function redactOrphanedQuotes(
+  db: Database.Database,
+  liveCallIds: ReadonlySet<string>
+): { memoriesTouched: number; quotesRedacted: number; charactersRemoved: number; callsSwept: number } {
+  const orphaned = new Set<string>()
+  for (const m of listMemories(db, { statuses: ['active', 'hypothesis', 'invalidated'] })) {
+    for (const e of m.evidence) {
+      if (e.type !== 'transcript' || !e.quote) continue
+      if (e.callId.includes(':')) continue // assistant:/onboarding: are not calls
+      if (!liveCallIds.has(e.callId)) orphaned.add(e.callId)
+    }
+  }
+  let memoriesTouched = 0
+  let quotesRedacted = 0
+  let charactersRemoved = 0
+  for (const callId of orphaned) {
+    const r = redactCallQuotes(db, callId)
+    memoriesTouched += r.memoriesTouched
+    quotesRedacted += r.quotesRedacted
+    charactersRemoved += r.charactersRemoved
+  }
+  return { memoriesTouched, quotesRedacted, charactersRemoved, callsSwept: orphaned.size }
+}
+
+/**
  * AUDIT FIX (2026-08-24) — forget what ONE call/conversation taught, instead
  * of deleting every memory it ever touched.
  *

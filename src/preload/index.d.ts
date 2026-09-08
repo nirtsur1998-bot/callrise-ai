@@ -656,7 +656,18 @@ export interface AssistantMemoryEvidence {
   category: string
   scope: string
   evidence: Array<
-    | { type: 'transcript'; callId: string; chatMessageId?: string; quote: string }
+    | {
+        type: 'transcript'
+        callId: string
+        chatMessageId?: string
+        quote: string
+        /** M36 Stage 3 — when the source call or chat happened. */
+        at?: string
+        /** BUG-215 — set when the CALL was deleted: the quote is blanked and
+         *  this records when. The evidence entry survives so the memory keeps
+         *  its episode count; only the buyer's words are gone. */
+        redactedAt?: string
+      }
     | { type: 'reflection'; memoryIds: string[] }
   >
 }
@@ -2968,7 +2979,15 @@ export type MemoryScope = 'rep' | 'business' | `client:${string}`
 export type MemoryStatus = 'active' | 'hypothesis' | 'invalidated' | 'archived'
 export type MemorySource = 'auto' | 'user_stated' | 'user_confirmed'
 export type MemoryEvidence =
-  | { type: 'transcript'; callId: string; chatMessageId?: string; quote: string }
+  | {
+      type: 'transcript'
+      callId: string
+      chatMessageId?: string
+      quote: string
+      at?: string
+      /** BUG-215 — see the note on the other copy of this union above. */
+      redactedAt?: string
+    }
   | { type: 'reflection'; memoryIds: string[] }
 
 export interface Memory {
