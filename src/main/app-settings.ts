@@ -291,6 +291,71 @@ function mergeJobConcurrency(
  * ELSE the rep is doing on their machine. On by default, matching today's
  * unconditional behavior; this is the first time it's been optional at all.
  */
+/**
+ * BUG-227 — the three AI Note Taker auto-behaviours, moved out of renderer
+ * localStorage (prefs.ts) into the settings file, exactly as M26 Phase 4.5.2
+ * did for Deal Intelligence and live cues.
+ *
+ * WHAT IT COST TO LEAVE THEM THERE, measured on the founder's own profile
+ * before this moved: 137 of 191 live calls (71.7%) carried the default
+ * "Call · <date>" title, and the last AI title was generated 2026-09-03 — a
+ * STOP, not a decline. Cause, read out of the running app rather than
+ * inferred: localStorage is PER-ORIGIN. The founder set these in the packaged
+ * app (file://) and their daily driver is the dev app (http://localhost:5173).
+ * Both share userData — same calls, contacts, Sales Brain, settings file —
+ * but not these three, because these three never migrated. Five weeks of a
+ * feature the user believed was on, with nothing anywhere reporting it off.
+ *
+ * The general defect, which is why this is a migration rather than a note:
+ * renderer localStorage is not in `backup_settings` (that uploads THIS
+ * object), main cannot read it, and ANY origin change resets it silently for
+ * every user at once. A future build moving off file:// would do to everyone
+ * what dev-vs-packaged did to the founder.
+ *
+ * Defaults stay false, matching the localStorage getters they replace, so an
+ * install that never set them sees no behaviour change from the migration
+ * itself. What recovers an EXISTING setting is the one-time seed in prefs.ts
+ * — see seedAiNoteTakerFromLocalStorage().
+ */
+export interface AiNoteTakerSettings {
+  /** Summarize a call automatically once it is saved. */
+  autoSummarize: boolean
+  /** Rename a saved call with an AI title instead of "Call · <date>". */
+  autoGenerateTitle: boolean
+  /** Write the post-call brief to the clipboard the moment a call ends. */
+  autoPostCallBrief: boolean
+}
+
+const EMPTY_AI_NOTE_TAKER: AiNoteTakerSettings = {
+  autoSummarize: false,
+  autoGenerateTitle: false,
+  autoPostCallBrief: false
+}
+
+function sanitizeAiNoteTaker(value: unknown): AiNoteTakerSettings {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  // BUG-211's rule, applied deliberately: an ABSENT key resolves to the
+  // default (false), never to a guess. That is what makes the seed safe — it
+  // can only ever turn one ON.
+  return {
+    autoSummarize: typeof v.autoSummarize === 'boolean' ? v.autoSummarize : false,
+    autoGenerateTitle: typeof v.autoGenerateTitle === 'boolean' ? v.autoGenerateTitle : false,
+    autoPostCallBrief: typeof v.autoPostCallBrief === 'boolean' ? v.autoPostCallBrief : false
+  }
+}
+
+function mergeAiNoteTaker(current: AiNoteTakerSettings, patch: unknown): AiNoteTakerSettings {
+  if (!patch || typeof patch !== 'object') return current
+  const p = patch as Record<string, unknown>
+  return {
+    autoSummarize: 'autoSummarize' in p ? p.autoSummarize === true : current.autoSummarize,
+    autoGenerateTitle:
+      'autoGenerateTitle' in p ? p.autoGenerateTitle === true : current.autoGenerateTitle,
+    autoPostCallBrief:
+      'autoPostCallBrief' in p ? p.autoPostCallBrief === true : current.autoPostCallBrief
+  }
+}
+
 export interface JobNotificationSettings {
   nativeEnabled: boolean
 }
@@ -781,6 +846,10 @@ export interface AppSettings {
   /** M26 Phase 5 — job-completion notification preferences. On by default;
    *  see JobNotificationSettings for exactly what this gates. */
   jobNotifications: JobNotificationSettings
+  /** BUG-227 — the AI Note Taker auto-behaviours, migrated out of renderer
+   *  localStorage so they survive a reinstall, a restore and an origin
+   *  change. All off by default; see AiNoteTakerSettings. */
+  aiNoteTaker: AiNoteTakerSettings
 }
 
 // AIProviderId is re-exported here (not re-declared) so existing importers
@@ -830,7 +899,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   dealIntelligence: EMPTY_DEAL_INTELLIGENCE,
   liveCues: EMPTY_LIVE_CUES,
   jobConcurrency: EMPTY_JOB_CONCURRENCY,
-  jobNotifications: EMPTY_JOB_NOTIFICATIONS
+  jobNotifications: EMPTY_JOB_NOTIFICATIONS,
+  aiNoteTaker: EMPTY_AI_NOTE_TAKER
 }
 
 function settingsPath(): string {
@@ -928,7 +998,8 @@ export function loadAppSettings(): AppSettings {
       dealIntelligence: sanitizeDealIntelligence(parsed.dealIntelligence),
       liveCues: sanitizeLiveCues(parsed.liveCues),
       jobConcurrency: sanitizeJobConcurrency(parsed.jobConcurrency),
-      jobNotifications: sanitizeJobNotifications(parsed.jobNotifications)
+      jobNotifications: sanitizeJobNotifications(parsed.jobNotifications),
+      aiNoteTaker: sanitizeAiNoteTaker(parsed.aiNoteTaker)
     }
   } catch {
     return {
@@ -945,7 +1016,8 @@ export function loadAppSettings(): AppSettings {
       dealIntelligence: { ...EMPTY_DEAL_INTELLIGENCE, enabledTypes: { ...EMPTY_ENABLED_TYPES } },
       liveCues: { ...EMPTY_LIVE_CUES },
       jobConcurrency: { ...EMPTY_JOB_CONCURRENCY },
-      jobNotifications: { ...EMPTY_JOB_NOTIFICATIONS }
+      jobNotifications: { ...EMPTY_JOB_NOTIFICATIONS },
+      aiNoteTaker: { ...EMPTY_AI_NOTE_TAKER }
     }
   }
 }
@@ -1007,7 +1079,8 @@ function mergeSettings(current: AppSettings, patch: unknown): AppSettings {
     dealIntelligence: mergeDealIntelligence(current.dealIntelligence, p.dealIntelligence),
     liveCues: mergeLiveCues(current.liveCues, p.liveCues),
     jobConcurrency: mergeJobConcurrency(current.jobConcurrency, p.jobConcurrency),
-    jobNotifications: mergeJobNotifications(current.jobNotifications, p.jobNotifications)
+    jobNotifications: mergeJobNotifications(current.jobNotifications, p.jobNotifications),
+    aiNoteTaker: mergeAiNoteTaker(current.aiNoteTaker, p.aiNoteTaker)
   }
 }
 

@@ -9,24 +9,24 @@ import { useAutoTranscribeCalls } from './useAutoTranscribeCalls'
 import {
   getAutoOpenMeetingPage,
   setAutoOpenMeetingPage,
-  getAutoSummarize,
-  setAutoSummarize,
-  getAutoGenerateTitle,
-  setAutoGenerateTitle,
-  getAutoPostCallBrief,
-  setAutoPostCallBrief,
   getExcludedApps,
   setExcludedApps,
   getSeenApps
 } from './prefs'
+import { useAppSettings } from './useAppSettings'
 
 export function AINoteTakerSection(): React.JSX.Element {
   const [autoStart, setAutoStart] = useAutoStartListening()
   const [autoTranscribeCalls, setAutoTranscribeCalls] = useAutoTranscribeCalls()
   const [autoOpen, setAutoOpenState] = useState(() => getAutoOpenMeetingPage())
-  const [autoSummarize, setAutoSummarizeState] = useState(() => getAutoSummarize())
-  const [autoTitle, setAutoTitleState] = useState(() => getAutoGenerateTitle())
-  const [autoBrief, setAutoBriefState] = useState(() => getAutoPostCallBrief())
+  // BUG-227 — these three were useState(() => getAutoSummarize()) and friends,
+  // reading renderer localStorage. They read the settings file now, so the
+  // switch a user sets is the switch the app has: on any origin, after any
+  // reinstall, and visible to main.
+  const { settings, update } = useAppSettings()
+  const autoSummarize = settings.aiNoteTaker.autoSummarize
+  const autoTitle = settings.aiNoteTaker.autoGenerateTitle
+  const autoBrief = settings.aiNoteTaker.autoPostCallBrief
   const [excluded, setExcludedState] = useState<string[]>(() => getExcludedApps())
   const [seenApps] = useState<string[]>(() => getSeenApps())
   const [detectionAvailable, setDetectionAvailable] = useState<boolean | null>(null)
@@ -93,8 +93,7 @@ export function AINoteTakerSection(): React.JSX.Element {
                 <ToggleSwitch
                   checked={autoSummarize}
                   onChange={(v) => {
-                    setAutoSummarize(v)
-                    setAutoSummarizeState(v)
+                    void update({ aiNoteTaker: { autoSummarize: v } })
                   }}
                   label="Automatically summarize meeting notes"
                 />
@@ -109,8 +108,7 @@ export function AINoteTakerSection(): React.JSX.Element {
                 <ToggleSwitch
                   checked={autoTitle}
                   onChange={(v) => {
-                    setAutoGenerateTitle(v)
-                    setAutoTitleState(v)
+                    void update({ aiNoteTaker: { autoGenerateTitle: v } })
                   }}
                   label="Automatically generate AI meeting title"
                 />
@@ -125,8 +123,7 @@ export function AINoteTakerSection(): React.JSX.Element {
                 <ToggleSwitch
                   checked={autoBrief}
                   onChange={(v) => {
-                    setAutoPostCallBrief(v)
-                    setAutoBriefState(v)
+                    void update({ aiNoteTaker: { autoPostCallBrief: v } })
                   }}
                   label="Instant follow-up on your clipboard"
                 />

@@ -1114,7 +1114,19 @@ export interface CallsApi {
    *  hands back that job's id instead of starting a second one. */
   scanPastCallsForObjections: () => Promise<{ ok: boolean; jobId?: string }>
   /** AI Note Taker's auto-title feature: generate + save a title in one step. */
-  generateTitle: (callId: string) => Promise<{ ok: true; title: string } | { ok: false }>
+  generateTitle: (
+    callId: string
+  ) => Promise<
+    | { ok: true; title: string }
+    // BUG-228 — the reason travels, so a caller can tell a refusal from an
+    // empty transcript from a save failure. It used to be a bare
+    // `{ ok: false }`, which is how five weeks of silent failure hid.
+    | {
+        ok: false
+        reason: 'no-transcript' | 'no-title-returned' | 'ai-failed' | 'save-failed'
+        detail?: string
+      }
+  >
   /** §4.6 — brief + next steps + follow-up email, written straight to the
    *  clipboard by the main process (which needs no window focus). */
   postCallBrief: (callId: string) => Promise<PostCallBriefEvent>
@@ -2354,6 +2366,7 @@ export interface AppSettings {
   /** M26 Phase 5 — job-completion notification preferences. On by default;
    *  see main/app-settings.ts's JobNotificationSettings. */
   jobNotifications: JobNotificationSettings
+  aiNoteTaker: AiNoteTakerSettings
 }
 
 /** M26 Phase 5 — see main/app-settings.ts's JobConcurrencySettings for the
@@ -2367,6 +2380,14 @@ export interface JobConcurrencySettings {
 /** M26 Phase 5 — see main/app-settings.ts's JobNotificationSettings. */
 export interface JobNotificationSettings {
   nativeEnabled: boolean
+}
+
+/** BUG-227 — see main/app-settings.ts's AiNoteTakerSettings for why these
+ *  three moved out of renderer localStorage. */
+export interface AiNoteTakerSettings {
+  autoSummarize: boolean
+  autoGenerateTitle: boolean
+  autoPostCallBrief: boolean
 }
 
 /** M26 Phase 4.5.2 — see main/app-settings.ts's DealIntelligenceSettings
@@ -2476,6 +2497,7 @@ export interface AppSettingsPatch {
   jobConcurrency?: Partial<JobConcurrencySettings>
   /** Partial — only the keys present are changed; others are left as-is. */
   jobNotifications?: Partial<JobNotificationSettings>
+  aiNoteTaker?: Partial<AiNoteTakerSettings>
 }
 
 export interface AppSettingsApi {

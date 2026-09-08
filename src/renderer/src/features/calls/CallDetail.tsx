@@ -322,6 +322,33 @@ export function CallDetail({
   })
   const summarizing = summaryJob?.state === 'running' || summaryJob?.state === 'queued'
 
+  // BUG-229 — the manual title action. `isDefaultTitle` is derived from the
+  // shape formatTitle() produces in calls-fs.ts ("Call · Sep 8, 2026, 3:04 PM")
+  // rather than from a stored flag, because there is no flag: a call carries no
+  // record of whether its title was generated, typed, or defaulted. Matching
+  // the prefix is the honest available test, and a user who deliberately types
+  // a title starting "Call · " simply keeps the button, which costs them
+  // nothing.
+  const isDefaultTitle = /^Call · /.test(call?.title ?? '')
+  const [titling, setTitling] = useState(false)
+  const [titleError, setTitleError] = useState<string | null>(null)
+  const generateTitle = useCallback(async () => {
+    setTitleError(null)
+    setTitling(true)
+    try {
+      const res = await window.api.calls.generateTitle(callId)
+      if (!mountedRef.current) return
+      // BUG-228's other half. The automatic path swallows this outcome three
+      // layers deep; here a human is watching, so say which way it went.
+      if (res.ok) void notifyChanged()
+      else setTitleError('Could not generate a title. Please try again.')
+    } catch {
+      if (mountedRef.current) setTitleError('Could not generate a title. Please try again.')
+    } finally {
+      if (mountedRef.current) setTitling(false)
+    }
+  }, [callId, notifyChanged])
+
   const summarizeCall = useCallback(async () => {
     setSummaryError(null)
     setNoKey(false)
@@ -869,6 +896,28 @@ export function CallDetail({
       <div className="mb-4">
         <div className="flex items-start justify-between gap-3">
           <h2 className="text-xl font-semibold tracking-tight">{call.title}</h2>
+          {/* BUG-229 — the manual escape hatch. Until now `generateTitle` had
+              exactly ONE caller in the whole tree, the automatic one at call
+              end, so a call that missed its single shot could never be titled
+              except by typing one. Summaries have had two buttons the whole
+              time, and the asymmetry was visible in the founder's own data:
+              60 of their 137 untitled calls DID have a summary.
+              Offered only while the title is still the default, so it shows up
+              exactly where it is useful and nowhere else. */}
+          {isDefaultTitle && (
+            <div className="flex shrink-0 flex-col items-end gap-1">
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={titling ? Loader2 : Sparkles}
+                disabled={titling}
+                onClick={() => void generateTitle()}
+              >
+                {titling ? 'Naming…' : 'Generate title'}
+              </Button>
+              {titleError && <p className="text-[12px] text-danger">{titleError}</p>}
+            </div>
+          )}
           {/* M28 Part 4 — the assistant, scoped to this call's linked client. */}
           {call.contactId && (
             <Button

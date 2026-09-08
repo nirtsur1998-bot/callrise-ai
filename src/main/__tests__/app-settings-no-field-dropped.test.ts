@@ -82,7 +82,12 @@ describe('no AppSettings field may be silently dropped by load or merge', () => 
       jobNotifications: {
         ...base.jobNotifications,
         nativeEnabled: !base.jobNotifications.nativeEnabled
-      }
+      },
+      // BUG-227. All three flipped off their defaults, because SURVIVING is
+      // the whole point of moving them here — a reinstall, a restore, an
+      // origin change. A field that silently reverts to its default is exactly
+      // the failure this migration exists to end.
+      aiNoteTaker: { autoSummarize: true, autoGenerateTitle: true, autoPostCallBrief: true }
     }
 
     // Seed disk with the fully-populated record, then reload.

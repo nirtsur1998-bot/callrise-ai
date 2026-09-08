@@ -55,39 +55,66 @@ export function setAutoOpenMeetingPage(value: boolean): void {
   write(KEY_AUTO_OPEN_MEETING_PAGE, String(value))
 }
 
-// Default OFF: unlike opening a page, this silently sends the transcript to
-// Claude on every saved call — a real behavior + cost change, so it's opt-in
-// rather than matching every toggle's default in the reference product.
-export function getAutoSummarize(): boolean {
-  return read(KEY_AUTO_SUMMARIZE) === 'true'
+/* ── BUG-227: the three AI Note Taker prefs no longer live here ───────────
+ *
+ * getAutoSummarize / getAutoGenerateTitle / getAutoPostCallBrief are GONE.
+ * They live in the settings file now, as `settings.aiNoteTaker` — read
+ * through window.api.settings, written through settings.update, and therefore
+ * backed up, readable by main, and immune to an origin change.
+ *
+ * WHY, in one measurement: localStorage is PER-ORIGIN. The founder set these
+ * in the packaged app (file://); their daily driver is the dev app
+ * (http://localhost:5173). Both share userData, so every OTHER setting
+ * followed them across and these three did not. 137 of 191 calls went
+ * untitled over five weeks, on a feature they believed was on, with nothing
+ * anywhere reporting it off.
+ *
+ * The functions are DELETED rather than deprecated on purpose. A getter left
+ * behind is a second source of truth, and the next person needing this value
+ * would reach for whichever one compiles.
+ *
+ * What remains is the one-time SEED — the only thing that still reads the old
+ * keys, and the only reason they are still named in this file.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/** Set once per ORIGIN, after that origin's seed has run. Deliberately in
+ *  localStorage rather than in the settings file: the marker has to be
+ *  per-origin, because each origin holds a different set of legacy values and
+ *  each needs its own chance to contribute them. A marker in the shared
+ *  settings file would let whichever app launched first speak for both. */
+const KEY_AI_NOTE_TAKER_SEEDED = 'salesos.settings.aiNoteTakerSeeded'
+
+export interface LegacyAiNoteTakerPrefs {
+  autoSummarize: boolean
+  autoGenerateTitle: boolean
+  autoPostCallBrief: boolean
 }
 
-export function setAutoSummarize(value: boolean): void {
-  write(KEY_AUTO_SUMMARIZE, String(value))
-}
-
-// Default OFF, same reasoning as auto-summarize (a Claude call per saved call).
-export function getAutoGenerateTitle(): boolean {
-  return read(KEY_AUTO_GENERATE_TITLE) === 'true'
-}
-
-export function setAutoGenerateTitle(value: boolean): void {
-  write(KEY_AUTO_GENERATE_TITLE, String(value))
-}
-
-// Default OFF, same reasoning again — one AI call per saved call.
-//
-// §4.6 specifies "fire automatically on call-end (no click)", and once this is
-// on that is exactly what happens: the brief and the follow-up email are on the
-// clipboard before the rep has switched windows, with nothing to press. What
-// "no click" cannot reasonably mean is opting a rep into per-call spend on
-// their own key without asking once.
-export function getAutoPostCallBrief(): boolean {
-  return read(KEY_AUTO_POST_CALL_BRIEF) === 'true'
-}
-
-export function setAutoPostCallBrief(value: boolean): void {
-  write(KEY_AUTO_POST_CALL_BRIEF, String(value))
+/**
+ * BUG-227's migration. Reads the three legacy localStorage keys for THIS
+ * origin, marks the origin seeded, and hands back what it found — or null if
+ * this origin has already had its turn.
+ *
+ * The caller must only ever turn a preference ON from this. That is the whole
+ * safety property, and it is what makes seeding from two origins correct
+ * rather than destructive: the dev app finds nothing and changes nothing; the
+ * packaged app, on its next launch, finds the founder's real settings and
+ * restores them. A seed that could also turn things OFF would let the first
+ * app to start silently clear the other's settings — a fresh version of the
+ * bug this migration exists to end.
+ */
+export function takeLegacyAiNoteTakerPrefs(): LegacyAiNoteTakerPrefs | null {
+  if (read(KEY_AI_NOTE_TAKER_SEEDED) === 'true') return null
+  const legacy = {
+    autoSummarize: read(KEY_AUTO_SUMMARIZE) === 'true',
+    autoGenerateTitle: read(KEY_AUTO_GENERATE_TITLE) === 'true',
+    autoPostCallBrief: read(KEY_AUTO_POST_CALL_BRIEF) === 'true'
+  }
+  // Written whether or not anything was found: an origin with nothing to
+  // contribute has still had its turn, and re-reading three keys that will
+  // never change again costs a launch-time round trip for nothing.
+  write(KEY_AI_NOTE_TAKER_SEEDED, 'true')
+  return legacy
 }
 
 /** Apps excluded from auto-start (checked against the foreground app when a

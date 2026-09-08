@@ -50,6 +50,26 @@ export interface KeyCardConfig {
    *  Deepgram, which isn't one of the model-picker's text-AI providers. */
   retention?: { posture: RetentionPosture; url: string }
   /**
+   * What gets sent to this service, rendered directly under the key input.
+   *
+   * Round five, 2026-09-08, founder-approved. Only Deepgram has one, and it is
+   * the third of the three places this fact now appears (with the Privacy &
+   * data opening card and — via DEEPGRAM_KEY_CONFIG — the onboarding key
+   * step). It is HERE rather than in `blurb` on purpose: someone typing a
+   * credential into a box is entitled to know what will be sent to it, and
+   * that is the highest-intent moment in the product for this sentence. The
+   * blurb sells the feature; this states the egress.
+   *
+   * Why Deepgram specifically: it is the only destination in the product with
+   * NO control of any kind. Every text-AI provider is reached only when a
+   * feature runs, and a feature can be switched off; the call audio streams to
+   * Deepgram on every call, always, because that is how the words appear at
+   * all. It is also the destination four rounds of privacy copy never named,
+   * because the working model of "where data goes" had two boxes in it and
+   * this was the third (taxonomy species 91).
+   */
+  dataNote?: string
+  /**
    * A second, NON-SECRET value this provider needs before it can be called.
    * Only Cloudflare has one: its base URL contains the account id, so a key on
    * its own addresses nothing. Modelled as an extra field on the same card
@@ -116,7 +136,9 @@ const KEYS: KeyCardConfig[] = [
     // BUG-146 — the app's most consequential credential, and until now the
     // only one with no way to check it. NOT `providerId`: that would enrol
     // Deepgram in the default-text-AI-provider picker it can never serve.
-    validateAs: 'deepgram'
+    validateAs: 'deepgram',
+    dataNote:
+      'Your call audio goes to Deepgram, live, as you speak. That is the transcription service this key connects to, and it is how your words become text at all — it happens on every call, and there is no way to turn it off and still have a transcript.'
   },
   {
     name: 'ANTHROPIC_API_KEY',
@@ -681,6 +703,11 @@ export function KeyCard({
           </button>
         )}
       </div>
+
+      {/* Under the input, not under the title — see KeyCardConfig.dataNote.
+          Rendered before the test result so it stays put rather than moving
+          when a test runs. */}
+      {config.dataNote && <p className="mt-2 text-[12px] text-faint">{config.dataNote}</p>}
 
       {testResult && (
         <p className={cn('mt-2 text-[13px]', testResult.ok ? 'text-positive' : 'text-danger')}>

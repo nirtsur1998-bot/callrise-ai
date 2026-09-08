@@ -86,7 +86,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
   liveCues: { enabled: true, sensitivity: 'low', quiet: false },
   jobConcurrency: { interactive: 2, batch: 1, maintenance: 1 },
-  jobNotifications: { nativeEnabled: true }
+  jobNotifications: { nativeEnabled: true },
+  // BUG-227. All false is both the real default AND the safe placeholder:
+  // each of these three spends the user's own AI budget, so showing them off
+  // until the real value loads can only ever under-promise.
+  aiNoteTaker: { autoSummarize: false, autoGenerateTitle: false, autoPostCallBrief: false }
 }
 
 export interface UseAppSettings {

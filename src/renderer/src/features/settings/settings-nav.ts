@@ -267,7 +267,7 @@ const ALL_GROUPS: SettingsGroup[] = [
         id: 'privacy-data',
         label: 'Privacy & data',
         icon: ShieldCheck,
-        description: 'What stays on this device, and what backs up to your account.'
+        description: 'What backs up to your account, and where else your calls go.'
       },
       {
         id: 'telemetry',
@@ -489,7 +489,7 @@ const V2_GROUPS: SettingsGroup[] = [
         id: 'privacy-data',
         label: 'Privacy & data',
         icon: ShieldCheck,
-        description: 'What stays on this device, and what backs up to your account.'
+        description: 'What backs up to your account, and where else your calls go.'
       },
       {
         id: 'telemetry',

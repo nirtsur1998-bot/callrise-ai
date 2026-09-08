@@ -72,6 +72,18 @@ const isDetectionOverlay = window.location.hash.startsWith('#/detection-overlay'
 // set here rather than in a component effect so it lands before first paint.
 if (isDetectionOverlay) document.documentElement.dataset.window = 'overlay'
 
+// BUG-227 — fold the three legacy AI Note Taker localStorage keys into the
+// settings file, once per origin. Main window only: the overlay shares this
+// bundle AND this origin, so a second seed would be racing work with nothing
+// left to find.
+//
+// Deliberately not awaited. It is a settings write with no bearing on what
+// renders, and blocking first paint on an IPC round trip to repair a
+// preference would be a worse trade than the preference itself.
+if (!isDetectionOverlay) {
+  void import('./features/settings/seed-ai-note-taker').then((m) => m.seedAiNoteTakerPrefs())
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     {/* null, not a spinner: the overlay window is transparent by design, and

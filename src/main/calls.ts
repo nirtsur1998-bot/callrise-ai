@@ -1177,17 +1177,36 @@ export function registerCalls(): void {
   ipcMain.handle(
     'calls:generateTitle',
     async (_event, callId: string): Promise<GenerateTitleResult> => {
+      // BUG-228 — the reason travels now, and every failure says so out loud.
+      // This used to return a bare `{ ok: false }` from three separate places,
+      // so "the transcript was empty", "the provider refused" and "the save
+      // failed" were one indistinguishable outcome, logged nowhere. Together
+      // with the renderer's `.catch(() => {})` that is how five weeks of
+      // silent failure hid: the user saw a default title and had four equally
+      // plausible explanations, none of them checkable.
       try {
         const call = await getCall(callsDir(), callId)
-        if (!call?.segments?.length) return { ok: false }
+        if (!call?.segments?.length) {
+          console.warn(`[title] ${callId}: no transcript to title`)
+          return { ok: false, reason: 'no-transcript' }
+        }
         const result = await generateCallTitle(speechSegments(call.segments))
-        if (!result.ok) return result
+        if (!result.ok) {
+          console.warn(
+            `[title] ${callId}: ${result.reason}${result.detail ? ` — ${result.detail}` : ''}`
+          )
+          return result
+        }
         const saved = await setCallTitle(callsDir(), callId, result.title)
-        if (!saved) return { ok: false }
+        if (!saved) {
+          console.warn(`[title] ${callId}: generated "${result.title}" but the call would not save`)
+          return { ok: false, reason: 'save-failed' }
+        }
         scheduleBackup() // the new title reaches the cloud like any other metadata edit
         return { ok: true, title: saved.title }
-      } catch {
-        return { ok: false }
+      } catch (err) {
+        console.error(`[title] ${callId}: unexpected failure`, err)
+        return { ok: false, reason: 'ai-failed' }
       }
     }
   )

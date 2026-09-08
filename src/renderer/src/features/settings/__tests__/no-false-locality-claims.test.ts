@@ -237,15 +237,10 @@ const PENDING_FOUNDER_APPROVAL: { file: string; contains: string; because: strin
   // conversations are stored in your cloud account, not just this device."
   // Unconditional, and its doc comment calls it "a short, honest recap".
   // Three of the four categories it names were syncing when it was read.
-  {
-    file: 'features/settings/PrivacyNoticeCard.tsx',
-    contains: 'live only on this',
-    because:
-      'Unconditional, and false for transcripts (backup AND the AI provider), the knowledge base ' +
-      '(its own toggle), and app settings (backup_settings). It also names "call recordings", ' +
-      'which do not exist — no code path writes call audio to disk or uploads it. Round five ' +
-      'replaces the whole card.'
-  },
+  // FIXED 2026-09-08 and removed from this list, which is what the pin exists
+  // to force: PrivacyNoticeCard.tsx's "live only on this device" is gone, and
+  // the card now names all three destinations. Pinned positively instead, by
+  // the Deepgram disclosure test below.
   // ── Added 2026-09-07. Four more, all found by an independent adversarial
   //    sweep rather than by this guard, and one of them had been recorded HERE
   //    as true.
@@ -261,14 +256,12 @@ const PENDING_FOUNDER_APPROVAL: { file: string; contains: string; because: strin
   // word-for-word transcript text leaves the computer while this sentence says
   // it does not. An allowlist entry with a reason is still only as good as the
   // reason.
-  {
-    file: 'features/backup/BackupCard.tsx',
-    contains: 'never leave this computer',
-    because:
-      'The reason above, plus a second one found in round five: the call AUDIO streams to ' +
-      'Deepgram live on every call (transcription.ts:487), with no toggle at all. So the sentence ' +
-      'is false even for a user with every backup category off and Sales Brain off.'
-  },
+  // FIXED 2026-09-08. BackupCard's "never leave this computer unless you turn
+  // that on above" is gone. It was the one rename in round five that had to
+  // change MEANING rather than wording — a locality promise replaced by what
+  // actually happens: "Your transcripts aren't included unless you turn that
+  // on above. Your AI provider still receives them whenever a feature reads a
+  // call."
   {
     file: 'features/settings/TelemetrySection.tsx',
     contains: 'Nothing has been sent from this computer',
@@ -383,7 +376,7 @@ describe('the app makes no false claim about where the user data lives', () => {
     }
   })
 
-  it('the five sites awaiting founder approval are still exactly five, and still there', () => {
+  it('the three sites awaiting founder approval are still exactly three, and still there', () => {
     // Red in BOTH directions, so listed debt cannot quietly become permanent.
     for (const p of PENDING_FOUNDER_APPROVAL) {
       const hit = claims.find((c) => c.file === p.file && c.text.includes(p.contains))
@@ -396,7 +389,87 @@ describe('the app makes no false claim about where the user data lives', () => {
     expect(
       PENDING_FOUNDER_APPROVAL.length,
       'the count of known-false, unapproved copy sites changed'
-    ).toBe(5)
+    ).toBe(3)
+  })
+
+  it('the Deepgram destination is disclosed in all three places, and tied to the code', () => {
+    // ROUND FIVE. The third destination: the raw microphone audio of every
+    // call streams live to Deepgram, with no toggle, and the product had never
+    // said so anywhere. Four rounds of privacy copy failed partly because the
+    // working model of "where data goes" had two boxes in it and this was the
+    // third (taxonomy species 91).
+    //
+    // CODE HALF FIRST, per species 90 — a disclosure can outlive its
+    // behaviour, and then it is false in the other direction. If the app stops
+    // streaming audio to Deepgram, THIS goes red and asks for the three
+    // sentences to come out, rather than leaving them there for ever.
+    const transcription = readFileSync(
+      join(RENDERER, '..', '..', 'main', 'transcription.ts'),
+      'utf8'
+    )
+    expect(
+      transcription,
+      'transcription.ts no longer streams to Deepgram — three user-facing sentences still say it does'
+    ).toContain('wss://api.deepgram.com')
+    expect(
+      transcription,
+      'the audio frames are no longer sent over the Deepgram socket — the disclosure is now false'
+    ).toMatch(/ws\.send\(frame\.bytes\)/)
+
+    // 1 + 2. The key card, which the onboarding ApiKey step renders through
+    //        DEEPGRAM_KEY_CONFIG — one string, two placements, so they cannot
+    //        drift apart.
+    const keys = readFileSync(join(RENDERER, 'features/settings/ApiKeysSection.tsx'), 'utf8')
+    expect(keys, 'the Deepgram key card lost its dataNote').toContain(
+      'Your call audio goes to Deepgram, live, as you speak.'
+    )
+    expect(
+      keys,
+      'DEEPGRAM_KEY_CONFIG no longer points at the card carrying the note, so onboarding lost it'
+    ).toContain('export const DEEPGRAM_KEY_CONFIG: KeyCardConfig = KEYS[0]')
+    const onboarding = readFileSync(
+      join(RENDERER, 'features/onboarding/steps/ApiKey.tsx'),
+      'utf8'
+    )
+    expect(
+      onboarding,
+      'the onboarding key step no longer renders the shared Deepgram card'
+    ).toContain('DEEPGRAM_KEY_CONFIG')
+
+    // 3. The Privacy & data opening card.
+    const notice = readFileSync(join(RENDERER, 'features/settings/PrivacyNoticeCard.tsx'), 'utf8')
+    expect(notice, 'the Privacy & data opening card lost the Deepgram paragraph').toContain(
+      'receives the audio of every call'
+    )
+    expect(
+      notice,
+      'the opening card no longer names all three destinations — the two-box framing is what made four rounds of copy false'
+    ).toMatch(/Deepgram[\s\S]*Your AI provider[\s\S]*Your CallRise backup/)
+  })
+
+  it('no user-facing string calls the transcripts toggle a RECORDINGS toggle', () => {
+    // Round five. "Call recordings" named a category that does not exist:
+    // nothing writes call audio to disk and no payload or bucket carries any.
+    // A label is a noun rather than a claim, so the locality sweep above can
+    // never catch this — it is pinned by name instead.
+    const backup = readFileSync(join(RENDERER, 'features/backup/BackupCard.tsx'), 'utf8')
+    const notice = readFileSync(join(RENDERER, 'features/settings/PrivacyNoticeCard.tsx'), 'utf8')
+    const strippedComments = (s: string) =>
+      s.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ')
+    for (const [name, source] of [
+      ['BackupCard.tsx', backup],
+      ['PrivacyNoticeCard.tsx', notice]
+    ] as const) {
+      expect(
+        strippedComments(source),
+        `${name} calls the transcripts category "recordings" again. The app has never written a ` +
+          'call recording to disk and has never uploaded one — the word promises an upload that ' +
+          'does not happen, to someone who might rely on it after losing a machine.'
+      ).not.toMatch(/call recordings/i)
+    }
+    expect(backup, 'the transcripts toggle label changed away from "Call transcripts"').toContain(
+      "label: 'Call transcripts'"
+    )
   })
 
   it('the three approved strings say where the data actually goes', () => {

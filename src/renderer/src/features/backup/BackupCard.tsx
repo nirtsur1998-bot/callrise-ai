@@ -106,7 +106,18 @@ const ALWAYS_SYNCED: { icon: typeof ListChecks; label: string }[] = [
 type SyncScopeKey = keyof BackupSyncScope
 
 const OPTIONAL_ITEMS: { key: SyncScopeKey; icon: typeof ListChecks; label: string }[] = [
-  { key: 'transcripts', icon: MessagesSquare, label: 'Call recordings & transcripts' },
+  // Round five, 2026-09-08 — was "Call recordings & transcripts", and the word
+  // "recordings" named a category that does not exist. Nothing writes call
+  // audio to disk (the only two audio writers in the tree are the mic test and
+  // Rise voice notes) and no payload or bucket carries any: callBackupPayload
+  // and callFullBackupPayload are metadata, summary, coaching, segments,
+  // bookmarks. So the label was wrong in BOTH directions — it promised an
+  // upload that never happens, to a user who might rely on it after losing a
+  // machine, while its off-state sentence promised the audio stays here and
+  // the audio streams to Deepgram during every call (transcription.ts:487).
+  // No guard caught this and none can: a label is a noun, not a claim, and the
+  // falseness was that the noun named nothing.
+  { key: 'transcripts', icon: MessagesSquare, label: 'Call transcripts' },
   { key: 'attachments', icon: Paperclip, label: 'Attached files' },
   { key: 'knowledgeBase', icon: BookOpen, label: 'Knowledge Base entries' },
   {
@@ -348,8 +359,8 @@ export function BackupCard(): React.JSX.Element {
       {syncScope.transcripts && (
         <p className="mt-4 flex items-start gap-1.5 rounded-lg border border-warning/20 bg-warning-soft px-3 py-2 text-[12px] text-warning">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          Call recordings & transcripts sync is ON — your buyer conversations are stored in your
-          cloud account, not just this device.
+          Call transcripts sync is ON — your buyer conversations are stored in your cloud account,
+          not just this device.
         </p>
       )}
 
@@ -410,9 +421,17 @@ export function BackupCard(): React.JSX.Element {
 
       <p className="mt-4 border-t border-line-soft pt-3 text-[12px] text-faint">
         Backups happen automatically in the background and restore on a new device when you sign in.{' '}
+        {/* Round five. The OFF branch used to read "Your call recordings and
+            transcripts never leave this computer unless you turn that on
+            above." Both halves were false: there are no call recordings, and
+            the transcript reaches the user's AI provider on every summary,
+            coaching run, task extraction, live cue and Sales Brain extraction
+            regardless of this toggle. A locality PROMISE has been replaced
+            with what actually happens — the one rename in this batch that
+            changes meaning rather than wording. */}
         {syncScope.transcripts
-          ? 'Call recordings and transcripts sync too, since you turned that on above.'
-          : 'Your call recordings and transcripts never leave this computer unless you turn that on above.'}{' '}
+          ? 'Your transcripts sync too, since you turned that on above.'
+          : "Your transcripts aren't included unless you turn that on above. Your AI provider still receives them whenever a feature reads a call."}{' '}
         Your Google Calendar connection is never synced — reconnect it in one click on a new device
         instead.
       </p>

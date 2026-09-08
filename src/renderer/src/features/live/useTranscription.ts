@@ -9,12 +9,7 @@ import type {
   TranscriptPatch,
   TranscriptionHealthEvent
 } from '../../../../preload/index.d'
-import {
-  getAutoSummarize,
-  getAutoGenerateTitle,
-  getAutoPostCallBrief,
-  addSeenApp
-} from '@renderer/features/settings/prefs'
+import { addSeenApp } from '@renderer/features/settings/prefs'
 
 type LivePhase = Exclude<LiveStatus, 'paused'>
 
@@ -272,16 +267,33 @@ export function useTranscription(
         },
         buyerIdentityRef?.current ?? undefined
       )
-      .then((saved) => {
+      .then(async (saved) => {
         setSavedNotice(true)
         // AI Note Taker: fire-and-forget the opted-in auto-behaviors. Each is
         // independent — one failing (or being off) never affects the others.
-        if (getAutoSummarize()) void window.api.calls.summarizeCall(saved.id).catch(() => {})
-        if (getAutoGenerateTitle()) void window.api.calls.generateTitle(saved.id).catch(() => {})
+        //
+        // BUG-227 — these three gates used to be synchronous localStorage
+        // reads (getAutoSummarize() and friends). They read the settings file
+        // now, which is one await instead of three property reads, and it is
+        // the whole fix: localStorage is per-origin, so the packaged app and
+        // the dev app disagreed about whether this feature was on while
+        // sharing every other setting. 137 of 191 calls went untitled.
+        //
+        // Read here rather than from a hook so the value is the one in force
+        // at the moment the call ENDS, not the one that was in force when the
+        // screen mounted.
+        const noteTaker = await window.api.settings
+          .get()
+          .then((s) => s.aiNoteTaker)
+          .catch(() => null)
+        if (noteTaker?.autoSummarize)
+          void window.api.calls.summarizeCall(saved.id).catch(() => {})
+        if (noteTaker?.autoGenerateTitle)
+          void window.api.calls.generateTitle(saved.id).catch(() => {})
         // §4.6 — the brief lands on the clipboard without anyone clicking.
         // Main does the clipboard write, so this works while the rep is still
         // looking at Zoom and our window has no focus.
-        if (getAutoPostCallBrief()) {
+        if (noteTaker?.autoPostCallBrief) {
           void window.api.calls
             .postCallBrief(saved.id)
             .then((res) => {
