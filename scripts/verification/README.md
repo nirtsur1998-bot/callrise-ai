@@ -20,6 +20,7 @@
 | `purge-test-data.mjs` | Remove only what a drive created in the real profile, by id list, nothing older. | the app's profile | `node scripts/verification/purge-test-data.mjs <ids…>` | refuses ids it cannot find; never touches records not in its list; verifies removal after. |
 | `render-surfaces.mjs` / `measure-reach.mjs` | Render a component in the REAL app's stylesheet and theme without a session; can the founder reach every row of a modal at a given viewport? | dev module server | `node scripts/verification/render-surfaces.mjs`, `…/measure-reach.mjs` | measured from `getBoundingClientRect`, reported per viewport; unreachable rows are listed, not summed. |
 | `five-checks.mjs` | The five release-feed checks: manifest, hash, staged percentage, installer name, download. | network | `node scripts/verification/five-checks.mjs vX.Y.Z 100` | any check failing prints which and exits non-zero; a missing asset is not a pass. |
+| `artifact-version.mjs` | **CHECK 6, added 2026-09-08.** Does the BUILT ARTIFACT report the version being released? Read from the exe's own ProductVersion, never from package.json alone and never from the release plan. | a built dist/ | `node scripts/verification/artifact-version.mjs 1.11.0` | exits 1 and says DO NOT TAG. Earned: an installer built from merged main installed cleanly, ran correctly, and reported 1.10.0 because package.json was never bumped - a release that would have reached nobody, with every other check green. |
 | one-offs: `bug141-fsync-probe.mjs`, `bug176-corpus-check.mjs`, `bugd-partition.mjs`, `drive-call-deal-picker.mjs` | evidence for a single bug, kept because the tracker cites them | varies | see each file's header | — |
 
 **Which ones CI runs:** only `verify-green.mjs` (and the instruments' own self-tests). Everything
@@ -837,3 +838,78 @@ the screenshot showed a placeholder for an editor that already contained text.
 
 Step 4 is the whole point. Steps 1–3 are workarounds for failures that will probably differ in the
 next editor; step 4 is what makes any of them survivable.
+
+---
+
+## DRIVING A WINDOWS VM OVER RDP — four hazards, none of which appears in any log
+
+*Added 2026-09-08, after the M37 release walk. Four instruments failed at once on the Stage 2 VM;
+each was individually findable and together they cost hours. **Three of the four are ENVIRONMENT,
+not code**, which is why nothing in the repo could have warned about them and why they belong here.*
+
+**Start every VM session by running the four checks below before driving anything.** They take a
+minute together. Skipping them does not fail loudly — it produces keystrokes that arrive as
+different characters, paths that silently do not exist, and a script that parses fine on the host
+and fails on a brace forty lines from the real problem.
+
+### 1. The guest's keyboard layout rewrites your keystrokes
+
+The Stage 2 VM has **Hebrew (Standard)** installed alongside English. With Hebrew active, SendKeys
+text arrives transposed: `E`→`ⴰ`, `B`→`J`, `U`→`Ⴑ`, `/`→`q`, and `[`/`]` swap. `powershell
+-ExecutionPolicy Bypass` typed as `powershelll -ⴰxecutionⲆolicy Jypasss`. Nothing errors — the shell
+simply reports an unknown command, which reads like a missing binary.
+
+**Check:** look at the tray for `ENG` vs `עבי` before typing, and type a canary first —
+`echo HELLO-TEST-123` — and READ IT BACK from a screenshot.
+
+### 2. Windows tracks the layout PER WINDOW, so fixing it once fixes one window
+
+Switching to ENG with PowerShell focused leaves Explorer on Hebrew. The next path typed into
+Explorer's address bar came out as `qqtsclientqcqusers…` and opened Edge.
+
+**Check:** re-verify the layout after every window switch, not once per session. This is the one
+that turns "I fixed that" into an hour, because the fix is real and its scope is not what you assume.
+
+### 3. Punctuation does not survive SendKeys even on ENG
+
+Measured on that VM with ENG active: alphanumerics, `\`, `-`, `.`, `;`, `:` arrive intact.
+`[ ] ( ) ' " { }` do not — brackets transpose, quotes and parens vanish. `$d=[char]92` arrived as
+`$d=]char[92`.
+
+**Check:** keep typed commands to alphanumerics, backslashes, hyphens and dots. Anything needing
+quotes, brackets or parentheses goes in a **file** that is invoked by path, never typed inline. A
+`.bat` next to the script, launched by double-click or by typing only its path, removes the problem
+entirely — `%~dp0` gives the script its own directory so nothing has to be escaped.
+
+### 4. Your own host-side quoting eats backslashes before they reach the VM
+
+Independent of the VM. `-Type "…\\tsclient\…"` from a bash-quoted command arrives as
+`\tsclient\`, so every UNC path fails with "cannot find path C:\tsclient" — which reads exactly like
+drive redirection being off, and sends you to check the wrong thing.
+
+**Check, measured rather than reasoned:** type `echo A\\\\B-A\\\B-A\\B` and read what lands. On this
+setup the answer was `A\\B-A\\B-A\B` — **four backslashes in the host string produce two on the
+guest.** Do this once per session; it is two seconds and it tells you the exact multiplier for your
+shell.
+
+### And one that IS in our own notes and was walked into anyway
+
+**A `.ps1` written UTF-8 without a BOM breaks Windows PowerShell 5.1.** An em dash decodes to a
+character that terminates a string, and the parser then fails on an unrelated closing brace many
+lines later — the error points nowhere near the cause. This is already recorded under
+`powershell-51-encoding-traps`, and it still cost a cycle.
+
+**Check:** every script written for a VM is **pure ASCII**. Verify it, do not trust it:
+
+    node -e "const b=require('fs').readFileSync('x.ps1');console.log([...b].filter(c=>c>127).length)"
+
+Zero, or fix it before copying.
+
+### The general lesson, which is why this section exists at all
+
+The host and the guest disagreed about **what characters were sent**, **what a path meant**, and
+**what encoding a file was in** — and every one of those disagreements produced a plausible,
+specific, wrong error message pointing somewhere else. A session that trusts its own instruments
+here will spend hours reading correct output about the wrong thing.
+
+**Canary first, then drive.** One `echo` of known text, one backslash-count test, one ASCII check.
