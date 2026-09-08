@@ -151,19 +151,29 @@ export function BackfillTitlesCard(): React.JSX.Element | null {
       )}
 
       {running && (
-        <div className="flex flex-col items-start gap-2">
-          <p className="flex items-center gap-2 text-[13px] text-accent">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            {job?.progress.mode === 'determinate'
-              ? `Naming… ${job.progress.itemsDone} of ${job.progress.itemsTotal}`
-              : 'Naming…'}
-            <span className="text-faint">— safe to leave this screen.</span>
+        // Founder feedback, 2026-09-08: "the start/stop button seems too low."
+        // It was stacked BELOW the progress line, which put a control on its
+        // own row under a sentence and read as detached from the thing it
+        // stops. Progress and its control belong on one line — Stop is the
+        // partner of "Naming… 4 of 125", not a separate item on the page.
+        // The reassurance drops to its own faint line, where a note belongs.
+        <div className="flex flex-col items-start gap-1">
+          <div className="flex items-center gap-3">
+            <p className="flex items-center gap-2 text-[13px] text-accent">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {job?.progress.mode === 'determinate'
+                ? `Naming… ${job.progress.itemsDone} of ${job.progress.itemsTotal}`
+                : 'Naming…'}
+            </p>
+            {/* Stopping is a first-class outcome, not an escape hatch:
+                everything named so far stays named. */}
+            <Button variant="secondary" size="sm" icon={XCircle} onClick={() => void stop()}>
+              Stop
+            </Button>
+          </div>
+          <p className="text-[12px] text-faint">
+            Safe to leave this screen — it keeps going, and Activity tracks it.
           </p>
-          {/* Stopping is a first-class outcome, not an escape hatch: everything
-              named so far stays named. */}
-          <Button variant="secondary" size="sm" icon={XCircle} onClick={() => void stop()}>
-            Stop
-          </Button>
         </div>
       )}
 
