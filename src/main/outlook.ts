@@ -664,7 +664,31 @@ export async function pushUpdateEvent(ev: CalendarEvent): Promise<PushResult> {
       remoteUpdatedAt: res.lastModifiedDateTime
     }
   } catch (e) {
-    if (httpStatus(e) === 404 || httpStatus(e) === 410) return pushInsertEvent(ev, calId)
+    // BUG-221 — this used to re-create the event on the same calendar, and
+    // the comment called it "gone on Google's side, recreate". The trouble is
+    // that "gone" includes "the user deleted it there", and the API gives the
+    // same 404 either way: there is no signal that separates a provider losing
+    // an event from a person cancelling a meeting.
+    //
+    // Re-inserting takes the unrecoverable side of that ambiguity. A cancelled
+    // meeting reappears on the user's real calendar, with its attendees, and
+    // the provider re-notifies them — the app undoing a deletion made in the
+    // provider's own UI, in front of other people, with no way for the user to
+    // guess what did it.
+    //
+    // Nothing reconciles a provider-side deletion inward (every
+    // markEventDeleted call is on the local delete path, and reconcile()
+    // iterates local events only), so the local copy would sit at 'synced' and
+    // any later edit would resurrect it again.
+    //
+    // The caller now unlinks the local record and tells the user instead. That
+    // loses the case where the provider genuinely lost an event and we could
+    // have restored it — accepted, and it is the same trade the calendar-gone
+    // path already made in writing: re-creating a stale meeting on someone's
+    // calendar has no benefit worth this risk.
+    if (httpStatus(e) === 404 || httpStatus(e) === 410) {
+      return { ok: false, error: 'remote-event-gone', retryable: false }
+    }
     return classifyPushError(e)
   }
 }

@@ -38,8 +38,13 @@ function eventsDir(): string {
 
 /** The words for an orphaned event, shared by the Activity row and (in its own
  *  copy) the renderer's dialog line. */
-export function orphanNote(o: { provider: string; at: string }): string {
+export function orphanNote(o: { provider: string; at: string; reason?: string }): string {
   const where = o.provider.startsWith('google') ? 'Google Calendar' : o.provider.startsWith('outlook') ? 'Outlook' : 'your calendar'
+  if (o.reason === 'event-gone') {
+    // BUG-221. Says what happened and what was NOT done, because the thing the
+    // user needs to know is that we did not put it back on their calendar.
+    return `Kept here only: this meeting is no longer in ${where} (since ${o.at.slice(0, 10)}), so it was not re-added there.`
+  }
   return `Kept here only: the ${where} calendar it was on no longer exists (since ${o.at.slice(0, 10)}).`
 }
 
@@ -241,6 +246,14 @@ async function syncPush(id: string): Promise<boolean> {
     // Linked → PATCH; never linked → create + link (also adopts events made
     // while sync was off, once they're next created/edited).
     const res = event.externalId ? await pushUpdateEvent(event) : await pushInsertEvent(event)
+    // BUG-221 — the remote copy is gone and we are NOT putting it back. Unlink
+    // the local record and say why, the same landing place a dead calendar
+    // already uses. The event stays: it is the user's data, they did not ask
+    // to lose it here, and the old link is kept on the orphan note as evidence.
+    if (!res.ok && res.error === 'remote-event-gone') {
+      await withState(id, () => orphanEvent(eventsDir(), id, 'event-gone'))
+      return true
+    }
     return recordPushResult(id, res)
   } catch {
     return false // best-effort: a mirror failure never breaks the local store

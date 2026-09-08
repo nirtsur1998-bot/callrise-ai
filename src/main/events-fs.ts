@@ -31,7 +31,13 @@ export interface EventSync {
 export interface EventOrphan {
   provider: string
   externalId: string
-  reason: 'calendar-gone'
+  /** BUG-221 — two ways a link can die, and they are told apart because the
+   *  wording a user needs is different.
+   *    'calendar-gone' — the whole calendar was removed at the provider.
+   *    'event-gone'    — the calendar is fine and THIS event is not there any
+   *                      more, which in practice usually means the user
+   *                      deleted it at the provider. */
+  reason: 'calendar-gone' | 'event-gone'
   at: string
 }
 
@@ -263,7 +269,11 @@ function sanitizeOrphan(value: unknown): EventOrphan | undefined {
  * orphan note but no evidence would be a lie. `updatedAt` is bumped so the
  * change reaches the cloud mirror.
  */
-export async function orphanEvent(dir: string, id: string): Promise<CalendarEvent | null> {
+export async function orphanEvent(
+  dir: string,
+  id: string,
+  reason: EventOrphan['reason'] = 'calendar-gone'
+): Promise<CalendarEvent | null> {
   const event = await getEvent(dir, id)
   if (!event) return null
   if (event.orphaned && !event.externalId) return event
@@ -271,7 +281,7 @@ export async function orphanEvent(dir: string, id: string): Promise<CalendarEven
   event.orphaned = {
     provider: event.provider,
     externalId: event.externalId,
-    reason: 'calendar-gone',
+    reason,
     at: new Date().toISOString()
   }
   delete event.provider
