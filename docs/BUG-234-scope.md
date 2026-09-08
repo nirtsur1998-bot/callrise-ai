@@ -4,8 +4,13 @@
 
 ## The headline, and it reverses what I told you
 
-I said "twelve-plus call sites is not a small change". **The real count is 21 files and 25 tool
-definitions — and none of them has to change.**
+I said "twelve-plus call sites is not a small change". **The real count is 21 files, 27 tool
+definitions and 28 call sites — and none of them has to change.**
+
+*(Counts corrected after a fan-out survey checked mine: I had said 25 definitions from a `name:`
+grep, which under-counted. The survey also found that all 28 go through `completeWithFallback` and
+**none** through `streamWithFallback`, and independently classified **27 of 27** as structured
+output wearing a tool's clothes — the central claim below, arrived at separately.)*
 
 **This is an afternoon-to-three-days change, not a milestone.** Here is the fact that decides it:
 
@@ -42,11 +47,28 @@ the four adapter files.
 | 1 | `ai/providers/anthropic.ts` | send `output_config` instead of a forced tool when the model supports it; map the JSON back into `toolInput` | small |
 | 2 | `ai/providers/openai.ts` | `response_format: { type: 'json_schema', json_schema: { strict: true, schema } }`; same mapping | small |
 | 3 | `ai/providers/gemini.ts` | `responseMimeType: 'application/json'` + `responseSchema`; same mapping | small |
-| 4 | `ai/providers/openai-compatible.ts` | same as OpenAI, **per-provider** — this one file serves Groq, Mistral, Cerebras, OpenRouter, Cloudflare and DeepSeek, and they do not all support it identically | **the real work** |
+| 4 | `ai/providers/openai-compatible.ts` | same as OpenAI, **per-provider** — this one file is a factory serving **eight** providers (groq, openrouter, nvidia, cerebras, mistral, zai, huggingface, cloudflare), and they do not all support structured output identically | **the real work** |
 | 5 | `ai/model-catalog.ts` | a `supportsStructuredOutput` flag beside the existing `supportsToolCalling` | small |
 | 6 | `ai/capability-needs.ts` + `complete-with-fallback.ts` | prefer structured output where available, fall back to the forced tool where not — and stop excluding tool-less models from a request that no longer needs tools | medium |
 | 7 | `coach.ts:166,189` | `{ type: 'integer', minimum: 1, maximum: 5 }` — numeric constraints are the one JSON-Schema feature strict modes commonly forbid | **one line, twice** |
-| 8 | 12 test files touching `tool`/`toolInput` | extend rather than rewrite; the mapping keeps `toolInput` as the result shape | medium |
+| 8 | Tests | **bigger than I first said** — see below | medium |
+
+**Correction on the test surface, because my first estimate was wrong.** I said "12 test files". The
+survey counted **53 test files that reference `complete-with-fallback`** (22 `vi.mock` it, 31 import
+it for real), holding **429 test blocks** between them. Most need nothing. Two groups do:
+
+- **11 files assert on `toolInput`**; 4 of those dispatch their mock on `req.tool.name`, so they
+  break the moment a request stops carrying a tool.
+- **6 files mock `../model-catalog` with only `catalogEntry`** — adding a `supportsStructuredOutput`
+  read into the chain walk breaks all six, and it breaks them at import time rather than in an
+  assertion, which is the annoying kind.
+
+That second group is the only real surprise in the whole scope, and it is the reason the estimate
+below is a range rather than a number.
+
+**Useful precedent found:** `gemini.ts:75-98` already has `toGeminiSchema`, a schema transformer for
+that provider's dialect. A strict-mode schema mapper is the same shape, and there is already a place
+it belongs.
 
 **Call sites changed: zero.** They keep passing `tool`, and keep reading `result.toolInput`. The
 result shape does not move.
@@ -72,13 +94,18 @@ is not.
 
 ## The estimate
 
-- **Anthropic + OpenAI paths, catalog flag, capability plumbing, coach.ts, tests: one focused day.**
-  That covers the key you are buying and the obvious second.
-- **The `openai-compatible` fan-out: one to two more days**, because six providers share that file
-  and each has to be checked and flagged individually — and checked means *measured*, not read off a
-  docs page. That is where the risk lives, and it is also the part you can defer: those providers
-  keep working exactly as they do today until their flag is turned on.
-- **Total: 1 day to make your paid key correct, 2-3 days to do all of it.**
+- **Anthropic + OpenAI paths, catalog flag, capability plumbing, coach.ts: one focused day** for the
+  production code. That covers the key you are buying and the obvious second.
+- **The test surface: half a day to a day on top**, and it is where my first estimate was wrong —
+  the six `model-catalog` mocks break at import time, and 11 more assert on `toolInput`.
+- **The `openai-compatible` fan-out: one to two more days**, because **eight** providers share that
+  one factory and each has to be checked and flagged individually — and checked means *measured*,
+  not read off a docs page. That is where the remaining risk lives, and it is also the part you can
+  defer: every provider keeps working exactly as it does today until its flag is turned on.
+- **Total: ~1.5 days to make your paid key correct, 3-4 days to do all of it.**
+
+Still not a milestone. But I want the revision on the record rather than quietly shipping the
+original number: I said 1 day / 2-3 days before the survey, and the test surface moved it.
 
 **Do it in that order.** Day one makes Haiku right, which is the only provider that matters once you
 have the key. The free-tier fan-out can follow at leisure, and every provider still on the old path
