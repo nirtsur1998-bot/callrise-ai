@@ -19,10 +19,13 @@ const candidates = (n: number): { id: string; title: string }[] =>
 
 const ok = (): GenerateTitleResult => ({ ok: true, title: 'Acme — Renewal' })
 
+/** A signal that never fires — for the cases that are not about stopping. */
+const never = (): AbortSignal => new AbortController().signal
+
 describe('runTitleBackfill', () => {
   it('titles every candidate when everything works', async () => {
     const titleOne = vi.fn(async () => ok())
-    const s = await runTitleBackfill(candidates(5), { isAborted: () => false, titleOne })
+    const s = await runTitleBackfill(candidates(5), { isAborted: () => false, titleOne, signal: never() })
     expect(s).toEqual({ attempted: 5, titled: 5, failures: [], stoppedEarly: false })
     expect(titleOne).toHaveBeenCalledTimes(5)
   })
@@ -36,7 +39,8 @@ describe('runTitleBackfill', () => {
     // The rep presses Stop after the third call.
     const s = await runTitleBackfill(candidates(10), {
       isAborted: () => done >= 3,
-      titleOne
+      titleOne,
+      signal: never()
     })
     expect(s.attempted).toBe(3)
     expect(s.titled).toBe(3)
@@ -57,7 +61,7 @@ describe('runTitleBackfill', () => {
       if (id === 'call-3') return { ok: false, reason: 'no-transcript' }
       return ok()
     })
-    const s = await runTitleBackfill(candidates(5), { isAborted: () => false, titleOne })
+    const s = await runTitleBackfill(candidates(5), { isAborted: () => false, titleOne, signal: never() })
 
     expect(s.attempted).toBe(5)
     expect(s.titled).toBe(3)
@@ -85,7 +89,7 @@ describe('runTitleBackfill', () => {
     const titleOne = vi.fn(async (id: string): Promise<GenerateTitleResult> =>
       id === 'call-1' ? { ok: false, reason: 'ai-failed' } : ok()
     )
-    const s = await runTitleBackfill(candidates(6), { isAborted: () => false, titleOne })
+    const s = await runTitleBackfill(candidates(6), { isAborted: () => false, titleOne, signal: never() })
     expect(titleOne).toHaveBeenCalledTimes(6)
     expect(s.titled).toBe(5)
   })
@@ -95,7 +99,7 @@ describe('runTitleBackfill', () => {
       if (id === 'call-2') throw new Error('socket hang up')
       return ok()
     })
-    const s = await runTitleBackfill(candidates(4), { isAborted: () => false, titleOne })
+    const s = await runTitleBackfill(candidates(4), { isAborted: () => false, titleOne, signal: never() })
     expect(s.attempted).toBe(4)
     expect(s.titled).toBe(3)
     expect(s.failures[0]).toMatchObject({ callId: 'call-2', reason: 'ai-failed' })
@@ -107,6 +111,7 @@ describe('runTitleBackfill', () => {
     await runTitleBackfill(candidates(3), {
       isAborted: () => false,
       titleOne: async () => ok(),
+      signal: never(),
       onProgress: (d, t) => seen.push([d, t])
     })
     // The leading 0/3 matters: without it the bar appears only after the first
@@ -119,9 +124,84 @@ describe('runTitleBackfill', () => {
     ])
   })
 
+  // ── FOUNDER REPORT, 2026-09-08: "the stop button doesn't really stop it." ──
+  //
+  // It was true, and these three cases are the bug. The loop only observed the
+  // abort BETWEEN items, and one item is an AI call measured at 55 seconds on a
+  // bad fallback chain — so pressing Stop on the first item meant up to a
+  // minute of the UI still saying "Naming…", which is indistinguishable from a
+  // button that does nothing. The signal now reaches the provider SDK.
+
+  it('the signal reaches the work, so Stop can land INSIDE a slow request', async () => {
+    const controller = new AbortController()
+    const seen: AbortSignal[] = []
+    const titleOne = vi.fn(async (_id: string, opts: { signal: AbortSignal }) => {
+      seen.push(opts.signal)
+      return ok()
+    })
+    await runTitleBackfill(candidates(2), {
+      isAborted: () => controller.signal.aborted,
+      titleOne,
+      signal: controller.signal
+    })
+    // Without this the abort is only ever observed between items, which is the
+    // whole complaint.
+    expect(seen[0]).toBe(controller.signal)
+  })
+
+  it('an abort mid-request stops the run and is NOT recorded as a failed call', async () => {
+    const controller = new AbortController()
+    const titleOne = vi.fn(async (id: string): Promise<GenerateTitleResult> => {
+      if (id === 'call-1') {
+        // The rep pressed Stop while this request was in flight; the SDK
+        // rejects with an AbortError.
+        controller.abort()
+        const err = new Error('Request was aborted.')
+        err.name = 'AbortError'
+        throw err
+      }
+      return ok()
+    })
+    const s = await runTitleBackfill(candidates(5), {
+      isAborted: () => controller.signal.aborted,
+      titleOne,
+      signal: controller.signal
+    })
+
+    expect(s.stoppedEarly).toBe(true)
+    expect(s.titled).toBe(1)
+    // The interrupted call is not counted as attempted and NOT listed as a
+    // failure. Telling the rep a call "could not be named" when they cancelled
+    // it themselves is a false report, and it would be the loudest thing on
+    // screen after they pressed Stop.
+    expect(s.attempted).toBe(1)
+    expect(s.failures).toEqual([])
+    // and nothing after it ran
+    expect(titleOne).toHaveBeenCalledTimes(2)
+  })
+
+  it('an abort that arrives while an item SUCCEEDS still stops the run', async () => {
+    // The race: the click lands while a fast request is already returning, so
+    // nothing rejects. Checking only at the top of the loop would start one
+    // more call after the rep asked for none.
+    const controller = new AbortController()
+    const titleOne = vi.fn(async (id: string) => {
+      if (id === 'call-0') controller.abort()
+      return ok()
+    })
+    const s = await runTitleBackfill(candidates(4), {
+      isAborted: () => controller.signal.aborted,
+      titleOne,
+      signal: controller.signal
+    })
+    expect(titleOne).toHaveBeenCalledTimes(1)
+    expect(s.titled).toBe(1)
+    expect(s.stoppedEarly).toBe(true)
+  })
+
   it('does nothing, successfully, when there is nothing to name', async () => {
     const titleOne = vi.fn(async () => ok())
-    const s = await runTitleBackfill([], { isAborted: () => false, titleOne })
+    const s = await runTitleBackfill([], { isAborted: () => false, titleOne, signal: never() })
     expect(s).toEqual({ attempted: 0, titled: 0, failures: [], stoppedEarly: false })
     expect(titleOne).not.toHaveBeenCalled()
   })

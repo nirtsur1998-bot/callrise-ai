@@ -1127,14 +1127,19 @@ export function registerCalls(): void {
    * hid: the user saw a default title and had four equally plausible
    * explanations, none of them checkable.
    */
-  async function titleOneCall(callId: string): Promise<GenerateTitleResult> {
+  async function titleOneCall(
+    callId: string,
+    opts?: { signal?: AbortSignal }
+  ): Promise<GenerateTitleResult> {
     try {
       const call = await getCall(callsDir(), callId)
       if (!call?.segments?.length) {
         console.warn(`[title] ${callId}: no transcript to title`)
         return { ok: false, reason: 'no-transcript' }
       }
-      const result = await generateCallTitle(speechSegments(call.segments))
+      const result = await generateCallTitle(speechSegments(call.segments), {
+        signal: opts?.signal
+      })
       if (!result.ok) {
         console.warn(
           `[title] ${callId}: ${result.reason}${result.detail ? ` — ${result.detail}` : ''}`
@@ -1149,6 +1154,10 @@ export function registerCalls(): void {
       scheduleBackup() // the new title reaches the cloud like any other metadata edit
       return { ok: true, title: saved.title }
     } catch (err) {
+      // A cancelled request is the rep pressing Stop, not a failure. Rethrow so
+      // the backfill records it as "stopped" rather than adding a phantom entry
+      // to the list of calls that could not be named.
+      if (opts?.signal?.aborted) throw err
       console.error(`[title] ${callId}: unexpected failure`, err)
       return {
         ok: false,
@@ -1200,6 +1209,7 @@ export function registerCalls(): void {
           {
             isAborted: () => handle.signal.aborted,
             titleOne: titleOneCall,
+            signal: handle.signal,
             onProgress: (itemsDone, itemsTotal) =>
               handle.reportProgress({ mode: 'determinate', itemsDone, itemsTotal })
           }

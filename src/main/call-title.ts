@@ -92,7 +92,10 @@ export type GenerateTitleResult =
  * "failed", and "the transcript was empty" used to be one indistinguishable
  * `{ ok: false }`, which is exactly how five weeks of silent failure hid.
  */
-export async function generateCallTitle(segments: CallSegment[]): Promise<GenerateTitleResult> {
+export async function generateCallTitle(
+  segments: CallSegment[],
+  opts?: { signal?: AbortSignal }
+): Promise<GenerateTitleResult> {
   if (!segments.length) return { ok: false, reason: 'no-transcript' }
 
   const transcript = segments
@@ -108,6 +111,10 @@ export async function generateCallTitle(segments: CallSegment[]): Promise<Genera
       purpose: 'other',
       maxTokens: 60,
       tool: TITLE_TOOL,
+      // Threaded so Stop lands INSIDE the request. Every adapter passes
+      // req.signal to its SDK; the backfill's Stop was only observed between
+      // items until this existed, and one item was measured at 55 seconds.
+      signal: opts?.signal,
       messages: [{ role: 'user', content: `${PROMPT}${body}` }]
     })
     const raw = result.toolInput as { title?: unknown } | undefined
@@ -120,6 +127,11 @@ export async function generateCallTitle(segments: CallSegment[]): Promise<Genera
     if (fromText) return { ok: true, title: fromText }
     toolDetail = 'the model returned neither a tool call nor any text'
   } catch (err) {
+    // An abort is the rep pressing Stop. Rethrow rather than falling through:
+    // attempt 2 would open a SECOND request on an already-cancelled signal,
+    // which is one more round trip between the click and anything happening —
+    // the exact complaint that "Stop doesn't really stop it".
+    if (opts?.signal?.aborted) throw err
     toolDetail = err instanceof Error ? err.message : String(err)
   }
 
@@ -128,12 +140,17 @@ export async function generateCallTitle(segments: CallSegment[]): Promise<Genera
     const result = await completeWithFallback({
       purpose: 'other',
       maxTokens: 60,
+      signal: opts?.signal,
       messages: [{ role: 'user', content: `${TEXT_PROMPT}${body}` }]
     })
     const title = titleFromText(result.text)
     if (title) return { ok: true, title }
     return { ok: false, reason: 'no-title-returned', detail: toolDetail || 'empty response' }
   } catch (err) {
+    // Same rule as attempt 1: a cancelled request is not a failed one, and the
+    // caller needs to be able to tell them apart (title-backfill.ts records an
+    // abort as "stopped", never as a call that could not be named).
+    if (opts?.signal?.aborted) throw err
     return {
       ok: false,
       reason: 'ai-failed',

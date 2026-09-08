@@ -43,18 +43,41 @@ export interface BackfillCandidate {
 }
 
 export interface RunTitleBackfillOptions {
-  /** Checked BEFORE each call, so Stop takes effect at the next boundary
-   *  rather than after the whole list. */
+  /** Checked before AND after each call. */
   isAborted: () => boolean
-  /** Title one call. Injected so this module never touches the filesystem,
-   *  the AI, or the job queue. */
-  titleOne: (callId: string) => Promise<GenerateTitleResult>
+  /**
+   * Title one call. Injected so this module never touches the filesystem, the
+   * AI, or the job queue.
+   *
+   * FOUNDER REPORT, 2026-09-08: "the stop button doesn't really stop it."
+   * Correct, and the cause was here. This used to take no signal, so Stop was
+   * only observed BETWEEN items — and one item is an AI call that was measured
+   * at 55 seconds on a bad fallback chain. Pressing Stop on the first item
+   * meant a minute of the UI still saying "Naming…" with nothing to show for
+   * it, which is indistinguishable from a button that does nothing.
+   *
+   * The signal now reaches the provider SDK (every adapter threads
+   * `req.signal`), so Stop lands inside the request rather than after it. Same
+   * fix the objection scan already made for the same complaint — the answer
+   * was one file away, which is species 16 again.
+   */
+  titleOne: (callId: string, opts: { signal: AbortSignal }) => Promise<GenerateTitleResult>
+  /** Passed to `titleOne` so an in-flight AI call can be cut short. */
+  signal: AbortSignal
   onProgress?: (done: number, total: number) => void
+}
+
+/** An abort is not a failure. When the rep presses Stop mid-request the SDK
+ *  rejects, and recording that as "the AI call failed" would put a phantom
+ *  entry in the failure list for a call nobody chose to fail. */
+function isAbortError(err: unknown): boolean {
+  if (err instanceof Error) return err.name === 'AbortError' || /abort/i.test(err.message)
+  return false
 }
 
 export async function runTitleBackfill(
   candidates: BackfillCandidate[],
-  { isAborted, titleOne, onProgress }: RunTitleBackfillOptions
+  { isAborted, titleOne, signal, onProgress }: RunTitleBackfillOptions
 ): Promise<TitleBackfillSummary> {
   const summary: TitleBackfillSummary = {
     attempted: 0,
@@ -74,8 +97,17 @@ export async function runTitleBackfill(
     // relies on should be enforced where it is relied upon.
     let outcome: GenerateTitleResult
     try {
-      outcome = await titleOne(c.id)
+      outcome = await titleOne(c.id, { signal })
     } catch (err) {
+      if (isAbortError(err)) {
+        // Stopped INSIDE the request. This attempt did not happen as far as
+        // the report is concerned — it is not a failure, and counting it as
+        // one would tell the rep a call could not be named when in fact they
+        // interrupted it.
+        summary.attempted -= 1
+        summary.stoppedEarly = true
+        break
+      }
       outcome = {
         ok: false,
         reason: 'ai-failed',
@@ -91,6 +123,13 @@ export async function runTitleBackfill(
         detail: outcome.detail
       })
     onProgress?.(summary.attempted, candidates.length)
+    // Checked again AFTER the item: an abort that arrived while this call was
+    // in flight but did not reject it (a fast success racing the click) must
+    // still stop the run rather than starting one more.
+    if (isAborted()) {
+      summary.stoppedEarly = true
+      break
+    }
   }
   return summary
 }

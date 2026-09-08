@@ -51,6 +51,7 @@ export function BackfillTitlesCard(): React.JSX.Element | null {
   const [job, setJob] = useState<Job | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showFailures, setShowFailures] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const mountedRef = useRef(true)
   const notifiedDoneRef = useRef<string | null>(null)
 
@@ -99,6 +100,7 @@ export function BackfillTitlesCard(): React.JSX.Element | null {
   const start = useCallback(async () => {
     setError(null)
     setShowFailures(false)
+    setStopping(false)
     try {
       const res = await window.api.calls.backfillTitles()
       if (!mountedRef.current) return
@@ -115,10 +117,17 @@ export function BackfillTitlesCard(): React.JSX.Element | null {
 
   const stop = useCallback(async () => {
     if (!job) return
+    // The other half of the founder's "Stop doesn't really stop it". The main
+    // half was that the abort never reached the in-flight AI request; this is
+    // the half a user actually SEES. Even now that cancel lands inside the
+    // request, there is a real gap between the click and the job's state
+    // changing, and leaving "Naming… 0 of 121" with a live Stop button on
+    // screen through that gap is what makes a working button look broken.
+    setStopping(true)
     try {
       await window.api.jobs.cancel(job.id)
     } catch {
-      /* the job either stopped or it did not; the state below is the truth */
+      /* the job either stopped or it did not; the job state below is the truth */
     }
   }, [job])
 
@@ -161,14 +170,22 @@ export function BackfillTitlesCard(): React.JSX.Element | null {
           <div className="flex items-center gap-3">
             <p className="flex items-center gap-2 text-[13px] text-accent">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              {job?.progress.mode === 'determinate'
-                ? `Naming… ${job.progress.itemsDone} of ${job.progress.itemsTotal}`
-                : 'Naming…'}
+              {stopping
+                ? 'Stopping — finishing the call in flight…'
+                : job?.progress.mode === 'determinate'
+                  ? `Naming… ${job.progress.itemsDone} of ${job.progress.itemsTotal}`
+                  : 'Naming…'}
             </p>
             {/* Stopping is a first-class outcome, not an escape hatch:
                 everything named so far stays named. */}
-            <Button variant="secondary" size="sm" icon={XCircle} onClick={() => void stop()}>
-              Stop
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={XCircle}
+              disabled={stopping}
+              onClick={() => void stop()}
+            >
+              {stopping ? 'Stopping…' : 'Stop'}
             </Button>
           </div>
           <p className="text-[12px] text-faint">
