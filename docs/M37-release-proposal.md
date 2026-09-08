@@ -51,9 +51,44 @@ which is the corrupted-read case that would otherwise wipe every quote) and that
 The concern is not that it is wrong. It is that **it is one-way, it runs before anyone can look at
 it, and the only machine it has ever run on is the founder's.**
 
-So: **10% first, hold for one clean day, then 100%.** If the founder overrules this the way they
-overruled the last one, that is a defensible call — but I would rather have the disagreement on the
-record than approve my own recommendation into a one-way migration.
+So: **10% first, hold for one clean day, then 100%.**
+
+### The ramp criteria — and the honest version first
+
+**I cannot watch a 10% cohort.** Telemetry is off by default, so no counter reaches me; and nobody
+reports a quote that quietly vanished, because they never see it go. **"No reports" is not a
+criterion, it is the absence of one**, and if that were the whole plan then 10% would buy nothing at
+all except a smaller number of people harmed — which is a real benefit, but it is *blast radius*,
+not *observation*, and calling it the latter would be the third false claim this milestone caught.
+
+So rather than invent a criterion, I went and closed the hole the criterion would have been watching
+for. **BUG-236, found while writing this section:**
+
+`liveCallIds` came from `listCalls`, whose per-file reader ends
+`catch { return null } // skip unreadable / corrupt file`. A call whose file could not be read *for a
+moment* was therefore indistinguishable from a call the user deleted — and this sweep runs once, on
+first launch after an upgrade, on Windows, where a file briefly locked by antivirus is ordinary. It
+would have blanked that call's quotes permanently, on a call that still exists, with nothing
+recording that it had. The existing precondition only caught the read failing **entirely**; a
+**partial** read walked straight through it, and a partial read is both likelier and quieter.
+
+**Now a call is only treated as deleted when a direct filesystem check agrees it is gone.** A file
+that exists but did not parse is not a deleted call. Red-checked: ignoring the second instrument
+fails two tests.
+
+### What is actually watched, then
+
+| | |
+|---|---|
+| **The number** | `rescuedByFileCheck` in the sweep's `memory_meta` record — calls the listing thought were gone and the filesystem found alive. **It should be 0.** |
+| **Where it is readable** | in any profile's `memory.db`, and in the log, loudly. Not aggregate, not remote — but real, and readable off a machine that reports a problem for any reason. |
+| **What non-zero means** | the calls directory read is unreliable on that machine. Quotes were one check away from being destroyed. **Stop the ramp**, because the same condition on a build without this guard is exactly the unrecoverable case. |
+| **The founder's own machine** | the sweep has already run there, so it is *not* a data point for the ramp. Say so rather than counting it. |
+
+**The honest promise for the hold day:** it is one machine's worth of evidence — the VM walk, where
+I can read the sweep record directly after a first launch on a real profile copy. That is a genuine
+check on a real installer, and it is the only observation in this plan I can actually make. The 10%
+is blast radius, and I would rather name it that way than dress it up.
 
 ---
 

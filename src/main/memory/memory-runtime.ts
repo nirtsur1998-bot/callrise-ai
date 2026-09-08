@@ -5,6 +5,7 @@
 // where and why.
 import { app } from 'electron'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import type Database from 'better-sqlite3'
 import { memoryDbPath, openMemoryDb, migrate, type MigrateResult } from './db'
 import {
@@ -179,6 +180,11 @@ export interface QuoteSweepRecord {
   quotesRedacted?: number
   charactersRemoved?: number
   memoriesTotal?: number
+  /** BUG-236 — calls the bulk listing thought were gone and the filesystem
+   *  found alive. Zero on a healthy machine. Recorded rather than only logged
+   *  because it is the one number that says whether this irreversible sweep
+   *  can be trusted, and it has to be readable from a profile afterwards. */
+  rescuedByFileCheck?: number
 }
 
 export function quoteSweepRecord(handle: Database.Database): QuoteSweepRecord | null {
@@ -248,7 +254,27 @@ async function runQuoteRedactionSweepOnce(
       return
     }
 
-    const r = redactOrphanedQuotes(handle, liveCallIds)
+    // BUG-236 — the second instrument. listCalls SKIPS a file it cannot read
+    // (calls-fs.ts: `catch { return null } // skip unreadable / corrupt file`),
+    // so an unreadable call is indistinguishable from a deleted one, and on
+    // Windows a file briefly locked by antivirus on first launch after an
+    // upgrade is exactly that. Before blanking anything, ask the filesystem
+    // directly whether the call is really gone.
+    const r = redactOrphanedQuotes(
+      handle,
+      liveCallIds,
+      (callId) => !existsSync(join(callsDir, `${callId}.json`))
+    )
+    if (r.rescuedByFileCheck > 0) {
+      // The signal. If this is ever above zero the bulk listing disagreed with
+      // the filesystem, which means the sweep's input cannot be trusted on this
+      // machine — loud, because the alternative is silence about quotes that
+      // were one check away from being destroyed.
+      console.error(
+        `[sales-brain] quote sweep: ${r.rescuedByFileCheck} call(s) were missing from the ` +
+          'calls listing but present on disk — their quotes were NOT redacted'
+      )
+    }
     const record: QuoteSweepRecord = {
       status: 'ran',
       at: new Date().toISOString(),
@@ -256,7 +282,8 @@ async function runQuoteRedactionSweepOnce(
       memoriesTouched: r.memoriesTouched,
       quotesRedacted: r.quotesRedacted,
       charactersRemoved: r.charactersRemoved,
-      memoriesTotal: total
+      memoriesTotal: total,
+      rescuedByFileCheck: r.rescuedByFileCheck
     }
     setMeta(handle, QUOTE_SWEEP_KEY, JSON.stringify(record))
     console.log(

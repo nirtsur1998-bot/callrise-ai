@@ -212,3 +212,97 @@ describe('the backlog sweep', () => {
     expect(redactOrphanedQuotes(db, new Set()).quotesRedacted).toBe(1)
   })
 })
+describe('BUG-236 — an unreadable call file is not a deleted call', () => {
+  // THE HOLE THIS CLOSES, and it is the one that decided the release rollout.
+  //
+  // `liveCallIds` comes from listCalls, whose per-file reader ends
+  // `catch { return null } // skip unreadable / corrupt file` (calls-fs.ts).
+  // So a call whose file cannot be read for a moment is INDISTINGUISHABLE from
+  // a call the user deleted — and this sweep runs once, on first launch after
+  // an upgrade, on Windows, where a file briefly locked by antivirus is
+  // ordinary. It would blank that call's quotes permanently, on a call that
+  // still exists, and nothing anywhere would record that it had.
+  //
+  // The pre-existing precondition only catches the read failing ENTIRELY (an
+  // empty list while memories exist). A PARTIAL read walks straight through
+  // it, and a partial read is both likelier and quieter.
+
+  it('does NOT redact a call the listing missed but the filesystem still has', () => {
+    insertMemory(
+      db,
+      candidate({
+        statement: 'Budget lands in March',
+        evidence: [{ type: 'transcript', callId: 'locked-1', quote: 'our budget lands in March' }]
+      }),
+      embedding(11)
+    )
+
+    // The listing came back without it — an antivirus lock, a transient EBUSY,
+    // a corrupt parse. The filesystem says otherwise.
+    const r = redactOrphanedQuotes(db, new Set(), (callId) => callId !== 'locked-1')
+
+    expect(r.quotesRedacted, 'a still-present call had its quote destroyed').toBe(0)
+    expect(r.callsSwept).toBe(0)
+    expect(r.rescuedByFileCheck).toBe(1)
+    const e = listMemories(db)[0].evidence[0]
+    expect(e.type === 'transcript' && e.quote).toBe('our budget lands in March')
+  })
+
+  it('still redacts a call that is genuinely gone from both instruments', () => {
+    insertMemory(
+      db,
+      candidate({
+        statement: 'Mentioned a competitor',
+        evidence: [{ type: 'transcript', callId: 'deleted-1', quote: 'we also looked at Acme' }]
+      }),
+      embedding(12)
+    )
+
+    const r = redactOrphanedQuotes(db, new Set(), () => true)
+
+    expect(r.quotesRedacted).toBe(1)
+    expect(r.rescuedByFileCheck).toBe(0)
+    const e = listMemories(db)[0].evidence[0]
+    expect(e.type === 'transcript' && e.quote).toBe('')
+    // and the FACT survives, which is the whole design of BUG-215
+    expect(listMemories(db)[0].statement).toBe('Mentioned a competitor')
+  })
+
+  it('reports the rescue count, because a silent rescue is a silent warning', () => {
+    // The number is the rollout's only real signal: above zero means the calls
+    // listing disagreed with the filesystem on that machine, so the sweep's
+    // input cannot be trusted there. It is recorded in memory_meta rather than
+    // only logged, so it can be read back off a profile afterwards.
+    for (const [i, id] of ['a', 'b', 'c'].entries()) {
+      insertMemory(
+        db,
+        candidate({
+          statement: `Fact ${id}`,
+          evidence: [{ type: 'transcript', callId: `call-${id}`, quote: `quote ${id}` }]
+        }),
+        embedding(20 + i)
+      )
+    }
+    // Two of the three are really gone; one was merely unreadable.
+    const r = redactOrphanedQuotes(db, new Set(), (callId) => callId !== 'call-b')
+    expect(r.rescuedByFileCheck).toBe(1)
+    expect(r.callsSwept).toBe(2)
+    const kept = listMemories(db).find((m) => m.statement === 'Fact b')?.evidence[0]
+    expect(kept && kept.type === 'transcript' && kept.quote).toBe('quote b')
+  })
+
+  it('without the check, the old destructive behaviour is exactly what happens', () => {
+    // Kept deliberately: it documents what the sweep does when nobody passes
+    // the second instrument, which is what shipped before this fix and what
+    // the pure unit tests above still exercise.
+    insertMemory(
+      db,
+      candidate({
+        statement: 'Would have been destroyed',
+        evidence: [{ type: 'transcript', callId: 'locked-2', quote: 'still here' }]
+      }),
+      embedding(13)
+    )
+    expect(redactOrphanedQuotes(db, new Set()).quotesRedacted).toBe(1)
+  })
+})

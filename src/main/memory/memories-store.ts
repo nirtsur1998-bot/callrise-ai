@@ -715,15 +715,58 @@ export function redactCallQuotes(
  */
 export function redactOrphanedQuotes(
   db: Database.Database,
-  liveCallIds: ReadonlySet<string>
-): { memoriesTouched: number; quotesRedacted: number; charactersRemoved: number; callsSwept: number } {
-  const orphaned = new Set<string>()
+  liveCallIds: ReadonlySet<string>,
+  /**
+   * BUG-236 — a SECOND, INDEPENDENT instrument answering "is this call really
+   * gone?", consulted before anything is blanked.
+   *
+   * WHY IT EXISTS. `liveCallIds` comes from `listCalls`, whose per-file reader
+   * ends `catch { return null } // skip unreadable / corrupt file`
+   * (calls-fs.ts:1163). A call whose file is momentarily unreadable is
+   * therefore INDISTINGUISHABLE from a call the user deleted — and on Windows,
+   * on first launch after an upgrade, a file briefly locked by antivirus is
+   * not hypothetical. This sweep would blank that call's quotes permanently,
+   * on a call that still exists, with nothing anywhere recording that it had.
+   *
+   * The existing precondition only catches the read failing ENTIRELY (empty
+   * list, memories present). A PARTIAL read walks straight through it, and a
+   * partial read is both the likelier failure and the one that leaves no
+   * trace.
+   *
+   * So a call counts as orphaned only when a direct filesystem check agrees it
+   * is gone. **A file that exists but did not parse is not a deleted call.**
+   *
+   * Optional so the pure unit tests that predate this can still drive the
+   * function with a set alone; the runtime always passes one.
+   */
+  isGenuinelyGone?: (callId: string) => boolean
+): {
+  memoriesTouched: number
+  quotesRedacted: number
+  charactersRemoved: number
+  callsSwept: number
+  /** Calls the bulk listing believed were gone and the file check found alive.
+   *  NOT a count of work done — a count of destruction avoided. Anything above
+   *  zero means the calls directory read is unreliable on that machine, and it
+   *  is the one number worth watching during a staged rollout. */
+  rescuedByFileCheck: number
+} {
+  const candidates = new Set<string>()
   for (const m of listMemories(db, { statuses: ['active', 'hypothesis', 'invalidated'] })) {
     for (const e of m.evidence) {
       if (e.type !== 'transcript' || !e.quote) continue
       if (e.callId.includes(':')) continue // assistant:/onboarding: are not calls
-      if (!liveCallIds.has(e.callId)) orphaned.add(e.callId)
+      if (!liveCallIds.has(e.callId)) candidates.add(e.callId)
     }
+  }
+  const orphaned = new Set<string>()
+  let rescuedByFileCheck = 0
+  for (const callId of candidates) {
+    if (isGenuinelyGone && !isGenuinelyGone(callId)) {
+      rescuedByFileCheck += 1
+      continue
+    }
+    orphaned.add(callId)
   }
   let memoriesTouched = 0
   let quotesRedacted = 0
@@ -734,7 +777,13 @@ export function redactOrphanedQuotes(
     quotesRedacted += r.quotesRedacted
     charactersRemoved += r.charactersRemoved
   }
-  return { memoriesTouched, quotesRedacted, charactersRemoved, callsSwept: orphaned.size }
+  return {
+    memoriesTouched,
+    quotesRedacted,
+    charactersRemoved,
+    callsSwept: orphaned.size,
+    rescuedByFileCheck
+  }
 }
 
 /**
