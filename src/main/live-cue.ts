@@ -466,11 +466,28 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
   // this rides along with (which already sends the same transcript window
   // for cue generation regardless of this setting).
   const includeBuyerName = isSelfIntroExtractionAllowed()
-  // M25 Phase 3 — a cheap, synchronous DB read of an already-compiled
-  // profile (see profile-injection.ts's own doc comment) — genuinely zero
-  // added latency on this specific path, which is the whole reason the
-  // profile gets PREcompiled by consolidation.ts rather than assembled
-  // here. '' when Sales Brain is off or nothing's compiled yet.
+  // M25 Phase 3 — a cheap, synchronous read of an already-compiled profile
+  // (see profile-injection.ts), which is the whole reason the profile gets
+  // PREcompiled by consolidation.ts rather than assembled here. '' when Sales
+  // Brain is off or nothing's compiled yet.
+  //
+  // MEASURED 2026-09-08, because this comment used to say "genuinely zero
+  // added latency" and that was a claim nobody had taken:
+  //
+  //     readFileSync + JSON.parse of app-settings.json   0.054 ms
+  //     compiled_profiles PRIMARY KEY lookup             0.005 ms
+  //     one profileSection() call                        0.059 ms
+  //     against the 6,000 ms cue budget                  0.001 %
+  //
+  // (founder's machine, 3,266-byte settings file, 2,000 iterations.)
+  //
+  // So: negligible, which is what the old comment meant — but not zero, and
+  // the difference matters because of WHERE this sentence sits. It is the
+  // first thing anyone reads when deciding whether to inject a SECOND profile
+  // here (BUG-222 proposes exactly that, which would double the settings read
+  // to 0.118 ms per cue). A comment that grants permission is worth more
+  // scrutiny than one that describes, because the next person does not
+  // re-derive it — they cite it.
   const salesBrainMicro = repProfileSection('micro')
 
   try {

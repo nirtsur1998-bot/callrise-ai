@@ -285,6 +285,25 @@ export function BackupCard(): React.JSX.Element {
         <p className="mt-4 mb-2 text-[11px] font-medium tracking-wide text-faint uppercase">
           Optional — {syncedCount} of {OPTIONAL_ITEMS.length} synced
         </p>
+        {/* BUG-223 — the scope of these switches, said once above all seven.
+            Each row is named for a CATEGORY ("Call recordings & transcripts"),
+            under a heading about what leaves this device, so a user who turns
+            one off has expressed a view about that category and the app
+            honours it for exactly one of the two places the data goes.
+            syncScope governs Supabase and nothing else: a grep for it across
+            live-cue.ts, coach.ts, summarize.ts and memory/extraction.ts
+            returns nothing, correctly, because gating an AI feature on a
+            BACKUP preference would be the wrong coupling.
+            The founder's decision was to disclose rather than gate: "AI reads
+            your calls" is the product, and a toggle implying "send my
+            transcripts but not really" would be worse than an honest
+            sentence. Placed above the list rather than on one row, because
+            annotating one would leave the other six making the same implicit
+            claim. */}
+        <p className="mb-2 text-[12px] text-faint">
+          These control your backup only. Transcripts also go to your AI provider whenever a feature
+          reads a call.
+        </p>
         <ul className="space-y-1.5">
           {OPTIONAL_ITEMS.map(({ key, icon: Icon, label }) => {
             // BUG-214 — a row whose switch is ON while nothing is being

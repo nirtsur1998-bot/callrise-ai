@@ -2,9 +2,15 @@
 // (live cues, coaching reports, pre-call brief, CRM notes) uses to pull in
 // a precompiled profile. Deliberately just a DB read of an already-
 // compiled row (see consolidation.ts's compileProfile) — NEVER an AI call,
-// NEVER a live retrieval pass — so injecting this anywhere adds no
-// meaningful latency, including on the live-cue path where that matters
-// most. Returns '' (never throws, never null-checks needed by callers) when
+// NEVER a live retrieval pass.
+//
+// COST, MEASURED 2026-09-08 rather than asserted: 0.059 ms per call on the
+// founder's machine — 0.054 ms of it the UNCACHED readFileSync + JSON.parse
+// that isSalesBrainEnabled() does via loadAppSettings(), and 0.005 ms the
+// primary-key row lookup. That is 0.001% of the live-cue path's 6,000 ms
+// budget, so "negligible" holds; "no latency" does not, and the settings read
+// rather than the DB read is where nearly all of it goes. Injecting a second
+// profile on the same path doubles it, to 0.118 ms. Returns '' (never throws, never null-checks needed by callers) when
 // Sales Brain is off, not yet initialized, or no profile has been compiled
 // for that scope yet (e.g. a brand-new install with zero calls processed).
 import { isSalesBrainEnabled } from '../app-settings'
