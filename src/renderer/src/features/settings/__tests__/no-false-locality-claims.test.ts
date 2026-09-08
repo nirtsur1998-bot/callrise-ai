@@ -168,26 +168,84 @@ const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
     because:
       'Describes where a NOTIFICATION appears, not where data is kept. True: local notifications ' +
       'need the app running.'
+  },
+  // ── Moved here from PENDING_FOUNDER_APPROVAL on 2026-09-08 (round five).
+  //    Both were pinned as FALSE by a sweep and neither was ever argued. Read
+  //    against the code, both are true. See PENDING_FOUNDER_APPROVAL's doc
+  //    comment for why that asymmetry was the real defect.
+  {
+    file: 'features/coaching/CoachingView.tsx',
+    contains: 'nothing new leaves your device',
+    because:
+      'TRUE, and verified rather than assumed. Skill tracking makes no AI call of its own: ' +
+      'coach2:getProgress (calls.ts:624) reads the `skills` already stored on call summaries, and ' +
+      'focus-skill-fs.ts contains no network code. Turning coach2 on changes the OUTBOUND coach ' +
+      'prompt only by a constant methodology string (coach.ts:89-94) and a wider tool schema — no ' +
+      'user data that was not already being sent by the coaching run this rides on. The claim is ' +
+      'MARGINAL ("nothing NEW leaves"), which is what makes it true; an absolute version would ' +
+      'not be. NOTE the sentence around it was false for a different reason and has been fixed — ' +
+      'see CoachingView.tsx and taxonomy species 92.'
+  },
+  {
+    file: 'features/home/AccountMigrationNoticeCard.tsx',
+    contains: 'completely unaffected',
+    because:
+      'TRUE as written. "Your calls, transcripts, contacts and Sales Brain live on this computer" ' +
+      'says the data lives here, which it does; it does not say ONLY, and the sentence is about ' +
+      'the Supabase PROJECT SWITCH, which touches nothing local. Matched because the pattern is ' +
+      'deliberately wide and this sentence wraps across two JSX lines — a true positive for the ' +
+      'net, a false one for the finding.'
   }
 ]
 
 /** Sites that ARE false and are NOT YET FIXED, because privacy copy is
- *  approved word by word by the founder and these two have not been.
+ *  approved word by word by the founder and these have not been.
  *
- *  Pinned to their exact contents on purpose. The guard goes red when a
- *  THIRD false site appears, and ALSO when either of these is finally fixed
- *  — which forces the list to shrink rather than rot. Debt visible in the
- *  gate, not debt hidden by an allowlist. */
-const PENDING_FOUNDER_APPROVAL: { file: string; contains: string }[] = [
-  { file: 'features/home/activationSteps.ts', contains: 'Runs entirely on your own device' },
-  { file: 'features/settings/MemoryCenterSection.tsx', contains: 'Nothing is sent anywhere' },
+ *  Pinned to their exact contents on purpose. The guard goes red when a NEW
+ *  false site appears, and ALSO when one of these is finally fixed — which
+ *  forces the list to shrink rather than rot. Debt visible in the gate, not
+ *  debt hidden by an allowlist.
+ *
+ *  `because` is REQUIRED, and it was not until 2026-09-08. ACCOUNTED_FOR has
+ *  always demanded a written argument for calling a site FINE; this list
+ *  demanded nothing for calling a site a LIE. That asymmetry is backwards and
+ *  it cost: TWO of the seven entries here turned out to be TRUE when someone
+ *  finally read them against the code — CoachingView's locality clause, and
+ *  the migration card's "live on this computer", which never claimed
+ *  exclusivity. Both sat as debt for a week on nobody's argument. An unargued
+ *  accusation rots exactly like an unargued exemption. */
+const PENDING_FOUNDER_APPROVAL: { file: string; contains: string; because: string }[] = [
+  {
+    file: 'features/home/activationSteps.ts',
+    contains: 'Runs entirely on your own device',
+    because:
+      'False three ways for Sales Brain: extraction posts the transcript to the AI provider, the ' +
+      'nightly reflection posts the derived facts, and memory.db uploads to the sales-brain ' +
+      'bucket when salesBrain AND transcripts are both on.'
+  },
+  {
+    file: 'features/settings/MemoryCenterSection.tsx',
+    contains: 'Nothing is sent anywhere',
+    because:
+      'The same falseness as activationSteps, and worse placed: this is the `cost` line of an ' +
+      'off-state — the one sentence whose whole job is to say what turning the feature on will ' +
+      'cost. It says it costs nothing.'
+  },
   // Found by DRIVING the app, not by reading source: it is the first thing on
   // the Privacy & data page, two paragraphs above that same page's own line
   // reading "Call recordings & transcripts sync is ON — your buyer
   // conversations are stored in your cloud account, not just this device."
   // Unconditional, and its doc comment calls it "a short, honest recap".
   // Three of the four categories it names were syncing when it was read.
-  { file: 'features/settings/PrivacyNoticeCard.tsx', contains: 'live only on this' },
+  {
+    file: 'features/settings/PrivacyNoticeCard.tsx',
+    contains: 'live only on this',
+    because:
+      'Unconditional, and false for transcripts (backup AND the AI provider), the knowledge base ' +
+      '(its own toggle), and app settings (backup_settings). It also names "call recordings", ' +
+      'which do not exist — no code path writes call audio to disk or uploads it. Round five ' +
+      'replaces the whole card.'
+  },
   // ── Added 2026-09-07. Four more, all found by an independent adversarial
   //    sweep rather than by this guard, and one of them had been recorded HERE
   //    as true.
@@ -203,10 +261,26 @@ const PENDING_FOUNDER_APPROVAL: { file: string; contains: string }[] = [
   // word-for-word transcript text leaves the computer while this sentence says
   // it does not. An allowlist entry with a reason is still only as good as the
   // reason.
-  { file: 'features/backup/BackupCard.tsx', contains: 'never leave this computer' },
-  { file: 'features/coaching/CoachingView.tsx', contains: 'nothing new leaves your device' },
-  { file: 'features/home/AccountMigrationNoticeCard.tsx', contains: 'completely unaffected' },
-  { file: 'features/settings/TelemetrySection.tsx', contains: 'Nothing has been sent from this computer' }
+  {
+    file: 'features/backup/BackupCard.tsx',
+    contains: 'never leave this computer',
+    because:
+      'The reason above, plus a second one found in round five: the call AUDIO streams to ' +
+      'Deepgram live on every call (transcription.ts:487), with no toggle at all. So the sentence ' +
+      'is false even for a user with every backup category off and Sales Brain off.'
+  },
+  {
+    file: 'features/settings/TelemetrySection.tsx',
+    contains: 'Nothing has been sent from this computer',
+    because:
+      'Worded absolutely on a privacy screen while scoped by its surroundings to diagnostics — ' +
+      'and false inside its own scope too: the sent log is user-deletable (sent-log.ts, the ' +
+      'Delete button in this same card), so clearing it makes the app say nothing was ever sent.'
+  }
+  // ── WITHDRAWN 2026-09-08, round five. Two entries left this list because
+  //    they are TRUE, not because they were fixed. Both are now in
+  //    ACCOUNTED_FOR with the argument that should have been required of the
+  //    pin in the first place. See this list's doc comment.
 ]
 
 /** Directories holding SIMULATED sales dialogue rather than UI copy. A
@@ -300,7 +374,16 @@ describe('the app makes no false claim about where the user data lives', () => {
     ).toEqual([])
   })
 
-  it('the seven sites awaiting founder approval are still exactly seven, and still there', () => {
+  it('every pinned false site carries a written argument for calling it false', () => {
+    // The correction of 2026-09-08. Calling a site a LIE now costs the same
+    // as calling one FINE: a reason someone can check. Two entries here were
+    // true and nobody had to say why they were not.
+    for (const p of PENDING_FOUNDER_APPROVAL) {
+      expect(p.because.length, `${p.file} is pinned as false with no argument`).toBeGreaterThan(40)
+    }
+  })
+
+  it('the five sites awaiting founder approval are still exactly five, and still there', () => {
     // Red in BOTH directions, so listed debt cannot quietly become permanent.
     for (const p of PENDING_FOUNDER_APPROVAL) {
       const hit = claims.find((c) => c.file === p.file && c.text.includes(p.contains))
@@ -313,7 +396,7 @@ describe('the app makes no false claim about where the user data lives', () => {
     expect(
       PENDING_FOUNDER_APPROVAL.length,
       'the count of known-false, unapproved copy sites changed'
-    ).toBe(7)
+    ).toBe(5)
   })
 
   it('the three approved strings say where the data actually goes', () => {

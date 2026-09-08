@@ -39,8 +39,26 @@ export function CoachingView(): React.JSX.Element {
             reason={{
               kind: 'off',
               settingsPage: 'coach2',
-              what: 'Scores every coached call against eight named selling skills and charts how each one moves over time, so you can see which is actually improving and pick one to work on.',
-              cost: 'Uses your existing coaching results — no extra AI calls, nothing new leaves your device.',
+              // Round five. "Uses your existing coaching results" and "every
+              // coached call" were both backwards: coach.ts:541-562 computes
+              // `skills` only while this flag is already on, and nothing
+              // recomputes them for past calls — so switching it on scores
+              // none of your existing coaching and the dashboard stays empty
+              // until the next coached call. The behaviour cannot be fixed
+              // instead: computeSkillScores needs a benchmark built from the
+              // transcript and a methodologyAdherence that comes out of the AI
+              // response, so scoring old calls means re-coaching them, which
+              // is exactly what the next clause promises not to do.
+              //
+              // The locality clause is TRUE and is kept verbatim — coach2
+              // adds a constant methodology string and a wider tool schema to
+              // a prompt that was already being sent, and getProgress reads
+              // stored rows with no network call at all. It was pinned as a
+              // false locality claim for a week; the false half was the one
+              // beside it, which nobody read because the sweep had not
+              // matched there (taxonomy species 92).
+              what: 'Scores each call you coach against eight named selling skills and charts how each one moves over time, so you can see which is actually improving and pick one to work on. Scoring starts from your next coached call.',
+              cost: 'Uses the coaching you already run — no extra AI calls, nothing new leaves your device.',
               actionLabel: 'Turn on skill tracking'
             }}
           />
