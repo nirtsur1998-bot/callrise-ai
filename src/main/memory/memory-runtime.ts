@@ -165,10 +165,25 @@ export async function initSalesBrain(): Promise<{ ok: boolean; detail: string }>
   return lastInitResult
 }
 
-/** memory_meta key holding the sweep's record. Its presence is what stops the
- *  sweep re-running; its CONTENTS are the counts, so "it ran and found
+/** memory_meta key holding the sweep's record. A COMPLETED RUN is what stops
+ *  the sweep re-running; its CONTENTS are the counts, so "it ran and found
  *  nothing" and "it never ran" are different states rather than both being
- *  silence. */
+ *  silence.
+ *
+ *  BUG-238 — the latch used to test the record's PRESENCE, so a
+ *  `status: 'skipped'` record disabled the sweep permanently. Both skip paths
+ *  below are TRANSIENT: a connection replaced during startup, and the safety
+ *  refusal taken when the calls directory reads as empty. The refusal is the
+ *  worse one, because it fires in exactly the conditions BUG-236 was written
+ *  about — a Windows first launch after an upgrade, files briefly locked by
+ *  antivirus. So the safety refusal became a permanent opt-out of the safety
+ *  feature: BUG-215's promise, that deleting a call takes its words out of the
+ *  Sales Brain, silently never ran on that machine and nothing said so.
+ *
+ *  The sibling job below always had this right
+ *  (`temporalBackfillRecord(handle)?.status === 'ran'`), and its own comment
+ *  spells out the reasoning this one contradicted. The asymmetry between two
+ *  one-shot jobs in the same file was the finding, not the line. */
 const QUOTE_SWEEP_KEY = 'bug215.quoteSweep'
 
 export interface QuoteSweepRecord {
@@ -194,6 +209,24 @@ export function quoteSweepRecord(handle: Database.Database): QuoteSweepRecord | 
   } catch {
     return null
   }
+}
+
+/**
+ * BUG-238 — the latch, extracted so the DECISION can be tested rather than
+ * only the string that expresses it.
+ *
+ * Only a COMPLETED run stops the sweep. A `skipped` record means the sweep
+ * never got to do its work — a connection replaced mid-startup, or the safety
+ * refusal when the calls directory read as empty — and both of those are
+ * conditions of one launch, not of the profile. Latching on them left
+ * BUG-215's promise permanently unexecuted on that machine, silently.
+ *
+ * Deliberately NOT `record !== null`: that is the bug, and writing it as a
+ * named predicate is what stops it being re-introduced by someone reading the
+ * call site alone.
+ */
+export function quoteSweepIsComplete(handle: Database.Database): boolean {
+  return quoteSweepRecord(handle)?.status === 'ran'
 }
 
 /**
@@ -249,7 +282,11 @@ async function runQuoteRedactionSweepOnce(
 ): Promise<void> {
   try {
     if (!handle.open) return
-    if (quoteSweepRecord(handle)) return
+    // BUG-238 — a COMPLETED run latches; a skip is retried on the next launch.
+    // See QUOTE_SWEEP_KEY's comment: testing presence made both transient skip
+    // paths permanent, and turned the safety refusal into a permanent opt-out
+    // of the safety feature.
+    if (quoteSweepIsComplete(handle)) return
 
     const summaries = await listCalls(callsDir, { includeDeleted: false })
     const liveCallIds = new Set(summaries.map((c) => c.id))
