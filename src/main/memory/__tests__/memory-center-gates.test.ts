@@ -36,7 +36,18 @@ vi.mock('electron', () => ({
 }))
 
 const salesBrainOn = { value: true }
-vi.mock('../../app-settings', () => ({ isSalesBrainEnabled: () => salesBrainOn.value }))
+const erasedNotified = { count: 0 }
+// BUG-206 — the erase now notifies backup.ts so the CLOUD copy is scrubbed
+// too. Mocked as a spy rather than a no-op so the assertion below can check it
+// FIRED, not merely that the module loaded: a mock missing a surface the code
+// calls does not fail, it routes the code down the throw branch while every
+// old assertion still passes (taxonomy species 93).
+vi.mock('../../app-settings', () => ({
+  isSalesBrainEnabled: () => salesBrainOn.value,
+  notifySalesBrainErased: () => {
+    erasedNotified.count += 1
+  }
+}))
 vi.mock('../../calls-fs', () => ({
   setCallSalesBrainExcluded: async () => true,
   getCall: async () => null
@@ -179,6 +190,37 @@ describe('the destructive doors do what they say — while enabled', () => {
     expect(countMemories()).toBe(1)
     await call('salesBrain:memories:forgetEverything')
     expect(countMemories()).toBe(0)
+  })
+
+  it('BUG-206 — and the erase reaches the CLOUD, not just the local tables', async () => {
+    // Emptying the local store was never the missing half. The copy already in
+    // the sales-brain bucket was untouched, backup.ts correctly refused to push
+    // emptiness over it, and the next restore brought everything back — under a
+    // dialog reading "This cannot be undone".
+    //
+    // Asserted on the notification FIRING, not on the mock merely existing:
+    // adding notifySalesBrainErased to the mock silenced a module error, and a
+    // mock that only satisfies an import proves nothing about behaviour.
+    const before = erasedNotified.count
+    seed('m2', 'b')
+    await call('salesBrain:memories:forgetEverything')
+    expect(
+      erasedNotified.count,
+      'the erase must queue a cloud scrub, or the cloud copy outlives the wipe'
+    ).toBe(before + 1)
+  })
+
+  it('and a REFUSED erase queues nothing — no scrub without a deletion', async () => {
+    // The pairing that stops the fix becoming its own bug: when Sales Brain is
+    // off the handler returns { ok: false } and deletes nothing, so it must not
+    // queue a cloud scrub either. Notifying here would delete a cloud brain the
+    // user still has locally — an erase they never asked for.
+    salesBrainOn.value = false
+    const before = erasedNotified.count
+    const res = (await call('salesBrain:memories:forgetEverything')) as { ok: boolean }
+    salesBrainOn.value = true
+    expect(res.ok).toBe(false)
+    expect(erasedNotified.count, 'a refused erase must not scrub the cloud').toBe(before)
   })
 })
 

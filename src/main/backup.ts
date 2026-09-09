@@ -41,6 +41,7 @@ import { loadDealStagesMeta, applyPulledDealStages } from './deal-stages'
 import {
   loadAppSettings,
   applyPulledSettings,
+  setSalesBrainErasedListener,
   setSyncScopeDisabledListener,
   type BackupSyncScope
 } from './app-settings'
@@ -889,6 +890,30 @@ export async function downloadSalesBrainDb(
   //   >=1 memory row          -> DO NOT restore     (the M25 invariant, intact)
   //   0 memory rows           -> restore            (an empty brain is not local truth)
   //   unopenable / corrupt    -> rename aside, THEN restore
+  //
+  // BUG-206 adds ONE row above all of them, and the reason is the whole fix:
+  //
+  //   0 rows AND an erase queued -> DO NOT restore   (the user asked for empty)
+  //
+  // "EMPTY" IS A STATE. "THE USER PRESSED FORGET EVERYTHING" IS AN EVENT.
+  // Inferring the event from the state was the original mistake: every row in
+  // the table above reads the store's CONTENTS and guesses intent from them,
+  // which cannot tell an erase from a broken store, because both are empty.
+  //
+  // So intent is read from where it was actually recorded — the pending-scrub
+  // queue, written when the user pressed the button. Deliberately NOT a marker
+  // inside memory.db: a marker in the thing being erased is unreadable exactly
+  // when the store is broken, which is the one case that must never look like
+  // an erase. The queue is separate, durable, atomic, and self-clearing once
+  // the scrub drains.
+  //
+  // This closes the window between the erase and a successful scrub — an
+  // offline erase followed by a sign-in before the push completes. After the
+  // scrub drains there is no cloud object left to restore anyway.
+  if ((await readPendingScrubs()).includes('salesBrain')) {
+    console.log('[backup] Sales Brain restore skipped: the user erased it and the scrub is pending')
+    return
+  }
   const local = localMemoryCount(dbPath)
   if (local.ok && local.count > 0) {
     return // real local memories — never overwrite them from the cloud
@@ -1616,6 +1641,13 @@ export function registerBackup(): void {
   // A privacy toggle turned OFF locally → queue a durable cloud scrub of that
   // category (drained at the start of the next push, retried until done).
   setSyncScopeDisabledListener((keys) => queuePendingScrubs(expandDisabledScrubKeys(keys)))
+
+  // BUG-206 — an erase joins the SAME path a scope toggle-off already uses.
+  // `salesBrain` was already a scrub key with a proven branch in
+  // drainPendingScrubs (BUG-204's eraseStoragePrefixProven, verified against
+  // the live project). forgetEverything simply never queued one, so the local
+  // wipe was real and the cloud copy outlived it.
+  setSalesBrainErasedListener(() => queuePendingScrubs(['salesBrain']))
 
   // M26 Phase 3 — the MANUAL "Sync now" button is a MAINTENANCE-lane job so
   // its progress is visible (and survives leaving Settings). Deliberately

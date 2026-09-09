@@ -1105,6 +1105,42 @@ export function setSyncScopeDisabledListener(fn: (keys: SyncScopeKey[]) => void)
 }
 
 /**
+ * BUG-206 — "Forget everything" is an ERASE, and an erase must reach the cloud.
+ *
+ * `backup.ts` already says how an erase is supposed to travel: *"an erasure
+ * travels as a DELETE rather than as an upload of emptiness… nothing
+ * legitimate uploads an empty brain."* That is right, and the empty-upload
+ * refusal it guards stays exactly as it is. The defect was never that the
+ * refusal was wrong — it was that `forgetEverything` never joined the path.
+ * The user emptied the local store, the refusal correctly declined to push
+ * emptiness over the cloud copy, and the next restore brought everything back,
+ * under a dialog reading "This cannot be undone".
+ *
+ * Same callback-registration shape as onSyncScopeDisabled, for the same
+ * reason: memory-center-ipc.ts already imports this module, so there is no
+ * cycle, and backup.ts stays the only place that knows how a scrub is queued.
+ *
+ * Fired ONLY by the user's explicit erase — never by a pull, a migration, or a
+ * store that merely reads as empty. See downloadSalesBrainDb for why that
+ * distinction is the whole fix.
+ */
+let onSalesBrainErased: (() => void) | null = null
+export function setSalesBrainErasedListener(fn: () => void): void {
+  onSalesBrainErased = fn
+}
+
+/** Called by the Memory Center's forgetEverything handler, after the local
+ *  wipe succeeds. Never throws into the erase: a queued scrub that fails must
+ *  not make the user think their local deletion failed too. */
+export function notifySalesBrainErased(): void {
+  try {
+    onSalesBrainErased?.()
+  } catch (err) {
+    console.error('[app-settings] sales brain erase listener threw:', err)
+  }
+}
+
+/**
  * Called whenever a save flips `detection.enabled` - detection-service.ts
  * registers this so toggling the Settings switch starts/stops the live
  * CallDetector immediately, instead of only taking effect on next launch.
