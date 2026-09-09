@@ -23,6 +23,21 @@
 //
 // With no --exe it reads the unpacked build's exe under dist/, which is the
 // same binary the installer carries.
+//
+// ── ONE CAVEAT, SO NOBODY QUOTES A PASS AS MORE THAN IT IS ───────────────────
+//
+// The FRESHNESS half below compares the artifact's FILE MTIME against a commit
+// time. That is meaningful for a LOCAL build, where mtime is when the build
+// wrote the file. It is MEANINGLESS for a DOWNLOADED artifact, where mtime is
+// when curl finished — always "now", so it always passes, and it passes just as
+// happily over a binary built from the wrong commit.
+//
+// So: pointing --exe at something you just downloaded from the release exercises
+// the VERSION half only. The freshness line in that run is noise. Do not cite it
+// as evidence that a shipped artifact is current; it cannot answer that. What
+// can: the release workflow's own headSha, which says which commit CI built.
+// (Recorded 2026-09-09, when this exact pass appeared under v1.11.0's checks and
+// was reported as a caveat rather than counted.)
 import { execFileSync, execSync } from 'node:child_process'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -138,6 +153,11 @@ try {
   for (const exe of found) {
     const built = statSync(exe).mtimeMs
     const skewMin = Math.round((built - srcTime) / 60000)
+    // mtime means "when this file was written here". For a local build that is
+    // the build. For a DOWNLOAD it is when the transfer finished — always now,
+    // so it always passes, including over a binary built from the wrong commit.
+    // Say so in the output rather than only in a comment nobody opens.
+    const downloadedRecently = exeArgIndex > -1 && Date.now() - built < 60 * 60 * 1000
     record(
       `the artifact post-dates the last change to shipped source (${exe})`,
       built >= srcTime,
@@ -145,7 +165,13 @@ try {
         `artifact built              ${new Date(built).toISOString()}\n` +
         (built >= srcTime
           ? `artifact is ${skewMin} min newer — it can contain that commit`
-          : `artifact is ${-skewMin} min OLDER — it CANNOT contain that commit. Rebuild.`)
+          : `artifact is ${-skewMin} min OLDER — it CANNOT contain that commit. Rebuild.`) +
+        (downloadedRecently
+          ? '\nNOT EVIDENCE: this file was written under an hour ago via --exe. If you downloaded it,\n' +
+            'that mtime is the download time, not the build time, and this line would pass over any\n' +
+            'binary at all. Only the VERSION check above means anything here. For a shipped artifact,\n' +
+            "ask the release run's headSha which commit CI actually built."
+          : '')
     )
   }
 } catch (err) {
