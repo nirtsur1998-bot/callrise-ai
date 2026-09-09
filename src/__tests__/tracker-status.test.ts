@@ -6,7 +6,20 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 // @ts-expect-error — an .mjs script with no declaration file; the shape is asserted below
-import { check, migrate, withIndex, main, deriveInitialStatus, parseTracker } from '../../scripts/verification/tracker-status.mjs'
+import {
+  check,
+  migrate,
+  withIndex,
+  main,
+  deriveInitialStatus,
+  parseTracker,
+  readStatusLine,
+  renderIndex,
+  diffRuns,
+  recordRun,
+  movementByDay,
+  movementPath
+} from '../../scripts/verification/tracker-status.mjs'
 
 const SAMPLE = `# 🐞 Bug Tracker
 
@@ -170,5 +183,126 @@ describe('deriveInitialStatus — the real tracker\'s legacy shapes', () => {
   it('parseTracker sees the real heading levels and ids', () => {
     const p = parseTracker(SAMPLE)
     expect(p.entries.map((e: { id: string; level: number }) => [e.id, e.level])).toEqual([['BUG-001', 3], ['BUG-002', 3], ['BUG-003', 2], ['BUG-004', 3]])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// LANES AND MOVEMENT — added 2026-09-09.
+//
+// The index reported "37 OPEN" for three consecutive sessions. That number is
+// equally consistent with "nothing closed" and with "closed three, found
+// three", and it says nothing about which of the 37 the founder could move.
+// Their words: *"That's not an accusation. It's the metric being useless, and
+// I'd rather fix the metric than argue about the work."*
+//
+// The lane is DECLARED (it is a fact about the world, not about the text), so
+// it can fall behind — the same shape as the record-rebuild literal that
+// produced BUG-242. Hence the second test below: an absent lane must never be
+// counted as READY.
+const LANED = `# 🐞 Bug Tracker
+
+> intro
+
+---
+
+## BUG-101 — waits on the founder
+**Status:** OPEN · 2026-09-01 · WAITING-ON-FOUNDER — needs a call on the work PC
+
+## BUG-102 — nobody has started
+**Status:** OPEN · 2026-09-02 · READY — scoped, unblocked
+
+## BUG-103 — no lane at all
+**Status:** OPEN · 2026-09-03 — found ten minutes ago
+
+## BUG-104 — done
+**Status:** FIXED · 2026-09-04 — shipped
+`
+
+describe('lanes — the second axis on OPEN', () => {
+  it('reads a lane off the status line without disturbing the note', () => {
+    const st = readStatusLine(['**Status:** OPEN · 2026-09-01 · WAITING-ON-FOUNDER — needs a call'])
+    expect(st).toMatchObject({
+      state: 'OPEN',
+      date: '2026-09-01',
+      lane: 'WAITING-ON-FOUNDER',
+      note: 'needs a call'
+    })
+  })
+
+  it('still reads a status line with no lane, and reports the lane as absent', () => {
+    const st = readStatusLine(['**Status:** OPEN · 2026-09-03 — found ten minutes ago'])
+    expect(st).toMatchObject({ state: 'OPEN', lane: null, note: 'found ten minutes ago' })
+  })
+
+  it('NEVER counts an unlaned entry as READY', () => {
+    // The load-bearing one. Folding UNTRIAGED into READY would make a queue
+    // nobody has looked at read as a queue that is ready to work — which is
+    // the exact failure the lane split exists to end.
+    const { statuses } = check(LANED)
+    const index = renderIndex(statuses)
+    expect(index).toContain('| **READY** | 1 |')
+    expect(index).toContain('| **UNTRIAGED** | 1 |')
+    expect(index).toContain('1 of 3 open entries carry no lane')
+  })
+
+  it('names a misspelt lane instead of silently treating it as untriaged', () => {
+    const bad = LANED.replace('WAITING-ON-FOUNDER', 'WAITNG-ON-FOUNDER')
+    const { problems } = check(bad)
+    expect(problems.join('\n')).toMatch(/BUG-101.*unknown lane "WAITNG-ON-FOUNDER"/)
+  })
+
+  it('leaves settled entries out of the lane split entirely', () => {
+    const { statuses } = check(LANED)
+    const index = renderIndex(statuses)
+    expect(index).toContain('### OPEN (3) — by who is blocking')
+    expect(index).toContain('**FIXED (1)**')
+  })
+})
+
+describe('movement — so a flat total cannot hide a busy week', () => {
+  it('counts opened, closed and reopened separately', () => {
+    const before = { 'BUG-1': 'OPEN', 'BUG-2': 'OPEN', 'BUG-3': 'FIXED' }
+    const after = { 'BUG-1': 'FIXED', 'BUG-2': 'OPEN', 'BUG-3': 'OPEN', 'BUG-4': 'OPEN' }
+    expect(diffRuns(before, after)).toEqual({
+      opened: ['BUG-4'],
+      closed: ['BUG-1'],
+      reopened: ['BUG-3']
+    })
+  })
+
+  it('counts DEFERRED and LOGGED as leaving the queue', () => {
+    // From the founder's side these have left the set of things anyone is
+    // going to act on. Counting only FIXED would under-report movement and
+    // make the queue look stucker than it is.
+    expect(diffRuns({ a: 'OPEN', b: 'OPEN' }, { a: 'DEFERRED', b: 'LOGGED' }).closed).toEqual([
+      'a',
+      'b'
+    ])
+  })
+
+  it('records a run only when the map actually changed', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'movement-'))
+    const file = join(dir, 'T.md')
+    writeFileSync(file, '# x', 'utf8')
+    const s1 = [{ id: 'BUG-1', state: 'OPEN' }]
+    recordRun(file, s1, '2026-09-09T10:00:00.000Z')
+    recordRun(file, s1, '2026-09-09T10:05:00.000Z') // identical — must not append
+    const r3 = recordRun(file, [{ id: 'BUG-1', state: 'FIXED' }], '2026-09-10T10:00:00.000Z')
+    expect(r3.ledger.runs).toHaveLength(2)
+    expect(JSON.parse(readFileSync(movementPath(file), 'utf8')).runs).toHaveLength(2)
+
+    const byDay = movementByDay(r3.ledger)
+    expect(byDay).toEqual([['2026-09-10', { opened: [], closed: ['BUG-1'], reopened: [] }]])
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('says an empty ledger is unmeasured, not zero', () => {
+    // A blank movement table would read as "nothing happened". The distinction
+    // between "no movement" and "no measurement" is the whole point of the
+    // section; getting it wrong here would repeat the bug one level up.
+    const { statuses } = check(LANED)
+    expect(renderIndex(statuses, null)).toContain(
+      'absence of measurement, not an absence of movement'
+    )
   })
 })
