@@ -581,6 +581,46 @@ function logSessionSummary(s: Session): void {
   }
 }
 
+/**
+ * BUG-249 — the SECOND line, written after the socket has actually closed.
+ *
+ * The summary above runs at the top of `transcription:stop`, before anything
+ * closes the socket. Deepgram sends its `Metadata` frame in response to
+ * CloseStream, at the END of a session — so `serverChannels` and `requestId`,
+ * the two fields the M37 [[BUG-D]] trap exists for, are written strictly
+ * before they can arrive. On the first real call ever run through the trap
+ * they came out `unknown` and `none` on a clean, successful 59-second session
+ * with `socketOpens=1` and `socketErrors=0`.
+ *
+ * THE FAILURE MODE IS THE DANGEROUS KIND: the line appears, on the happy path,
+ * looking like a result. A reader sees "the trap fired and told us nothing"
+ * rather than "the trap cannot fire correctly".
+ *
+ * Why a second line and not a moved one, which was the obvious repair: the
+ * first line is the CRASH-SAFE one. A session that dies without a clean close
+ * still gets it. Moving it wholesale would trade a summary that is always
+ * written for a better one that is not, and the sessions most worth diagnosing
+ * are exactly the ones that end badly. So both: `session=N` at stop, and
+ * `session=N close` once the socket is really gone.
+ *
+ * Written from `ws.on('close')`, which is also where `lastCloseCode` and
+ * `lastCloseReason` are recorded — so this line is the only place all four
+ * late fields are simultaneously true.
+ */
+function logSessionClose(s: Session): void {
+  try {
+    const line =
+      `${new Date().toISOString()} session=${s.id} close ` +
+      `multichannel=${s.multichannel} serverChannels=${s.serverChannels ?? 'unknown'} ` +
+      `requestId=${s.requestId ?? 'none'} socketOpens=${s.socketOpens} ` +
+      `closeCode=${s.lastCloseCode ?? 'none'} closeReason=${JSON.stringify(s.lastCloseReason ?? '')} ` +
+      `socketErrors=${s.socketErrors} frames=${JSON.stringify(s.otherFrames)}\n`
+    appendFileSync(join(app.getPath('userData'), 'session-health.log'), line, 'utf8')
+  } catch {
+    /* logging must never break a real call */
+  }
+}
+
 function snapshot(s: Session): HealthSnapshot {
   const at = s.timeline.elapsedMs()
   const verdict = s.lag.evaluate(at)
@@ -1022,6 +1062,14 @@ function connect(s: Session): void {
     } catch {
       /* never */
     }
+    // BUG-249 — the late fields, written where they are finally true. Placed
+    // ABOVE the `session !== s` return on purpose: a superseded session's
+    // close still carries a real serverChannels and requestId, and those are
+    // the connections BUG-D cares about most. One line per socket close means
+    // a session that reconnected five times leaves five records of what each
+    // connection actually was, which is the thing `socketOpens` alone counts
+    // and cannot describe.
+    logSessionClose(s)
     if (session !== s) return
     if (s.keepAlive) {
       clearInterval(s.keepAlive)
