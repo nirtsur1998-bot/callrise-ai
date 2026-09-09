@@ -15,6 +15,26 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() }
 }))
 
+// BUG-141 — WARM THE MODULE GRAPH HERE, at collection time, rather than inside
+// whichever `it()` happens to import first. `vi.resetModules()` clears the
+// executed-module registry but NOT vitest's fetch/transform cache, so the
+// first test pays a COLD fetch — from the one vite transform server every
+// worker process shares — inside its own 20 s budget.
+//
+// This file EARNED the fix rather than matching a pattern: on 2026-09-09 its
+// first it() timed out at 19074 ms under 3x suite load, caught with
+// resolving=['src/main/ai/providers/openai-compatible.ts'], cpuMs 593, and no
+// filesystem request in flight — the mechanism-A signature exactly.
+//
+// This carries two limits — it makes nothing faster, and collection has no
+// timeout so a genuinely hung fetch now hangs the file instead of failing one
+// test. Both are spelled out at the same block in
+// src/main/assistant/__tests__/assistant-ipc.turn.test.ts.
+await import('../../telemetry/index')
+await import('../../telemetry/setup')
+await import('../../telemetry/consent')
+await import('../purpose-health-store')
+
 const PROSE = 'Provider said: cannot summarize call with Dana about the forty thousand budget'
 
 async function fresh(): Promise<{

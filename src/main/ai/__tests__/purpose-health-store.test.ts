@@ -35,6 +35,16 @@ beforeEach(async () => {
 
 afterEach(async () => {
   process.env = { ...ORIGINAL_ENV }
+  // BUG-244 — flush BEFORE removing the dir. The store's persist() is
+  // throttled and fire-and-forget, so a write can still be in flight here
+  // (a test that threw, or one that did not call the flush itself), and on
+  // Windows a write landing mid-rm makes rmdir fail with ENOTEMPTY. This
+  // file failed that way once in 18 idle full-suite runs and twice in 12
+  // under load, 2026-09-09. `purpose-health-telemetry.test.ts` already does
+  // exactly this, with the reason written out — the fix existed in the
+  // sibling file the whole time.
+  const { flushPendingWritesForTests } = await import('../purpose-health-store')
+  await flushPendingWritesForTests()
   await rm(dir, { recursive: true, force: true })
 })
 
@@ -57,7 +67,11 @@ describe('recordAiSuccess / recordAiFailure — real persistence to a temp file'
     const first = await freshModule()
     first.registerPurposeHealthStore()
     for (let i = 0; i < 5; i++) {
-      await first.recordAiFailure('summary', { reason: 'failed', providerId: 'groq', detail: `boom ${i}` })
+      await first.recordAiFailure('summary', {
+        reason: 'failed',
+        providerId: 'groq',
+        detail: `boom ${i}`
+      })
     }
     await first.flushPendingWritesForTests()
 
@@ -74,8 +88,12 @@ describe('recordAiSuccess / recordAiFailure — real persistence to a temp file'
   })
 
   it('a success clears a prior failure streak', async () => {
-    const { recordAiFailure, recordAiSuccess, flushPendingWritesForTests, registerPurposeHealthStore } =
-      await freshModule()
+    const {
+      recordAiFailure,
+      recordAiSuccess,
+      flushPendingWritesForTests,
+      registerPurposeHealthStore
+    } = await freshModule()
     registerPurposeHealthStore()
     await recordAiFailure('summary', { reason: 'failed', providerId: 'groq', detail: 'x' })
     await recordAiSuccess('summary', { providerId: 'groq', fromImplicitTail: false })
@@ -132,7 +150,10 @@ describe('purposeHealth:getAll — severity classification through the real IPC 
       vi.setSystemTime(now)
       await recordAiSuccess('summary', { providerId: 'google', fromImplicitTail: true })
 
-      const view = (await getAll()) as Record<string, { severity: string; message: string; actionPageId: string | null }>
+      const view = (await getAll()) as Record<
+        string,
+        { severity: string; message: string; actionPageId: string | null }
+      >
       expect(view.summary.severity).toBe('substituting')
       expect(view.summary.message).toMatch(/instead of your chosen provider/i)
       await flushPendingWritesForTests()

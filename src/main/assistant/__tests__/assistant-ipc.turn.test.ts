@@ -261,6 +261,21 @@ import { getConversation } from '../conversations-fs'
 // latency being charged to one test's per-test timeout, which is the actual
 // defect. Deleting it as a "redundant import" reopens BUG-141 for this file;
 // the dynamic import below is still needed, for module isolation.
+//
+// TWO LIMITS OF THIS, both easy to forget and neither obvious from the numbers:
+//
+// 1. IT DOES NOT MAKE ANYTHING FASTER. The 100-200x drop in this test's
+//    reported time is not work getting quicker — it is shared-infrastructure
+//    latency no longer being billed to a per-test budget it was never about.
+//    The suite takes the same time. Read a 6702 ms -> 33 ms row as "stopped
+//    being charged here", never as "the pipeline got fast".
+//
+// 2. COLLECTION HAS NO TIMEOUT. A fetch that merely queues is now absorbed;
+//    a fetch that truly HANGS now hangs this whole file instead of failing
+//    one test at 20 s. That is arguably the more visible failure — a run that
+//    never finishes is harder to wave through than one red test — but it is a
+//    DIFFERENT failure, and it is the trade this line makes. If a file ever
+//    stops producing output at collection, this is the first thing to suspect.
 await import('../assistant-ipc')
 import * as ragMod from '../../memory/rag'
 

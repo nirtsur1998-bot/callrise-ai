@@ -45,6 +45,7 @@ import {
   type BackupSyncScope
 } from './app-settings'
 import { writeJsonAtomic } from './atomic-write'
+import { writeJsonAtomicDurable } from './durable-write'
 import {
   conversationsDir as assistantConversationsDir,
   listConversations,
@@ -165,13 +166,26 @@ async function readPendingBlobDeletes(): Promise<PendingBlobDelete[]> {
   }
 }
 
-async function writePendingBlobDeletes(items: PendingBlobDelete[]): Promise<void> {
-  await writeJsonAtomic(pendingBlobDeletesPath(), { items }).catch(() => {})
+async function writePendingBlobDeletes(items: PendingBlobDelete[]): Promise<boolean> {
+  // BUG-244 — this used to be `.catch(() => {})`. This queue is a record of
+  // DELETIONS the user asked for; a dropped write does not defer the deletion,
+  // it forgets it. The local call is already gone by the time we get here, so
+  // the blob is orphaned in the bucket with nothing anywhere recording that it
+  // was ever meant to go. The doc comment below promised "durable … retried
+  // until it succeeds" while the swallow made that untrue.
+  return writeJsonAtomicDurable(
+    pendingBlobDeletesPath(),
+    { items },
+    'the queue of cloud blobs to delete'
+  )
 }
 
 /** Called by calls.ts when a call (or a single attachment) is deleted —
- *  queue its uploaded blobs for removal from the cloud bucket. Best-effort
- *  and durable: drained on the next push, retried until it succeeds. */
+ *  queue its uploaded blobs for removal from the cloud bucket. Drained on the
+ *  next push and retried until it succeeds — but only ONCE THE QUEUE WRITE
+ *  ITSELF LANDS, which is the part BUG-244 found was being swallowed. If that
+ *  write fails after its retries, the deletion is lost rather than deferred,
+ *  and `writeJsonAtomicDurable` says so loudly rather than returning quietly. */
 export function queueAttachmentBlobDeletes(items: PendingBlobDelete[]): void {
   if (!items.length) return
   void (async () => {
@@ -237,8 +251,15 @@ async function readPendingScrubs(): Promise<ScrubKey[]> {
   }
 }
 
-async function writePendingScrubs(keys: ScrubKey[]): Promise<void> {
-  await writeJsonAtomic(pendingScrubsPath(), { keys }).catch(() => {})
+async function writePendingScrubs(keys: ScrubKey[]): Promise<boolean> {
+  // BUG-244 — as above, and this one is a CONSENT path: the user turned a sync
+  // scope off and expects the cloud copy removed. A swallowed write here means
+  // the scrub is silently never queued, while the UI reports the toggle as off.
+  return writeJsonAtomicDurable(
+    pendingScrubsPath(),
+    { keys },
+    'the queue of cloud scrubs to perform'
+  )
 }
 
 function queuePendingScrubs(keys: ScrubKey[]): void {
@@ -379,9 +400,7 @@ export async function eraseStoragePrefixProven(
     if (error) throw new ScrubError('list-error', `${bucketName}: ${error.message}`)
     if (!data?.length) break
     seen += data.length
-    const { data: gone, error: rmErr } = await bucket.remove(
-      data.map((o) => `${userId}/${o.name}`)
-    )
+    const { data: gone, error: rmErr } = await bucket.remove(data.map((o) => `${userId}/${o.name}`))
     if (rmErr) throw new ScrubError('remove-error', `${bucketName}: ${rmErr.message}`)
     const n = gone?.length ?? 0
     removed += n
@@ -625,6 +644,15 @@ async function writeState(patch: BackupState): Promise<void> {
   const next = { ...(await readState()), ...patch }
   // Atomic like every other store: a torn write here blanks lastSyncAt, which
   // degrades conflict detection and wipes the "Backed up X ago" status.
+  //
+  // BUG-244 — this swallow is DELIBERATE and is the only one of the three in
+  // this file that stays, for the same reason JobManager.reportPersistFailure
+  // is log-only: this is cached status, not a user request. Every push writes
+  // it again, so a dropped write self-heals within one sync cycle; the worst
+  // case is a stale "Backed up X ago" and slightly weaker conflict detection
+  // until then. Nothing is lost that cannot be recomputed. The two queue
+  // writes above are NOT like this — they carry intent that exists nowhere
+  // else — which is why they retry and report and this one does not.
   await writeJsonAtomic(statePath(), next).catch(() => {})
 }
 
@@ -901,7 +929,9 @@ export async function downloadSalesBrainDb(
         .toISOString()
         .replace(/[:.]/g, '-')}`
       await fs.rename(dbPath, asideName)
-      console.error(`[backup] local memory.db unreadable (${local.errorClass}); moved to ${asideName}`)
+      console.error(
+        `[backup] local memory.db unreadable (${local.errorClass}); moved to ${asideName}`
+      )
       reportBackupStep('salesBrainLocalUnreadable', { code: local.errorClass })
     } catch (err) {
       // If we cannot even move it aside, do NOT restore over it.
@@ -1376,9 +1406,7 @@ export async function pullAll(): Promise<RestoreResult> {
         const dir = assistantConversationsDir(app.getPath('userData'))
         const convRows = await fetchAllRows(client, 'backup_rise_conversations', userId)
         const localMetas = await listConversations(dir)
-        const convMap = new Map(
-          localMetas.map((m) => [m.id, { id: m.id, updatedAt: m.updatedAt }])
-        )
+        const convMap = new Map(localMetas.map((m) => [m.id, { id: m.id, updatedAt: m.updatedAt }]))
         const convChanged = await reconcileStore(
           dir,
           convRows,
