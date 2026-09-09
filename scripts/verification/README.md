@@ -914,3 +914,79 @@ specific, wrong error message pointing somewhere else. A session that trusts its
 here will spend hours reading correct output about the wrong thing.
 
 **Canary first, then drive.** One `echo` of known text, one backslash-count test, one ASCII check.
+
+---
+
+## BUG-141 — the suite-under-load stall: instruments, and what each one can and cannot see
+
+Five files, added 2026-09-09 while root-causing [[BUG-141]]. They exist because a
+20-second test timeout tells you a test did not finish and **nothing about where it was
+stopped**, and every hypothesis in that entry — fsync, a lock, a leaked handle, module
+loading — produces the identical symptom.
+
+| file | what it does |
+|---|---|
+| `bug141-instrument.setup.ts` | vitest `setupFiles` hook. Per test: wall time, CPU, worst event-loop delay, and a 3 s/8 s/15 s watchdog that dumps in-flight libuv **requests** and the module ids the worker is **resolving**. Inert unless `BUG141_LOG` is set. |
+| `vitest.bug141.config.ts` | the real config plus that setup file. Same include, same environment, **same 20 s `testTimeout`** — raising it would hide the thing being measured. |
+| `bug141-loop.mjs` | runs the full suite N times, one at a time, recording exit code and wall clock per run. |
+| `bug141-load.mjs` | runs K full suites CONCURRENTLY, R rounds. This is what reproduces the stall; one suite at a time on an idle machine does not. |
+| `bug141-analyze.mjs` | reads every record and prints the duration tail, the slowest tests, first-test-in-file vs the rest, every stall record, and the target file's phase split. |
+| `bug141-fsync-probe2.mjs` | the filesystem probe, at genuine cross-process concurrency (see below). |
+| `bug141-controls/` | proves the instrument can FIRE. Run before trusting any silence it reports. |
+
+Run the controls first, always:
+
+```bash
+BUG141_SLOW_TRANSFORM=1 BUG141_LOG=/tmp/ctl node node_modules/vitest/vitest.mjs run --config vitest.bug141-controls.config.ts
+```
+
+Then a reproduction:
+
+```bash
+node scripts/verification/bug141-load.mjs 4 3 .bug141-load && node scripts/verification/bug141-analyze.mjs .bug141-load
+```
+
+### The three instruments that were WRONG before they were right
+
+Recorded because each of them read as a clean result while measuring nothing, and each
+was caught only by deliberately trying to make it fail.
+
+1. **Buffered records, flushed on `process.on('exit')`.** The self-test showed records
+   silently missing: vitest's forks pool does not exit workers cleanly enough for that
+   handler. The flush moved to a per-file `afterAll`. Had this not been checked, every
+   "no stall was recorded" would have been unfalsifiable.
+2. **`process.cpuUsage()` as a millisecond figure.** On this machine it under-reports by
+   roughly 25x — 782 ms of pure arithmetic measured as 31 "cpuMs". It still separates
+   *busy* from *idle* (an idle sleep reads exactly 0), so it is used only for that, never
+   as a duration. `performance.eventLoopUtilization()` was tried as a replacement and is
+   worse here: it reads 0.000 for a synchronous block, because it only accounts at loop
+   boundaries.
+3. **A pending-delete probe** that timed how long a deleted file's NAME stayed in
+   `readdir`, on the theory that a scanner's open handle would keep it listed. **The
+   positive control failed**: Node on Windows 10+ deletes with POSIX semantics, so the
+   name vanishes immediately even with a handle deliberately held open. It reported a
+   clean 0 across 960 samples while being structurally incapable of reporting anything
+   else. Removed, not reported. The observable signature of a third party holding a
+   handle on Windows is **`ENOTEMPTY` from `rmdir`**, not a lingering name.
+
+### The concurrency flaw in the ORIGINAL fsync probe
+
+`bug141-fsync-probe.mjs` (2026-08-31) runs its "15 workers" as 15 `Promise.all` branches
+**inside one node process**. `fs.promises` calls are served by the libuv threadpool,
+which defaults to **four threads** — so at most 4 filesystem operations were ever in
+flight, not 15. The suite runs ~300 separate worker *processes* (measured: 303 processes
+for 409 files), each with its own pool. Corrected in `bug141-fsync-probe2.mjs`, which
+forks real processes; on the same machine the worst atomic write went from **28 ms to
+1319 ms** under load. The old number was not wrong, it was measuring a tenth of the load.
+
+### What `resolving[]` means, exactly
+
+It is vitest's own set of module ids the worker is currently fetching/transforming.
+Controls establish its range:
+
+- stall inside a module **transform** → the module is named ✅
+- stall inside a module **evaluation** (top-level await) → **empty** ⚠ a real limit
+- stall on a plain timer → empty ✅
+
+So a non-empty `resolving[]` is strong evidence; an empty one only rules out the
+transform half.

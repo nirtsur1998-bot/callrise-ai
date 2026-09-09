@@ -51,6 +51,8 @@ const all = (await Promise.all(Array.from({ length: WORKERS }, (_, i) => worker(
 all.sort((a, b) => a - b)
 const at = (p) => all[Math.min(all.length - 1, Math.floor((p / 100) * all.length))].toFixed(1)
 console.log(`${WORKERS} workers x ${WRITES} atomic writes = ${all.length} samples`)
-console.log(`p50=${at(50)}ms  p95=${at(95)}ms  p99=${at(99)}ms  MAX=${all[all.length - 1].toFixed(1)}ms`)
+console.log(
+  `p50=${at(50)}ms  p95=${at(95)}ms  p99=${at(99)}ms  MAX=${all[all.length - 1].toFixed(1)}ms`
+)
 console.log(`samples over 1000ms: ${all.filter((t) => t > 1000).length}`)
 console.log(`samples over 5000ms: ${all.filter((t) => t > 5000).length}`)
