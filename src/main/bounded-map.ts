@@ -49,11 +49,19 @@
  */
 
 /**
- * Chosen FROM THE TABLE ABOVE rather than from a rule of thumb: 16 is where the
- * read cost stops falling and the fairness cost starts climbing. (The first
- * value here was 8, picked as "twice the threadpool" before the trade had been
- * measured properly; 8 costs 6 ms more on the read than 16 and buys almost no
- * extra fairness.) Deliberately NOT derived from `UV_THREADPOOL_SIZE` —
+ * IF YOU ARE HERE WONDERING WHY 16: it is not free, and it is not a rule of
+ * thumb. It is a JUDGEMENT taken against the measured table above — 16 is where
+ * the read cost stops falling and the fairness cost starts climbing, and the
+ * trade bought there is **~6 ms of extra listing latency for a concurrent
+ * unrelated write going 9.2 ms -> 1.2 ms**. The judgement is that the thing
+ * queued behind a listing is usually a user's SAVE, and six milliseconds of
+ * listing against a save waiting on 483 reads is not a close call. Change the
+ * number if that reasoning stops holding; re-measure with
+ * `scripts/verification/bug141-fanout-probe.mjs` rather than reasoning about
+ * it. (The first value was 8, picked as "twice the threadpool" before the
+ * trade had been measured at all; 8 costs 6 ms more on the read than 16 and
+ * buys almost no extra fairness.) Deliberately NOT derived from
+ * `UV_THREADPOOL_SIZE` —
  * raising that is a global change that trades a queue for disk saturation, and
  * this fix should not quietly depend on it being left alone.
  */
