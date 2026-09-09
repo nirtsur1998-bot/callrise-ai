@@ -52,12 +52,34 @@ export async function connect(port, { titleMatch } = {}) {
 
   let id = 0
   const pending = new Map()
+  // EVENTS, added 2026-09-09. This handler used to drop every message without
+  // an `id`, which is every CDP EVENT — and that made one whole class of drive
+  // impossible rather than merely awkward: `window.confirm` in Electron is a
+  // NATIVE modal that blocks the renderer, so a driver that clicks a
+  // destructive button and cannot hear `Page.javascriptDialogOpening` has no
+  // way to answer the dialog. The renderer stops, and so does the next
+  // `Runtime.evaluate`, which surfaces as a CDP timeout on an unrelated call.
+  //
+  // Found while driving BUG-237's "Forget everything" — a confirm dialog is
+  // exactly what guards the buttons most worth driving.
+  const listeners = new Map()
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data)
     if (msg.id && pending.has(msg.id)) {
       const { res, rej } = pending.get(msg.id)
       pending.delete(msg.id)
       msg.error ? rej(new Error(JSON.stringify(msg.error))) : res(msg.result)
+      return
+    }
+    if (msg.method && listeners.has(msg.method)) {
+      for (const fn of listeners.get(msg.method)) {
+        // A listener must never be able to kill the connection.
+        try {
+          fn(msg.params)
+        } catch (err) {
+          console.error(`[cdp] listener for ${msg.method} threw: ${err.message}`)
+        }
+      }
     }
   }
   const send = (method, params = {}) =>
@@ -82,5 +104,27 @@ export async function connect(port, { titleMatch } = {}) {
     return path
   }
 
-  return { send, evaluate, screenshot, page, close: () => ws.close() }
+  /** Subscribe to a CDP event, e.g. on('Page.javascriptDialogOpening', fn). */
+  const on = (method, fn) => {
+    if (!listeners.has(method)) listeners.set(method, [])
+    listeners.get(method).push(fn)
+  }
+
+  /**
+   * Answer native window.confirm/alert/prompt dialogs so a drive can click the
+   * buttons that matter. Returns a getter for what was actually asked — assert
+   * on the WORDING, not merely that something was accepted: "it confirmed" and
+   * "it confirmed the right irreversible action" are different findings.
+   */
+  const autoAnswerDialogs = async (accept = true) => {
+    const seen = []
+    on('Page.javascriptDialogOpening', (p) => {
+      seen.push({ type: p.type, message: p.message })
+      void send('Page.handleJavaScriptDialog', { accept })
+    })
+    await send('Page.enable')
+    return () => seen
+  }
+
+  return { send, on, autoAnswerDialogs, evaluate, screenshot, page, close: () => ws.close() }
 }

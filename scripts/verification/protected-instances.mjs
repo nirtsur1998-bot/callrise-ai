@@ -73,12 +73,15 @@ export function listProcesses() {
  * allowProtected is the exact phrase.
  * @param {ProcRow[]} rows
  * @param {(row: ProcRow) => boolean} predicate
- * @param {{ allowProtected?: string, kill?: (pid: number) => void }} [opts]
+ * @param {{ allowProtected?: string, kill?: (pid: number) => void, isRunning?: (pid: number) => boolean }} [opts]
+ * @returns {{ stopped: object[], refused: object[], failed: object[] }}
  */
 export function stopMatching(rows, predicate, opts = {}) {
   const kill = opts.kill ?? ((pid) => execFileSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore' }))
+  const alive = opts.isRunning ?? isRunning
   const stopped = []
   const refused = []
+  const failed = []
   for (const row of rows) {
     if (!predicate(row)) continue
     const c = classify(row)
@@ -86,10 +89,43 @@ export function stopMatching(rows, predicate, opts = {}) {
       refused.push({ pid: row.pid, name: row.name, protectedBy: c.protectedBy, reason: c.reason })
       continue
     }
-    kill(row.pid)
-    stopped.push({ pid: row.pid, name: row.name, reason: c.reason })
+    // ONE FAILED KILL MUST NOT ABORT THE SWEEP. Twice on 2026-09-09 this threw
+    // and stopped mid-loop: listProcesses snapshots parents AND their children,
+    // killing a parent takes its children with it, and taskkill then exits
+    // non-zero on a pid that no longer exists. The output was a raw node stack
+    // trace, which reads like nothing was stopped — while in fact the first
+    // process died and every LATER sandbox stayed alive. A stray sandbox
+    // Electron still holding memory.db open is exactly what corrupts the next
+    // drive, so a half-finished sweep is worse than a loud one.
+    //
+    // The failure is not swallowed, it is RE-CHECKED. Gone -> it is stopped,
+    // which is what the caller asked for. Still running -> recorded in `failed`
+    // and reported, because "already dead" and "access denied" must not look
+    // the same.
+    try {
+      kill(row.pid)
+      stopped.push({ pid: row.pid, name: row.name, reason: c.reason })
+    } catch (err) {
+      if (!alive(row.pid)) {
+        stopped.push({ pid: row.pid, name: row.name, reason: c.reason + ' (already gone — died with its parent)' })
+      } else {
+        failed.push({ pid: row.pid, name: row.name, error: err.message })
+      }
+    }
   }
-  return { stopped, refused }
+  return { stopped, refused, failed }
+}
+
+/** Is this pid still alive? Only ever used to tell "already dead" from "could
+ *  not kill it". Returns TRUE when it cannot tell — never claim a process is
+ *  gone on the strength of a failed query. */
+function isRunning(pid) {
+  try {
+    const out = execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/NH'], { encoding: 'utf8' })
+    return out.includes(String(pid))
+  } catch {
+    return true
+  }
 }
 
 export function main(argv) {
@@ -105,7 +141,8 @@ export function main(argv) {
     const res = stopMatching(rows, (r) => classify(r).protectedBy === null && (r.name.toLowerCase().startsWith('electron')))
     for (const s of res.stopped) console.log(`stopped ${s.pid} ${s.name} — ${s.reason}`)
     for (const s of res.refused) console.log(`REFUSED ${s.pid} ${s.name} — ${s.protectedBy}: ${s.reason}`)
-    return 0
+    for (const s of res.failed) console.log(`*** COULD NOT STOP ${s.pid} ${s.name} — still running: ${s.error}`)
+    return res.failed.length ? 3 : 0
   }
   const at = argv.indexOf('--stop')
   if (at >= 0) {
@@ -114,7 +151,8 @@ export function main(argv) {
     const res = stopMatching(rows, (r) => r.pid === pid, { allowProtected: allow })
     for (const s of res.stopped) console.log(`stopped ${s.pid} ${s.name} — ${s.reason}`)
     for (const s of res.refused) console.log(`REFUSED ${s.pid} ${s.name} — ${s.protectedBy}: ${s.reason}. Ask the founder, then pass --i-asked-the-founder.`)
-    return res.refused.length ? 2 : 0
+    for (const s of res.failed) console.log(`*** COULD NOT STOP ${s.pid} ${s.name} — still running: ${s.error}`)
+    return res.refused.length ? 2 : res.failed.length ? 3 : 0
   }
   console.log('usage: --list | --stop-sandboxes | --stop <pid> [--i-asked-the-founder]')
   return 1

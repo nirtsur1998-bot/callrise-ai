@@ -55,3 +55,39 @@ describe('stopMatching — the refusal', () => {
     expect(kill).toHaveBeenCalledWith(1)
   })
 })
+
+describe('stopMatching — one dead pid must not abort the sweep', () => {
+  // Found 2026-09-09, twice in one session. listProcesses snapshots parents AND
+  // children; killing a parent takes its children with it, and taskkill then
+  // exits non-zero on a pid that no longer exists. The throw propagated out of
+  // the loop, so the output was a raw node stack trace — which reads like
+  // nothing was stopped, while in fact the first process died and every LATER
+  // sandbox stayed alive. A stray sandbox Electron still holding memory.db open
+  // is what corrupts the next drive.
+  const rows = [sandboxBundle, sandboxProfile]
+
+  it('a kill that fails on an ALREADY-GONE pid still counts as stopped, and the sweep continues', () => {
+    const kill = vi.fn((pid: number) => {
+      if (pid === 5) throw new Error('Command failed: taskkill /PID 5 /F')
+    })
+    const isRunning = vi.fn(() => false)
+    const res = stopMatching(rows, () => true, { kill, isRunning })
+    // THE REGRESSION: without the catch, pid 6 is never reached at all.
+    expect(kill.mock.calls.map((c) => c[0])).toEqual([5, 6])
+    expect(res.stopped.map((s: { pid: number }) => s.pid)).toEqual([5, 6])
+    expect(res.stopped[0].reason).toContain('already gone')
+    expect(res.failed).toEqual([])
+  })
+
+  it('a kill that fails on a pid STILL RUNNING is reported, not counted as stopped', () => {
+    // "already dead" and "access denied" must not look the same. This one is
+    // the whole reason the failure is re-checked rather than swallowed.
+    const kill = vi.fn(() => {
+      throw new Error('Access is denied')
+    })
+    const res = stopMatching([sandboxBundle], () => true, { kill, isRunning: () => true })
+    expect(res.stopped).toEqual([])
+    expect(res.failed[0]).toMatchObject({ pid: 5, name: 'electron.exe' })
+    expect(res.failed[0].error).toContain('Access is denied')
+  })
+})
