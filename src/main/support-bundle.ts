@@ -24,6 +24,7 @@ import { engineDiagnosticFiles } from './tier1-diagnostics'
 import { updateStatus } from './updater/index'
 import { currentConsent } from './telemetry/setup'
 import { listQueued } from './telemetry/index'
+import { readSweepSummary, type SweepSummary } from './memory/sweep-record-summary'
 
 /**
  * A scrubber for WHOLE DOCUMENTS rather than single fields.
@@ -51,6 +52,11 @@ export const BUNDLE_FILES = [
   'ai-fallback-events.jsonl',
   'ai-purpose-health.json',
   'jobs-summary.json',
+  // M37 — the BUG-215 quote sweep's record: counts only, whitelisted by
+  // memory/sweep-record-summary.ts, plus one sentence saying what a non-zero
+  // means. It exists because the ramp criterion was unobservable — the number
+  // lived only in a SQLite row on the user's own disk and nothing carried it.
+  'sales-brain-sweep.json',
   // M37 — the BUG-D trap writes the one line that answers "did multichannel
   // capture actually work" (serverChannels, socketOpens, closeCode). It was
   // written to a file that NOTHING could collect: not this bundle, not the
@@ -118,6 +124,36 @@ function scrubbedPurposeHealth(src: string, destDir: string): boolean {
   }
 }
 
+/**
+ * M37 — the BUG-215 quote sweep's record, so the ramp criterion is observable.
+ *
+ * `rescuedByFileCheck` is the one number that says whether an irreversible
+ * sweep could be trusted on a given machine, and until now it reached nobody:
+ * telemetry never carried it, no UI showed it, and the only copy sat in a
+ * SQLite table on the user's own disk. The founder, 2026-09-09: "a criterion
+ * nobody can observe isn't a criterion... that's not a gate, it's a hope."
+ *
+ * COUNTS ONLY. The record is read as an unchecked cast in memory-runtime, so
+ * whatever is in that row comes back typed as if it were the interface.
+ * `projectSweepRecord` therefore whitelists nine known keys, type-checks each,
+ * accepts `reason` only on an exact match of the two literals the code can
+ * produce, and drops everything else — so no memory content, quote or call id
+ * can reach this file even from a record written by a later version.
+ *
+ * Read through a SEPARATE read-only connection rather than the app's live
+ * handle, so this bundle's own test can plant a real poisoned memory.db and
+ * prove the whitelist holds against it. Never throws: a bundle must still be
+ * produced on a machine where Sales Brain is off, absent, or broken.
+ */
+function sweepSummary(userDataDir: string, destDir: string): void {
+  const { summary, meaning } = readSweepSummary(userDataDir)
+  writeFileSync(
+    join(destDir, 'sales-brain-sweep.json'),
+    scrubDocument(JSON.stringify({ quoteSweep: summary, meaning }, null, 2)),
+    'utf8'
+  )
+}
+
 /** Job history as metadata only — never title (can carry names), never
  *  input/resultData/checkpoint (carry content by design; audit §1.4). */
 function jobsSummary(destDir: string): number {
@@ -140,7 +176,7 @@ function jobsSummary(destDir: string): number {
   return rows.length
 }
 
-async function summaryText(src: BundleSources, collected: string[]): Promise<string> {
+async function summaryText(src: BundleSources, collected: string[], dest: string): Promise<string> {
   const lines: string[] = []
   const push = (l = ''): void => {
     lines.push(l)
@@ -194,6 +230,20 @@ async function summaryText(src: BundleSources, collected: string[]): Promise<str
     push('(unavailable)')
   }
   push()
+  // M37 — the founder's condition: "say in the bundle's own summary what the
+  // number means, so someone reading it cold knows a non-zero is a problem
+  // rather than a statistic." The counts live in sales-brain-sweep.json; this
+  // is the sentence that makes them legible without the context of the bug.
+  push('== sales brain quote sweep ==')
+  try {
+    const raw = readFileSync(join(dest, 'sales-brain-sweep.json'), 'utf8')
+    const doc = JSON.parse(raw) as { quoteSweep: SweepSummary | null; meaning: string }
+    push(doc.meaning)
+    push(`(counts in sales-brain-sweep.json; rescuedByFileCheck should be 0)`)
+  } catch {
+    push('(unavailable)')
+  }
+  push()
   push('== files in this bundle ==')
   for (const f of collected) push(`- ${f}`)
   push()
@@ -241,8 +291,10 @@ export async function buildSupportBundle(
     }
     jobsSummary(dest)
     collected.push('jobs-summary.json')
+    sweepSummary(src.userDataDir, dest)
+    collected.push('sales-brain-sweep.json')
 
-    writeFileSync(join(dest, 'support-summary.txt'), await summaryText(src, collected), 'utf8')
+    writeFileSync(join(dest, 'support-summary.txt'), await summaryText(src, collected, dest), 'utf8')
     collected.unshift('support-summary.txt')
     return { ok: true, path: dest, files: collected }
   } catch (err) {

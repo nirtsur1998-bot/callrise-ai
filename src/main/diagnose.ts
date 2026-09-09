@@ -21,6 +21,7 @@ import { app } from 'electron'
 import { existsSync } from 'node:fs'
 import { resolveVecExtensionPath } from './memory/db'
 import { getLastInitResult, getMemoryDb } from './memory/memory-runtime'
+import { explainSweepSummary, readSweepSummary } from './memory/sweep-record-summary'
 import { runChannelSelfTest } from './session-health/channel-test'
 import { loadRealWorkletRender } from './session-health/real-worklet-render'
 import { HEALTH_TUNING } from './session-health/types'
@@ -225,6 +226,28 @@ export function buildDiagnoseReport(): string {
   const init = safe(() => getLastInitResult(), null)
   push(`  init result       : ${init ? `${init.ok ? 'ok' : 'FAILED'} — ${init.detail}` : 'has not run yet'}`)
   push(`  database open     : ${yesNo(safe(() => getMemoryDb() !== null, false))}`)
+
+  // M37 — the quote sweep's record, so the ramp criterion is observable by
+  // someone who pastes this report into a bug thread. `rescuedByFileCheck`
+  // should be 0; above zero means this machine's call listing disagreed with
+  // its filesystem and quotes were one check away from being destroyed.
+  //
+  // This is the FIRST thing in this report that opens memory.db. Read-only,
+  // its own connection, closed immediately, and wrapped so a failure prints a
+  // line rather than taking the report down — --diagnose has to work on the
+  // broken machine, which is the only kind anyone runs it on. Counts only,
+  // through the same whitelist the support bundle uses.
+  //
+  // One honest side effect: opening a WAL database read-only can create its
+  // -shm/-wal siblings if the app closed cleanly and removed them. That is
+  // ordinary SQLite behaviour, they are recreated on the next launch anyway,
+  // and deleting them by hand is the genuinely dangerous operation (see
+  // db.ts's removeBrainShadowCopies, which excludes them by construction) —
+  // so they are left alone.
+  const sweep = safe(() => readSweepSummary(app.getPath('userData')).summary, null)
+  push(`  quote sweep       : ${sweep ? sweep.status : 'no record'}`)
+  push(`  rescuedByFileCheck: ${sweep?.rescuedByFileCheck ?? 'n/a'} (should be 0)`)
+  push(`  ${explainSweepSummary(sweep)}`)
   push()
 
   push('='.repeat(60))

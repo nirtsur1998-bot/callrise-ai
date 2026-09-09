@@ -38,6 +38,46 @@ function bundleFiles(dest: string): Set<string> {
   return new Set(readdirSync(dest))
 }
 
+/** A real Sales Brain database, poisoned in every way the sweep record's
+ *  whitelist is meant to survive. Written with better-sqlite3 so the bundle's
+ *  reader opens a genuine database rather than failing and reporting nothing. */
+function plantPoisonedBrainDb(dbPath: string): void {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const Database = require('better-sqlite3')
+  const db = new Database(dbPath)
+  try {
+    db.exec('CREATE TABLE memory_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    db.exec('CREATE TABLE memories (id TEXT PRIMARY KEY, statement TEXT)')
+    db.prepare('INSERT INTO memory_meta (key, value) VALUES (?, ?)').run(
+      'bug215.quoteSweep',
+      JSON.stringify({
+        status: 'ran',
+        at: '2026-09-08T08:54:52.846Z',
+        callsSwept: 25,
+        memoriesTouched: 36,
+        quotesRedacted: 43,
+        charactersRemoved: 2537,
+        memoriesTotal: 73,
+        rescuedByFileCheck: 0,
+        // keys no version has ever written — the future-version hazard
+        lastQuote: POISON_TRANSCRIPT,
+        lastCallId: 'call-2026-09-01-abc123',
+        lastError: `ENOENT: open '${POISON_PATH}'`
+      })
+    )
+    // The neighbour. Its reason CAN carry an absolute path and a call id, and
+    // anything scoped to "the meta table" rather than to one key takes it along.
+    db.prepare('INSERT INTO memory_meta (key, value) VALUES (?, ?)').run(
+      'temporal_backfill',
+      JSON.stringify({ status: 'skipped', reason: `could not read ${POISON_PATH}`, callId: 'call-xyz' })
+    )
+    db.prepare('INSERT INTO memories (id, statement) VALUES (?, ?)').run('m1', POISON_TRANSCRIPT)
+    db.prepare('INSERT INTO memories (id, statement) VALUES (?, ?)').run('m2', 'sqlite poison')
+  } finally {
+    db.close()
+  }
+}
+
 function bundleText(dest: string): string {
   return readdirSync(dest)
     .map((f) => readFileSync(join(dest, f), 'utf8'))
@@ -153,8 +193,22 @@ function plantAllSources(): void {
     JSON.stringify({ pid: 1, modelLoaded: true })
   )
 
-  // Files that must NEVER be read or copied, poisoned so a bug would be loud.
-  writeFileSync(join(userDataDir, 'memory.db'), 'sqlite poison')
+  // M37 — memory.db is now READ (counts only, whitelisted), so planting the
+  // literal string 'sqlite poison' would no longer exercise anything: the
+  // reader would fail to open it, report "could not be read", and the
+  // whitelist would never run. A REAL database carrying REAL poison is what
+  // makes the guard testable.
+  //
+  // Poisoned four separate ways, each a hazard someone identified rather than
+  // one someone imagined:
+  //   - unknown keys on the sweep record itself (a later version's fields)
+  //   - a `reason` carrying a path and a transcript (the sibling record in the
+  //     same source file already interpolates fs errors into its own reason)
+  //   - the NEIGHBOURING temporal_backfill row, whose reason can legitimately
+  //     carry an absolute path and a call id
+  //   - a memories table holding verbatim buyer speech, plus the original
+  //     'sqlite poison' marker so the older assertion still means something
+  plantPoisonedBrainDb(join(userDataDir, 'memory.db'))
   writeFileSync(join(userDataDir, 'supabase-auth.json'), JSON.stringify({ jwt: POISON_DETAIL }))
   writeFileSync(join(userDataDir, 'ai-keys.json'), JSON.stringify({ openai: 'sk-secret-should-never-ship' }))
   writeFileSync(join(userDataDir, 'app-settings.json'), JSON.stringify({ note: POISON_TRANSCRIPT }))
@@ -210,6 +264,62 @@ describe('buildSupportBundle — privacy pin', () => {
     const all = bundleText(r.path!)
     expect(all).not.toContain('sqlite poison')
     expect(all).not.toContain('sk-secret-should-never-ship')
+  })
+
+  // M37 — the ramp criterion, made observable. Paired: the counts a support
+  // reader needs must SURVIVE, and everything else in that database must not.
+  // Either assertion alone is satisfiable by a bug (emit nothing / emit all).
+  it('the sweep record reaches the bundle with its counts intact', async () => {
+    plantAllSources()
+    const r = await buildSupportBundle(src(), downloadsDir)
+    expect(r.ok, JSON.stringify(r)).toBe(true)
+    const doc = JSON.parse(readFileSync(join(r.path!, 'sales-brain-sweep.json'), 'utf8'))
+    expect(doc.quoteSweep).toEqual({
+      status: 'ran',
+      at: '2026-09-08T08:54:52.846Z',
+      callsSwept: 25,
+      memoriesTouched: 36,
+      quotesRedacted: 43,
+      charactersRemoved: 2537,
+      memoriesTotal: 73,
+      rescuedByFileCheck: 0,
+      unknownKeysDropped: 3
+    })
+  })
+
+  it('and nothing else from that database reaches it', async () => {
+    plantAllSources()
+    const r = await buildSupportBundle(src(), downloadsDir)
+    const all = bundleText(r.path!)
+    // the future-version keys on the record itself
+    expect(all).not.toContain('call-2026-09-01-abc123')
+    expect(all).not.toContain('lastQuote')
+    // the neighbouring temporal_backfill row
+    expect(all).not.toContain('call-xyz')
+    expect(all).not.toContain('temporal_backfill')
+    // memory content
+    expect(all).not.toContain(POISON_TRANSCRIPT)
+    expect(all).not.toContain('sqlite poison')
+    // and the path, which the whole-bundle path sweep also covers
+    expect(all).not.toContain(POISON_PATH)
+  })
+
+  it('the summary says what the number MEANS, not just what it is', async () => {
+    // The founder's condition: someone reading it cold must know a non-zero is
+    // a problem rather than a statistic.
+    plantAllSources()
+    const r = await buildSupportBundle(src(), downloadsDir)
+    const summary = readFileSync(join(r.path!, 'support-summary.txt'), 'utf8')
+    expect(summary).toContain('== sales brain quote sweep ==')
+    expect(summary).toContain('rescuedByFileCheck should be 0')
+    expect(summary).toContain('healthy result')
+  })
+
+  it('a machine with no Sales Brain still gets the file, saying so', async () => {
+    const r = await buildSupportBundle(src(), downloadsDir)
+    const doc = JSON.parse(readFileSync(join(r.path!, 'sales-brain-sweep.json'), 'utf8'))
+    expect(doc.quoteSweep).toBeNull()
+    expect(doc.meaning).toContain('has not created a memory database')
   })
 
   it('the fallback log detail field is stripped, not merely scrubbed', async () => {
@@ -274,7 +384,12 @@ describe('buildSupportBundle — privacy pin', () => {
   it('missing sources are skipped, never fatal — a fresh install still gets a bundle', async () => {
     const r = await buildSupportBundle(src(), downloadsDir)
     expect(r.ok).toBe(true)
-    expect(bundleFiles(r.path!)).toEqual(new Set(['support-summary.txt', 'jobs-summary.json']))
+    // sales-brain-sweep.json is written UNCONDITIONALLY, like jobs-summary.json:
+    // "the sweep has not run on this machine" is itself the answer a support
+    // reader needs, and an absent file would read as an absent feature.
+    expect(bundleFiles(r.path!)).toEqual(
+      new Set(['support-summary.txt', 'jobs-summary.json', 'sales-brain-sweep.json'])
+    )
   })
 
   it('a second run the same day gets a suffixed folder, not an overwrite', async () => {
