@@ -201,13 +201,20 @@ export function BackupCard(): React.JSX.Element {
   // the drain is reached. So it is not "retrying", it is stopped, and waiting
   // for a second consecutive failure would wait for ever. Shown immediately.
   const scrubStoppedBySignOut = pendingScrubs.length > 0 && status?.signedIn === false
+  // BUG-246 — the request could not be WRITTEN DOWN. Shown immediately and
+  // ahead of the two above, because they both describe a removal that was
+  // recorded and is retrying, and this one describes a removal that will be
+  // FORGOTTEN if the app quits. No second-failure grace period for the same
+  // reason as the sign-out case: waiting for a recurrence waits for something
+  // that may never come, while the window it warns about is open now.
+  const scrubRequestUnrecorded = Boolean(status?.scrubQueuePersistError)
+  const scrubLabels = (): string =>
+    pendingScrubs
+      .map((k) => OPTIONAL_ITEMS.find((i) => i.key === k)?.label ?? k)
+      .join(', ')
+      .toLowerCase()
   const pendingScrubLabels =
-    scrubFailedTwice || scrubStoppedBySignOut
-      ? pendingScrubs
-          .map((k) => OPTIONAL_ITEMS.find((i) => i.key === k)?.label ?? k)
-          .join(', ')
-          .toLowerCase()
-      : null
+    scrubFailedTwice || scrubStoppedBySignOut || scrubRequestUnrecorded ? scrubLabels() : null
 
   return (
     <Card>
@@ -244,9 +251,15 @@ export function BackupCard(): React.JSX.Element {
               // behaviour was to show the reassuring line and nothing else,
               // forever, while the erase failed on every single push.
               <p className="text-[13px] text-warning">
-                {scrubStoppedBySignOut
-                  ? `Sign in to finish removing ${pendingScrubLabels} from your account`
-                  : `Still removing ${pendingScrubLabels} from your account`}
+                {/* BUG-246 first: "we could not write your request down"
+                    outranks "we wrote it down and it is retrying".
+                    PROVISIONAL COPY — awaiting the founder's word-by-word
+                    approval, like every other privacy sentence in this app. */}
+                {scrubRequestUnrecorded
+                  ? `Couldn't save your request to remove ${pendingScrubLabels} — it will run now, but will be lost if you quit first`
+                  : scrubStoppedBySignOut
+                    ? `Sign in to finish removing ${pendingScrubLabels} from your account`
+                    : `Still removing ${pendingScrubLabels} from your account`}
               </p>
             ) : lastSyncedAt ? (
               <p className="text-[13px] text-muted">Backed up {agoLabel(lastSyncedAt)}</p>

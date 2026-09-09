@@ -45,7 +45,7 @@ import {
   setSyncScopeDisabledListener,
   type BackupSyncScope
 } from './app-settings'
-import { writeJsonAtomic } from './atomic-write'
+import { writeJsonAtomic, writeJsonAtomicDurable } from './atomic-write'
 import {
   conversationsDir as assistantConversationsDir,
   listConversations,
@@ -227,22 +227,93 @@ const SCRUB_KEY_SET: Record<ScrubKey, true> = {
 }
 export const SCRUB_KEYS = Object.keys(SCRUB_KEY_SET) as ScrubKey[]
 
+/**
+ * BUG-246 — the scrub queue is where *"the user pressed Forget everything"* is
+ * recorded, and it was written with every failure discarded.
+ *
+ * This set is the same queue held in memory, and it exists because the file
+ * write can fail: BUG-244 measured `writeJsonAtomic`'s rename failing with
+ * EPERM on this very machine under contention. When that happened the erase
+ * intent was never recorded, so `drainPendingScrubs` had nothing to drain AND
+ * `downloadSalesBrainDb`'s BUG-206 guard read an empty queue and restored the
+ * data the user had just erased — under a dialog reading "This cannot be
+ * undone."
+ *
+ * Every read unions this with the file, so a failed write costs durability
+ * across a restart but never costs the erase within the session, and never
+ * costs the restore guard.
+ *
+ * It can be a FALSE positive in one direction only: if the founder's second
+ * app instance drains the queue from the same profile, this instance still
+ * believes a scrub is pending and will refuse to restore. Refusing a restore
+ * is the safe side of that error, and it clears on the next successful drain.
+ */
+const pendingScrubsInMemory = new Set<ScrubKey>()
+
+/** Set when the queue could not be persisted after retries. Read by
+ *  `backup:getStatus` so the Backup card can say the erase was NOT recorded,
+ *  rather than showing an empty queue and implying nothing was asked for. */
+let scrubQueuePersistError: { code: string; at: string } | null = null
+
+/**
+ * TESTS ONLY. The in-memory queue is module state that only a successful
+ * `writePendingScrubs` clears, which is correct in the app (the next drain
+ * clears it) and leaks between cases in a test file.
+ *
+ * Deliberately cannot weaken anything in production: it clears a set that only
+ * ever ADDS refusals, so calling it can never cause an erase or bypass a
+ * guard — the worst it can do is forget an erase, which is the pre-fix
+ * behaviour. `bug246-...test.ts` pins that no shipping source calls it.
+ */
+export function resetPendingScrubMemoryForTests(): void {
+  pendingScrubsInMemory.clear()
+  scrubQueuePersistError = null
+}
+
 async function readPendingScrubs(): Promise<ScrubKey[]> {
+  let fromFile: unknown[] = []
   try {
     const parsed = JSON.parse(await fs.readFile(pendingScrubsPath(), 'utf8')) as { keys?: unknown }
-    const keys = parsed.keys
-    if (!Array.isArray(keys)) return []
-    return SCRUB_KEYS.filter((k) => keys.includes(k))
+    if (Array.isArray(parsed.keys)) fromFile = parsed.keys
   } catch {
-    return []
+    /* no queue file yet, or unreadable — the in-memory set still counts */
+  }
+  return SCRUB_KEYS.filter((k) => fromFile.includes(k) || pendingScrubsInMemory.has(k))
+}
+
+/**
+ * `keys` is the AUTHORITATIVE remaining queue, so the in-memory copy is
+ * replaced rather than merged — a drained key must leave both.
+ *
+ * Durable or loud: retried on transient Windows contention, and if it still
+ * fails the failure is recorded rather than discarded. It does not throw,
+ * because both callers are paths where throwing would abort an erase that is
+ * otherwise proceeding correctly; the in-memory queue carries on.
+ */
+async function writePendingScrubs(keys: ScrubKey[]): Promise<void> {
+  pendingScrubsInMemory.clear()
+  for (const k of keys) pendingScrubsInMemory.add(k)
+  try {
+    await writeJsonAtomicDurable(pendingScrubsPath(), { keys })
+    scrubQueuePersistError = null
+  } catch (err) {
+    const raw = (err as { code?: unknown } | null)?.code
+    scrubQueuePersistError = {
+      code: typeof raw === 'string' ? raw : 'error',
+      at: new Date().toISOString()
+    }
+    // Loud in all three places it can be heard: the log, the aggregate signal,
+    // and the status the Backup card reads.
+    console.error('[backup] the pending-scrub queue could not be written — the erase is recorded in memory only and will NOT survive a restart:', err)
+    reportBackupStep('scrubQueue.persist', err)
   }
 }
 
-async function writePendingScrubs(keys: ScrubKey[]): Promise<void> {
-  await writeJsonAtomic(pendingScrubsPath(), { keys }).catch(() => {})
-}
-
 function queuePendingScrubs(keys: ScrubKey[]): void {
+  // In memory FIRST and synchronously: the restore guard must be armed before
+  // this function returns, because its caller (a "the user erased X" listener)
+  // cannot await and the very next thing that happens may be a restore.
+  for (const k of keys) pendingScrubsInMemory.add(k)
   void (async () => {
     const existing = await readPendingScrubs()
     const merged = SCRUB_KEYS.filter((k) => existing.includes(k) || keys.includes(k))
@@ -1736,6 +1807,14 @@ export function registerBackup(): void {
       // Losing sides of two-device concurrent edits, kept as <id>.conflict —
       // surfaced in the Settings card so "kept" data isn't invisibly lost.
       conflictCount: await countConflictFiles(),
+      // BUG-246 — `pendingScrubs` above is read from a FILE, and that file's
+      // write can fail (BUG-244: EPERM on rename under contention). Without
+      // this field an erase that could not be RECORDED looks exactly like an
+      // erase nobody asked for: an empty queue, no error, a reassuring card.
+      // The erase is still queued in memory and still runs this session; what
+      // is at risk is surviving a restart, and only the user can decide to
+      // retry it.
+      scrubQueuePersistError,
       // Non-blocking hint only: a badly wrong device clock no longer corrupts
       // backup ordering (that's corrected for), but it still makes every
       // locally-displayed time wrong, so it's worth telling the user.

@@ -1848,6 +1848,13 @@ export interface BackupStatus {
   signedIn?: boolean
   lastScrubError?: string
   lastScrubErrorAt?: string
+  /** BUG-246 - the removal request itself could not be WRITTEN DOWN on this
+   *  device (BUG-244: an atomic rename failing with EPERM under contention).
+   *  Distinct from every field above, which all describe a removal that WAS
+   *  recorded and has not finished. Without it an unrecordable erase looks
+   *  exactly like an erase nobody asked for: an empty queue and a reassuring
+   *  card. The erase still runs this session; it will not survive a restart. */
+  scrubQueuePersistError?: { code: string; at: string } | null
 }
 
 export interface BackupApi {
