@@ -1100,6 +1100,21 @@ Two checks, not one, for anything you measure with:
 
 A silent instrument is caught by (1). A **biased** one passes (1) and is caught only by (2).
 
+#### The general form: a verification that reads what the action WROTE agrees with itself
+
+Named by the founder, 2026-09-09, after this arrived three times on three surfaces in one
+investigation:
+
+- a **sampler** whose own load scaled with the arm it was timing — it measured itself;
+- a **driver** that navigated by `location.hash` and verified by reading `location.hash` back, the
+  URL it had just set, while the screen never moved;
+- a **mock** built from the same wrong belief as the code it was checking (species 97).
+
+Different tools, one shape: **the check and the thing checked share a source.** So the question to
+ask of any verification is not "did it pass" but *"could this have come out differently if the thing
+were broken — or am I reading back something I just wrote?"* If the second half is yes, it is a
+tautology with a green tick on it.
+
 **The check:** measure the headline number with the instrumentation OFF, and only then turn it on to
 measure the secondary effect. If an instrument's cost is proportional to the duration it is
 measuring, it cannot be trusted to compare durations. Same family as a benchmark that includes its
@@ -1138,6 +1153,16 @@ URL and does **not** route — a driver that navigates by hash and verifies by h
 itself while the screen never moves.
 
 ### `APPDATA` does NOT redirect Electron's userData — and the failure is silent
+
+> **IF YOU DO NOT SEE THESE TWO LINES, YOU ARE DRIVING THE REAL STORE:**
+>
+> ```
+> [dev] userData overridden -> <copy>
+> [dev] SANDBOX profile at <copy>: cloud backup push and pull REFUSED
+> ```
+>
+> Not "the override probably took". Read them, every time, before you touch anything. This is the
+> one trap in this file that destroys the founder's data rather than costing a cycle.
 
 Redirecting `APPDATA` for a child process looks like the obvious way to point a dev build at a
 copied profile. **It does nothing.** Electron resolves `app.getPath('appData')` through the Windows
