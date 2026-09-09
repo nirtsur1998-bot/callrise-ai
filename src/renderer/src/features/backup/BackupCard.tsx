@@ -253,10 +253,13 @@ export function BackupCard(): React.JSX.Element {
               <p className="text-[13px] text-warning">
                 {/* BUG-246 first: "we could not write your request down"
                     outranks "we wrote it down and it is retrying".
-                    PROVISIONAL COPY — awaiting the founder's word-by-word
-                    approval, like every other privacy sentence in this app. */}
+                    APPROVED WORD BY WORD by the founder, 2026-09-09, with one
+                    change from the draft: "will be lost" -> "won't survive a
+                    restart", because nothing that existed is lost — the
+                    REQUEST is what fails to persist. Do not reword without
+                    asking again. */}
                 {scrubRequestUnrecorded
-                  ? `Couldn't save your request to remove ${pendingScrubLabels} — it will run now, but will be lost if you quit first`
+                  ? `Couldn't save your request to remove ${pendingScrubLabels} — it will run now, but won't survive a restart`
                   : scrubStoppedBySignOut
                     ? `Sign in to finish removing ${pendingScrubLabels} from your account`
                     : `Still removing ${pendingScrubLabels} from your account`}
