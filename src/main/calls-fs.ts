@@ -1044,6 +1044,99 @@ export const CALL_FIELD_RULES: { [K in keyof Required<Call>]: CallFieldRule } = 
   notes: { cls: 'REP_CONTENT' } // the rep typed it; the buyer has no claim on it
 }
 
+/** How `importCall`'s restore-merge treats one field of a Call. */
+type CallRestoreRule =
+  /** The incoming cloud row decides this field's value — either carried in
+   *  `callBackupPayload` or rebuilt by name in the merge (segments, preview,
+   *  contactId, …). Every one of these is handled explicitly in the literal,
+   *  so a wrong rule here shows up as a contradiction between two readable
+   *  places rather than as an absence. */
+  | 'FROM_ROW'
+  /** NEVER synced — `callBackupPayload` omits it, so the cloud row can only
+   *  ever say "absent" about it. The LOCAL value must survive the merge; a
+   *  cloud row is not evidence that the user cleared it. */
+  | 'KEEP_LOCAL'
+
+/**
+ * EXHAUSTIVE over `Required<Call>` — the same mechanism, and for the same reason,
+ * as `CALL_FIELD_RULES` above: adding a field to the Call record without
+ * saying how a restore-merge treats it is a COMPILE ERROR, not silent data
+ * loss on the next sync.
+ *
+ * This exists because the reconstruction in `importCall` was a
+ * hand-maintained object literal over a growing type, and fell behind it three
+ * separate times:
+ *
+ *  - the four M23 fields (callType, commitments, dealIntelligence, coachChat),
+ *    found by accident while wiring them;
+ *  - `endedAt` (BUG-242) — absent on **196 of 196** live calls on the founder's
+ *    machine, though the writer has set it unconditionally since 2026-09-02.
+ *    It was added SPECIFICALLY so BUG-D's hypothesis could be tested, and the
+ *    sync had been quietly deleting it the whole time;
+ *  - `salesBrainExcluded` (BUG-245), found by enumerating this list against
+ *    the type instead of re-reading the literal. That one is the user's
+ *    explicit "do not feed this call to the Sales Brain" — reverted by a pull.
+ *
+ * Two of the three were found by accident, and the third only because someone
+ * finally compared the literal to the type. The compiler does that comparison
+ * now.
+ */
+const CALL_RESTORE_RULES: { [K in keyof Required<Call>]: CallRestoreRule } = {
+  id: 'FROM_ROW',
+  title: 'FROM_ROW',
+  createdAt: 'FROM_ROW',
+  updatedAt: 'FROM_ROW',
+  durationMs: 'FROM_ROW',
+  endedAt: 'KEEP_LOCAL', // BUG-242 — not in callBackupPayload; the cloud never had it
+  contactId: 'FROM_ROW', // three-way: string links, null unlinks, absent preserves
+  dealId: 'FROM_ROW', // identical three-way shape, deliberately
+  callType: 'KEEP_LOCAL',
+  salesBrainExcluded: 'KEEP_LOCAL', // BUG-245 — a privacy choice, not a value to re-derive
+  preview: 'FROM_ROW', // rebuilt from whichever segments won
+  speakerCount: 'FROM_ROW',
+  segments: 'FROM_ROW', // local wins when it has any; see the merge
+  speakerIdentities: 'FROM_ROW', // reconciled, not replaced (mergeSpeakerIdentities)
+  bookmarks: 'FROM_ROW', // same local-wins rule as segments
+  dealIntelligence: 'KEEP_LOCAL',
+  commitments: 'KEEP_LOCAL',
+  coachChat: 'KEEP_LOCAL',
+  summary: 'FROM_ROW',
+  coaching: 'FROM_ROW', // local kept when the creation stamp matches — see the merge
+  attachments: 'FROM_ROW', // cloud metadata wins; local `summary` preserved per id
+  consent: 'FROM_ROW',
+  objectionsMinedAt: 'FROM_ROW',
+  crmNoteGeneratedAt: 'KEEP_LOCAL',
+  deleted: 'FROM_ROW', // a cloud tombstone becomes a real local tombstone
+  notes: 'KEEP_LOCAL'
+}
+
+/** The KEEP_LOCAL keys, DERIVED from the table rather than listed a second
+ *  time — a second list is a second thing to keep in step, which is the
+ *  failure this table exists to end. */
+const RESTORE_KEEP_LOCAL_KEYS = (
+  Object.keys(CALL_RESTORE_RULES) as (keyof Required<Call>)[]
+).filter((k) => CALL_RESTORE_RULES[k] === 'KEEP_LOCAL')
+
+/**
+ * The local-only fields a restore-merge must carry across untouched. Exported
+ * for the test that drives it: the assertion worth having is not "the list has
+ * N entries" but "a record with every local-only field set survives a pull
+ * that mentions none of them".
+ */
+export function keepLocalCallFields(current: Call | null | undefined): Partial<Call> {
+  if (!current) return {}
+  const out: Record<string, unknown> = {}
+  for (const key of RESTORE_KEEP_LOCAL_KEYS) {
+    const value = current[key]
+    // PRESENCE, not truthiness. An empty `commitments` array means "the AI
+    // extraction ran and found zero", which is a real state distinct from
+    // "never ran" (undefined) — a `.length` check collapses both and loses an
+    // honest zero-commitments result on every restore-merge.
+    if (value !== undefined) out[key] = value
+  }
+  return out as Partial<Call>
+}
+
 /**
  * WHAT MUST NOT PERSIST LOCALLY WHEN THE OTHER PARTY DID NOT CONSENT.
  *
@@ -1663,30 +1756,17 @@ export async function importCall(
       ...(!deleted && (isoOrUndefined(v.objectionsMinedAt) ?? current?.objectionsMinedAt)
         ? { objectionsMinedAt: isoOrUndefined(v.objectionsMinedAt) ?? current?.objectionsMinedAt }
         : {}),
-      // Never synced (see callBackupPayload) — preserved only across a
-      // same-device restore-merge onto an existing local record, so a
-      // restore can't re-trigger a duplicate AI CRM note.
-      ...(!deleted && current?.crmNoteGeneratedAt
-        ? { crmNoteGeneratedAt: current.crmNoteGeneratedAt }
-        : {}),
       ...(!deleted && bookmarks.length ? { bookmarks } : {}),
       ...(speakerIdentities && Object.keys(speakerIdentities).length ? { speakerIdentities } : {}),
-      // Bugfix (found while wiring M23's own local-only fields below): these
-      // were missing from this reconstruction entirely, so a cloud restore
-      // merging onto an existing local record silently wiped them even
-      // though they're local-only and the cloud row never carries them —
-      // same "preserved only across a same-device restore-merge" rule as
-      // crmNoteGeneratedAt above, just never actually applied to these four.
-      ...(!deleted && current?.callType ? { callType: current.callType } : {}),
-      // Presence (`!== undefined`), not a `.length` truthy check — an empty
-      // array means "the AI extraction ran and found zero," which is a
-      // real, distinct state from "never ran" (undefined). A `.length`
-      // check collapses both to falsy and silently loses an honest
-      // zero-commitments result on every restore-merge.
-      ...(!deleted && current?.commitments !== undefined ? { commitments: current.commitments } : {}),
-      ...(!deleted && current?.dealIntelligence ? { dealIntelligence: current.dealIntelligence } : {}),
-      ...(!deleted && current?.coachChat !== undefined ? { coachChat: current.coachChat } : {}),
-      ...(!deleted && current?.notes ? { notes: current.notes } : {}),
+      // EVERY local-only field, carried across untouched — the cloud row never
+      // held them, so its silence about them is not an instruction to delete.
+      // The set comes from CALL_RESTORE_RULES (exhaustive over Required<Call>)
+      // rather than from a list maintained here, because a list maintained
+      // here is exactly what fell behind the type three times: the four M23
+      // fields, then `endedAt` (BUG-242, gone on 196 of 196 calls) and
+      // `salesBrainExcluded` (BUG-245, a privacy choice a pull reverted).
+      // A tombstone keeps none of it: a deleted call retains no local state.
+      ...(deleted ? {} : keepLocalCallFields(current)),
       ...(deleted ? { deleted: true } : {})
     }
     // Mirror every other persister (saveCall/getCall/listCalls): strip buyer
