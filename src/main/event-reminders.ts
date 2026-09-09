@@ -105,7 +105,10 @@ export function liveReminderKeys(events: CalendarEvent[]): Set<string> {
   return keys
 }
 
-export function reminderNotification(event: CalendarEvent, minutes: number): {
+export function reminderNotification(
+  event: CalendarEvent,
+  minutes: number
+): {
   title: string
   body: string
 } {

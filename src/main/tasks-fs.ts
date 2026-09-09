@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from './atomic-write'
 import { purgeCompanionFiles } from './companion-files'
+import { mapWithConcurrency } from './bounded-map'
 
 export type TaskType = 'follow-up' | 'email' | 'meeting' | 'research' | 'general'
 export type TaskPriority = 'low' | 'medium' | 'high'
@@ -210,19 +211,26 @@ export async function listTasks(dir: string, opts?: { includeDeleted?: boolean }
   } catch {
     return []
   }
-  const results = await Promise.all(
-    files
-      .filter((file) => file.endsWith('.json'))
-      .map(async (file): Promise<Task | null> => {
-        try {
-          const raw = await fs.readFile(join(dir, file), 'utf8')
-          const task = sanitizeTaskRecord(JSON.parse(raw))
-          // Tombstones stay hidden from the app; the backup reads them via includeDeleted.
-          return task && (opts?.includeDeleted || !task.deleted) ? task : null
-        } catch {
-          return null // skip unreadable / corrupt file
-        }
-      })
+  // BUG-248 — BOUNDED, and it is a TRADE, not a free win. `fs.promises` runs on
+  // libuv's threadpool (4 threads by default), so an unbounded `Promise.all`
+  // over a whole directory does not read in parallel — it QUEUES, and the queue
+  // is process-wide, ahead of every other store's reads and every
+  // `writeJsonAtomic`. Measured on 296 real record files: unbounded reads them
+  // in 11 ms but makes a concurrent unrelated write take 9.2 ms; bounded to 16
+  // costs 17 ms on the read and takes that write to 1.2 ms. We buy ~6 ms of
+  // listing latency for a ~7.7x fairness win. See bounded-map.ts for the table.
+  const results = await mapWithConcurrency(
+    files.filter((file) => file.endsWith('.json')),
+    async (file): Promise<Task | null> => {
+      try {
+        const raw = await fs.readFile(join(dir, file), 'utf8')
+        const task = sanitizeTaskRecord(JSON.parse(raw))
+        // Tombstones stay hidden from the app; the backup reads them via includeDeleted.
+        return task && (opts?.includeDeleted || !task.deleted) ? task : null
+      } catch {
+        return null // skip unreadable / corrupt file
+      }
+    }
   )
   const tasks = results.filter((t): t is Task => t !== null)
   // Newest first as a stable default; the renderer applies its own ordering.

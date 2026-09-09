@@ -39,6 +39,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from '../atomic-write'
+import { mapWithConcurrency } from '../bounded-map'
 
 /**
  * One stored voice profile. `embedding` is typed as `number[] | null` so the
@@ -98,16 +99,23 @@ export async function listVoiceProfiles(userDataDir: string): Promise<VoiceProfi
   } catch {
     return []
   }
-  const results = await Promise.all(
-    files
-      .filter((f) => f.endsWith('.json'))
-      .map(async (f) => {
-        try {
-          return JSON.parse(await fs.readFile(join(dir, f), 'utf8')) as VoiceProfile
-        } catch {
-          return null
-        }
-      })
+  // BUG-248 — BOUNDED, and it is a TRADE, not a free win. `fs.promises` runs on
+  // libuv's threadpool (4 threads by default), so an unbounded `Promise.all`
+  // over a whole directory does not read in parallel — it QUEUES, and the queue
+  // is process-wide, ahead of every other store's reads and every
+  // `writeJsonAtomic`. Measured on 296 real record files: unbounded reads them
+  // in 11 ms but makes a concurrent unrelated write take 9.2 ms; bounded to 16
+  // costs 17 ms on the read and takes that write to 1.2 ms. We buy ~6 ms of
+  // listing latency for a ~7.7x fairness win. See bounded-map.ts for the table.
+  const results = await mapWithConcurrency(
+    files.filter((f) => f.endsWith('.json')),
+    async (f) => {
+      try {
+        return JSON.parse(await fs.readFile(join(dir, f), 'utf8')) as VoiceProfile
+      } catch {
+        return null
+      }
+    }
   )
   return results.filter((p): p is VoiceProfile => p !== null)
 }
@@ -117,7 +125,10 @@ export async function listVoiceProfiles(userDataDir: string): Promise<VoiceProfi
  *  linked voice profile is INTENDED to go with it rather than survive as an
  *  orphaned biometric record, once contacts-fs.ts's deleteContact actually
  *  calls this (it does not yet — see this file's header). */
-export async function deleteVoiceProfile(userDataDir: string, id: string): Promise<{ ok: boolean }> {
+export async function deleteVoiceProfile(
+  userDataDir: string,
+  id: string
+): Promise<{ ok: boolean }> {
   try {
     await fs.unlink(join(profilesDir(userDataDir), `${id}.json`))
     return { ok: true }

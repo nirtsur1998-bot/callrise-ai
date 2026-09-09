@@ -103,7 +103,9 @@ export function buildDiagnoseReport(): string {
   push(
     `  using             : ${realRender ? 'the real live worklet (pcm-processor.js)' : 'FALLBACK reimplementation — real worklet asset not found (expected under `npm run dev`)'}`
   )
-  const stereo = realRender ? runChannelSelfTest(16000, 2, realRender) : runChannelSelfTest(16000, 2)
+  const stereo = realRender
+    ? runChannelSelfTest(16000, 2, realRender)
+    : runChannelSelfTest(16000, 2)
   push(`  stereo (rep+buyer): ${stereo.pass ? 'PASS' : 'FAIL'} — ${stereo.detail}`)
   push(`  measured rms      : ${stereo.rms.map((r) => r.toFixed(3)).join(', ')}`)
   const mono = realRender ? runChannelSelfTest(16000, 1, realRender) : runChannelSelfTest(16000, 1)
@@ -148,7 +150,9 @@ export function buildDiagnoseReport(): string {
     // number that is neither about sockets nor complete, to a human, under a
     // name that invited them to trust it. The real per-call socket count is
     // `socketOpens=` in session-health.log (BUG-D's trap, M37).
-    push(`  lag resets        : ${health.resets}   (lag-triggered only — see socketOpens= in session-health.log)`)
+    push(
+      `  lag resets        : ${health.resets}   (lag-triggered only — see socketOpens= in session-health.log)`
+    )
     push(`  drift             : ${health.driftPpm} ppm`)
     if (health.gaps.length === 0) push('  gaps              : none')
     else {
@@ -221,10 +225,15 @@ export function buildDiagnoseReport(): string {
     { raw: 'unresolvable', corrected: 'unresolvable', exists: false }
   )
   push(`  vec0 path         : ${vec.corrected}`)
-  push(`  vec0 on disk      : ${yesNo(vec.exists)}${vec.exists ? '' : ' — extension load WILL fail'}`)
-  if (vec.raw !== vec.corrected) push('  vec0 asar fix     : applied (raw path pointed inside app.asar)')
+  push(
+    `  vec0 on disk      : ${yesNo(vec.exists)}${vec.exists ? '' : ' — extension load WILL fail'}`
+  )
+  if (vec.raw !== vec.corrected)
+    push('  vec0 asar fix     : applied (raw path pointed inside app.asar)')
   const init = safe(() => getLastInitResult(), null)
-  push(`  init result       : ${init ? `${init.ok ? 'ok' : 'FAILED'} — ${init.detail}` : 'has not run yet'}`)
+  push(
+    `  init result       : ${init ? `${init.ok ? 'ok' : 'FAILED'} — ${init.detail}` : 'has not run yet'}`
+  )
   push(`  database open     : ${yesNo(safe(() => getMemoryDb() !== null, false))}`)
 
   // M37 — the quote sweep's record, so the ramp criterion is observable by

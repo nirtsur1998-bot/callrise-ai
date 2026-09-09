@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from './atomic-write'
 import { sanitizeCommitments } from './commitments'
+import { mapWithConcurrency } from './bounded-map'
 
 /** 'unknown' is a first-class answer — see the renderer's SpeakerRole. */
 export type SpeakerRole = 'rep' | 'other' | 'unknown'
@@ -999,7 +1000,7 @@ export const CALL_FIELD_RULES: { [K in keyof Required<Call>]: CallFieldRule } = 
   },
 
   coachChat: {
-    cls: 'DERIVED',
+    cls: 'DERIVED'
     // NO STRIPPER, and the DERIVED escape clause is exactly why: this thread is
     // produced downstream of a getCall() read, so it cannot contain the other
     // party's speech on a call where consent was absent.
@@ -1142,28 +1143,44 @@ export async function listCalls(
   } catch {
     return []
   }
-  // Reads run concurrently — one file's disk I/O never waits on another's, and
-  // order doesn't matter here since the result is sorted below regardless.
-  const results = await Promise.all(
-    files
-      .filter((file) => file.endsWith('.json'))
-      .map(async (file): Promise<CallSummary | null> => {
-        try {
-          const raw = await fs.readFile(join(dir, file), 'utf8')
-          const call = JSON.parse(raw) as Call
-          // Tombstones stay hidden from the app; the backup reads them via includeDeleted.
-          if (call && typeof call.id === 'string' && (opts?.includeDeleted || !call.deleted)) {
-            // Normalize consent + strip unconsented buyer turns so the list preview
-            // and speaker count never surface the other party's words either.
-            call.consent = sanitizeConsent(call.consent)
-            applyConsentRetention(call)
-            return toSummary(call)
-          }
-          return null
-        } catch {
-          return null // skip unreadable / corrupt file
+  // CORRECTED 2026-09-09. This used to read:
+  //
+  //   "Reads run concurrently — one file's disk I/O never waits on another's,
+  //    and order doesn't matter here since the result is sorted below regardless."
+  //
+  // The second clause is still true, and order is preserved anyway. The first
+  // was true for the FIRST FOUR reads and false for the other 483 on a real
+  // profile. It was not a wrong comment — it was a comment that stopped being
+  // true at read #5, and nobody reads a justification looking for the boundary
+  // where it expires.
+  //
+  // BUG-248 — BOUNDED, and it is a TRADE, not a free win. `fs.promises` runs on
+  // libuv's threadpool (4 threads by default), so an unbounded `Promise.all`
+  // over a whole directory does not read in parallel — it QUEUES, and the queue
+  // is process-wide, ahead of every other store's reads and every
+  // `writeJsonAtomic`. Measured on 296 real record files: unbounded reads them
+  // in 11 ms but makes a concurrent unrelated write take 9.2 ms; bounded to 16
+  // costs 17 ms on the read and takes that write to 1.2 ms. We buy ~6 ms of
+  // listing latency for a ~7.7x fairness win. See bounded-map.ts for the table.
+  const results = await mapWithConcurrency(
+    files.filter((file) => file.endsWith('.json')),
+    async (file): Promise<CallSummary | null> => {
+      try {
+        const raw = await fs.readFile(join(dir, file), 'utf8')
+        const call = JSON.parse(raw) as Call
+        // Tombstones stay hidden from the app; the backup reads them via includeDeleted.
+        if (call && typeof call.id === 'string' && (opts?.includeDeleted || !call.deleted)) {
+          // Normalize consent + strip unconsented buyer turns so the list preview
+          // and speaker count never surface the other party's words either.
+          call.consent = sanitizeConsent(call.consent)
+          applyConsentRetention(call)
+          return toSummary(call)
         }
-      })
+        return null
+      } catch {
+        return null // skip unreadable / corrupt file
+      }
+    }
   )
   const summaries = results.filter((s): s is CallSummary => s !== null)
   summaries.sort((a, b) => b.createdAt.localeCompare(a.createdAt)) // newest first
@@ -1637,7 +1654,10 @@ export async function importCall(
     // forward or replaced (see mergeSpeakerIdentities' own doc comment).
     const speakerIdentities = deleted
       ? undefined
-      : mergeSpeakerIdentities(current?.speakerIdentities, sanitizeIncomingSpeakerIdentities(v.speakerIdentities))
+      : mergeSpeakerIdentities(
+          current?.speakerIdentities,
+          sanitizeIncomingSpeakerIdentities(v.speakerIdentities)
+        )
 
     const call: Call = {
       id,
@@ -1683,8 +1703,12 @@ export async function importCall(
       // real, distinct state from "never ran" (undefined). A `.length`
       // check collapses both to falsy and silently loses an honest
       // zero-commitments result on every restore-merge.
-      ...(!deleted && current?.commitments !== undefined ? { commitments: current.commitments } : {}),
-      ...(!deleted && current?.dealIntelligence ? { dealIntelligence: current.dealIntelligence } : {}),
+      ...(!deleted && current?.commitments !== undefined
+        ? { commitments: current.commitments }
+        : {}),
+      ...(!deleted && current?.dealIntelligence
+        ? { dealIntelligence: current.dealIntelligence }
+        : {}),
       ...(!deleted && current?.coachChat !== undefined ? { coachChat: current.coachChat } : {}),
       ...(!deleted && current?.notes ? { notes: current.notes } : {}),
       ...(deleted ? { deleted: true } : {})
@@ -2504,7 +2528,7 @@ export async function appendCoachChatTurn(
     // advisor filter and leave a lone assistant turn. Callers pass the same
     // mode for both today; this keeps it true if a future caller does not.
     if (userEntry.mode !== assistantEntry.mode) {
-      console.warn('[calls] coach-chat pair with two modes — using the user turn\'s for both', {
+      console.warn("[calls] coach-chat pair with two modes — using the user turn's for both", {
         callId,
         user: userEntry.mode,
         assistant: assistantEntry.mode
@@ -2565,13 +2589,26 @@ function sanitizeDealNudgeRecord(value: unknown): DealNudgeRecord | null {
     typeof v.confidence === 'number' && Number.isFinite(v.confidence)
       ? Math.max(0, Math.min(1, v.confidence))
       : 0
-  const evidenceQuote = typeof v.evidenceQuote === 'string' ? v.evidenceQuote.trim().slice(0, 400) : ''
-  const evidenceRole = v.evidenceRole === 'rep' || v.evidenceRole === 'other' ? v.evidenceRole : null
+  const evidenceQuote =
+    typeof v.evidenceQuote === 'string' ? v.evidenceQuote.trim().slice(0, 400) : ''
+  const evidenceRole =
+    v.evidenceRole === 'rep' || v.evidenceRole === 'other' ? v.evidenceRole : null
   const suggestedCue = typeof v.suggestedCue === 'string' ? v.suggestedCue.trim().slice(0, 150) : ''
-  const atMs = typeof v.atMs === 'number' && Number.isFinite(v.atMs) ? Math.max(0, Math.round(v.atMs)) : 0
+  const atMs =
+    typeof v.atMs === 'number' && Number.isFinite(v.atMs) ? Math.max(0, Math.round(v.atMs)) : 0
   const feedback = v.feedback === 'helpful' || v.feedback === 'not-helpful' ? v.feedback : undefined
   if (!id || !type || !subtype || !evidenceQuote || !evidenceRole || !suggestedCue) return null
-  return { id, type, subtype, confidence, evidenceQuote, evidenceRole, suggestedCue, atMs, feedback }
+  return {
+    id,
+    type,
+    subtype,
+    confidence,
+    evidenceQuote,
+    evidenceRole,
+    suggestedCue,
+    atMs,
+    feedback
+  }
 }
 
 function sanitizeHealthScorePoint(value: unknown): DealHealthScorePoint | null {
@@ -2582,10 +2619,12 @@ function sanitizeHealthScorePoint(value: unknown): DealHealthScorePoint | null {
       ? Math.max(0, Math.min(100, Math.round(v.score)))
       : null
   const trajectory =
-    typeof v.trajectory === 'string' && DEAL_TRAJECTORIES.has(v.trajectory as DealHealthScorePoint['trajectory'])
+    typeof v.trajectory === 'string' &&
+    DEAL_TRAJECTORIES.has(v.trajectory as DealHealthScorePoint['trajectory'])
       ? (v.trajectory as DealHealthScorePoint['trajectory'])
       : null
-  const atMs = typeof v.atMs === 'number' && Number.isFinite(v.atMs) ? Math.max(0, Math.round(v.atMs)) : 0
+  const atMs =
+    typeof v.atMs === 'number' && Number.isFinite(v.atMs) ? Math.max(0, Math.round(v.atMs)) : 0
   if (score === null || !trajectory) return null
   return { score, trajectory, atMs }
 }

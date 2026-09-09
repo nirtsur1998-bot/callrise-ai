@@ -62,7 +62,9 @@ export async function generateCrmNote(
       purpose: 'other',
       maxTokens: crmNoteMaxTokens(length),
       tool: noteTool(length),
-      messages: [{ role: 'user', content: `${prompt(length)}${businessContext}\n\n--- CONTENT ---\n${text}` }],
+      messages: [
+        { role: 'user', content: `${prompt(length)}${businessContext}\n\n--- CONTENT ---\n${text}` }
+      ],
       signal: opts?.signal
     })
     const note = typeof result.toolInput?.note === 'string' ? result.toolInput.note.trim() : ''

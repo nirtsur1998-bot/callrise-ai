@@ -63,7 +63,12 @@ export async function recordFeedback(input: unknown): Promise<{ ok: boolean }> {
     return { ok: false }
   }
 
-  const event: FeedbackEvent = { ts: new Date().toISOString(), type: v.type, subtype: v.subtype.slice(0, 60), helpful: v.helpful }
+  const event: FeedbackEvent = {
+    ts: new Date().toISOString(),
+    type: v.type,
+    subtype: v.subtype.slice(0, 60),
+    helpful: v.helpful
+  }
 
   try {
     const dir = app.getPath('userData')
@@ -103,7 +108,10 @@ const MIN_RATINGS_TO_ADAPT = 3
 
 export async function getFeedbackSummary(): Promise<FeedbackSummaryEntry[]> {
   const events = await readEvents()
-  const bySubtype = new Map<string, { type: FeedbackEvent['type']; subtype: string; total: number; rejected: number }>()
+  const bySubtype = new Map<
+    string,
+    { type: FeedbackEvent['type']; subtype: string; total: number; rejected: number }
+  >()
   for (const e of events) {
     const key = `${e.type}:${e.subtype}`
     const entry = bySubtype.get(key) ?? { type: e.type, subtype: e.subtype, total: 0, rejected: 0 }

@@ -250,7 +250,13 @@ function isBackfillDeal(d: { origin?: string; notes?: string }): boolean {
  */
 function reconstructAnswers(
   fileAnswers: readonly BackfillAnswerRecord[],
-  deals: readonly { id: string; contactId: string; stageId: string; origin?: string; notes?: string }[],
+  deals: readonly {
+    id: string
+    contactId: string
+    stageId: string
+    origin?: string
+    notes?: string
+  }[],
   calls: readonly CallSummary[],
   stages: readonly { id: string; kind: DealStageKind }[]
 ): BackfillAnswerRecord[] {

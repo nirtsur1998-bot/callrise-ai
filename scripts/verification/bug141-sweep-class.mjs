@@ -27,6 +27,24 @@
  * scope. It leaves the two untreated CONTROLS alone so the sweep can be
  * measured against something.
  *
+ * WARNING 1 — THIS FILE REWRITES TEST FILES WHEN IT IS RUN, and it did so
+ * TWICE by accident on 2026-09-09 as a side effect of
+ * `await import('./bug141-sweep-class.mjs')` in a one-liner that only wanted
+ * `scan()` for a spot check. 23 files each time, silently, because a module
+ * body runs on import. Both were caught only by `git status` immediately
+ * afterwards — which is the standing rule for exactly this reason. There is a
+ * run-only-when-run guard further down now; the story is up HERE because
+ * someone reaching for `scan()` reads this header and not the guard.
+ *
+ * WARNING 2 — THE RESULT WAS NEGATIVE. This is committed UNAPPLIED on purpose.
+ * Applied to all 29 files and measured on a matched design (2 rounds x 3
+ * concurrent suites, back to back): 20 s timeouts 8 -> 17, wall per run
+ * 198-205 s -> 235-282 s, and two files that had never timed out started to.
+ * Reverted. The warm-up adds a full extra module-graph EXECUTION for any file
+ * that also calls `vi.resetModules()`, so it only pays where the cold fetch
+ * actually queued — BUG-141, taxonomy species 103. Run this to REPRODUCE that
+ * measurement, not to ship the sweep.
+ *
  * Usage:
  *   node scripts/verification/bug141-sweep-class.mjs --dry     # list, change nothing
  *   node scripts/verification/bug141-sweep-class.mjs           # apply

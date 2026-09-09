@@ -366,7 +366,10 @@ export function registerDealStages(): void {
   // deal stages registering at all, which would take the whole Pipeline down
   // over a config nicety.
   try {
-    if (migrateDealStages()) console.log('[deal-stages] repaired the saved pipeline ("Went quiet" added, restored, or de-duplicated)')
+    if (migrateDealStages())
+      console.log(
+        '[deal-stages] repaired the saved pipeline ("Went quiet" added, restored, or de-duplicated)'
+      )
   } catch (e) {
     console.error('[deal-stages] migration failed, continuing with the saved pipeline:', e)
   }

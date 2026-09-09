@@ -66,7 +66,8 @@ export function toGraphBody(ev: CalendarEvent): Record<string, unknown> {
  * Graph allows: search first, by this token, since Graph won't reject a
  * second create with a client-side conflict signal the way Google does.
  */
-const CLIENT_TOKEN_PROPERTY_ID = 'String {66f5a359-4659-4830-9070-00047ec6ac6e} Name CallRiseClientToken'
+const CLIENT_TOKEN_PROPERTY_ID =
+  'String {66f5a359-4659-4830-9070-00047ec6ac6e} Name CallRiseClientToken'
 
 /** A Graph-safe token derived from the local id — same trick as
  *  toGoogleEventId (hex-only, no characters that need OData escaping). */

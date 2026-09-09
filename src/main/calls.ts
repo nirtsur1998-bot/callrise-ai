@@ -72,7 +72,13 @@ import {
   titleBackfillResultRef,
   type TitleBackfillSummary
 } from './title-backfill'
-import { beginSave, currentTranscript, endCall, endSave, liveCallInfo } from './live/live-transcript'
+import {
+  beginSave,
+  currentTranscript,
+  endCall,
+  endSave,
+  liveCallInfo
+} from './live/live-transcript'
 import type { Job } from './jobs/types'
 
 function objectionQueueDir(): string {
@@ -243,7 +249,10 @@ async function computePersonalBenchmarksForCallType(
  *  happens second actually has enough context + the link). Only marks the
  *  call as done on SUCCESS, so a transient failure (rate limit, no key)
  *  leaves it eligible for the other trigger to retry. */
-async function maybeGenerateCrmNote(callId: string, opts?: { signal?: AbortSignal }): Promise<void> {
+async function maybeGenerateCrmNote(
+  callId: string,
+  opts?: { signal?: AbortSignal }
+): Promise<void> {
   if (!loadAppSettings().crm.autoGenerateNotes) return
   if (crmNoteInFlight.has(callId)) return
   crmNoteInFlight.add(callId)
@@ -922,7 +931,9 @@ export function registerCalls(): void {
       run: async (input, handle) => {
         const call = await getCall(callsDir(), input.callId)
         if (!call) throw new Error('Call not found.')
-        const result = await extractCommitments(speechSegments(call.segments), { signal: handle.signal })
+        const result = await extractCommitments(speechSegments(call.segments), {
+          signal: handle.signal
+        })
         if (!result.ok) {
           throw Object.assign(
             new Error(result.message ?? 'Could not find commitments on this call.'),

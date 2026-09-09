@@ -39,7 +39,11 @@ function eventsDir(): string {
 /** The words for an orphaned event, shared by the Activity row and (in its own
  *  copy) the renderer's dialog line. */
 export function orphanNote(o: { provider: string; at: string; reason?: string }): string {
-  const where = o.provider.startsWith('google') ? 'Google Calendar' : o.provider.startsWith('outlook') ? 'Outlook' : 'your calendar'
+  const where = o.provider.startsWith('google')
+    ? 'Google Calendar'
+    : o.provider.startsWith('outlook')
+      ? 'Outlook'
+      : 'your calendar'
   if (o.reason === 'event-gone') {
     // BUG-221. Says what happened and what was NOT done, because the thing the
     // user needs to know is that we did not put it back on their calendar.
@@ -163,7 +167,12 @@ async function recordPushResult(
       // ids. The Activity row below still fires once, and reads as "kept
       // here only" once it looks at the record.
       await orphanEvent(eventsDir(), id)
-      noteCalendarPushFailure({ eventId: id, title: cur.title, code: res.error, provider: cur.provider })
+      noteCalendarPushFailure({
+        eventId: id,
+        title: cur.title,
+        code: res.error,
+        provider: cur.provider
+      })
     } else {
       await setEventSync(eventsDir(), id, {
         sync: { state: res.retryable ? 'dirty' : 'error', lastError: res.error }
@@ -347,9 +356,7 @@ export function registerEvents(): void {
   // Founder's decision (2026-09-05) for the events ALREADY in the not-found
   // state when this shipped: same transition the push path now applies.
   // Idempotent and cheap; fire-and-forget off the startup path.
-  void orphanNotFoundEvents().catch((err) =>
-    console.error('[events] orphan sweep failed:', err)
-  )
+  void orphanNotFoundEvents().catch((err) => console.error('[events] orphan sweep failed:', err))
 
   ipcMain.handle('events:list', (): Promise<CalendarEvent[]> => listEvents(eventsDir()))
   // Each of these announces the change (notifyEventsChanged) rather than

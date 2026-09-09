@@ -587,7 +587,10 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
       // rep deserves to know which: `attempts` already carries per-step
       // failureClass (see complete-with-fallback.ts), so this is free.
       const quotaExhausted = err.attempts.some((a) => a.failureClass === 'period-exhausted')
-      return { ok: false, pausedReason: quotaExhausted ? 'quota-exhausted' : 'all-models-unavailable' }
+      return {
+        ok: false,
+        pausedReason: quotaExhausted ? 'quota-exhausted' : 'all-models-unavailable'
+      }
     }
     if (err instanceof AIProviderError) {
       // BUG-057 Phase 2 — these two used to fall straight through to the

@@ -112,7 +112,9 @@ export function registerPrepBrief(): void {
   ipcMain.handle('prepBrief:regenerate', async (_event, raw: unknown) => {
     const input = sanitizeInput(raw)
     if (!input) return { ok: false as const, error: 'failed' as const, message: 'Invalid event.' }
-    const withFocus = await withFocusSkillReminder(await ensurePrepBriefForEvent(input, { force: true }))
+    const withFocus = await withFocusSkillReminder(
+      await ensurePrepBriefForEvent(input, { force: true })
+    )
     return withSalesBrainEdge(withFocus, input.contactId)
   })
 

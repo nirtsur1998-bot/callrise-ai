@@ -87,13 +87,21 @@ function subscribeDesktopDeliveries(): void {
     .subscribe()
 }
 
-async function handleDesktopDelivery(deliveryId: string, ruleId: string, subjectId: string): Promise<void> {
+async function handleDesktopDelivery(
+  deliveryId: string,
+  ruleId: string,
+  subjectId: string
+): Promise<void> {
   const client = getSupabaseClient()
   if (!client) return
   // Confirm this delivery is actually routed to a desktop channel of ours —
   // the subscription above sees every INSERT (RLS narrows SELECT visibility,
   // not the realtime payload shape), so this is the real gate.
-  const { data: rule } = await client.from('alert_rules').select('trigger_type').eq('id', ruleId).maybeSingle()
+  const { data: rule } = await client
+    .from('alert_rules')
+    .select('trigger_type')
+    .eq('id', ruleId)
+    .maybeSingle()
   if (!rule) return
   const { error } = await client.rpc('ack_desktop_delivery', { p_delivery_id: deliveryId })
   if (error) return // row wasn't ours, already handled, or not a desktop channel — nothing to show
@@ -148,7 +156,10 @@ function isSafeId(id: unknown): id is string {
 }
 
 function sanitizeTriggerType(value: unknown): TriggerType | null {
-  return value === 'meeting_starting' || value === 'task_due' || value === 'deal_cold' || value === 'no_next_step'
+  return value === 'meeting_starting' ||
+    value === 'task_due' ||
+    value === 'deal_cold' ||
+    value === 'no_next_step'
     ? value
     : null
 }
@@ -268,32 +279,38 @@ export function registerAlerts(): void {
     return { ok: true as const, channelId: data.id as string, expiresAt }
   })
 
-  ipcMain.handle('alerts:channels:confirmEmailCode', async (_event, channelId: unknown, code: unknown) => {
-    const client = getSupabaseClient()
-    const userId = await getSignedInUserId()
-    if (!client || !userId || !isSafeId(channelId) || typeof code !== 'string') {
-      return { ok: false, error: 'invalid-input' as const }
+  ipcMain.handle(
+    'alerts:channels:confirmEmailCode',
+    async (_event, channelId: unknown, code: unknown) => {
+      const client = getSupabaseClient()
+      const userId = await getSignedInUserId()
+      if (!client || !userId || !isSafeId(channelId) || typeof code !== 'string') {
+        return { ok: false, error: 'invalid-input' as const }
+      }
+      const { data, error } = await client
+        .from('notification_channels')
+        .select('verification_token, verification_expires_at')
+        .eq('id', channelId)
+        .eq('user_id', userId)
+        .single()
+      if (error || !data) return { ok: false, error: 'not-found' as const }
+      if (
+        !data.verification_expires_at ||
+        new Date(data.verification_expires_at).getTime() < Date.now()
+      ) {
+        return { ok: false, error: 'expired' as const }
+      }
+      if (data.verification_token !== code.trim()) {
+        return { ok: false, error: 'wrong-code' as const }
+      }
+      const { error: updateError } = await client
+        .from('notification_channels')
+        .update({ verified_at: new Date().toISOString(), verification_token: null })
+        .eq('id', channelId)
+      if (updateError) return { ok: false, error: 'update-failed' as const }
+      return { ok: true as const }
     }
-    const { data, error } = await client
-      .from('notification_channels')
-      .select('verification_token, verification_expires_at')
-      .eq('id', channelId)
-      .eq('user_id', userId)
-      .single()
-    if (error || !data) return { ok: false, error: 'not-found' as const }
-    if (!data.verification_expires_at || new Date(data.verification_expires_at).getTime() < Date.now()) {
-      return { ok: false, error: 'expired' as const }
-    }
-    if (data.verification_token !== code.trim()) {
-      return { ok: false, error: 'wrong-code' as const }
-    }
-    const { error: updateError } = await client
-      .from('notification_channels')
-      .update({ verified_at: new Date().toISOString(), verification_token: null })
-      .eq('id', channelId)
-    if (updateError) return { ok: false, error: 'update-failed' as const }
-    return { ok: true as const }
-  })
+  )
 
   ipcMain.handle('alerts:channels:delete', async (_event, channelId: unknown) => {
     const client = getSupabaseClient()
@@ -318,7 +335,8 @@ export function registerAlerts(): void {
   ipcMain.handle('alerts:channels:testSend', async (_event, channelId: unknown) => {
     const client = getSupabaseClient()
     const userId = await getSignedInUserId()
-    if (!client || !userId || !isSafeId(channelId)) return { ok: false, error: 'invalid-input' as const }
+    if (!client || !userId || !isSafeId(channelId))
+      return { ok: false, error: 'invalid-input' as const }
     const { data: channel, error } = await client
       .from('notification_channels')
       .select('*')
@@ -333,7 +351,9 @@ export function registerAlerts(): void {
         'CallRise AI: this is a test alert. If you can read this, Telegram delivery is working.'
       )
       const result = await sendTelegramMessage(channel.address, text, 'MarkdownV2')
-      return result.ok ? { ok: true as const } : { ok: false as const, error: 'send-failed' as const, message: result.message }
+      return result.ok
+        ? { ok: true as const }
+        : { ok: false as const, error: 'send-failed' as const, message: result.message }
     }
     if (channel.type === 'email') {
       const { error: fnError } = await client.functions.invoke('send-test-alert-email', {
@@ -405,7 +425,11 @@ export function registerAlerts(): void {
     if (patch?.params && typeof patch.params === 'object') update.params = patch.params
 
     if (Object.keys(update).length > 0) {
-      const { error } = await client.from('alert_rules').update(update).eq('id', ruleId).eq('user_id', userId)
+      const { error } = await client
+        .from('alert_rules')
+        .update(update)
+        .eq('id', ruleId)
+        .eq('user_id', userId)
       if (error) return null
     }
 
@@ -421,7 +445,11 @@ export function registerAlerts(): void {
       }
     }
 
-    const { data } = await client.from('alert_rules').select('*, alert_rule_channels(channel_id)').eq('id', ruleId).single()
+    const { data } = await client
+      .from('alert_rules')
+      .select('*, alert_rule_channels(channel_id)')
+      .eq('id', ruleId)
+      .single()
     return data ?? null
   })
 
@@ -429,7 +457,11 @@ export function registerAlerts(): void {
     const client = getSupabaseClient()
     const userId = await getSignedInUserId()
     if (!client || !userId || !isSafeId(ruleId)) return { ok: false }
-    const { error } = await client.from('alert_rules').delete().eq('id', ruleId).eq('user_id', userId)
+    const { error } = await client
+      .from('alert_rules')
+      .delete()
+      .eq('id', ruleId)
+      .eq('user_id', userId)
     return { ok: !error }
   })
 
@@ -439,7 +471,11 @@ export function registerAlerts(): void {
     const client = getSupabaseClient()
     const userId = await getSignedInUserId()
     if (!client || !userId) return null
-    const { data } = await client.from('user_alert_settings').select('*').eq('user_id', userId).maybeSingle()
+    const { data } = await client
+      .from('user_alert_settings')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle()
     return data
   })
 

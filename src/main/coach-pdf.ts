@@ -156,7 +156,9 @@ function evidenceHtml(
   // IS the channel (see transcription.ts), so it doubles as one.
   const channel = multichannel && speaker !== null ? speaker : undefined
   const label =
-    speaker === null ? 'Speaker' : speakerLabel(speaker, repSpeaker, identities, channel, speakerCount)
+    speaker === null
+      ? 'Speaker'
+      : speakerLabel(speaker, repSpeaker, identities, channel, speakerCount)
   return `
       <div class="evidence">&ldquo;${escapeHtml(ev.quote)}&rdquo; <span class="ev-speaker">— ${escapeHtml(label)}</span></div>`
 }
