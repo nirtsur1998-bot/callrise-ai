@@ -68,16 +68,68 @@ async function saveKey(name: AiKeyName, value: string): Promise<void> {
   await fs.writeFile(keyPath(name), safeStorage.encryptString(value), { mode: 0o600 })
 }
 
-async function loadKey(name: AiKeyName): Promise<string | null> {
+/**
+ * BUG-250 — keys whose FILE EXISTS but could not be decrypted.
+ *
+ * The old `loadKey` returned `null` for both "no file" and "decrypt failed",
+ * with a comment that knew the difference and discarded it anyway: *"Missing
+ * file, or decrypt failed (keychain reset / moved machine) → treat as
+ * not-configured; the user just re-enters it in Settings."* They never do,
+ * because nothing tells them to: every surface says **"No key"**, Home says
+ * *"Live transcription needs a Deepgram key"*, and the live screen offers to
+ * help them get one free in a minute. A user who pasted their key last week is
+ * told to go and fetch one, while it sits on disk in a file the app can see
+ * and cannot read.
+ *
+ * On Windows this is not exotic. Electron's safeStorage does not DPAPI-protect
+ * each value: Chromium's OSCrypt keeps a per-profile random key in `Local
+ * State` and protects that. A profile restored from backup, a `Local State`
+ * removed by a cleanup tool, a corrupted write, a profile copied between
+ * accounts — the `.enc` files survive all of them; the key that unseals them
+ * does not.
+ *
+ * NEVER delete an unreadable file. It may decrypt tomorrow (a profile mounted
+ * from the wrong account, a restored `Local State`), and it is the only copy
+ * of something the user typed. Re-entering IS the repair; the defect was only
+ * ever that nothing said so.
+ */
+const unreadableKeys = new Set<AiKeyName>()
+
+type LoadedKey =
+  | { ok: true; value: string }
+  /** No file, or an empty one. Genuinely "no key". */
+  | { ok: false; reason: 'missing' }
+  /** The file is there and did not open. A DIFFERENT thing to tell someone. */
+  | { ok: false; reason: 'unreadable' }
+
+async function readKey(name: AiKeyName): Promise<LoadedKey> {
+  let bytes: Buffer
   try {
-    if (!safeStorage.isEncryptionAvailable()) return null
-    const value = safeStorage.decryptString(await fs.readFile(keyPath(name)))
-    return value || null
+    bytes = await fs.readFile(keyPath(name))
   } catch {
-    // Missing file, or decrypt failed (keychain reset / moved machine) → treat
-    // as not-configured; the user just re-enters it in Settings.
-    return null
+    return { ok: false, reason: 'missing' } // no file: nothing was ever saved
   }
+  // A file exists from here on, so every failure below is UNREADABLE rather
+  // than absent — including encryption being unavailable, which is the same
+  // situation from the user's side: their key is here and cannot be opened.
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return { ok: false, reason: 'unreadable' }
+    const value = safeStorage.decryptString(bytes)
+    return value ? { ok: true, value } : { ok: false, reason: 'unreadable' }
+  } catch {
+    return { ok: false, reason: 'unreadable' }
+  }
+}
+
+async function loadKey(name: AiKeyName): Promise<string | null> {
+  const result = await readKey(name)
+  if (result.ok) {
+    unreadableKeys.delete(name)
+    return result.value
+  }
+  if (result.reason === 'unreadable') unreadableKeys.add(name)
+  else unreadableKeys.delete(name)
+  return null
 }
 
 async function clearKey(name: AiKeyName): Promise<void> {
@@ -368,11 +420,22 @@ export function registerAiKeys(): void {
       AI_KEY_NAMES.map((n) => [n, { configured: false, hint: null }])
     ) as Record<
       AiKeyName,
-      { configured: boolean; hint: string | null; demotedSince?: number }
+      {
+        configured: boolean
+        hint: string | null
+        demotedSince?: number
+        /** BUG-250 - the file is on disk and did not decrypt. NOT the same as
+         *  "no key", and the card must not say "No key" for it. */
+        unreadable?: boolean
+      }
     >
     const now = Date.now()
     for (const name of KEY_NAMES) {
       status[name].configured = isConfigured(name)
+      // BUG-250 - only meaningful when the key is not configured; a key that
+      // loaded fine is never reported unreadable even if an earlier attempt
+      // failed (loadKey clears the flag on success).
+      if (!status[name].configured && unreadableKeys.has(name)) status[name].unreadable = true
       const raw = process.env[name]
       if (raw) status[name].hint = maskedHint(raw)
       // BUG-148 — "visibly, never silently" (founder, 2026-08-31). A demotion

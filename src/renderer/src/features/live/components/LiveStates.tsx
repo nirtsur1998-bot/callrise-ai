@@ -136,9 +136,14 @@ export function DeniedState({ onRetry }: { onRetry: () => void }): React.JSX.Ele
 /** Setup guidance when the Deepgram API key is missing. */
 export function NoKeyState({
   onRetry,
-  onSample
+  onSample,
+  unreadable = false
 }: {
   onRetry: () => void
+  /** BUG-250 — the key file is on disk and did not decrypt. A different
+   *  sentence: this user does not need a key, they need to paste theirs again.
+   *  The setup steps below stay, because they are also the re-paste route. */
+  unreadable?: boolean
   /** M36 Stage 1 — the sample call: what a stranger with no key can look at
    *  instead of a dead microphone. Optional so tests and standalone mounts
    *  still work. */
@@ -147,8 +152,17 @@ export function NoKeyState({
   return (
     <CenteredState
       icon={<Mic className="h-6 w-6 text-faint" />}
-      title="Add your Deepgram API key"
-      subtitle="Live transcription needs a Deepgram key — it's free, no credit card, takes a minute."
+      title={unreadable ? "Your Deepgram key can't be read" : 'Add your Deepgram API key'}
+      subtitle={
+        // BUG-250, founder-approved 2026-09-09. One line, for someone about to
+        // take a call: what happened, and that pasting it again fixes it.
+        // "straight away" is true and was verified before it was written —
+        // aiKeys:save sets process.env immediately (ai-keys.ts), so there is
+        // no restart between pasting and transcribing.
+        unreadable
+          ? "Your Deepgram key can't be read on this computer — paste it again in Settings and this works straight away."
+          : "Live transcription needs a Deepgram key — it's free, no credit card, takes a minute."
+      }
     >
       <div className="mt-5 w-full max-w-md rounded-xl border border-line-soft bg-surface p-4 text-left">
         <ol className="list-decimal space-y-1.5 pl-4 text-[13px] text-muted">

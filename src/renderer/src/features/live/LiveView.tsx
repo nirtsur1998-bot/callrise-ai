@@ -137,6 +137,24 @@ export function LiveView({
   // whole-hook hoist rather than just moving the Recorder object.
   const liveCall = useLiveCall()
   const { consent, buyerIdentityRef, setOnSaved } = liveCall
+  // BUG-250 — is the Deepgram key MISSING, or on disk and unreadable? The
+  // no-key screen says a different sentence for each, because telling someone
+  // to fetch a free key they already have is the whole defect.
+  const [keyUnreadable, setKeyUnreadable] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    void window.api.aiKeys
+      .getStatus()
+      .then((s) => {
+        if (!cancelled) setKeyUnreadable(Boolean(s.DEEPGRAM_API_KEY?.unreadable))
+      })
+      .catch(() => {
+        /* the screen still renders the ordinary no-key copy */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const [consentOpen, setConsentOpen] = useState(false)
 
   // "Clip this" — a local, in-memory clip buffer (no callId exists yet for a
@@ -954,7 +972,8 @@ export function LiveView({
         />
       )
     }
-    if (status === 'no-key') return <NoKeyState onRetry={start} onSample={onOpenSample} />
+    if (status === 'no-key')
+      return <NoKeyState onRetry={start} onSample={onOpenSample} unreadable={keyUnreadable} />
     if (status === 'error') {
       return (
         <CenteredState

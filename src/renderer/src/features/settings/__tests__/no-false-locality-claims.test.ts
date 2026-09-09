@@ -146,6 +146,27 @@ const ACCOUNTED_FOR: {
   checkedOn?: string
 }[] = [
   {
+    file: 'features/home/HomeView.tsx',
+    contains: "Your saved Deepgram key can't be read on this computer",
+    checkedOn: '2026-09-09',
+    entries: ['BUG-250'],
+    because:
+      'BUG-250, founder-approved 2026-09-09. A claim about whether THIS MACHINE CAN READ A FILE, ' +
+      'not about where data lives. The key is on disk and safeStorage cannot decrypt it (the ' +
+      'OSCrypt key in Local State changed); the sentence exists precisely so the user is not told ' +
+      'to fetch a key they already have. It asserts nothing about upload, storage or retention.'
+  },
+  {
+    file: 'features/live/components/LiveStates.tsx',
+    contains: "Your Deepgram key can't be read on this computer",
+    checkedOn: '2026-09-09',
+    entries: ['BUG-250'],
+    because:
+      'BUG-250, founder-approved 2026-09-09. Same sentence and same subject as the HomeView entry ' +
+      'above: this machine cannot decrypt a file it can see. Shown on the live screen because a ' +
+      'rep about to take a call needs to know that pasting it again fixes it immediately.'
+  },
+  {
     file: 'features/live/LiveView.tsx',
     checkedOn: '2026-09-09',
     entries: ['BUG-201'],

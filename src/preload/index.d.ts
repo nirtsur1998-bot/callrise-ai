@@ -1936,6 +1936,16 @@ export interface AiKeyStatus {
    * with no provider of its own (Deepgram, CLOUDFLARE_ACCOUNT_ID).
    */
   demotedSince?: number
+  /**
+   * BUG-250 - the key FILE is on disk and could not be decrypted. Distinct
+   * from `configured: false` with no file: that one is genuinely "no key",
+   * this one is "your key is here and this computer cannot open it".
+   *
+   * Set only when `configured` is false. The card renders 'Saved but
+   * unreadable'; Home and the live screen say so too, because telling someone
+   * to go and get a key they already have is the whole defect.
+   */
+  unreadable?: boolean
 }
 
 /** 'anthropic'/'openai' are the original M16 pair. The next six (M20) and
