@@ -35,8 +35,13 @@ import {
 import { backupRefusedForSandbox } from './sandbox-profile'
 import { memoryDbPath, removeWalSidecars } from './memory/db'
 import { snapshotMemoryDb } from './memory/snapshot'
-import { listContacts, importContact, type Contact } from './contacts-fs'
-import { listDeals, importDeal, type Deal } from './deals-fs'
+import {
+  listContacts,
+  importContact,
+  contactBackupPayload,
+  type Contact
+} from './contacts-fs'
+import { listDeals, importDeal, dealBackupPayload, type Deal } from './deals-fs'
 import { loadDealStagesMeta, applyPulledDealStages } from './deal-stages'
 import {
   loadAppSettings,
@@ -1245,7 +1250,13 @@ export async function pushAll(): Promise<BackupResult> {
           user_id: userId,
           updated_at: c.updatedAt,
           deleted: c.deleted === true,
-          payload: c
+          // BUG-199 — was `payload: c`, the whole record. Calls have gone
+          // through a payload builder since BUG-115; contacts and deals did
+          // not, so any field added to either reached the cloud on the next
+          // sync with nothing having classified it. The SAME payload today, by
+          // construction — every field is SYNCED — and the next one has to be
+          // classified or it will not compile.
+          payload: contactBackupPayload(c)
         }))
         await upsertRows(client, 'backup_contacts', contactRows, skewMs)
       } catch (err) {
@@ -1262,13 +1273,11 @@ export async function pushAll(): Promise<BackupResult> {
           user_id: userId,
           updated_at: d.updatedAt,
           deleted: d.deleted === true,
-          // outcomeReason travels EXPLICITLY, null when there is none — the
-          // stored record drops the key when empty, so a bare payload cannot
-          // distinguish "cleared on this machine" from "written by an older
-          // build that has never heard of the field". importDeal reads the
-          // difference: null clears, ABSENT preserves. Same three-way
-          // contract callBackupPayload uses for a call's dealId, same reason.
-          payload: { ...d, outcomeReason: d.outcomeReason ?? null }
+          // BUG-199 — was `{ ...d, outcomeReason: … }`, a spread of the whole
+          // record. The builder keeps the outcomeReason three-way contract
+          // (null clears, ABSENT preserves) and adds the exhaustive-over-the-
+          // type guard the call side has had since BUG-115.
+          payload: dealBackupPayload(d)
         }))
         await upsertRows(client, 'backup_deals', dealRows, skewMs)
       } catch (err) {

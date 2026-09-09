@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from './atomic-write'
+import { buildEgressPayload, type FieldEgress } from './record-egress'
 
 /** A comment left on a contact — either the rep's own note, or an AI-drafted
  *  one from a linked call (opt-in, see CrmSettings.autoGenerateNotes). */
@@ -96,6 +97,80 @@ export interface Contact {
    *  propagate to a future cloud backup. Hidden from every normal listing. */
   deleted?: boolean
   comments?: ContactComment[]
+}
+
+/**
+ * BUG-199 — EXHAUSTIVE over `Required<Contact>`, the same mechanism and the
+ * same reason as `CALL_FIELD_RULES` in `calls-fs.ts`: **adding a field to this
+ * record without saying whether it may leave the device is a COMPILE ERROR**,
+ * not a silent egress on the next sync.
+ *
+ * `backup.ts` used to push `payload: c` — the whole record — so the guard that
+ * covered calls, and that exists because an allowlist fell behind a growing
+ * type three separate times (BUG-014, BUG-028, BUG-115), simply did not cover
+ * the two record types a CRM integration would grow fastest.
+ *
+ * **Every field below is SYNCED, and that is the status quo, not a decision
+ * being made here.** All of it is user-entered CRM data the `contacts` sync
+ * toggle exists to carry, and it all travels today. What changes is that the
+ * next field has to be classified — and that "should this one sync?" is now a
+ * question with somewhere to put the answer, which is when such questions
+ * actually get asked.
+ */
+export const CONTACT_FIELD_RULES: { [K in keyof Required<Contact>]: FieldEgress } = {
+  id: 'SYNCED',
+  name: 'SYNCED',
+  company: 'SYNCED',
+  cid: 'SYNCED',
+  registeredAt: 'SYNCED',
+  country: 'SYNCED',
+  email: 'SYNCED',
+  phoneCountry: 'SYNCED',
+  phone: 'SYNCED',
+  phoneE164: 'SYNCED',
+  notes: 'SYNCED',
+
+  // --- KYC / Business ---
+  industry: 'SYNCED',
+  companySize: 'SYNCED',
+  website: 'SYNCED',
+  registrationNumber: 'SYNCED',
+  verificationStatus: 'SYNCED',
+  title: 'SYNCED',
+  decisionAuthority: 'SYNCED',
+  otherStakeholders: 'SYNCED',
+
+  // --- Deal context ---
+  dealValue: 'SYNCED',
+  pipelineStage: 'SYNCED',
+  leadSource: 'SYNCED',
+  budgetIndication: 'SYNCED',
+  timeline: 'SYNCED',
+  competitors: 'SYNCED',
+  knownObjections: 'SYNCED',
+  currentTooling: 'SYNCED',
+  lastContactDate: 'SYNCED',
+
+  // --- Relationship ---
+  preferredLanguage: 'SYNCED',
+  communicationStyle: 'SYNCED',
+  timezone: 'SYNCED',
+  // The two free-text fields a user is most likely to put something personal
+  // in. They sync today, and they are called out here rather than buried in
+  // the list so the question is visible the next time anyone reads this.
+  personalNotes: 'SYNCED',
+  briefingNotes: 'SYNCED',
+
+  createdAt: 'SYNCED',
+  updatedAt: 'SYNCED',
+  deleted: 'SYNCED', // the tombstone is the whole point of syncing a deletion
+  comments: 'SYNCED'
+}
+
+/** The contact payload the backup pushes — DERIVED from the table above, so it
+ *  cannot fall behind the type the way a hand-written literal does. */
+export function contactBackupPayload(contact: Contact): Record<string, unknown> {
+  return buildEgressPayload(contact, CONTACT_FIELD_RULES)
 }
 
 /** Fields the renderer may send when creating a contact. */
