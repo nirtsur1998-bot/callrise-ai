@@ -121,10 +121,24 @@ export function Done({
           default, so the only way to know they exist at all is Settings or
           the Calendar tab. One line here beats them staying permanently
           undiscovered. */}
+      {/* BUG-208, founder-approved 2026-09-09. The old sentence named the
+          three ALWAYS-SYNCED categories as the optional ones. Tasks, calendar
+          events and call titles/summaries/coaching scores sync once you are
+          signed in, and there is no master backup switch anywhere — greps for
+          `backupEnabled`, `cloudBackup` and `syncEnabled` find none, and
+          `pushAll` runs once signed in. The only optional thing is the
+          seven-key BackupSyncScope, and calls, tasks and calendar are not
+          among its keys. So the one sentence telling a brand-new user which of
+          their data leaves the device named exactly the three they cannot
+          stop.
+
+          The parenthetical is retained from the shipped line; it is not new
+          copy and is still true. */}
       <p className="mx-auto mt-5 max-w-xs text-[11px] leading-relaxed text-faint">
-        Settings also has automatic call detection (start capturing without a click) and optional
-        cloud backup for your calls, tasks, and calendar. The Calendar tab can connect Google or
-        Outlook for two-way sync and meeting prep.
+        Settings also has automatic call detection (start capturing without a click), and optional
+        cloud backup for transcripts, attachments and more — your tasks, calendar and call summaries
+        always sync once you&rsquo;re signed in. The Calendar tab can connect Google or Outlook for
+        two-way sync and meeting prep.
       </p>
     </div>
   )

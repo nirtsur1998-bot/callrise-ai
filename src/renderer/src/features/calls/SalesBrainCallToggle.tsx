@@ -36,7 +36,14 @@ export function SalesBrainCallToggle({ callId }: { callId: string }): React.JSX.
       onClick={() => void toggle()}
       disabled={busy}
     >
-      {excluded ? "Sales Brain won't learn from this call" : 'Sales Brain is learning from this call'}
+      {/* BUG-068, founder-approved 2026-09-09: "is learning" -> "can learn".
+          This button reflects ELIGIBILITY — whether the call is excluded —
+          and knows nothing about whether extraction ran, is queued, was
+          deferred for AI capacity, or failed. The old present tense read as a
+          completion claim for calls nothing had been learned from yet. The
+          off-state was already permission-shaped ("won't learn"); only the
+          on-state overclaimed. */}
+      {excluded ? "Sales Brain won't learn from this call" : 'Sales Brain can learn from this call'}
     </Button>
   )
 }
