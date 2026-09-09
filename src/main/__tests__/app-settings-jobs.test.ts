@@ -13,6 +13,26 @@ let dir: string
 
 vi.mock('electron', () => ({ app: { getPath: () => dir } }))
 
+// BUG-141 — WARM THE MODULE GRAPH HERE, at collection time, rather than inside
+// whichever `it()` happens to import first.
+//
+// `vi.resetModules()` clears the executed-module registry but NOT vitest's
+// fetch/transform cache. So the FIRST test to import pays the COLD fetch —
+// served by the single vite transform server that every worker process in the
+// run shares — inside its own 20 s budget, while all the later tests
+// re-execute an already-fetched graph in tens of milliseconds. That is why the
+// failures were always the first `it()` in the file, and why they were stalls
+// rather than slowness: a queue on a shared serialized resource.
+//
+// Measured 2026-09-09 under 3x suite load, on assistant-ipc.turn.test.ts:
+// the first test's import phase went 2396 ms -> 7 ms with this line present.
+//
+// This does NOT make the pipeline faster. It stops shared-infrastructure
+// latency being charged to one test's per-test timeout, which is the actual
+// defect. Deleting it as a "redundant import" reopens BUG-141 for this file;
+// the dynamic import below is still needed, for module isolation.
+await import('../app-settings')
+
 async function freshModule(): Promise<typeof import('../app-settings')> {
   vi.resetModules()
   return import('../app-settings')
@@ -27,7 +47,7 @@ afterEach(() => {
 })
 
 describe('jobConcurrency — defaults, clamping, and getter', () => {
-  it('a fresh install matches JobManager\'s own hardcoded DEFAULT_LANE_CONFIG', async () => {
+  it("a fresh install matches JobManager's own hardcoded DEFAULT_LANE_CONFIG", async () => {
     const { loadAppSettings } = await freshModule()
     expect(loadAppSettings().jobConcurrency).toEqual({ interactive: 2, batch: 1, maintenance: 1 })
   })

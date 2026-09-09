@@ -32,7 +32,10 @@ vi.mock('electron', () => ({
 }))
 
 // Controllable fake stream: tests push deltas / end / fail explicitly.
-type Waiter = { resolve: (v: IteratorResult<{ delta: string }>) => void; reject: (e: unknown) => void }
+type Waiter = {
+  resolve: (v: IteratorResult<{ delta: string }>) => void
+  reject: (e: unknown) => void
+}
 const streamControl = vi.hoisted(() => ({
   queue: [] as { delta: string }[],
   waiters: [] as Waiter[],
@@ -103,7 +106,8 @@ vi.mock('../../ai', () => ({ AIProviderError: class AIProviderError extends Erro
 vi.mock('../../memory/profile-injection', () => ({
   repProfileSection: () => '--- REP (Sales Brain) ---\n- closes fast',
   businessProfileSection: () => '',
-  clientProfileSection: (contactId: string) => `--- CLIENT ${contactId} (Sales Brain) ---\n- prefers email`
+  clientProfileSection: (contactId: string) =>
+    `--- CLIENT ${contactId} (Sales Brain) ---\n- prefers email`
 }))
 vi.mock('../../memory/rag', () => ({
   retrieveRelevantMemoriesStructured: vi.fn(async () => [
@@ -126,7 +130,9 @@ vi.mock('../../memory/rag', () => ({
     }
   ])
 }))
-vi.mock('../../memory/consolidation', () => ({ consolidateNewCandidate: vi.fn(async () => 'created') }))
+vi.mock('../../memory/consolidation', () => ({
+  consolidateNewCandidate: vi.fn(async () => 'created')
+}))
 const brainMock = vi.hoisted(() => ({ enabled: true, dbAvailable: true }))
 vi.mock('../../memory/memory-runtime', () => ({
   getMemoryDb: () => (brainMock.dbAvailable ? { fake: 'db' } : null),
@@ -161,7 +167,10 @@ vi.mock('../../memory/memories-store', () => ({
     if (!callId.startsWith('assistant:')) return { deleted: 0, pruned: 0 }
     let deleted = 0
     let pruned = 0
-    for (const m of memStore.byCall as { id: string; evidence?: { type?: string; callId?: string }[] }[]) {
+    for (const m of memStore.byCall as {
+      id: string
+      evidence?: { type?: string; callId?: string }[]
+    }[]) {
       const remaining = (m.evidence ?? []).filter(
         (e) => !(e.type === 'transcript' && e.callId === callId)
       )
@@ -181,12 +190,10 @@ vi.mock('../../memory/memory-hooks', () => ({
 vi.mock('../../app-settings', () => ({ isSalesBrainEnabled: () => brainMock.enabled }))
 const toolsMock = vi.hoisted(() => ({
   plan: vi.fn(async (): Promise<unknown[]> => []),
-  execute: vi.fn(
-    async (): Promise<{ sections: unknown[]; taskProposals: unknown[] }> => ({
-      sections: [],
-      taskProposals: []
-    })
-  ),
+  execute: vi.fn(async (): Promise<{ sections: unknown[]; taskProposals: unknown[] }> => ({
+    sections: [],
+    taskProposals: []
+  })),
   clientBrief: vi.fn(async (): Promise<unknown[]> => [])
 }))
 vi.mock('../tools', () => ({
@@ -203,9 +210,9 @@ const taskMock = vi.hoisted(() => ({
 // its output reach the prompt); the module's own behaviour is covered for
 // real in unbound-client.test.ts.
 const unboundMock = vi.hoisted(() => ({
-  detect: vi.fn(
-    async (_message: string, _dir: string) => [{ contactId: 'acme', label: 'Acme', memoryCount: 2 }]
-  ),
+  detect: vi.fn(async (_message: string, _dir: string) => [
+    { contactId: 'acme', label: 'Acme', memoryCount: 2 }
+  ]),
   calls: [] as string[]
 }))
 // Mocks ONLY the detector. unboundClientNotice is imported for real from
@@ -221,13 +228,40 @@ vi.mock('../../tasks-fs', () => ({ createTask: taskMock.create }))
 vi.mock('../../backup', () => ({ scheduleBackup: vi.fn() }))
 const suggestMock = vi.hoisted(() => ({
   extract: vi.fn(async () => [
-    { id: 'sug-mem', type: 'memory', text: 'fact', confidence: 'high', memoryScope: 'rep', memoryCategory: 'preference' },
+    {
+      id: 'sug-mem',
+      type: 'memory',
+      text: 'fact',
+      confidence: 'high',
+      memoryScope: 'rep',
+      memoryCategory: 'preference'
+    },
     { id: 'sug-kyc', type: 'kyc', field: 'timeline', text: 'x', confidence: 'high' }
   ])
 }))
 vi.mock('../../coaching-chat', () => ({ extractContextSuggestions: suggestMock.extract }))
 
 import { getConversation } from '../conversations-fs'
+
+// BUG-141 — WARM THE MODULE GRAPH HERE, at collection time, rather than inside
+// whichever `it()` happens to import first.
+//
+// `vi.resetModules()` clears the executed-module registry but NOT vitest's
+// fetch/transform cache. So the FIRST test to import pays the COLD fetch —
+// served by the single vite transform server that every worker process in the
+// run shares — inside its own 20 s budget, while all the later tests
+// re-execute an already-fetched graph in tens of milliseconds. That is why the
+// failures were always the first `it()` in the file, and why they were stalls
+// rather than slowness: a queue on a shared serialized resource.
+//
+// Measured 2026-09-09 under 3x suite load, on assistant-ipc.turn.test.ts:
+// the first test's import phase went 2396 ms -> 7 ms with this line present.
+//
+// This does NOT make the pipeline faster. It stops shared-infrastructure
+// latency being charged to one test's per-test timeout, which is the actual
+// defect. Deleting it as a "redundant import" reopens BUG-141 for this file;
+// the dynamic import below is still needed, for module isolation.
+await import('../assistant-ipc')
 import * as ragMod from '../../memory/rag'
 
 // NOTE (2026-08-24, audit fix): `inFlightCountForTests` used to be imported
@@ -401,8 +435,7 @@ describe('the total prompt bound is applied to real sends', () => {
       system: string
       messages: { content: string }[]
     }
-    const total =
-      req.system.length + req.messages.reduce((n, m) => n + m.content.length, 0)
+    const total = req.system.length + req.messages.reduce((n, m) => n + m.content.length, 0)
     const { budgetCharsFor, DEFAULT_CONTEXT_WINDOW_TOKENS } = await import('../prompt-budget')
     const budget = budgetCharsFor(DEFAULT_CONTEXT_WINDOW_TOKENS)
 
@@ -436,7 +469,7 @@ describe('the total prompt bound is applied to real sends', () => {
 // staged files by owner, and this is the backstop that makes every other path
 // fail closed too.
 describe('attachments are bound to their conversation', () => {
-  it("a file staged in one conversation is REFUSED when sent from another", async () => {
+  it('a file staged in one conversation is REFUSED when sent from another', async () => {
     const { convId, invoke, inFlightCount } = await setup()
     const other = (await invoke('assistant:createConversation', undefined)) as { id: string }
     expect(other.id).not.toBe(convId)
@@ -508,7 +541,12 @@ describe('attachments are bound to their conversation', () => {
 describe('M28 Part 3 — attachments + the vision gate', () => {
   it('an image with no vision-capable model is refused BEFORE the turn, naming the fix', async () => {
     const { convId, invoke, inFlightCount } = await setup()
-    const added = (await invoke('assistant:addAttachment', 'shot.png', new Uint8Array([1, 2, 3]).buffer, convId)) as {
+    const added = (await invoke(
+      'assistant:addAttachment',
+      'shot.png',
+      new Uint8Array([1, 2, 3]).buffer,
+      convId
+    )) as {
       ok: boolean
       attachment: { id: string }
     }
@@ -567,11 +605,18 @@ describe('M28 Part 3 — attachments + the vision gate', () => {
 
   it('with a vision-capable model the image rides the request and the metadata persists', async () => {
     const { convId, invoke } = await setup()
-    const added = (await invoke('assistant:addAttachment', 'shot.png', new Uint8Array([9, 9]).buffer, convId)) as {
+    const added = (await invoke(
+      'assistant:addAttachment',
+      'shot.png',
+      new Uint8Array([9, 9]).buffer,
+      convId
+    )) as {
       ok: boolean
       attachment: { id: string }
     }
-    const pending = invoke('assistant:send', convId, 'describe it', undefined, [added.attachment.id])
+    const pending = invoke('assistant:send', convId, 'describe it', undefined, [
+      added.attachment.id
+    ])
     streamControl.push('A chart.')
     streamControl.end()
     await pending
@@ -591,7 +636,9 @@ describe('M28 Part 3 — attachments + the vision gate', () => {
       convId
     )) as { ok: boolean; attachment: { id: string; extractedChars: number } }
     expect(added.ok).toBe(true)
-    const pending = invoke('assistant:send', convId, 'summarize the brief', undefined, [added.attachment.id])
+    const pending = invoke('assistant:send', convId, 'summarize the brief', undefined, [
+      added.attachment.id
+    ])
     streamControl.push('Pilot first.')
     streamControl.end()
     await pending
@@ -706,7 +753,10 @@ describe('assistant:send', () => {
 })
 
 describe('audit V6 — chips are never OFFERED when they cannot save', () => {
-  async function sendOne(convId: string, invoke: (c: string, ...a: unknown[]) => Promise<unknown>): Promise<Record<string, unknown>> {
+  async function sendOne(
+    convId: string,
+    invoke: (c: string, ...a: unknown[]) => Promise<unknown>
+  ): Promise<Record<string, unknown>> {
     const pending = invoke('assistant:send', convId, 'we use HubSpot')
     streamControl.push('Noted.')
     streamControl.end()
@@ -769,14 +819,18 @@ describe('task proposals — writes are confirmed, never executed by the turn', 
     await pending
     const msgId = (await getConversation(convDir(), convId))!.messages[1].id
 
-    const first = (await invoke('assistant:confirmTask', convId, msgId, 'prop-1')) as { ok: boolean }
+    const first = (await invoke('assistant:confirmTask', convId, msgId, 'prop-1')) as {
+      ok: boolean
+    }
     expect(first.ok).toBe(true)
     expect(taskMock.create).toHaveBeenCalledOnce()
     expect((await getConversation(convDir(), convId))?.messages[1].taskProposals?.[0].status).toBe(
       'accepted'
     )
 
-    const second = (await invoke('assistant:confirmTask', convId, msgId, 'prop-1')) as { ok: boolean }
+    const second = (await invoke('assistant:confirmTask', convId, msgId, 'prop-1')) as {
+      ok: boolean
+    }
     expect(second.ok).toBe(false)
     expect(taskMock.create).toHaveBeenCalledOnce() // still once — no double-create
   })
@@ -794,7 +848,9 @@ describe('task proposals — writes are confirmed, never executed by the turn', 
     const msgId = (await getConversation(convDir(), convId))!.messages[1].id
 
     taskMock.create.mockRejectedValueOnce(new Error('disk full'))
-    const result = (await invoke('assistant:confirmTask', convId, msgId, 'prop-1')) as { ok: boolean }
+    const result = (await invoke('assistant:confirmTask', convId, msgId, 'prop-1')) as {
+      ok: boolean
+    }
     expect(result.ok).toBe(false)
     expect((await getConversation(convDir(), convId))?.messages[1].taskProposals?.[0].status).toBe(
       'pending'
@@ -818,7 +874,10 @@ describe('voice notes — attachment + cleanup', () => {
 
   it('a malformed voiceNote argument is dropped, not persisted', async () => {
     const { convId, invoke } = await setup()
-    const pending = invoke('assistant:send', convId, 'text', { mediaId: '../evil.webm', durationMs: 1 })
+    const pending = invoke('assistant:send', convId, 'text', {
+      mediaId: '../evil.webm',
+      durationMs: 1
+    })
     streamControl.push('ok')
     streamControl.end()
     await pending
@@ -883,7 +942,7 @@ describe('chat as a memory source — wiring + retroactive forget', () => {
     expect(target, 'the extraction id matches no persisted message').toBeTruthy()
     expect(
       target?.role,
-      "a memory extracted from the USER-side turn was filed under a non-user message"
+      'a memory extracted from the USER-side turn was filed under a non-user message'
     ).toBe('user')
     expect(target?.text).toBe('we use HubSpot for CRM')
   })
@@ -1014,9 +1073,7 @@ describe('stop and attach — the two M28 design claims', () => {
     // Planning hangs until we release it — simulating the multi-second
     // plan_research call on a slow provider.
     let releasePlan: (v: unknown[]) => void = () => {}
-    toolsMock.plan.mockImplementationOnce(
-      () => new Promise<unknown[]>((r) => (releasePlan = r))
-    )
+    toolsMock.plan.mockImplementationOnce(() => new Promise<unknown[]>((r) => (releasePlan = r)))
     const pending = invoke('assistant:send', convId, 'wrong question, stop it')
 
     // Wait for PLANNING to have started, not merely for the turn to be
@@ -1172,7 +1229,9 @@ describe('BUG-096 fix C — naming clients an unbound chat cannot reach', () => 
     await pending
     const req = streamControl.lastRequest as { system: string }
     expect(req.system).toContain('AS-OF QUESTION — NOTHING KNOWN FOR THAT TIME')
-    expect(req.system).toContain("I can't tell you what was true then — the earliest fact I have is from 2026-03-14")
+    expect(req.system).toContain(
+      "I can't tell you what was true then — the earliest fact I have is from 2026-03-14"
+    )
     expect(req.system).toContain('Do NOT answer from current facts as if they applied at that time')
   })
 
@@ -1193,10 +1252,9 @@ describe('BUG-096 fix C — naming clients an unbound chat cannot reach', () => 
     streamControl.end()
     await pending
 
-    expect(
-      unboundMock.calls,
-      'a scoped conversation reached the unbound-client detector'
-    ).toEqual([])
+    expect(unboundMock.calls, 'a scoped conversation reached the unbound-client detector').toEqual(
+      []
+    )
     const req = streamControl.lastRequest as { system: string }
     expect(req.system).not.toContain('CANNOT REACH')
   })
