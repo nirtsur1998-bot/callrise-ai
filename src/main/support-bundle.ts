@@ -76,6 +76,54 @@ export const BUNDLE_FILES = [
   'kern_bridge_status.json'
 ] as const
 
+/**
+ * WHAT EACH FILE IS ALLOWED TO CONTAIN — the code half of the closing claim.
+ *
+ * The last three lines of every bundle say it "contains NO transcripts,
+ * recordings, memories, contacts, deals, API keys, or account data". That
+ * sentence was written when the bundle held nine files. It is a NEGATIVE claim
+ * about a GROWING container, which is the kind someone else's commit falsifies:
+ * whoever adds the eleventh file has no reason to re-read a sentence that has
+ * been correct for months. The founder, 2026-09-09, on adding
+ * sales-brain-sweep.json: "'true today' is how the ten false claims started."
+ *
+ * So the sentence is bound to the file set here. Every file declares what KIND
+ * of thing it carries, every kind must be one the sentence survives, and the
+ * sentence itself is pinned. Adding a file to BUNDLE_FILES without an entry
+ * here fails; declaring a kind outside PERMITTED_KINDS fails; and when it does,
+ * the fix is to change the SENTENCE, not to widen the list.
+ */
+export const BUNDLE_CONTENT_KINDS: Record<(typeof BUNDLE_FILES)[number], string> = {
+  'support-summary.txt': 'diagnostic-metadata',
+  'callrise.log': 'scrubbed-log',
+  'callrise.old.log': 'scrubbed-log',
+  'ai-fallback-events.jsonl': 'scrubbed-log',
+  'ai-purpose-health.json': 'diagnostic-metadata',
+  'jobs-summary.json': 'counts-and-ids',
+  'sales-brain-sweep.json': 'counts-only',
+  'session-health.log': 'scrubbed-log',
+  'kern_bridge.log': 'scrubbed-log',
+  'kern_bridge.log.1': 'scrubbed-log',
+  'kern_bridge_status.json': 'diagnostic-metadata'
+}
+
+/** The kinds the closing claim can survive. A file carrying anything else makes
+ *  that sentence false, and the sentence is what must change. */
+export const PERMITTED_KINDS = [
+  'counts-only',
+  'counts-and-ids',
+  'diagnostic-metadata',
+  'scrubbed-log'
+] as const
+
+/** The closing claim itself, pinned so it cannot drift away from the list above
+ *  without someone saying so out loud. */
+export const BUNDLE_CLAIM = [
+  'This bundle contains NO transcripts, recordings, memories, contacts,',
+  'deals, API keys, or account data. Every file passed a scrubber that',
+  'removes user paths, keys, emails, and ids on the way in.'
+] as const
+
 export interface BundleSources {
   userDataDir: string
   localAppData: string
@@ -247,9 +295,9 @@ async function summaryText(src: BundleSources, collected: string[], dest: string
   push('== files in this bundle ==')
   for (const f of collected) push(`- ${f}`)
   push()
-  push('This bundle contains NO transcripts, recordings, memories, contacts,')
-  push('deals, API keys, or account data. Every file passed a scrubber that')
-  push('removes user paths, keys, emails, and ids on the way in.')
+  // Rendered FROM the pinned constant rather than written here, so the prose a
+  // user reads and the sentence the test guards cannot become two things.
+  for (const line of BUNDLE_CLAIM) push(line)
   return scrubDocument(lines.join('\n'))
 }
 

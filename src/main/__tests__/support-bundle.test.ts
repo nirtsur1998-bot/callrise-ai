@@ -27,7 +27,8 @@ vi.mock('electron', () => ({
 // summary line only needs a status shape, not a live updater.
 vi.mock('../updater/index', () => ({ updateStatus: () => ({ state: 'idle' }) }))
 
-const { buildSupportBundle, BUNDLE_FILES } = await import('../support-bundle')
+const { buildSupportBundle, BUNDLE_FILES, BUNDLE_CONTENT_KINDS, PERMITTED_KINDS, BUNDLE_CLAIM } =
+  await import('../support-bundle')
 
 const POISON_EMAIL = 'danawhitfield1998@example.com'
 const POISON_PATH = 'C:\\Users\\User\\Desktop\\callrise-ai\\private-note.txt'
@@ -521,5 +522,55 @@ describe("the engine's rotated log is collected under the name the engine actual
     const names = engineDiagnosticFiles('X').map((p) => p.split(/[\\/]/).pop())
     expect(names).toContain('kern_bridge.log.1')
     expect(names).not.toContain('kern_bridge.prev.log')
+  })
+})
+
+// M37 — THE CLOSING CLAIM, BOUND TO THE FILE SET.
+//
+// "This bundle contains NO transcripts, recordings, memories, contacts, deals,
+// API keys, or account data" is a NEGATIVE claim about a GROWING container.
+// It was written when the bundle held nine files and is falsified not by the
+// person who wrote it but by whoever adds the next one — who has no reason to
+// re-read a sentence that has been correct for months. This milestone shipped
+// ten false locality claims that started exactly that way.
+//
+// The founder: "A negative claim about a growing container is a claim that
+// gets falsified by someone else's commit." So these tests make adding to the
+// bundle turn red and ask for the sentence, rather than trusting a re-read.
+describe('the closing claim cannot quietly stop being true', () => {
+  it('every bundle file declares what kind of thing it carries', () => {
+    expect(
+      new Set(Object.keys(BUNDLE_CONTENT_KINDS)),
+      'a file was added to BUNDLE_FILES without declaring its content kind. Declare it in ' +
+        'BUNDLE_CONTENT_KINDS — and while you are there, RE-READ the closing claim rendered from ' +
+        'BUNDLE_CLAIM, because that sentence is what your new file has to remain true against.'
+    ).toEqual(new Set(BUNDLE_FILES))
+  })
+
+  it('every declared kind is one the claim survives', () => {
+    for (const [file, kind] of Object.entries(BUNDLE_CONTENT_KINDS)) {
+      expect(
+        PERMITTED_KINDS as readonly string[],
+        `${file} declares kind "${kind}", which the closing claim does not cover. ` +
+          'If that is deliberate, the SENTENCE changes — do not widen PERMITTED_KINDS to make ' +
+          'this pass, because the sentence is the promise and the list is only its bookkeeping.'
+      ).toContain(kind)
+    }
+  })
+
+  it('the claim the user reads is the claim the tests guard', () => {
+    // Rendered from the constant, so prose and pin cannot become two things.
+    expect(BUNDLE_CLAIM.join(' ')).toBe(
+      'This bundle contains NO transcripts, recordings, memories, contacts, ' +
+        'deals, API keys, or account data. Every file passed a scrubber that ' +
+        'removes user paths, keys, emails, and ids on the way in.'
+    )
+  })
+
+  it('and it actually reaches the produced summary', async () => {
+    plantAllSources()
+    const r = await buildSupportBundle(src(), downloadsDir)
+    const summary = readFileSync(join(r.path!, 'support-summary.txt'), 'utf8')
+    for (const line of BUNDLE_CLAIM) expect(summary).toContain(line)
   })
 })
