@@ -193,15 +193,15 @@ export function evaluateGate(samples: readonly OutcomeSample[], counts: OutcomeC
   // Every closed deal, measurable or not. The gate does NOT use this — it
   // gates on `usable` — but the counter needs it to tell "no deals" apart
   // from "no measurable calls on them".
-  const closedOf = (kind: DealStageKind): number =>
-    samples.filter((s) => s.kind === kind).length
+  const closedOf = (kind: DealStageKind): number => samples.filter((s) => s.kind === kind).length
   const closed = {
     won: closedOf('won'),
     lost: closedOf('lost'),
     wentQuiet: closedOf('went-quiet')
   }
 
-  const answered = counts.won + counts.lost + counts.wentQuiet + counts.dontRemember + counts.notADeal
+  const answered =
+    counts.won + counts.lost + counts.wentQuiet + counts.dontRemember + counts.notADeal
   const backfillUntrustworthy =
     answered > 0 && counts.dontRemember / answered > DONT_REMEMBER_DISTRUST_RATIO
 

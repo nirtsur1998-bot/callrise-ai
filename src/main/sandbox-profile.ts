@@ -29,7 +29,10 @@ export function markSandboxProfile(overrideDir: string | undefined, allowSyncFla
 }
 
 /** Pure: does this configuration refuse the cloud backup? */
-export function sandboxRefusesSync(overrideDir: string | null | undefined, allowSyncFlag: boolean): boolean {
+export function sandboxRefusesSync(
+  overrideDir: string | null | undefined,
+  allowSyncFlag: boolean
+): boolean {
   return Boolean(overrideDir) && !allowSyncFlag
 }
 

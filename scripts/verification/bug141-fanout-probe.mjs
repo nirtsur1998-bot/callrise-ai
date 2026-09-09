@@ -89,9 +89,23 @@ for (const [label, run] of [
     }
   })()
 
+  // Peak in-flight filesystem requests, sampled from libuv itself. This is the
+  // mechanism made visible: unbounded does not read N files in parallel, it
+  // QUEUES N requests on a 4-thread pool, and that queue is what everything
+  // else in the process waits behind.
+  let peak = 0
+  const peakSampler = setInterval(() => {
+    const f = process._getActiveRequests
+    if (typeof f === 'function') {
+      const n = f.call(process).filter((r) => /^FSReq/.test(r?.constructor?.name ?? '')).length
+      if (n > peak) peak = n
+    }
+  }, 1)
+
   const t0 = process.hrtime.bigint()
   await run()
   const total = Number(process.hrtime.bigint() - t0) / 1e6
+  clearInterval(peakSampler)
   stop = true
   await sampler
 
@@ -99,6 +113,7 @@ for (const [label, run] of [
   const p = (q) => writes[Math.min(writes.length - 1, Math.floor((q / 100) * writes.length))]
   console.log(
     `\n${label}\n  total read of ${files.length} files: ${total.toFixed(0)} ms` +
+      `\n  peak filesystem requests in flight: ${peak}` +
       `\n  an unrelated small write, sampled ${writes.length}x during it:` +
       ` p50 ${p(50).toFixed(1)} ms  p95 ${p(95).toFixed(1)} ms  MAX ${writes[writes.length - 1].toFixed(1)} ms`
   )

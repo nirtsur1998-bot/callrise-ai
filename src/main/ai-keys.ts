@@ -12,7 +12,12 @@
 import { app, ipcMain, safeStorage } from 'electron'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
-import { buildProviderForValidation, getAIProvider, PROVIDER_REGISTRY, type AIProviderId } from './ai'
+import {
+  buildProviderForValidation,
+  getAIProvider,
+  PROVIDER_REGISTRY,
+  type AIProviderId
+} from './ai'
 import type { AIValidateKeyResult } from './ai/types'
 import { loadAppSettings, saveAppSettings } from './app-settings'
 import { validateDeepgramKey } from './deepgram-key'
@@ -283,10 +288,7 @@ export async function probeKey(
   }
 }
 
-async function validateAndMaybeAutoSelect(
-  name: AiKeyName,
-  value: string
-): Promise<SaveKeyOutcome> {
+async function validateAndMaybeAutoSelect(name: AiKeyName, value: string): Promise<SaveKeyOutcome> {
   const probe = await probeKey(name, value)
   // Nothing can check this credential. Report NOTHING rather than a cheerful
   // default: `keyValidated` stays undefined, which the card renders as "Not
@@ -366,10 +368,7 @@ export function registerAiKeys(): void {
     // of these strings, and the one a new key would silently be missing from.
     const status = Object.fromEntries(
       AI_KEY_NAMES.map((n) => [n, { configured: false, hint: null }])
-    ) as Record<
-      AiKeyName,
-      { configured: boolean; hint: string | null; demotedSince?: number }
-    >
+    ) as Record<AiKeyName, { configured: boolean; hint: string | null; demotedSince?: number }>
     const now = Date.now()
     for (const name of KEY_NAMES) {
       status[name].configured = isConfigured(name)

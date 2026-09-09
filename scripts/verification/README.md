@@ -1064,3 +1064,19 @@ catching the exception the check existed to surface — all pass, all by reducin
 **And when two parties disagree about a shared schema, widen the validator rather than rewrite the
 other party's data** — the validator is one file with one author; their entries are 36 and someone
 else's intent. Now taxonomy species 104.
+
+### An instrument whose load scales with the arm it is timing
+
+`bug141-fanout-probe.mjs` compares an unbounded directory read against a bounded one, and — to show
+the fairness cost — issues a small unrelated write every 5 ms **for the duration of each arm**.
+
+That sampler is the measurement's own confound. The slower arm runs longer, so it is charged for
+more sampler writes, so it looks even slower... except here it ran the other way and made **bounding
+look FASTER than unbounded**, which is backwards. That result was reported to the founder and
+written into a bug entry and eight code comments before a repeat with no sampler showed the truth:
+unbounded reads a directory in 11 ms, bounded-16 in 17 ms. Bounding is a **trade**, not a free win.
+
+**The check:** measure the headline number with the instrumentation OFF, and only then turn it on to
+measure the secondary effect. If an instrument's cost is proportional to the duration it is
+measuring, it cannot be trusted to compare durations. Same family as a benchmark that includes its
+own logging, and it is easy to miss because the instrument is the part you trust.

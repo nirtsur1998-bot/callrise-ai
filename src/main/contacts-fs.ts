@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from './atomic-write'
+import { mapWithConcurrency } from './bounded-map'
 
 /** A comment left on a contact — either the rep's own note, or an AI-drafted
  *  one from a linked call (opt-in, see CrmSettings.autoGenerateNotes). */
@@ -427,19 +428,26 @@ export async function listContacts(
   } catch {
     return []
   }
-  const results = await Promise.all(
-    files
-      .filter((file) => file.endsWith('.json'))
-      .map(async (file): Promise<Contact | null> => {
-        try {
-          const raw = await fs.readFile(join(dir, file), 'utf8')
-          const contact = sanitizeContactRecord(JSON.parse(raw))
-          // Tombstones stay hidden from the app; a future backup reads them via includeDeleted.
-          return contact && (opts?.includeDeleted || !contact.deleted) ? contact : null
-        } catch {
-          return null // skip unreadable / corrupt file
-        }
-      })
+  // BUG-248 — BOUNDED, and it is a TRADE, not a free win. `fs.promises` runs on
+  // libuv's threadpool (4 threads by default), so an unbounded `Promise.all`
+  // over a whole directory does not read in parallel — it QUEUES, and the queue
+  // is process-wide, ahead of every other store's reads and every
+  // `writeJsonAtomic`. Measured on 296 real record files: unbounded reads them
+  // in 11 ms but makes a concurrent unrelated write take 9.2 ms; bounded to 16
+  // costs 17 ms on the read and takes that write to 1.2 ms. We buy ~6 ms of
+  // listing latency for a ~7.7x fairness win. See bounded-map.ts for the table.
+  const results = await mapWithConcurrency(
+    files.filter((file) => file.endsWith('.json')),
+    async (file): Promise<Contact | null> => {
+      try {
+        const raw = await fs.readFile(join(dir, file), 'utf8')
+        const contact = sanitizeContactRecord(JSON.parse(raw))
+        // Tombstones stay hidden from the app; a future backup reads them via includeDeleted.
+        return contact && (opts?.includeDeleted || !contact.deleted) ? contact : null
+      } catch {
+        return null // skip unreadable / corrupt file
+      }
+    }
   )
   const contacts = results.filter((c): c is Contact => c !== null)
   // Alphabetical by name as a stable default; the renderer applies its own ordering.
@@ -513,27 +521,42 @@ async function updateContactUnlocked(
   if ('phoneE164' in patch) contact.phoneE164 = sanitizePhoneE164(patch.phoneE164)
   if ('notes' in patch) contact.notes = sanitizeMultilineText(patch.notes, MAX_NOTES)
   if ('industry' in patch) contact.industry = sanitizeOptionalText(patch.industry, MAX_SHORT_TEXT)
-  if ('companySize' in patch) contact.companySize = sanitizeOptionalText(patch.companySize, MAX_SHORT_TEXT)
+  if ('companySize' in patch)
+    contact.companySize = sanitizeOptionalText(patch.companySize, MAX_SHORT_TEXT)
   if ('website' in patch) contact.website = sanitizeOptionalText(patch.website, MAX_LONG_TEXT)
-  if ('registrationNumber' in patch) contact.registrationNumber = sanitizeOptionalText(patch.registrationNumber, MAX_SHORT_TEXT)
-  if ('verificationStatus' in patch) contact.verificationStatus = sanitizeOptionalText(patch.verificationStatus, MAX_SHORT_TEXT)
+  if ('registrationNumber' in patch)
+    contact.registrationNumber = sanitizeOptionalText(patch.registrationNumber, MAX_SHORT_TEXT)
+  if ('verificationStatus' in patch)
+    contact.verificationStatus = sanitizeOptionalText(patch.verificationStatus, MAX_SHORT_TEXT)
   if ('title' in patch) contact.title = sanitizeOptionalText(patch.title, MAX_SHORT_TEXT)
-  if ('decisionAuthority' in patch) contact.decisionAuthority = sanitizeOptionalText(patch.decisionAuthority, MAX_SHORT_TEXT)
-  if ('otherStakeholders' in patch) contact.otherStakeholders = sanitizeMultilineText(patch.otherStakeholders, MAX_LONG_TEXT)
+  if ('decisionAuthority' in patch)
+    contact.decisionAuthority = sanitizeOptionalText(patch.decisionAuthority, MAX_SHORT_TEXT)
+  if ('otherStakeholders' in patch)
+    contact.otherStakeholders = sanitizeMultilineText(patch.otherStakeholders, MAX_LONG_TEXT)
   if ('dealValue' in patch) contact.dealValue = sanitizeValue(patch.dealValue)
-  if ('pipelineStage' in patch) contact.pipelineStage = sanitizeOptionalText(patch.pipelineStage, MAX_SHORT_TEXT)
-  if ('leadSource' in patch) contact.leadSource = sanitizeOptionalText(patch.leadSource, MAX_SHORT_TEXT)
-  if ('budgetIndication' in patch) contact.budgetIndication = sanitizeOptionalText(patch.budgetIndication, MAX_SHORT_TEXT)
+  if ('pipelineStage' in patch)
+    contact.pipelineStage = sanitizeOptionalText(patch.pipelineStage, MAX_SHORT_TEXT)
+  if ('leadSource' in patch)
+    contact.leadSource = sanitizeOptionalText(patch.leadSource, MAX_SHORT_TEXT)
+  if ('budgetIndication' in patch)
+    contact.budgetIndication = sanitizeOptionalText(patch.budgetIndication, MAX_SHORT_TEXT)
   if ('timeline' in patch) contact.timeline = sanitizeOptionalText(patch.timeline, MAX_SHORT_TEXT)
-  if ('competitors' in patch) contact.competitors = sanitizeMultilineText(patch.competitors, MAX_LONG_TEXT)
-  if ('knownObjections' in patch) contact.knownObjections = sanitizeMultilineText(patch.knownObjections, MAX_LONG_TEXT)
-  if ('currentTooling' in patch) contact.currentTooling = sanitizeMultilineText(patch.currentTooling, MAX_LONG_TEXT)
+  if ('competitors' in patch)
+    contact.competitors = sanitizeMultilineText(patch.competitors, MAX_LONG_TEXT)
+  if ('knownObjections' in patch)
+    contact.knownObjections = sanitizeMultilineText(patch.knownObjections, MAX_LONG_TEXT)
+  if ('currentTooling' in patch)
+    contact.currentTooling = sanitizeMultilineText(patch.currentTooling, MAX_LONG_TEXT)
   if ('lastContactDate' in patch) contact.lastContactDate = sanitizeDateOnly(patch.lastContactDate)
-  if ('preferredLanguage' in patch) contact.preferredLanguage = sanitizeOptionalText(patch.preferredLanguage, MAX_SHORT_TEXT)
-  if ('communicationStyle' in patch) contact.communicationStyle = sanitizeOptionalText(patch.communicationStyle, MAX_SHORT_TEXT)
+  if ('preferredLanguage' in patch)
+    contact.preferredLanguage = sanitizeOptionalText(patch.preferredLanguage, MAX_SHORT_TEXT)
+  if ('communicationStyle' in patch)
+    contact.communicationStyle = sanitizeOptionalText(patch.communicationStyle, MAX_SHORT_TEXT)
   if ('timezone' in patch) contact.timezone = sanitizeOptionalText(patch.timezone, MAX_SHORT_TEXT)
-  if ('personalNotes' in patch) contact.personalNotes = sanitizeMultilineText(patch.personalNotes, MAX_LONG_TEXT)
-  if ('briefingNotes' in patch) contact.briefingNotes = sanitizeMultilineText(patch.briefingNotes, MAX_BRIEFING)
+  if ('personalNotes' in patch)
+    contact.personalNotes = sanitizeMultilineText(patch.personalNotes, MAX_LONG_TEXT)
+  if ('briefingNotes' in patch)
+    contact.briefingNotes = sanitizeMultilineText(patch.briefingNotes, MAX_BRIEFING)
 
   contact.updatedAt = new Date().toISOString() // mark modified (future backup ordering key)
 
@@ -695,5 +718,7 @@ export async function findContactByName(dir: string, name: string): Promise<Cont
   const normalized = name.trim().toLowerCase().replace(/\s+/g, ' ')
   if (!normalized) return null
   const contacts = await listContacts(dir)
-  return contacts.find((c) => c.name.trim().toLowerCase().replace(/\s+/g, ' ') === normalized) ?? null
+  return (
+    contacts.find((c) => c.name.trim().toLowerCase().replace(/\s+/g, ' ') === normalized) ?? null
+  )
 }

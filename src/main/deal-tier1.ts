@@ -297,7 +297,10 @@ export async function analyzeDealTier1(input: unknown): Promise<Tier1AnalyzeResu
       )
       // BUG-058 Phase 3 — see live-cue.ts's identical branch.
       const quotaExhausted = err.attempts.some((a) => a.failureClass === 'period-exhausted')
-      return { ok: false, pausedReason: quotaExhausted ? 'quota-exhausted' : 'all-models-unavailable' }
+      return {
+        ok: false,
+        pausedReason: quotaExhausted ? 'quota-exhausted' : 'all-models-unavailable'
+      }
     }
     if (err instanceof AIProviderError) {
       // BUG-057 Phase 2 — see live-cue.ts's identical branch for the full

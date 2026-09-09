@@ -122,7 +122,10 @@ export async function harvestKycFacts(
   const text = content.trim()
   if (!text) return []
   try {
-    const alreadyOnFile = [formatContactContext(contact), harvestKnownFieldsNotInContactContext(contact)]
+    const alreadyOnFile = [
+      formatContactContext(contact),
+      harvestKnownFieldsNotInContactContext(contact)
+    ]
       .filter(Boolean)
       .join('\n')
     const result = await completeWithFallback({
@@ -146,7 +149,8 @@ export async function harvestKycFacts(
       if (!field) continue
       const factText = typeof f.text === 'string' ? f.text.trim().slice(0, 1000) : ''
       if (!factText) continue
-      const confidence = f.confidence === 'high' ? 'high' : f.confidence === 'medium' ? 'medium' : null
+      const confidence =
+        f.confidence === 'high' ? 'high' : f.confidence === 'medium' ? 'medium' : null
       if (!confidence) continue
       out.push({ id: randomUUID(), field, text: factText, confidence })
     }

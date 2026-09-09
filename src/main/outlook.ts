@@ -605,7 +605,13 @@ export async function pushInsertEvent(ev: CalendarEvent, calId = 'primary'): Pro
   const clientToken = toOutlookClientToken(ev.id)
   try {
     const existing = await findByClientToken(token, calId, clientToken)
-    if (existing) return { ok: true, externalId: existing.id, provider, remoteUpdatedAt: existing.lastModifiedDateTime }
+    if (existing)
+      return {
+        ok: true,
+        externalId: existing.id,
+        provider,
+        remoteUpdatedAt: existing.lastModifiedDateTime
+      }
   } catch {
     // A failed idempotency check must never block a genuinely new event from
     // being created — fall through and attempt the insert as normal.

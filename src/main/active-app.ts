@@ -116,11 +116,7 @@ async function sampleExternalApp(): Promise<void> {
   if (generation !== samplingGeneration) return // stopped (or restarted) while this was in flight
   if (!name || isSelf(name)) return
   lastExternalApp = name
-  if (
-    isKnownCallingApp(name) &&
-    name !== lastNotifiedApp &&
-    allowedByDetectionSettings(name)
-  ) {
+  if (isKnownCallingApp(name) && name !== lastNotifiedApp && allowedByDetectionSettings(name)) {
     lastNotifiedApp = name
     broadcastCallDetected(name)
   }

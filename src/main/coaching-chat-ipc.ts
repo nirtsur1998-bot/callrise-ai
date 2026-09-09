@@ -24,7 +24,11 @@ import { generatePostCallBrief } from './post-call-brief'
 import { generateCrmNote } from './crm-notes'
 import { applyKycField } from './kyc-apply'
 import { AIProviderError, type AITool } from './ai'
-import { completeWithFallback, streamWithFallback, AllModelsExhaustedError } from './ai/complete-with-fallback'
+import {
+  completeWithFallback,
+  streamWithFallback,
+  AllModelsExhaustedError
+} from './ai/complete-with-fallback'
 import { scheduleBackup } from './backup'
 import { SKILL_LABEL } from './coaching/skill-graph'
 import {
@@ -44,7 +48,11 @@ import {
   DEFAULT_CONTEXT_WINDOW_TOKENS
 } from './assistant/prompt-budget'
 import { runMemoryExtractionForChatMessage } from './memory/memory-hooks'
-import { businessProfileSection, clientProfileSection, repProfileSection } from './memory/profile-injection'
+import {
+  businessProfileSection,
+  clientProfileSection,
+  repProfileSection
+} from './memory/profile-injection'
 import { retrieveRelevantMemories } from './memory/rag'
 import { consolidateNewCandidate } from './memory/consolidation'
 import { getMemoryDb } from './memory/memory-runtime'
@@ -78,7 +86,10 @@ function friendlyError(err: unknown): string {
 
 const MAX_PAST_CALLS = 5
 
-async function loadPastCallSummaries(contactId: string | undefined, excludeCallId: string): Promise<PastCallSummary[]> {
+async function loadPastCallSummaries(
+  contactId: string | undefined,
+  excludeCallId: string
+): Promise<PastCallSummary[]> {
   if (!contactId) return []
   const summaries = await listCalls(callsDir())
   const related = summaries
@@ -125,7 +136,6 @@ export interface CoachChatSendResult {
 // long chat session (MAX_CHAT_MESSAGES=300 in calls-fs.ts only bounds what's
 // stored, not what's replayed to the model on every turn).
 const MAX_HISTORY_MESSAGES = 40
-
 
 /** Best-effort with a hard time budget — extractContextSuggestions() is an
  *  ancillary pass; a slow/degraded provider chain must never hold up the
@@ -275,7 +285,13 @@ async function handleSend(
     ...(trailingMessage ? [{ role: 'user' as const, content: trailingMessage }] : [])
   ]
   if (messagesForModel.length === 0) {
-    messagesForModel = [{ role: 'user', content: '(No practice turns were recorded — just acknowledge that briefly and encourage them to try practice mode again.)' }]
+    messagesForModel = [
+      {
+        role: 'user',
+        content:
+          '(No practice turns were recorded — just acknowledge that briefly and encourage them to try practice mode again.)'
+      }
+    ]
   }
   if (budget.trim.trimmed) {
     console.warn(
@@ -308,7 +324,9 @@ async function handleSend(
     // to cut can fix it. Logged rather than hidden behind a result that looks
     // fitted; the request still goes out, because a degraded answer beats
     // refusing a turn the rep is waiting on mid-call.
-    console.warn('[coaching-chat] prompt still exceeds the budget after trimming — fixed context alone is too large')
+    console.warn(
+      '[coaching-chat] prompt still exceeds the budget after trimming — fixed context alone is too large'
+    )
   }
 
   const stream = streamWithFallback({
@@ -346,7 +364,11 @@ async function handleSend(
   }
 
   if (!full.trim()) {
-    return { ok: false, error: 'failed', message: 'The coach came back with an empty reply. Please try again.' }
+    return {
+      ok: false,
+      error: 'failed',
+      message: 'The coach came back with an empty reply. Please try again.'
+    }
   }
 
   const saved = await appendCoachChatTurn(
@@ -356,7 +378,11 @@ async function handleSend(
     { text: full, mode: replyMode }
   )
   if (!saved) {
-    return { ok: false, error: 'failed', message: 'The reply came through but could not be saved. Please retry.' }
+    return {
+      ok: false,
+      error: 'failed',
+      message: 'The reply came through but could not be saved. Please retry.'
+    }
   }
 
   // Context-save suggestions only make sense for real advisor-mode input —
@@ -428,7 +454,12 @@ export function registerCoachingChat(): void {
       startFreshPractice?: boolean
     ): Promise<CoachChatSendResult> => {
       try {
-        return await handleSend(callId, message, mode === 'practice' ? 'practice' : 'advisor', !!startFreshPractice)
+        return await handleSend(
+          callId,
+          message,
+          mode === 'practice' ? 'practice' : 'advisor',
+          !!startFreshPractice
+        )
       } catch {
         return { ok: false, error: 'failed', message: 'Something went wrong. Please try again.' }
       }
@@ -437,7 +468,11 @@ export function registerCoachingChat(): void {
 
   ipcMain.handle(
     'coachChat:applySuggestion',
-    async (_e, callId: string, suggestion: CoachChatContextSuggestion): Promise<{ ok: boolean }> => {
+    async (
+      _e,
+      callId: string,
+      suggestion: CoachChatContextSuggestion
+    ): Promise<{ ok: boolean }> => {
       try {
         const call = await getCall(callsDir(), callId)
         if (!call) return { ok: false }
@@ -452,7 +487,12 @@ export function registerCoachingChat(): void {
           // sanitizeValue() silently coerced it to undefined (wiping any
           // existing dealValue) while still reporting ok:true. applyKycField()
           // rejects up front instead, leaving the existing value untouched.
-          const contact = await applyKycField(contactsDir(), call.contactId, suggestion.field, suggestion.text)
+          const contact = await applyKycField(
+            contactsDir(),
+            call.contactId,
+            suggestion.field,
+            suggestion.text
+          )
           if (contact) scheduleBackup()
           return { ok: !!contact }
         }
@@ -467,7 +507,10 @@ export function registerCoachingChat(): void {
           // merges — not a read-outside-lock-then-overwrite via
           // setCallCommitments(), which would lose a concurrently-applied
           // commitment if two suggestion chips are clicked in quick succession.
-          const updated = await appendCommitment(callsDir(), callId, { owner: 'rep', text: suggestion.text })
+          const updated = await appendCommitment(callsDir(), callId, {
+            owner: 'rep',
+            text: suggestion.text
+          })
           return { ok: !!updated }
         }
 
@@ -478,7 +521,8 @@ export function registerCoachingChat(): void {
           // immediately (memories-store.ts's initialStatus()), skipping
           // the 3-call promotion hypotheses go through, the same way a
           // manual KYC edit is trusted immediately.
-          if (!isSalesBrainEnabled() || !suggestion.memoryScope || !suggestion.memoryCategory) return { ok: false }
+          if (!isSalesBrainEnabled() || !suggestion.memoryScope || !suggestion.memoryCategory)
+            return { ok: false }
           const db = getMemoryDb()
           if (!db) return { ok: false }
           await consolidateNewCandidate(db, {
@@ -502,38 +546,44 @@ export function registerCoachingChat(): void {
 
   // --- Actions: draft follow-up email, propose+confirm a task, regenerate the CRM note ---
 
-  ipcMain.handle('coachChat:draftFollowUpEmail', async (_e, callId: string): Promise<CoachChatSendResult> => {
-    try {
-      const call = await getCall(callsDir(), callId)
-      if (!call) return { ok: false, error: 'failed', message: 'Call not found.' }
-      const result = await generatePostCallBrief(speechSegments(call.segments), call.title)
-      if (!result.ok) {
-        return {
-          ok: false,
-          error: result.error,
-          message:
-            result.error === 'empty-call'
-              ? 'This call is too short to draft a follow-up from.'
-              : (result.message ?? 'Could not draft a follow-up email.')
+  ipcMain.handle(
+    'coachChat:draftFollowUpEmail',
+    async (_e, callId: string): Promise<CoachChatSendResult> => {
+      try {
+        const call = await getCall(callsDir(), callId)
+        if (!call) return { ok: false, error: 'failed', message: 'Call not found.' }
+        const result = await generatePostCallBrief(speechSegments(call.segments), call.title)
+        if (!result.ok) {
+          return {
+            ok: false,
+            error: result.error,
+            message:
+              result.error === 'empty-call'
+                ? 'This call is too short to draft a follow-up from.'
+                : (result.message ?? 'Could not draft a follow-up email.')
+          }
         }
+        const text = `Subject: ${result.brief.email.subject}\n\n${result.brief.email.body}`
+        const saved = await appendCoachChatTurn(
+          callsDir(),
+          callId,
+          { text: 'Draft a follow-up email for this call.', mode: 'advisor' },
+          { text, mode: 'advisor' }
+        )
+        if (!saved) return { ok: false, error: 'failed', message: 'Could not save the draft.' }
+        return { ok: true, reply: text }
+      } catch {
+        return { ok: false, error: 'failed', message: 'Could not draft a follow-up email.' }
       }
-      const text = `Subject: ${result.brief.email.subject}\n\n${result.brief.email.body}`
-      const saved = await appendCoachChatTurn(
-        callsDir(),
-        callId,
-        { text: 'Draft a follow-up email for this call.', mode: 'advisor' },
-        { text, mode: 'advisor' }
-      )
-      if (!saved) return { ok: false, error: 'failed', message: 'Could not save the draft.' }
-      return { ok: true, reply: text }
-    } catch {
-      return { ok: false, error: 'failed', message: 'Could not draft a follow-up email.' }
     }
-  })
+  )
 
   ipcMain.handle(
     'coachChat:proposeTask',
-    async (_e, callId: string): Promise<{ ok: true; proposal: TaskProposal } | { ok: false; message: string }> => {
+    async (
+      _e,
+      callId: string
+    ): Promise<{ ok: true; proposal: TaskProposal } | { ok: false; message: string }> => {
       try {
         const call = await getCall(callsDir(), callId)
         if (!call) return { ok: false, message: 'Call not found.' }
@@ -557,7 +607,9 @@ export function registerCoachingChat(): void {
         const raw = result.toolInput ?? {}
         const title = typeof raw.title === 'string' ? raw.title.trim().slice(0, 300) : ''
         if (!title) return { ok: false, message: 'Could not come up with a task for this call.' }
-        const type = TASK_TYPES.has(raw.type as string) ? (raw.type as TaskProposal['type']) : 'general'
+        const type = TASK_TYPES.has(raw.type as string)
+          ? (raw.type as TaskProposal['type'])
+          : 'general'
         const priority = TASK_PRIORITIES.has(raw.priority as string)
           ? (raw.priority as TaskProposal['priority'])
           : 'medium'
@@ -593,7 +645,10 @@ export function registerCoachingChat(): void {
 
   ipcMain.handle(
     'coachChat:regenerateCrmNote',
-    async (_e, callId: string): Promise<{ ok: true; note: string } | { ok: false; message: string }> => {
+    async (
+      _e,
+      callId: string
+    ): Promise<{ ok: true; note: string } | { ok: false; message: string }> => {
       try {
         const call = await getCall(callsDir(), callId)
         if (!call) return { ok: false, message: 'Call not found.' }

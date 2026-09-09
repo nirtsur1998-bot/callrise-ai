@@ -27,9 +27,9 @@ import { repProfileSection } from './memory/profile-injection'
 const METHODOLOGY_LABEL: Record<SalesMethodology, string> = {
   blended: 'Blended (whichever framework best fits this call)',
   spin: 'SPIN (Situation, Problem, Implication, Need-payoff)',
-  meddic: 'MEDDIC (Metrics, Economic buyer, Decision criteria, Decision process, Identify pain, Champion)',
-  meddpicc:
-    'MEDDPICC (MEDDIC plus Paper process and Competition)',
+  meddic:
+    'MEDDIC (Metrics, Economic buyer, Decision criteria, Decision process, Identify pain, Champion)',
+  meddpicc: 'MEDDPICC (MEDDIC plus Paper process and Competition)',
   challenger: 'Challenger (teach, tailor, take control — reframe the buyer’s status quo)',
   sandler: 'Sandler (buyer qualifies themselves; pain funnel; up-front contracts)'
 }
@@ -114,137 +114,138 @@ export type CoachResult =
  *  not just "the model happens to leave the optional field blank." */
 export function buildCoachTool(includeMethodology: boolean): AITool {
   return {
-  name: 'record_coaching',
-  description: 'Record a structured, evidence-grounded coaching assessment of the sales call.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      repSpeaker: {
-        type: 'integer',
-        description:
-          'The 0-based speaker number of the SALESPERSON being coached (e.g. 0 for "Speaker 0").'
-      },
-      dealContext: {
-        type: 'object',
-        properties: {
-          type: { type: 'string', enum: ['transactional', 'complex', 'unknown'] },
-          summary: {
-            type: 'string',
-            description:
-              'One short line inferring the deal (industry / stage / size) if detectable.'
+    name: 'record_coaching',
+    description: 'Record a structured, evidence-grounded coaching assessment of the sales call.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repSpeaker: {
+          type: 'integer',
+          description:
+            'The 0-based speaker number of the SALESPERSON being coached (e.g. 0 for "Speaker 0").'
+        },
+        dealContext: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', enum: ['transactional', 'complex', 'unknown'] },
+            summary: {
+              type: 'string',
+              description:
+                'One short line inferring the deal (industry / stage / size) if detectable.'
+            },
+            lens: {
+              type: 'string',
+              description:
+                'Which methodology lens you leaned on and why (e.g. "MEDDICC — enterprise qualification").'
+            }
           },
-          lens: {
-            type: 'string',
-            description:
-              'Which methodology lens you leaned on and why (e.g. "MEDDICC — enterprise qualification").'
+          required: ['type', 'summary', 'lens'],
+          additionalProperties: false
+        },
+        strengthText: {
+          type: 'string',
+          description: 'The single most genuine strength to lead with — encouraging and specific.'
+        },
+        strengthQuote: {
+          type: 'string',
+          description:
+            "A VERBATIM quote from the transcript (spoken words only, no 'Speaker N:' label) that shows this strength."
+        },
+        strengthSpeaker: { type: 'integer' },
+        dimensions: {
+          type: 'array',
+          description:
+            'Exactly the six rubric dimensions, each scored 1–5 with a verbatim evidence quote.',
+          items: {
+            type: 'object',
+            properties: {
+              key: {
+                type: 'string',
+                enum: ['discovery', 'engagement', 'objection', 'value', 'nextStep', 'control']
+              },
+              score: { type: 'integer', minimum: 1, maximum: 5 },
+              comment: {
+                type: 'string',
+                description: 'One or two sentences justifying the score, specific to THIS call.'
+              },
+              evidenceQuote: {
+                type: 'string',
+                description:
+                  'A VERBATIM span from the transcript (spoken words only) supporting the score.'
+              },
+              evidenceSpeaker: { type: 'integer' }
+            },
+            required: ['key', 'score', 'comment', 'evidenceQuote', 'evidenceSpeaker'],
+            additionalProperties: false
           }
         },
-        required: ['type', 'summary', 'lens'],
-        additionalProperties: false
-      },
-      strengthText: {
-        type: 'string',
-        description: 'The single most genuine strength to lead with — encouraging and specific.'
-      },
-      strengthQuote: {
-        type: 'string',
-        description:
-          "A VERBATIM quote from the transcript (spoken words only, no 'Speaker N:' label) that shows this strength."
-      },
-      strengthSpeaker: { type: 'integer' },
-      dimensions: {
-        type: 'array',
-        description:
-          'Exactly the six rubric dimensions, each scored 1–5 with a verbatim evidence quote.',
-        items: {
-          type: 'object',
-          properties: {
-            key: {
-              type: 'string',
-              enum: ['discovery', 'engagement', 'objection', 'value', 'nextStep', 'control']
-            },
-            score: { type: 'integer', minimum: 1, maximum: 5 },
-            comment: {
-              type: 'string',
-              description: 'One or two sentences justifying the score, specific to THIS call.'
-            },
-            evidenceQuote: {
-              type: 'string',
-              description:
-                'A VERBATIM span from the transcript (spoken words only) supporting the score.'
-            },
-            evidenceSpeaker: { type: 'integer' }
-          },
-          required: ['key', 'score', 'comment', 'evidenceQuote', 'evidenceSpeaker'],
-          additionalProperties: false
-        }
-      },
-      ...(includeMethodology
-        ? {
-            methodologyAdherence: {
-              type: 'object',
-              description:
-                'Score adherence to the methodology named below, with one supporting quote.',
-              properties: {
-                score: { type: 'integer', minimum: 1, maximum: 5 },
-                comment: {
-                  type: 'string',
-                  description: 'One or two sentences on how well the call followed that methodology.'
+        ...(includeMethodology
+          ? {
+              methodologyAdherence: {
+                type: 'object',
+                description:
+                  'Score adherence to the methodology named below, with one supporting quote.',
+                properties: {
+                  score: { type: 'integer', minimum: 1, maximum: 5 },
+                  comment: {
+                    type: 'string',
+                    description:
+                      'One or two sentences on how well the call followed that methodology.'
+                  },
+                  evidenceQuote: {
+                    type: 'string',
+                    description:
+                      'A VERBATIM span from the transcript (spoken words only) supporting the score.'
+                  },
+                  evidenceSpeaker: { type: 'integer' }
                 },
-                evidenceQuote: {
-                  type: 'string',
-                  description:
-                    'A VERBATIM span from the transcript (spoken words only) supporting the score.'
-                },
-                evidenceSpeaker: { type: 'integer' }
-              },
-              required: ['score', 'comment', 'evidenceQuote', 'evidenceSpeaker'],
-              additionalProperties: false
+                required: ['score', 'comment', 'evidenceQuote', 'evidenceSpeaker'],
+                additionalProperties: false
+              }
             }
+          : {}),
+        improvements: {
+          type: 'array',
+          description:
+            'Exactly TWO prioritized improvements: one "mechanical" (a concrete habit) and one "strategic" (a higher-level shift). Each MUST cite a verbatim transcript quote.',
+          items: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', enum: ['mechanical', 'strategic'] },
+              title: { type: 'string' },
+              detail: {
+                type: 'string',
+                description:
+                  'What to do differently, tied to the evidence. Growth-minded, never harsh.'
+              },
+              evidenceQuote: {
+                type: 'string',
+                description:
+                  'A VERBATIM span from the transcript (spoken words only) the advice responds to.'
+              },
+              evidenceSpeaker: { type: 'integer' }
+            },
+            required: ['kind', 'title', 'detail', 'evidenceQuote', 'evidenceSpeaker'],
+            additionalProperties: false
           }
-        : {}),
-      improvements: {
-        type: 'array',
-        description:
-          'Exactly TWO prioritized improvements: one "mechanical" (a concrete habit) and one "strategic" (a higher-level shift). Each MUST cite a verbatim transcript quote.',
-        items: {
-          type: 'object',
-          properties: {
-            kind: { type: 'string', enum: ['mechanical', 'strategic'] },
-            title: { type: 'string' },
-            detail: {
-              type: 'string',
-              description:
-                'What to do differently, tied to the evidence. Growth-minded, never harsh.'
-            },
-            evidenceQuote: {
-              type: 'string',
-              description:
-                'A VERBATIM span from the transcript (spoken words only) the advice responds to.'
-            },
-            evidenceSpeaker: { type: 'integer' }
-          },
-          required: ['kind', 'title', 'detail', 'evidenceQuote', 'evidenceSpeaker'],
-          additionalProperties: false
+        },
+        nextAction: {
+          type: 'string',
+          description: 'ONE concrete behavior to try on the very next call.'
         }
       },
-      nextAction: {
-        type: 'string',
-        description: 'ONE concrete behavior to try on the very next call.'
-      }
-    },
-    required: [
-      'repSpeaker',
-      'dealContext',
-      'strengthText',
-      'strengthQuote',
-      'strengthSpeaker',
-      'dimensions',
-      'improvements',
-      'nextAction'
-    ],
-    additionalProperties: false
-  }
+      required: [
+        'repSpeaker',
+        'dealContext',
+        'strengthText',
+        'strengthQuote',
+        'strengthSpeaker',
+        'dimensions',
+        'improvements',
+        'nextAction'
+      ],
+      additionalProperties: false
+    }
   }
 }
 
@@ -559,7 +560,13 @@ function assembleReport(
       pricingMentionsLatePct: benchmark.pricing.latePct,
       nextStepsLocked: benchmark.nextStepsLocked
     }
-    skills = computeSkillScores(dimensions, metrics, benchmark, methodologyAdherence, coach2.personalBenchmarks)
+    skills = computeSkillScores(
+      dimensions,
+      metrics,
+      benchmark,
+      methodologyAdherence,
+      coach2.personalBenchmarks
+    )
   }
 
   return {
@@ -616,7 +623,11 @@ export async function coachCall(
    *  likewise resolved by the caller (calls.ts has the call-history access
    *  memory/personal-benchmarks.ts's pure functions need); coach.ts just
    *  threads it through to computeSkillScores() unchanged. */
-  context?: { callType?: CallType; commitments?: Commitment[]; personalBenchmarks?: PersonalBenchmarks },
+  context?: {
+    callType?: CallType
+    commitments?: Commitment[]
+    personalBenchmarks?: PersonalBenchmarks
+  },
   /** BUG-060 — threaded into completeWithFallback so this job's Cancel button
    *  is real rather than cosmetic. Optional so non-job callers are unchanged. */
   opts?: { signal?: AbortSignal }

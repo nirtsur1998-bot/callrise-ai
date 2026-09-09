@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { linkKey } from './google-sync'
 import { writeJsonAtomic } from './atomic-write'
 import { purgeCompanionFiles } from './companion-files'
+import { mapWithConcurrency } from './bounded-map'
 
 /** Lifecycle of a local event's mirror in Google (M14 two-way sync). */
 export type SyncState =
@@ -352,22 +353,29 @@ export async function listEvents(
   } catch {
     return []
   }
-  const results = await Promise.all(
-    files
-      .filter((file) => file.endsWith('.json'))
-      .map(async (file): Promise<CalendarEvent | null> => {
-        try {
-          const raw = await fs.readFile(join(dir, file), 'utf8')
-          const event = sanitizeEventRecord(JSON.parse(raw))
-          // Tombstones never render: sync.state='deleted' is the transient awaiting-
-          // Google state, `deleted` is the permanent backup tombstone. The Google
-          // reconcile pass and the backup read them via includeDeleted.
-          const tombstoned = event?.sync?.state === 'deleted' || event?.deleted === true
-          return event && (opts?.includeDeleted || !tombstoned) ? event : null
-        } catch {
-          return null // skip unreadable / corrupt file
-        }
-      })
+  // BUG-248 — BOUNDED, and it is a TRADE, not a free win. `fs.promises` runs on
+  // libuv's threadpool (4 threads by default), so an unbounded `Promise.all`
+  // over a whole directory does not read in parallel — it QUEUES, and the queue
+  // is process-wide, ahead of every other store's reads and every
+  // `writeJsonAtomic`. Measured on 296 real record files: unbounded reads them
+  // in 11 ms but makes a concurrent unrelated write take 9.2 ms; bounded to 16
+  // costs 17 ms on the read and takes that write to 1.2 ms. We buy ~6 ms of
+  // listing latency for a ~7.7x fairness win. See bounded-map.ts for the table.
+  const results = await mapWithConcurrency(
+    files.filter((file) => file.endsWith('.json')),
+    async (file): Promise<CalendarEvent | null> => {
+      try {
+        const raw = await fs.readFile(join(dir, file), 'utf8')
+        const event = sanitizeEventRecord(JSON.parse(raw))
+        // Tombstones never render: sync.state='deleted' is the transient awaiting-
+        // Google state, `deleted` is the permanent backup tombstone. The Google
+        // reconcile pass and the backup read them via includeDeleted.
+        const tombstoned = event?.sync?.state === 'deleted' || event?.deleted === true
+        return event && (opts?.includeDeleted || !tombstoned) ? event : null
+      } catch {
+        return null // skip unreadable / corrupt file
+      }
+    }
   )
   const events = results.filter((e): e is CalendarEvent => e !== null)
   events.sort((a, b) => a.start.localeCompare(b.start)) // earliest first
@@ -425,7 +433,8 @@ export async function updateEvent(
     event.contactId = isSafeId(patch.contactId) ? patch.contactId : undefined
   if ('dealId' in patch) event.dealId = isSafeId(patch.dealId) ? patch.dealId : undefined
   if ('callId' in patch) event.callId = isSafeId(patch.callId) ? patch.callId : undefined
-  if ('reminderMinutes' in patch) event.reminderMinutes = sanitizeReminderMinutes(patch.reminderMinutes)
+  if ('reminderMinutes' in patch)
+    event.reminderMinutes = sanitizeReminderMinutes(patch.reminderMinutes)
   // Start/end are resolved together so the window always stays valid/ordered.
   if ('start' in patch || 'end' in patch) {
     const startRaw = 'start' in patch ? patch.start : event.start

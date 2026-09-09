@@ -220,7 +220,11 @@ function jobsSummary(destDir: string): number {
     createdAt: j.createdAt,
     endedAt: j.endedAt ?? null
   }))
-  writeFileSync(join(destDir, 'jobs-summary.json'), scrubDocument(JSON.stringify(rows, null, 2)), 'utf8')
+  writeFileSync(
+    join(destDir, 'jobs-summary.json'),
+    scrubDocument(JSON.stringify(rows, null, 2)),
+    'utf8'
+  )
   return rows.length
 }
 
@@ -264,7 +268,9 @@ async function summaryText(src: BundleSources, collected: string[], dest: string
   push('== recent AI fallback events (detail stripped at source) ==')
   try {
     for (const e of await readRecentFallbackEvents(20)) {
-      push(`${e.ts} ${e.purpose}: ${e.fromCatalogId} -> ${e.toCatalogId ?? 'EXHAUSTED'} (${e.reason})`)
+      push(
+        `${e.ts} ${e.purpose}: ${e.fromCatalogId} -> ${e.toCatalogId ?? 'EXHAUSTED'} (${e.reason})`
+      )
     }
   } catch {
     push('(unavailable)')
@@ -342,7 +348,11 @@ export async function buildSupportBundle(
     sweepSummary(src.userDataDir, dest)
     collected.push('sales-brain-sweep.json')
 
-    writeFileSync(join(dest, 'support-summary.txt'), await summaryText(src, collected, dest), 'utf8')
+    writeFileSync(
+      join(dest, 'support-summary.txt'),
+      await summaryText(src, collected, dest),
+      'utf8'
+    )
     collected.unshift('support-summary.txt')
     return { ok: true, path: dest, files: collected }
   } catch (err) {

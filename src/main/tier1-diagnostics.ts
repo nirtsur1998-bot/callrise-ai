@@ -97,7 +97,11 @@ export function buildAppDiagnostics(renderer: RendererDiagnostics): string {
       tier1Status: getStatus(),
       tier1Enabled: renderer.tier1Enabled ?? null,
       denoiseStrength: renderer.denoiseStrength ?? null,
-      devices: sanitizeDeviceSummary(renderer.devices) ?? { hasVirtualMic: false, inputCount: 0, kinds: [] }
+      devices: sanitizeDeviceSummary(renderer.devices) ?? {
+        hasVirtualMic: false,
+        inputCount: 0,
+        kinds: []
+      }
     },
     null,
     2

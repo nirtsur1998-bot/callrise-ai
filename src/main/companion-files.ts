@@ -167,7 +167,9 @@ export async function sweepOrphanedCompanions(baseDir: string): Promise<number> 
       if (!isCompanion) continue
 
       // `<id>.conflict` -> id; `<id>.json.<uuid>.tmp` -> id
-      const id = name.includes('.json.') ? name.slice(0, name.indexOf('.json.')) : name.slice(0, name.lastIndexOf('.'))
+      const id = name.includes('.json.')
+        ? name.slice(0, name.indexOf('.json.'))
+        : name.slice(0, name.lastIndexOf('.'))
 
       const recordExists = entries.includes(`${id}.json`)
       // An orphaned .tmp is always safe to remove: it is by definition a

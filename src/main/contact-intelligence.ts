@@ -69,7 +69,8 @@ export function otherPartyKey(input: OtherPartyKeyInput): OtherPartyKeyResult | 
 
 const DETECT_TOOL: AITool = {
   name: 'record_other_party_name',
-  description: 'Record the name of the other party (the non-rep person) on this call, if it can be determined.',
+  description:
+    'Record the name of the other party (the non-rep person) on this call, if it can be determined.',
   inputSchema: {
     type: 'object',
     properties: {
