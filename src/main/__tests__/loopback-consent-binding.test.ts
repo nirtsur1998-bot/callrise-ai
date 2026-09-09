@@ -105,7 +105,18 @@ function rendererPersists(callId: string, consent: unknown): boolean {
 function rendererArms(): boolean {
   const ev: { returnValue?: unknown } = {}
   syncHandlers.get('loopback:arm')!(ev)
-  return ev.returnValue === true
+  // BUG-201 — this channel returns `{ armed, reason }` now, not a bare
+  // boolean: the reason was being computed and thrown away (the preload was
+  // typed `arm: (): void`), so five distinguishable refusals reached the rep
+  // as one. Only the SHAPE changed. Every assertion in this file is about
+  // `armed`, which is the same value from the same untouched expression;
+  // `reason` is an observation, asserted separately in
+  // bug201-arm-refusal-has-a-reason.test.ts.
+  //
+  // These tests catching the shape change is the system working: they are the
+  // consent-binding tests, and a silent contract change on this channel is
+  // exactly what they exist to refuse.
+  return (ev.returnValue as { armed?: unknown } | undefined)?.armed === true
 }
 
 /** Chromium asking for the display-media stream. Returns true if audio was

@@ -1745,10 +1745,24 @@ export interface AuthApi {
   onChange: (cb: (user: AuthUser | null) => void) => () => void
 }
 
+/** BUG-201 — why an arm was refused. Four of the five are the APP declining;
+ *  only a `getDisplayMedia` rejection AFTER `armed: true` is the user. */
+export type ArmOutcome =
+  | 'armed'
+  | 'platform-unsupported'
+  | 'master-switch-off'
+  | 'no-live-call'
+  | 'consent-not-permitted'
+  | 'unknown'
+
 export interface LoopbackApi {
   /** Arm exactly one system-audio capture grant (synchronous; call right before
-   *  getDisplayMedia, only after consent is recorded). */
-  arm: () => void
+   *  getDisplayMedia, only after consent is recorded).
+   *
+   *  BUG-201 — returns main's verdict instead of discarding it. `armed: false`
+   *  means the APP refused and `reason` says which of the four; the renderer
+   *  must not report that as the user having blocked anything. */
+  arm: () => { armed: boolean; reason: ArmOutcome }
   /** Clear a pending arm (e.g. if capture was cancelled). */
   disarm: () => void
   /** Open the macOS Screen & System Audio Recording settings pane. */

@@ -48,6 +48,66 @@ import { liveCallInfo, recordConsent } from './live/live-transcript'
 // One-shot: set true by 'loopback:arm', consumed the moment a request is granted.
 let armed = false
 
+/**
+ * BUG-201 — WHY buyer capture did not happen.
+ *
+ * Main already decides this and used to throw the answer away: the arm handler
+ * evaluated four conditions, returned a bare boolean, and the preload's
+ * `arm(): void` discarded even that. The renderer then saw `getDisplayMedia`
+ * reject and reported `'denied'` — the same code the user gets when they see
+ * the OS prompt and click No. So FIVE distinguishable situations produced one
+ * indistinguishable outcome, four of which are the APP declining while the rep
+ * is told it was them.
+ *
+ * None of these are new decisions. Every refusal below is existing, deliberate
+ * behaviour ([[BUG-172]]: intent must never be trusted over evidence). The
+ * defect was purely that the reason was computed and then discarded, so a call
+ * showing "buyer capture promised, no channel attached" could be any of four
+ * causes with no way to tell which — the upstream half of BUG-D's branch
+ * question.
+ */
+export type ArmOutcome =
+  | 'armed'
+  | 'platform-unsupported'
+  | 'master-switch-off'
+  | 'no-live-call'
+  | 'consent-not-permitted'
+  /** The reason could not be determined. Never expected; present so the
+   *  observation can never throw into the arm path. */
+  | 'unknown'
+
+/** Every way the display-media handler can end. Seven paths used to collapse
+ *  into a bare `callback({})` with nothing logged, counted or persisted. */
+export type CaptureOutcome =
+  | 'granted'
+  | 'not-armed'
+  | 'master-switch-off'
+  | 'no-live-call'
+  | 'consent-not-permitted'
+  | 'no-screen-sources'
+  | 'get-sources-threw'
+
+const captureOutcomes = new Map<CaptureOutcome, number>()
+
+/** Counts since launch, for the session-health line and `--diagnose`.
+ *  Read-only: a copy, so no caller can reach in and reset the record. */
+export function loopbackOutcomeCounts(): Record<string, number> {
+  return Object.fromEntries(captureOutcomes)
+}
+
+/** Observation only. Wrapped so a counter can never affect a capture decision
+ *  — the safety-path rule: additive, and incapable of altering the outcome. */
+function noteCaptureOutcome(outcome: CaptureOutcome): void {
+  try {
+    captureOutcomes.set(outcome, (captureOutcomes.get(outcome) ?? 0) + 1)
+    if (outcome !== 'granted') {
+      console.log(`[loopback] buyer capture not granted: ${outcome}`)
+    }
+  } catch {
+    /* a counter must never break a live call */
+  }
+}
+
 export function registerLoopbackCapture(): void {
   // Deep-link to the OS's screen/system-audio recording permission pane so the
   // rep can grant the permission buyer capture needs (mirrors the mic settings
@@ -144,7 +204,31 @@ export function registerLoopbackCapture(): void {
       loadAppSettings().allowOtherPartyRecording &&
       live !== null &&
       consentPermitsCapture(live.callId)
-    event.returnValue = armed
+
+    // BUG-201 — the reason, computed ONLY on the refusal path and only from
+    // conditions already evaluated above. The decision expression is untouched
+    // and this cannot reach it: `armed` is assigned before this runs, and the
+    // whole thing is wrapped. An observation on a consent path must be
+    // incapable of changing the answer it observes.
+    let reason: ArmOutcome = 'armed'
+    if (!armed) {
+      try {
+        reason = !platformSupported
+          ? 'platform-unsupported'
+          : !loadAppSettings().allowOtherPartyRecording
+            ? 'master-switch-off'
+            : live === null
+              ? 'no-live-call'
+              : 'consent-not-permitted'
+      } catch {
+        reason = 'unknown'
+      }
+      console.log(`[loopback] arm refused: ${reason}`)
+    }
+    // The shape changed from a bare boolean to { armed, reason }. Safe: the
+    // preload discarded the old value entirely (`arm: (): void`), so nothing
+    // read it — which is the bug.
+    event.returnValue = { armed, reason }
   })
   ipcMain.on('loopback:disarm', (event) => {
     armed = false
@@ -184,6 +268,17 @@ export function registerLoopbackCapture(): void {
         liveNow === null ||
         !consentPermitsCapture(liveNow.callId)
       ) {
+        // BUG-201 — WHICH of the four, counted rather than collapsed. Computed
+        // after the decision, from the same values, and unable to change it.
+        noteCaptureOutcome(
+          !armed
+            ? 'not-armed'
+            : !loadAppSettings().allowOtherPartyRecording
+              ? 'master-switch-off'
+              : liveNow === null
+                ? 'no-live-call'
+                : 'consent-not-permitted'
+        )
         callback({}) // deny — not armed, switch off, or no persisted consent
         return
       }
@@ -192,12 +287,17 @@ export function registerLoopbackCapture(): void {
         .getSources({ types: ['screen'] })
         .then((sources) => {
           if (sources.length === 0) {
+            noteCaptureOutcome('no-screen-sources')
             callback({})
             return
           }
+          noteCaptureOutcome('granted')
           callback({ video: sources[0], audio: 'loopback' })
         })
-        .catch(() => callback({}))
+        .catch(() => {
+          noteCaptureOutcome('get-sources-threw')
+          callback({})
+        })
     },
     { useSystemPicker: false }
   )

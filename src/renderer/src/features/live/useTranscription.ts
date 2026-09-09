@@ -877,10 +877,25 @@ export function useTranscription(
       setOtherPartyError(null)
 
       let audio: MediaStream
+      // BUG-201 — main's verdict, which this line used to discard. `armed:
+      // false` means the APP refused (platform, master switch, no live call,
+      // or consent), NOT that the user blocked anything.
+      //
+      // Recorded, not yet acted on. Two things follow from it and both are
+      // product decisions the founder holds: the banner below says "screen &
+      // system-audio recording was blocked", which is false for all four
+      // app-side refusals; and calling getDisplayMedia after `armed: false`
+      // shows the user an OS prompt this app has already decided to deny.
+      // Changing either changes what a rep sees mid-call, so neither is done
+      // here — see BUG-201's entry for the drafts.
+      let armVerdict: { armed: boolean; reason: string } = { armed: false, reason: 'unknown' }
       try {
         // Arm the main-process one-shot grant synchronously — no await before
         // getDisplayMedia, so it stays a user gesture.
-        window.api.loopback.arm()
+        armVerdict = window.api.loopback.arm()
+        if (!armVerdict.armed) {
+          console.log(`[loopback] the app declined buyer capture: ${armVerdict.reason}`)
+        }
         const display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
         display.getVideoTracks().forEach((t) => t.stop()) // we only want the audio
         if (display.getAudioTracks().length === 0) {
