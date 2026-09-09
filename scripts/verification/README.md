@@ -1043,3 +1043,24 @@ is the sharpest instance of the catalogue's thesis in the catalogue itself.
 at the moment you need it:
 
     grep -oE '^\*\*[0-9]+\. ' '<file>' | grep -oE '[0-9]+' | sort -n | uniq -c
+
+### A fix that makes a check green by removing what the check was reading
+
+`tracker-status.mjs` refused to write: three entries had "no status line directly under the
+heading". The cause was that another session had rolled out a readiness field —
+`**Status:** OPEN · 2026-09-09 · READY — …` — across **36 entries**, and the validator's pattern
+did not allow the extra token.
+
+The first fix was a regex that normalised all 36 back to the older shape. **It worked, the gate went
+green, and no readable information was lost** — `READY` just moved after the em dash. It was still
+wrong: the check passed because *the field it reads had been deleted*. A colleague's
+machine-readable token became prose to satisfy a tool that did not know about it yet.
+
+Reverted; the validator was widened to accept and preserve the token, and their 37 lines restored.
+
+**The question is not "did the check pass" but "does the check still have the same thing to look
+at".** Deleting a test, loosening an assertion, dropping a field, widening a type to `unknown`,
+catching the exception the check existed to surface — all pass, all by reducing what is checked.
+**And when two parties disagree about a shared schema, widen the validator rather than rewrite the
+other party's data** — the validator is one file with one author; their entries are 36 and someone
+else's intent. Now taxonomy species 104.
