@@ -1076,6 +1076,30 @@ look FASTER than unbounded**, which is backwards. That result was reported to th
 written into a bug entry and eight code comments before a repeat with no sampler showed the truth:
 unbounded reads a directory in 11 ms, bounded-16 in 17 ms. Bounding is a **trade**, not a free win.
 
+#### FIRES ≠ NEUTRAL, and this project has only ever validated the first half
+
+This is the sharper version, and it is a gap in how **every** instrument here has been checked —
+including the ones that worked.
+
+The standing discipline is *"prove the check can FAIL before trusting that it passes"*: break the
+thing on purpose, watch it go red, restore. Four instruments in this investigation were caught that
+way. **That question is "can it fire?"** The sampler passed it easily — it fired every time, and its
+numbers were real.
+
+**"Does it distort what it measures?" is a different question, and nothing in the checklist asked
+it.** The sampler's cost was proportional to the duration it was timing, so it did not fail, it
+*leaned* — and it leaned hard enough to invert the result and produce a confident, wrong claim that
+reached the tracker, the memory and eight code comments before a sampler-free repeat caught it.
+
+Two checks, not one, for anything you measure with:
+
+1. **Can it fire?** Break the subject; the instrument must go red. (Positive control.)
+2. **Is it neutral?** Measure the headline number with the instrument OFF, and only then turn it on
+   for the secondary effect. If the instrument's cost scales with what it is timing, it cannot
+   compare durations at all — it can only measure the secondary thing it was added for.
+
+A silent instrument is caught by (1). A **biased** one passes (1) and is caught only by (2).
+
 **The check:** measure the headline number with the instrumentation OFF, and only then turn it on to
 measure the secondary effect. If an instrument's cost is proportional to the duration it is
 measuring, it cannot be trusted to compare durations. Same family as a benchmark that includes its
