@@ -1104,3 +1104,68 @@ A silent instrument is caught by (1). A **biased** one passes (1) and is caught 
 measure the secondary effect. If an instrument's cost is proportional to the duration it is
 measuring, it cannot be trusted to compare durations. Same family as a benchmark that includes its
 own logging, and it is easy to miss because the instrument is the part you trust.
+
+---
+
+## Driving the app: three traps that each cost a cycle on 2026-09-09
+
+### RULE — when verifying navigation, assert on something that exists ONLY on the destination
+
+This is the second instance of the same mistake with the same tool, so it stops being a worked
+example and becomes a rule.
+
+A driver clicked six sidebar entries and verified each with:
+
+```js
+body.includes(label)   // "NAVIGATED" — six times, from the Home page
+```
+
+The sidebar is always on screen. `body` contains "Calls", "Pipeline" and "Library" on every screen
+in the app, including the one you never left. Six confident NAVIGATED lines, six screenshots of
+Home. The earlier instance is already in this file: a 120-character `innerText` slice used as a
+"which screen am I on" check turned out to be the sidebar.
+
+**The sidebar is never evidence.** Assert on the destination's own content, or on a value that
+cannot be true elsewhere:
+
+- `location.hash` read back after navigating (only if the app is actually hash-routed — see below)
+- the destination's own heading read from `main`, compared against the PREVIOUS screen's, so
+  "unchanged" is a failure
+- a count or label that appears on exactly one screen ("Past Calls  196 calls")
+
+And check the app's routing model before assuming: setting `location.hash` in this app changes the
+URL and does **not** route — a driver that navigates by hash and verifies by hash agrees with
+itself while the screen never moves.
+
+### `APPDATA` does NOT redirect Electron's userData — and the failure is silent
+
+Redirecting `APPDATA` for a child process looks like the obvious way to point a dev build at a
+copied profile. **It does nothing.** Electron resolves `app.getPath('appData')` through the Windows
+API (`SHGetKnownFolderPath`), not the environment variable, so the app starts, looks completely
+normal, and reads and writes **the real profile**. The only reason it was caught here was a log line
+naming the path it had loaded `.env` from.
+
+This is the trap in this list that can cause actual damage: a "sandbox" doing real writes to the
+founder's store. The supported mechanism in this repo is the app's own override, and it announces
+itself:
+
+```bash
+CALLRISE_USER_DATA_DIR=<copy> npx electron out/main/index.js --remote-debugging-port=9444
+# [dev] userData overridden -> <copy>
+# [dev] SANDBOX profile at <copy>: cloud backup push and pull REFUSED
+```
+
+Both lines are the check. If you do not see them, you are driving the real profile. (The second is
+BUG-186's guard — it is what makes signing a copy in safe.)
+
+### A second app instance exits with code 0 — it is not "the launch failed"
+
+Start a second instance while one is running and it loses `requestSingleInstanceLock()`, calls
+`app.quit()` before `ready`, and exits **0** with no window and no error. Every symptom of a clean
+successful run.
+
+This is BUG-040's shape, it is documented in a long comment in `src/main/index.ts` — and it still
+cost a cycle here, in a new context. That is the argument for it living in this file as well as in
+that comment: the person hitting it is reading a launch log, not the source of the app they are
+trying to launch. Give your instance its own `CALLRISE_USER_DATA_DIR` (the lock is keyed on the
+userData path) and its own `--remote-debugging-port`.
