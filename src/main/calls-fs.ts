@@ -430,10 +430,32 @@ interface CallBase {
   id: string
   title: string
   createdAt: string // ISO timestamp
-  /** Last modification (save or any edit), ISO timestamp — the ordering key a
-   *  future cloud backup uses for "newest wins". Backfilled from createdAt for
-   *  calls saved before this field existed. */
+  /**
+   * THE SYNC ORDERING KEY, and only that. The value a cloud push compares for
+   * "newest wins", which the server trigger requires to be strictly greater.
+   *
+   * BUG-243 — it used to mean two things at once, and the second one lost.
+   * `touchAllCallsForRepush` bumps every call so a transcripts-scrub can evict
+   * the old rows (the server only accepts strictly-newer ones), which is
+   * correct and load-bearing. The cost was measured on the founder's store:
+   * **all 196 live records carried the same stamp, inside 789 milliseconds** —
+   * one bulk loop had erased the entire modification history of the corpus.
+   *
+   * So "when did the user last change this" moved to `editedAt` below. This
+   * field is free to be bumped by machinery; that one is not.
+   */
   updatedAt: string
+  /**
+   * WHEN A HUMAN LAST CHANGED THIS CALL — a title edit, a summary, a note, a
+   * link, a bookmark. Never touched by sync machinery.
+   *
+   * **ABSENT on every call that predates this field, and deliberately NOT
+   * backfilled.** The founder's rule, and it is the whole reason the split is
+   * worth anything: *"An absent field is honest; a backfilled one is a lie
+   * with a timestamp."* Absent also legitimately means "saved and never
+   * edited" — for those, `createdAt` is the answer and is intact.
+   */
+  editedAt?: string
   durationMs: number
   /** BUG-178 — wall-clock moment the call ended, recorded at save. `durationMs`
    *  is what the app BELIEVES the call lasted; this is what the clock said, so
@@ -896,6 +918,8 @@ export const CALL_FIELD_RULES: { [K in keyof Required<Call>]: CallFieldRule } = 
   title: { cls: 'DERIVED' }, // set by the rep or derived post-save; never from a live blob
   createdAt: { cls: 'METADATA' },
   updatedAt: { cls: 'METADATA' },
+  // BUG-243 - a clock reading about the RECORD, not about anyone's speech.
+  editedAt: { cls: 'METADATA' },
   durationMs: { cls: 'METADATA' },
   // A clock reading, not content: carries no speech and nothing derived from it.
   endedAt: { cls: 'METADATA' },
@@ -1086,6 +1110,10 @@ const CALL_RESTORE_RULES: { [K in keyof Required<Call>]: CallRestoreRule } = {
   title: 'FROM_ROW',
   createdAt: 'FROM_ROW',
   updatedAt: 'FROM_ROW',
+  // BUG-243 - KEEP_LOCAL for the same reason as endedAt: callBackupPayload
+  // does not carry it, so a cloud row's silence about it is not a delete.
+  // Whether it SHOULD travel is the founder's call, filed beside endedAt's.
+  editedAt: 'KEEP_LOCAL',
   durationMs: 'FROM_ROW',
   endedAt: 'KEEP_LOCAL', // BUG-242 — not in callBackupPayload; the cloud never had it
   contactId: 'FROM_ROW', // three-way: string links, null unlinks, absent preserves
@@ -1797,6 +1825,13 @@ export async function touchAllCallsForRepush(dir: string): Promise<number> {
       try {
         const raw = JSON.parse(await fs.readFile(join(dir, `${c.id}.json`), 'utf8')) as Call
         if (!raw || typeof raw.id !== 'string') return
+        // BUG-243 — `updatedAt` ONLY, deliberately. NOT touchCall(). This is
+        // machinery moving the sync ordering key so the server accepts a
+        // replacement row; nobody edited anything, and stamping `editedAt`
+        // here is precisely the conflation that flattened all 196 records'
+        // modification history inside 789 milliseconds. If a future change
+        // makes this use touchCall, the split is gone and so is the only
+        // record of when a user last changed a call.
         raw.updatedAt = new Date().toISOString()
         await writeCall(dir, raw)
         touched++
@@ -1816,6 +1851,27 @@ export async function touchAllCallsForRepush(dir: string): Promise<number> {
 // work per callId so same-call mutations run one at a time, while different
 // calls stay fully concurrent.
 const callLocks = new Map<string, Promise<unknown>>()
+
+/**
+ * BUG-243 — every real edit stamps BOTH clocks. The one call every mutator
+ * makes, so the two can never drift apart by someone adding a mutator and
+ * remembering only one of them.
+ *
+ * `updatedAt` is the sync ordering key and machinery may bump it;
+ * `editedAt` is "a human changed this" and nothing but a real edit writes it.
+ * `touchAllCallsForRepush` is the deliberate exception and moves only the
+ * first — which is exactly the asymmetry this function exists to preserve.
+ *
+ * A helper rather than nineteen hand-edited assignments, because nineteen
+ * hand-maintained copies of one rule is the shape that produced BUG-242,
+ * BUG-199 and BUG-123. The value is taken once so both fields are identical
+ * rather than a millisecond apart.
+ */
+function touchCall(call: Call): void {
+  const now = new Date().toISOString()
+  call.updatedAt = now
+  call.editedAt = now
+}
 
 async function withCallLock<T>(callId: string, fn: () => Promise<T>): Promise<T> {
   const prev = callLocks.get(callId) ?? Promise.resolve()
@@ -1844,7 +1900,7 @@ export async function setCallSummary(
     const clean = sanitizeSummary(summary)
     if (!clean) return null // nothing usable to save — signal failure to the caller
     call.summary = clean
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -1862,7 +1918,7 @@ export async function setCallTitle(
     const trimmed = typeof title === 'string' ? title.trim().slice(0, 300) : ''
     if (!trimmed) return call // never blank out the title
     call.title = trimmed
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -1884,7 +1940,7 @@ export async function setCallContact(
     } else {
       return call // not a recognizable id and not an explicit clear — leave as-is
     }
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -1916,7 +1972,7 @@ export async function setCallDeal(
     } else {
       return call // not a recognizable id and not an explicit clear — leave as-is
     }
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -1943,7 +1999,7 @@ export async function setCallCallType(
     } else {
       return call
     }
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -1964,7 +2020,7 @@ export async function setCallSalesBrainExcluded(
     if (!call) return null
     if (excluded) call.salesBrainExcluded = true
     else delete call.salesBrainExcluded
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -1983,7 +2039,7 @@ export async function setCallTypeIfUnset(
     const call = await getCall(dir, callId)
     if (!call || call.callType) return
     call.callType = callType
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
   })
 }
@@ -2057,7 +2113,7 @@ export async function setSpeakerIdentity(
 
     if (patch.name === null) {
       if (call.speakerIdentities) delete call.speakerIdentities[key]
-      call.updatedAt = new Date().toISOString()
+      touchCall(call)
       await writeCall(dir, call)
       return call
     }
@@ -2086,7 +2142,7 @@ export async function setSpeakerIdentity(
       ...call.speakerIdentities,
       [key]: { name, source, confidence, contactId, resolvedAt: new Date().toISOString() }
     }
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -2116,7 +2172,7 @@ export async function addBookmark(
       createdAt: new Date().toISOString()
     }
     call.bookmarks = [...(call.bookmarks ?? []), bookmark]
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     // BUG-028: re-apply retention on this exact write, not just on the next
     // read. getCall() above already stripped the call as of its own read,
     // but a bookmark captured live (before a mid-call consent revoke) can
@@ -2141,7 +2197,7 @@ export async function removeBookmark(
     const call = await getCall(dir, callId)
     if (!call) return null
     call.bookmarks = (call.bookmarks ?? []).filter((b) => b.id !== bookmarkId)
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -2162,7 +2218,7 @@ export async function setAttachmentSummary(
     const clean = sanitizeSummary(summary)
     if (!clean) return null // nothing usable to save — signal failure to the caller
     att.summary = clean
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -2477,7 +2533,7 @@ export async function setCallCoaching(
     const clean = sanitizeCoaching(report, speechSegments(call.segments))
     if (!clean) return null // nothing usable to save — signal failure to the caller
     call.coaching = clean
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -2496,7 +2552,7 @@ export async function setCallCommitments(
     // whatever reaches disk was validated at the point of writing it, not just
     // trusted because it came from the extraction call moments earlier.
     call.commitments = sanitizeCommitments(commitments)
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -2516,7 +2572,7 @@ export async function appendCommitment(
     const call = await getCall(dir, callId)
     if (!call) return null
     call.commitments = sanitizeCommitments([...(call.commitments ?? []), commitment])
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -2596,7 +2652,7 @@ export async function appendCoachChatTurn(
     // the two messages just minted are always among the survivors — the ids
     // returned below can never refer to something this write dropped.
     call.coachChat = [...(call.coachChat ?? []), ...turn].slice(-MAX_CHAT_MESSAGES)
-    call.updatedAt = now
+    touchCall(call)
     await writeCall(dir, call)
     return { call, userMessageId: userEntry.id, assistantMessageId: assistantEntry.id }
   })
@@ -2618,7 +2674,7 @@ export async function appendCallNotes(
     if (!call) return null
     const existing = call.notes ?? ''
     call.notes = (existing ? `${existing}\n\n${clean}` : clean).slice(-MAX_NOTES_CHARS)
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -2700,7 +2756,7 @@ export async function setCallDealIntelligence(
     const call = await getCall(dir, callId)
     if (!call) return null
     call.dealIntelligence = sanitizeDealIntelligenceRecord(record)
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     // BUG-115, same shape as BUG-028's fix in addBookmark: re-apply retention on
     // THIS write, not just on the next read. getCall() above stripped the call
     // as of its own read, but `record` is a renderer-supplied blob assembled
@@ -2757,7 +2813,7 @@ export async function addAttachment(
     }
     call.attachments = Array.isArray(call.attachments) ? call.attachments : []
     call.attachments.push(attachment)
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     try {
       await writeCall(dir, call)
     } catch (err) {
@@ -2787,7 +2843,7 @@ export async function removeAttachment(
       }
     }
     call.attachments = (call.attachments ?? []).filter((a) => a.id !== attachmentId)
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     try {
       await writeCall(dir, call)
     } catch {
