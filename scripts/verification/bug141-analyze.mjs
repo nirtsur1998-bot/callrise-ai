@@ -171,7 +171,9 @@ for (const t of tests.filter((x) => String(x.file).includes(TARGET) && x.idx ===
 console.log(
   '   run | target it#1 | import | createConv | suite transform | suite import | suite env | worker files'
 )
-for (const [run, t] of [...perRun.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0])))) {
+for (const [run, t] of [...perRun.entries()].sort((a, b) =>
+  String(a[0]).localeCompare(String(b[0]))
+)) {
   const f = footer(run)
   const sameWorker = tests.filter((x) => String(x.run) === String(run) && x.pid === t.pid)
   const filesInWorker = new Set(sameWorker.map((x) => x.file)).size
@@ -187,7 +189,9 @@ for (const [run, t] of [...perRun.entries()].sort((a, b) => String(a[0]).localeC
 }
 
 console.log('\n=== CONCURRENCY AT THE TARGET TEST (how many tests were in flight) ===')
-for (const [run, t] of [...perRun.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0])))) {
+for (const [run, t] of [...perRun.entries()].sort((a, b) =>
+  String(a[0]).localeCompare(String(b[0]))
+)) {
   const start = t.at - t.dur
   const overlap = tests.filter(
     (x) => String(x.run) === String(run) && x.pid !== t.pid && x.at > start && x.at - x.dur < t.at
@@ -196,4 +200,22 @@ for (const [run, t] of [...perRun.entries()].sort((a, b) => String(a[0]).localeC
   console.log(
     `  run ${String(run).padStart(3)}: import ${String(t.phases?.import ?? '?').padStart(5)}ms | overlapping tests ${String(overlap.length).padStart(4)} | of them >5s: ${String(heavy.length).padStart(3)} | distinct workers ${new Set(overlap.map((x) => x.pid)).size}`
   )
+}
+
+// Extra positional args name files (substring match) to report first-test
+// stats for, so a before/after on a specific fix is directly comparable
+// rather than eyeballed out of the "fattest tail" table.
+const WATCH = process.argv.slice(3)
+if (WATCH.length) {
+  console.log('\n=== FIRST it() PER WATCHED FILE ===')
+  for (const w of WATCH) {
+    const rows = tests.filter((t) => String(t.file).includes(w) && t.idx === 0).map((t) => t.dur)
+    if (!rows.length) {
+      console.log(`  ${w}: no records`)
+      continue
+    }
+    console.log(
+      `  ${w}: n=${rows.length} p50 ${pct(rows, 50)}ms p90 ${pct(rows, 90)}ms max ${Math.max(...rows)}ms`
+    )
+  }
 }

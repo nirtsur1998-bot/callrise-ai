@@ -1,5 +1,14 @@
 # Verification tooling — read this before driving the app
 
+> **When an investigation needs four corrected instruments, the instruments ARE the
+> investigation.** BUG-141 (2026-09-09) needed four: a record buffer that lost records, a CPU
+> counter that under-reports 25x here, a Defender counter whose "0.0 s" was access denial, and a
+> pending-delete probe Windows made structurally blind. Every one read as a clean result. None
+> was caught by reasoning about it — each was caught by deliberately trying to make it fail.
+> **Budget for that.** If a session reports a measurement without saying which control proved
+> the instrument could go red, the measurement is not yet evidence. The four are written up
+> under "BUG-141" below.
+
 ## THE TOOLS (M35 Stage 3 — the one index; the lessons below are why each exists)
 
 > **Driving a Monaco editor in a browser (Supabase SQL editor, a web IDE, any in-page code field)?
