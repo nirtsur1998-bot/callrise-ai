@@ -24,7 +24,8 @@ export type GenerateTasksResult =
   { ok: true; tasks: ProposedTask[] } | { ok: false; error: 'no-key' | 'failed'; message?: string }
 
 // Force the model to return its tasks via this tool, so we always get clean JSON.
-const TASKS_TOOL: AITool = {
+/** Exported for the BUG-234 baseline harness. Runtime behaviour unchanged. */
+export const TASKS_TOOL: AITool = {
   name: 'record_tasks',
   description: 'Record the suggested follow-up tasks for the salesperson.',
   inputSchema: {

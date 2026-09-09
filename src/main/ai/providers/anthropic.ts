@@ -25,9 +25,20 @@ import {
  * Structured output is constrained-decoded, so the schema is enforced rather
  * than requested.
  *
- * VERIFIED AGAINST THE INSTALLED SDK, not a docs page: `output_config.format`
- * is on the non-beta MessageCreateParams in @anthropic-ai/sdk 0.107.0, and the
- * response carries `parsed_output`.
+ * VERIFIED AGAINST THE INSTALLED SDK: `output_config.format` is on the
+ * non-beta MessageCreateParams in @anthropic-ai/sdk 0.107.0.
+ *
+ * THE SENTENCE THAT USED TO FOLLOW THAT ONE WAS FALSE, and it is worth leaving
+ * the correction here rather than quietly deleting it. It read "and the
+ * response carries `parsed_output`". It does not. That half was asserted in the
+ * same breath as the half that was checked, and the difference between them was
+ * invisible: verifying that a REQUEST field exists in a type definition says
+ * nothing about what the RESPONSE contains, and no unit test could tell,
+ * because the tests assert what we SEND. The answer arrives as a text block
+ * holding JSON — see parseStructuredText below and BUG-240.
+ *
+ * Cost of the gap: structured output failed 100% of the time from 1.11.0 until
+ * BUG-240, while the model answered correctly on every call.
  *
  * A PREFIX ALLOWLIST, deliberately, and the direction of its rot is the point.
  * A model missing from this list keeps the forced-tool path — exactly today's
@@ -41,6 +52,65 @@ const STRUCTURED_OUTPUT_MODEL_PREFIXES = ['claude-haiku-4-5', 'claude-sonnet-5',
 export function supportsStructuredOutput(model: string | undefined): boolean {
   if (!model) return false
   return STRUCTURED_OUTPUT_MODEL_PREFIXES.some((p) => model.startsWith(p))
+}
+
+/**
+ * BUG-240 — JSON-schema mode accepts a SUBSET of JSON Schema, and rejects the
+ * rest with a 400 rather than ignoring it.
+ *
+ * Measured against the live API with coach.ts's real schema:
+ *   400 invalid_request_error — "output_config.format.schema: For 'integer'
+ *   type, properties maximum, minimum are not supported"
+ *
+ * A forced tool call accepts those same keywords happily, which is why this
+ * only became visible when the schema moved. So the schema decides the
+ * mechanism, not just the model: a schema carrying anything this mode refuses
+ * takes the tool path, which is exactly today's shipped behaviour.
+ *
+ * DELIBERATELY A REFUSAL, NOT A REWRITE. Stripping `minimum`/`maximum` to make
+ * the request legal would silently send a WEAKER schema than the caller wrote
+ * and call it success — the constraint the caller asked for would just stop
+ * being enforced, with nothing saying so. Falling back to the tool path keeps
+ * the caller's schema intact and costs only the reliability we already have.
+ *
+ * Same rot direction as the model allowlist: a keyword this function has not
+ * heard of is NOT refused, so an unknown-but-legal schema still gets the
+ * better mechanism, while the specific things measured to 400 are avoided.
+ */
+const SCHEMA_KEYWORDS_REJECTED_BY_JSON_SCHEMA_MODE = ['minimum', 'maximum']
+
+export function schemaFitsStructuredOutput(schema: unknown): boolean {
+  const walk = (node: unknown): boolean => {
+    if (Array.isArray(node)) return node.every(walk)
+    if (!node || typeof node !== 'object') return true
+    const obj = node as Record<string, unknown>
+    if (obj.type === 'integer' || obj.type === 'number') {
+      for (const k of SCHEMA_KEYWORDS_REJECTED_BY_JSON_SCHEMA_MODE) {
+        if (k in obj) return false
+      }
+    }
+    return Object.values(obj).every(walk)
+  }
+  return walk(schema)
+}
+
+/**
+ * BUG-240 — the schema-valid object, read out of the text block the API
+ * actually returns. Exported so it can be tested against a recorded real
+ * response rather than only through a live call.
+ */
+export function parseStructuredText(
+  content: Array<{ type: string; text?: string }>
+): Record<string, unknown> | null {
+  const text = content.find((b) => b.type === 'text')?.text
+  if (!text) return null
+  try {
+    const parsed = JSON.parse(text) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    return parsed as Record<string, unknown>
+  } catch {
+    return null
+  }
 }
 
 // Same two tiers every call site already used before this migration —
@@ -157,13 +227,52 @@ export function toProviderError(err: unknown): AIProviderError {
   return new AIProviderError('failed', 'Something went wrong calling Anthropic. Please try again.')
 }
 
+/**
+ * MEASUREMENT ONLY — never set by production code.
+ *
+ * BUG-234's question is whether structured output beats a forced tool call.
+ * Answering it needs BOTH mechanisms on the SAME model; otherwise the
+ * comparison varies model and mechanism together and can credit the migration
+ * for a model difference.
+ *
+ * The alternative was for the harness to rebuild the two request shapes
+ * itself. That is the mistake this repo already carries a scar from: the old
+ * channel self-test called channel-test.ts's OWN reimplementation of the
+ * interleave logic, so a real bug in the shipped worklet could pass it
+ * cleanly. A measurement that does not run the shipped code measures itself.
+ *
+ * So the seam lives here, one branch wide, and is pinned by
+ * `anthropic-measurement-seam.test.ts`, which asserts no production call site
+ * passes it.
+ */
+export interface AnthropicProviderOptions {
+  /** Force the pre-BUG-234 forced-tool-call path even on a model that
+   *  supports structured output. The baseline arm of the A/B. */
+  forceToolCalling?: boolean
+}
+
 export class AnthropicProvider implements AIProvider {
   readonly id = 'anthropic' as const
   readonly displayName = 'Claude'
   private client: Anthropic
+  private readonly forceToolCalling: boolean
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, opts: AnthropicProviderOptions = {}) {
     this.client = new Anthropic({ apiKey })
+    this.forceToolCalling = opts.forceToolCalling === true
+  }
+
+  /** The single decision point for which mechanism carries the schema.
+   *  Production behaviour is exactly supportsStructuredOutput(); the override
+   *  can only move it toward the OLD path, never toward a newer one the model
+   *  may not honour — so a stale override degrades to today's shipped
+   *  behaviour rather than to an untested one. */
+  private usesStructuredOutput(model: string, req?: AICompletionRequest): boolean {
+    if (this.forceToolCalling) return false
+    if (!supportsStructuredOutput(model)) return false
+    // BUG-240 — the SCHEMA has a veto too, not just the model.
+    if (req?.tool && !schemaFitsStructuredOutput(req.tool.inputSchema)) return false
+    return true
   }
 
   private toolChoice(
@@ -172,7 +281,7 @@ export class AnthropicProvider implements AIProvider {
   ): Anthropic.MessageCreateParams['tool_choice'] {
     // BUG-234 — omitted when structured output carries the schema instead.
     // Sending both would ask for a tool call and a JSON format at once.
-    if (!req.tool || supportsStructuredOutput(model)) return undefined
+    if (!req.tool || this.usesStructuredOutput(model, req)) return undefined
     return { type: 'tool', name: req.tool.name }
   }
 
@@ -180,7 +289,7 @@ export class AnthropicProvider implements AIProvider {
    *  model is forced to call. Same schema object either way; the difference is
    *  which guarantee the provider applies to it. */
   private outputConfig(req: AICompletionRequest, model: string): Anthropic.OutputConfig | undefined {
-    if (!req.tool || !supportsStructuredOutput(model)) return undefined
+    if (!req.tool || !this.usesStructuredOutput(model, req)) return undefined
     return {
       format: { type: 'json_schema', schema: req.tool.inputSchema as Record<string, unknown> }
     }
@@ -228,7 +337,7 @@ export class AnthropicProvider implements AIProvider {
   }
 
   private tools(req: AICompletionRequest, model: string): Anthropic.Tool[] | undefined {
-    if (!req.tool || supportsStructuredOutput(model)) return undefined
+    if (!req.tool || this.usesStructuredOutput(model, req)) return undefined
     return [
       {
         name: req.tool.name,
@@ -270,9 +379,26 @@ export class AnthropicProvider implements AIProvider {
         // means `parsed_output` is the schema-valid object, with no tool call
         // involved. The result SHAPE is unchanged (`toolInput`), which is why
         // none of the 28 call sites had to move.
-        const parsed = (response as { parsed_output?: unknown }).parsed_output
-        if (parsed && typeof parsed === 'object') {
-          return { text: '', toolInput: parsed as Record<string, unknown>, model, usage }
+        // BUG-240 — THE ANSWER ARRIVES AS A TEXT BLOCK, not as `parsed_output`.
+        //
+        // This code shipped in 1.11.0 reading `response.parsed_output`, on the
+        // strength of a comment that said "the response carries parsed_output".
+        // It does not. A measured probe against the live API returns:
+        //   top-level keys: model, id, type, role, content, container,
+        //                   stop_reason, stop_sequence, stop_details, usage
+        //   content: [{ type: 'text', text: '{"title": "Acme Co — Renewal…"}' }]
+        // There is no parsed_output on the response at all, so this branch
+        // never fired, the tool_use lookup below found nothing (no tools are
+        // sent on this path), and EVERY structured-output call threw. The model
+        // was answering correctly every single time.
+        //
+        // What went wrong is worth naming: the request field was verified
+        // against the installed SDK's types, and the response field was
+        // asserted in the same breath without being looked at. A type existing
+        // is not a field being populated.
+        const parsed = parseStructuredText(response.content)
+        if (parsed) {
+          return { text: '', toolInput: parsed, model, usage }
         }
         const block = response.content.find((b) => b.type === 'tool_use')
         if (!block || block.type !== 'tool_use') {

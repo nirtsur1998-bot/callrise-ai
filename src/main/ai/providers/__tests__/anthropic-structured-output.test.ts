@@ -17,7 +17,7 @@
 // This file covers the Anthropic half — the provider the founder is buying a
 // key for. Verified against the INSTALLED SDK rather than a docs page:
 // output_config.format is on the non-beta MessageCreateParams in
-// @anthropic-ai/sdk 0.107.0, and the response carries parsed_output.
+// @anthropic-ai/sdk 0.107.0. The response does NOT carry parsed_output — see BUG-240.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const create = vi.fn()
@@ -96,7 +96,15 @@ describe('supportsStructuredOutput — a list whose rot points the safe way', ()
 
 describe('Anthropic: a schema goes as an output FORMAT, not as a forced tool', () => {
   it('sends output_config and NO tool when the model supports it', async () => {
-    create.mockResolvedValue(reply({ parsed_output: { title: 'Acme — Renewal' } }))
+    // BUG-240 — the RECORDED REAL SHAPE. This line used to mock
+    // { parsed_output: {...} }, a field the API does not return. The mock was
+    // built from the same wrong belief as the code, so this test CONFIRMED the
+    // bug instead of catching it: it asserted the request (correct) against a
+    // response that could never arrive. A fabricated response shape proves the
+    // fabrication, not the code.
+    create.mockResolvedValue(
+      reply({ content: [{ type: 'text', text: '{"title": "Acme — Renewal"}' }] })
+    )
     const p = await provider()
     const res = await p.complete({ ...baseReq, model: 'claude-haiku-4-5' })
 

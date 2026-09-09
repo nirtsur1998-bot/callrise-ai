@@ -112,7 +112,7 @@ export type CoachResult =
  *  request payload sent to the AI provider for the pre-existing six-
  *  dimension scorecard is byte-for-byte what it was before this milestone —
  *  not just "the model happens to leave the optional field blank." */
-function buildCoachTool(includeMethodology: boolean): AITool {
+export function buildCoachTool(includeMethodology: boolean): AITool {
   return {
   name: 'record_coaching',
   description: 'Record a structured, evidence-grounded coaching assessment of the sales call.',
