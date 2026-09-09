@@ -112,6 +112,18 @@ const LOCALITY_CLAIMS: RegExp[] = [
  *  back rather than blessing the new wording. */
 const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
   {
+    file: 'features/live/LiveView.tsx',
+    contains: "CallRise can't capture the other party on this computer",
+    because:
+      'BUG-201, founder-approved 2026-09-09. Not a claim about where data lives — a claim about ' +
+      'a CAPABILITY of this machine. It fires only on the `platform-unsupported` arm refusal ' +
+      '(loopback.ts: process.platform is neither darwin nor win32), and says the app cannot ' +
+      'capture the other party here. It asserts nothing about storage, upload or retention, and ' +
+      'the call it describes produces one-sided audio that syncs on exactly the same terms as any ' +
+      'other. The guard matched "on this computer", which is the right vocabulary to watch — the ' +
+      'sentence is simply about the wrong subject.'
+  },
+  {
     file: 'features/assistant/AssistantView.tsx',
     contains: 'Nothing is sent until you press',
     because:
