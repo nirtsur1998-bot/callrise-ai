@@ -51,6 +51,36 @@ when it cannot (species 53); test the instrument's refusals before trusting its 
 Two small modules for verifying behaviour against a **running packaged build**,
 plus the rule that matters more than either of them.
 
+## A precondition, not a lesson: source-position assertions strip comments FIRST
+
+> **Any check that reads source text — `indexOf`, an offset comparison, a
+> `toContain` over a file — strips comments before it looks. Full stop. This is
+> a precondition of writing such a check, not something to remember when it
+> bites.**
+
+Promoted here by the founder on 2026-09-09 after the **third independent
+arrival** at the same rule: `no-false-locality-claims.test.ts`, the BUG-206
+tests, and then BUG-249's, where `indexOf("ws.on('close'")` matched a **comment
+forty thousand characters above the handler** — *"`ws.on('close')` took no
+arguments at all"* — so every offset assertion in the file was measuring the
+wrong place.
+
+**Why it is a precondition and not a species.** That draft *failed*, which is
+the only reason it was caught, and it failed by luck: the comment happened to
+sit far enough from the handler that the offsets were absurd. The same match a
+hundred characters away passes, silently, and pins nothing. A check that can
+match its own explanation is not a check — and the failure mode is a green test
+that asserts nothing, which nobody re-examines.
+
+```js
+const RAW = readFileSync(file, 'utf8')
+const SRC = RAW.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ')
+```
+
+Blank the comments rather than deleting them when line numbers matter — the
+locality guard's `blankKeepingLines` keeps every newline so reported lines stay
+exact.
+
 ## The rule
 
 > **An instrument that WRITES must name its target explicitly and refuse if it
