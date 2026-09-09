@@ -82,6 +82,11 @@ vi.mock('../app-settings', () => ({
 // latency being charged to one test's per-test timeout, which is the actual
 // defect. Deleting it as a "redundant import" reopens BUG-141 for this file;
 // the dynamic import below is still needed, for module isolation.
+//
+// This carries two limits — it makes nothing faster, and collection has no
+// timeout so a genuinely hung fetch now hangs the file instead of failing one
+// test. Both are spelled out at the same block in
+// src/main/assistant/__tests__/assistant-ipc.turn.test.ts.
 await import('../active-app')
 
 async function blurThenResolve(name: string): Promise<void> {

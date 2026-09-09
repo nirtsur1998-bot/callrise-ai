@@ -999,3 +999,47 @@ Controls establish its range:
 
 So a non-empty `resolving[]` is strong evidence; an empty one only rules out the
 transform half.
+
+### Testing a retry wrapper in ESM: the spy that cannot intercept
+
+Recorded because the symptom is a **passing test**, and anyone writing a retry, a backoff or a
+fallback in this codebase will hit it.
+
+`writeJsonAtomicDurable` was first written inside `atomic-write.ts`, right next to the
+`writeJsonAtomic` it wraps. The retry test spied on the module object and made the writer fail
+once:
+
+```ts
+vi.spyOn(await import('../atomic-write'), 'writeJsonAtomic').mockImplementation(...)
+```
+
+It went green with `calls === 0`. **An ESM module calling its own export calls the local binding
+directly** — the spy replaces the property on the module namespace object, which nothing inside
+that module ever reads. The retry was never exercised; the assertion that it had been retried
+simply never ran against anything.
+
+**The fix is architectural, not a mocking trick:** move the wrapper into its own module so the call
+crosses a module boundary that `vi.mock` can actually hold (`src/main/durable-write.ts` imports
+`writeJsonAtomic` from `./atomic-write`). That is also the better shape — a retry policy is a
+separate concern from an atomic write.
+
+**The general check:** after writing any test that asserts *"the inner thing was called N times"*,
+assert the count is what you expect **including the zero case**. `expect(calls).toBe(2)` catches
+this; `expect(ok).toBe(true)` does not.
+
+### A register is a claim about a document, and it decays faster than the document
+
+The taxonomy's own **numbering register** — the one paragraph in that file whose entire job is to
+be trusted about numbers — read *"Canonical count: 88 species, numbers run 1 to 89"* while the file
+held definitions up to **101**. Twelve species past its own claim.
+
+It decayed faster than the document around it for a structural reason: **people re-read prose and
+re-derive counts only when they need them.** Every session that added a species read the species
+list; none re-read the register, because a count feels like a fact rather than a claim. That is
+species 18 (the stale doc in the privileged position) landing on the catalogue's own index, and it
+is the sharpest instance of the catalogue's thesis in the catalogue itself.
+
+**The rule:** never quote a count, a total, or a range from prose. Recompute it, in one command,
+at the moment you need it:
+
+    grep -oE '^\*\*[0-9]+\. ' '<file>' | grep -oE '[0-9]+' | sort -n | uniq -c

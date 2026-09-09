@@ -28,6 +28,28 @@ let dir: string
 
 vi.mock('electron', () => ({ app: { getPath: () => dir }, ipcMain: { handle: vi.fn() } }))
 
+// BUG-141 — WARM THE MODULE GRAPH HERE, at collection time, rather than inside
+// whichever `it()` happens to import first.
+//
+// `vi.resetModules()` clears the executed-module registry but NOT vitest's
+// fetch/transform cache. So the FIRST test to import pays the COLD fetch —
+// served by the single vite transform server that every worker process in the
+// run shares — inside its own 20 s budget, while all the later tests
+// re-execute an already-fetched graph in tens of milliseconds. That is why the
+// failures were always the first `it()` in the file, and why they were stalls
+// rather than slowness: a queue on a shared serialized resource.
+//
+// This file was one of the two untreated CONTROLS in the first measurement
+// (2026-09-09): while four fixed files dropped 100-200x in the same runs, this
+// one did not improve, which is what proved the drop was the fix and not a
+// quieter machine. It is swept here on its own measured numbers.
+//
+// This carries two limits — it makes nothing faster, and collection has no
+// timeout so a genuinely hung fetch now hangs the file instead of failing one
+// test. Both are spelled out at the same block in
+// src/main/assistant/__tests__/assistant-ipc.turn.test.ts.
+await import('../app-settings')
+
 async function freshModule(): Promise<typeof import('../app-settings')> {
   vi.resetModules()
   return import('../app-settings')
@@ -62,7 +84,10 @@ describe('no AppSettings field may be silently dropped by load or merge', () => 
       detection: { ...base.detection, enabled: !base.detection.enabled },
       speakerId: { ...base.speakerId, enabled: !base.speakerId.enabled },
       aiProvider: 'google', // default 'anthropic'
-      aiModelAssignments: { ...base.aiModelAssignments, summary: { chain: ['google-gemini-2.5-pro'] } },
+      aiModelAssignments: {
+        ...base.aiModelAssignments,
+        summary: { chain: ['google-gemini-2.5-pro'] }
+      },
       autoUpdateEnabled: false, // default true
       autoUpdateMigratedToDefaultOn: true,
       autoUpdateNoticePending: false, // default true
