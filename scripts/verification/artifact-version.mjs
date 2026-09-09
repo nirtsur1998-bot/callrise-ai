@@ -23,7 +23,7 @@
 //
 // With no --exe it reads the unpacked build's exe under dist/, which is the
 // same binary the installer carries.
-import { execSync } from 'node:child_process'
+import { execFileSync, execSync } from 'node:child_process'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -109,12 +109,32 @@ if (found.length === 0) {
 // through, which is how the version check came to be needed in the first
 // place. So it asks the question it actually means: could this binary contain
 // the code being released?
-const SHIPPED = ['src', 'package.json', 'package-lock.json', 'electron-builder.yml', 'build', 'native', 'resources']
+// AND "shipped" EXCLUDES TESTS. The first real run of this check failed on a
+// test-only commit, because `src` contains `src/**/__tests__/**` — which the
+// bundler never compiles and electron-builder's `files` list drops wholesale
+// (the app ships `out/`, and `!src/*` is the first line of that list). It cried
+// wolf on a correct state on its first outing, which is the precise thing the
+// paragraph above says makes a check worthless. Fixed rather than waved
+// through: pathspec exclusions, passed as argv so no shell mangles `:(exclude)`.
+const SHIPPED = [
+  'src',
+  ':(exclude)src/**/__tests__/**',
+  ':(exclude)src/**/*.test.ts',
+  ':(exclude)src/**/*.test.tsx',
+  'package.json',
+  'package-lock.json',
+  'electron-builder.yml',
+  'build',
+  'native',
+  'resources'
+]
 try {
-  const stamp = execSync(`git log -1 --format=%ct -- ${SHIPPED.join(' ')}`, { encoding: 'utf8' }).trim()
+  const gitLog = (fmt) =>
+    execFileSync('git', ['log', '-1', `--format=${fmt}`, '--', ...SHIPPED], { encoding: 'utf8' }).trim()
+  const stamp = gitLog('%ct')
   const srcTime = Number(stamp) * 1000
   if (!stamp || Number.isNaN(srcTime)) throw new Error('no commit found touching shipped source')
-  const srcCommit = execSync(`git log -1 --format="%h %s" -- ${SHIPPED.join(" ")}`, { encoding: 'utf8' }).trim()
+  const srcCommit = gitLog('%h %s')
   for (const exe of found) {
     const built = statSync(exe).mtimeMs
     const skewMin = Math.round((built - srcTime) / 60000)
