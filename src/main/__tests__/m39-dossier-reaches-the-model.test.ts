@@ -72,10 +72,16 @@ describe('M39 — the contactId reaches the main process', () => {
     expect(src).toMatch(/liveCall\.setCurrentMeeting\(/)
   })
 
-  it('the provider exposes the meeting contact as a getter and keeps it current', () => {
+  it('the provider keeps the meeting contact current AND passes it to useLiveCues', () => {
     const src = code(read('renderer', 'src', 'features', 'live', 'LiveCallProvider.tsx'))
     expect(src).toContain('meetingContactIdRef.current = currentMeeting?.contactId ?? null')
-    expect(src).toContain('getMeetingContactId')
+    // Asserting only that the identifier appears somewhere in the file would be
+    // satisfied by its own declaration — the getter can exist, be correct, and
+    // never be handed to the hook that calls the cue. It is the LAST positional
+    // argument to useLiveCues, so pin it inside that call.
+    const call = src.match(/useLiveCues\([\s\S]*?\n\s*\)/)
+    expect(call, 'LiveCallProvider must call useLiveCues').not.toBeNull()
+    expect(call?.[0]).toContain('getMeetingContactId')
   })
 
   it('useLiveCues reads the contact at REQUEST time, never captures it', () => {

@@ -36,10 +36,22 @@ async function readDir<T>(dir: string): Promise<T[]> {
     return []
   }
   const out: T[] = []
-  // Serial, deliberately. This runs once at call start, off the cue path, and
-  // BUG-248's finding was that a whole-directory Promise.all starves the
-  // 4-thread pool for everything else in the process — including the journal
-  // writes happening on this very call.
+  // Serial, deliberately: BUG-248's finding was that a whole-directory
+  // Promise.all starves libuv's 4-thread pool for everything else in the
+  // process — including the journal writes happening on this very call.
+  //
+  // ON THE CUE PATH, NOT OFF IT. An earlier version of this comment said "runs
+  // once at call start, off the cue path" and both halves were wrong: nothing
+  // calls the store at call start, and live-cue.ts:541 AWAITS ensureDossier
+  // before building the prompt. So the FIRST cue of a call waits for all five
+  // directories — measured at 281–441 ms (median 322) on the founder's records,
+  // roughly a seventh of BUG-225's 2,290 ms baseline. Every later cue is a map
+  // lookup at 0.005 ms.
+  //
+  // Moving it genuinely off the cue path means warming when the calendar match
+  // lands. That needs in-flight dedup here first: cue requests are single-flight
+  // today (`inFlightRef` in useLiveCues.ts), so a warm-up racing the first cue
+  // would be the only way two full reads could overlap.
   for (const name of names) {
     if (!name.endsWith('.json')) continue
     try {

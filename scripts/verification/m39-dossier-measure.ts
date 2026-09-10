@@ -1,5 +1,25 @@
 /**
- * M39 Stage 3 — measure the client dossier on the founder's real records.
+ * M39 Stage 3 — measure the client dossier BUILDER on the founder's real
+ * records.
+ *
+ * ⚠ THIS IS NOT THE PRODUCT PATH, AND ITS NUMBERS ARE NOT PRODUCT NUMBERS.
+ * It loads the five directories itself and calls `buildClientDossier` directly.
+ * `m39-ensuredossier-measure.ts` is the one that enters where live-cue.ts
+ * enters — at `ensureDossier` — and that is the script to quote from.
+ *
+ * This one survives because it reports things `ensureDossier` does not expose:
+ * per-contact section counts, how many lines the cap DROPPED, and the size
+ * distribution. Use it to tune the builder; never to describe what the app does.
+ *
+ * TWO CLAIMS FROM THIS FILE REACHED THE FOUNDER AND WERE WRONG, both because
+ * "the builder" was read as "the product":
+ *   - it resolved `stageLabel` from deal-stages.json while dossier-store.ts
+ *     passed `null`, so the measured dossier had a deal stage and the shipped
+ *     one did not — for three commits and one screenshot;
+ *   - it timed 0.07 ms of string assembly over arrays already in memory, which
+ *     was reported as "0.00% of the 2,290 ms baseline". The real cost in front
+ *     of the first cue is the five directory reads: 281–441 ms.
+ * A verification script that RE-IMPLEMENTS a step leaves that step unverified.
  *
  * READ-ONLY. Every open here is a read; nothing is written.
  *

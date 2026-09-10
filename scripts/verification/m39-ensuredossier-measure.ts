@@ -15,6 +15,14 @@
 // product hard-coded `stageLabel: null` and shipped a dossier with no stage in
 // it for three commits.
 //
+// WHAT THE NUMBER IS AND IS NOT. This runs under tsx on Node, with an
+// otherwise idle libuv thread pool. Electron's main process during a live call
+// has transcription and the journal writes competing for the same four threads
+// — which is the whole reason readDir is serial (BUG-248). So treat what comes
+// out of here as a FLOOR: in-app is likely higher, not lower, and by how much
+// is unmeasured because a live call needs a transcription key the sandbox does
+// not have. Do not quote it as "measured in the app".
+//
 // READ-ONLY. ensureDossier opens files and writes none.
 //
 // usage: npx tsx scripts/verification/m39-ensuredossier-measure.ts <userDataDir>
