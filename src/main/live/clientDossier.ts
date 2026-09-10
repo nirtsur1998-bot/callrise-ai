@@ -52,7 +52,36 @@
  * compiled profile is 0 chars, so a memory-sourced dossier would be an empty
  * string on this profile. Every fact below comes from a record the app wrote
  * itself and can show the user on the Contact page.
+ *
+ * KNOWN LIMIT — NOT BI-TEMPORAL, AND THE BRIEF ASKED FOR IT. "Current valid
+ * facts, bi-temporally correct — what's true now, not what was." The
+ * prior-call sections carry a date each, so a model can at least tell how old
+ * they are. The KYC fields cannot: a contact record has no validity window, so
+ * whatever is in `personalNotes` is presented as true forever. It is not
+ * theoretical — on the founder's own profile one contact's dossier says
+ * "unable to go to the bank today because the neighbour would not be back
+ * until 6 PM", which will be BACKGROUND on every future call with her.
+ * `memory.db` has the bi-temporal shape (valid-from / valid-to per fact) and
+ * contacts do not, so closing this is a data-model change and reserved. Until
+ * then the honest position is that section 1 is *known*, not *current*, and
+ * the section's own heading says "Known facts" rather than "Current facts".
+ *
+ * EGRESS, named because a path that is not enumerated is the mistake this
+ * milestone already made once. Everything this assembles is sent to the AI
+ * provider on every live cue: hand-entered KYC fields, prior-call summaries,
+ * and the buyer's verbatim quotes from EARLIER calls. `consentPermitsCapture`
+ * runs before the dossier is built, so a consent-blocked cue carries none of
+ * it — but a mono cue declaring `includesBuyerContent: false` still carries
+ * quotes the buyer gave weeks ago, because they are stored facts rather than
+ * this call's audio. Precedent: the prep brief already sends a `LAST CALL`
+ * block to the same provider. Recorded on BUG-263's egress table.
  */
+
+import {
+  buildObjectionPreload,
+  formatObjectionPreload,
+  type MinedObjection
+} from './objectionPreload'
 
 /** Only the fields this module reads, so a caller can pass its own shapes. */
 export interface DossierContact {
@@ -89,6 +118,12 @@ export interface DossierTask {
   id: string
   title?: string
   done?: boolean
+  /** The app writes `status` and `completedAt`; `done` is accepted too so a
+   *  caller with either shape works. Measured on the founder's profile: 28
+   *  tasks, all open, 25 of them carrying a dueAt. */
+  status?: string
+  completedAt?: string
+  dueAt?: string
   callId?: string
   contactId?: string
 }
@@ -108,6 +143,17 @@ export interface DossierInput {
   /** Every call; this filters to the contact's own and sorts them itself. */
   calls: DossierCall[]
   tasks: DossierTask[]
+  /** Every mined objection; filtered to this contact's calls here. Optional,
+   *  so a caller that has none simply gets a dossier without that section. */
+  objections?: MinedObjection[]
+  /**
+   * The moment this call started, as an ISO string. The ONLY time input this
+   * builder takes, and it is a parameter rather than a clock read on purpose:
+   * "overdue" is genuinely time-dependent, and a `Date.now()` inside would
+   * make the output differ between two cues on the same call, which is exactly
+   * what the cached prefix cannot survive. Passed once per call, frozen.
+   */
+  asOf?: string
   /** Hard character cap on the whole block. */
   maxChars?: number
 }
@@ -212,12 +258,37 @@ export function buildClientDossier(input: DossierInput): Dossier {
   // The strongest section by population and the most actionable mid-call: a
   // promise nobody kept is the thing a rep most wants named while they can
   // still act on it. Open tasks first, then the last call's stated next action.
+  //
+  // STAGE 4 FEATURE #4, the half of it the records can carry. "You said you'd
+  // send the security doc on the 3rd. You haven't." — the "you haven't" needs
+  // a due date and a check, and tasks have `dueAt` on 25 of the founder's 28.
+  // Measured there: 25 open AND past due. The REVERSE half — what the BUYER
+  // promised and has not delivered — has no extractor and is cut; see the
+  // milestone note for the corpus it would need.
+  //
+  // `asOf` and not a clock read. Overdue is the one thing in this file that
+  // genuinely depends on when it is asked, and a `Date.now()` here would break
+  // the byte-identical prefix the whole dossier exists to preserve. So the
+  // caller passes the moment the CALL started, once, and every cue in that
+  // call re-derives the same answer.
+  const done = (t: DossierTask): boolean =>
+    t.done === true || t.status === 'done' || t.status === 'completed' || !!t.completedAt
   const openTasks = input.tasks
-    .filter((t) => !t.done && (t.contactId === contact.id || calls.some((c) => c.id === t.callId)))
+    .filter((t) => !done(t) && (t.contactId === contact.id || calls.some((c) => c.id === t.callId)))
     .sort((a, b) => String(a.id).localeCompare(String(b.id)))
   for (const t of openTasks.slice(0, 4)) {
     const v = clean(t.title, 120)
-    if (v) items.push({ section: 'Open commitments', line: v, rank: 80 })
+    if (!v) continue
+    const due = t.dueAt && isoDay(t.dueAt)
+    const overdue = !!(due && input.asOf && due < isoDay(input.asOf))
+    items.push({
+      section: 'Open commitments',
+      line: overdue ? `${v} — was due ${due}, still open` : due ? `${v} (due ${due})` : v,
+      // An overdue promise outranks an open one. It is the single most
+      // actionable thing a rep can be handed mid-call, and the only line in
+      // the dossier that is about something going wrong.
+      rank: overdue ? 84 : 80
+    })
   }
   const lastAction = clean(calls[0]?.coaching?.nextAction, 140)
   if (lastAction) {
@@ -281,6 +352,24 @@ export function buildClientDossier(input: DossierInput): Dossier {
     })
   }
 
+  // --- STAGE 4 #1. Objection pre-loading -------------------------------------
+  // What this buyer has pushed back on MORE THAN ONCE, and what landed. Ranked
+  // just under an overdue commitment and above everything merely historical,
+  // because it is the only section that says what is about to happen rather
+  // than what already did. 8 of the founder's 50 contacts have a repeated
+  // objection type; see objectionPreload.ts for why `other` — 108 of the 287
+  // mined records — is excluded rather than counted.
+  if (input.objections?.length) {
+    const preloads = buildObjectionPreload({
+      contactId: contact.id,
+      calls,
+      objections: input.objections
+    })
+    for (const line of formatObjectionPreload(preloads)) {
+      items.push({ section: 'They have pushed back on this before', line, rank: 82 })
+    }
+  }
+
   // --- 4. What worked --------------------------------------------------------
   // Only stated when there is a comparison to make: one score is a number, two
   // are a direction. Absolute scores, never "improving" — the model can read a
@@ -303,6 +392,7 @@ export function buildClientDossier(input: DossierInput): Dossier {
     'Known facts',
     'Deal',
     'Open commitments',
+    'They have pushed back on this before',
     'Last call',
     'What they pushed back on',
     'How these calls have gone'

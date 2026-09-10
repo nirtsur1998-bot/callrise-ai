@@ -52,6 +52,11 @@ const contacts = readAll<DossierContact>('contacts')
 const calls = readAll<DossierCall>('calls')
 const tasks = readAll<DossierTask>('tasks')
 const deals = readAll<DossierDeal>('deals')
+const objections = readAll<import('../../src/main/live/objectionPreload').MinedObjection>('objection-queue')
+// Frozen, and passed rather than read inside the builder — the same value for
+// every contact here, so the comparison between them is not also a comparison
+// between two moments.
+const ASOF = new Date().toISOString()
 const stages: { id?: string; name?: string; label?: string }[] = (() => {
   const p = join(PROFILE, 'deal-stages.json')
   if (!existsSync(p)) return []
@@ -81,7 +86,9 @@ const rows = contacts.map((contact) => {
     deal,
     stageLabel: stageLabel(deal?.stageId),
     calls,
-    tasks
+    tasks,
+    objections,
+    asOf: ASOF
   })
   return { name: contact.name, chars: d.chars, sections: d.sections.length, dropped: d.dropped, text: d.text }
 })
@@ -105,7 +112,7 @@ for (const r of sorted.slice(0, 5)) {
 let unstable = 0
 for (const contact of contacts) {
   const deal = deals.find((d) => d.contactId === contact.id) ?? null
-  const args = { contact, deal, stageLabel: stageLabel(deal?.stageId), calls, tasks }
+  const args = { contact, deal, stageLabel: stageLabel(deal?.stageId), calls, tasks, objections, asOf: ASOF }
   if (buildClientDossier(args).text !== buildClientDossier(args).text) unstable++
 }
 console.log('')
@@ -119,7 +126,7 @@ const target = sorted[0]
 const targetContact = contacts.find((c) => c.name === target?.name)
 if (targetContact) {
   const deal = deals.find((d) => d.contactId === targetContact.id) ?? null
-  const args = { contact: targetContact, deal, stageLabel: stageLabel(deal?.stageId), calls, tasks }
+  const args = { contact: targetContact, deal, stageLabel: stageLabel(deal?.stageId), calls, tasks, objections, asOf: ASOF }
   for (let i = 0; i < 50; i++) buildClientDossier(args)
   const N = 200
   const t0 = performance.now()

@@ -23,6 +23,7 @@
 import { join } from 'node:path'
 import { promises as fs } from 'node:fs'
 import { buildClientDossier, type DossierCall, type DossierContact, type DossierDeal, type DossierTask } from './clientDossier'
+import type { MinedObjection } from './objectionPreload'
 
 /** One entry per live call. Cleared when the call ends. */
 const cache = new Map<string, { contactId: string; text: string }>()
@@ -69,13 +70,26 @@ export async function ensureDossier(
       cache.set(callId, { contactId, text: '' })
       return ''
     }
-    const [calls, tasks, deals] = await Promise.all([
+    const [calls, tasks, deals, objections] = await Promise.all([
       readDir<DossierCall>(join(userDataDir, 'calls')),
       readDir<DossierTask>(join(userDataDir, 'tasks')),
-      readDir<DossierDeal>(join(userDataDir, 'deals'))
+      readDir<DossierDeal>(join(userDataDir, 'deals')),
+      readDir<MinedObjection>(join(userDataDir, 'objection-queue'))
     ])
     const deal = deals.find((d) => d.contactId === contactId) ?? null
-    const { text } = buildClientDossier({ contact, deal, stageLabel: null, calls, tasks })
+    // `asOf` is read HERE and nowhere deeper: the dossier is assembled once
+    // and frozen, so this is the one moment a clock may be consulted. Reading
+    // it inside the builder would make "overdue" differ between two cues on
+    // the same call and cost the cached prefix.
+    const { text } = buildClientDossier({
+      contact,
+      deal,
+      stageLabel: null,
+      calls,
+      tasks,
+      objections,
+      asOf: new Date().toISOString()
+    })
     cache.set(callId, { contactId, text })
     return text
   } catch {

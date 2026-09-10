@@ -27,6 +27,7 @@
 // interrupted call" prompt for a call that saved perfectly well.
 import { randomUUID } from 'node:crypto'
 import { CallJournal, redactJournalConsentIfNeeded } from './call-journal'
+import { clearDossier } from './dossier-store'
 import {
   TranscriptAccumulator,
   type AccumulatedSegment,
@@ -301,6 +302,15 @@ export function endCall(opts: { saved: boolean }): void {
   if (!opts.saved && saveInFlight) return
   const call = current
   current = null
+
+  // M39 — release this call's frozen client dossier. It is deliberately held
+  // for the whole call (dossier-store.ts explains why rebuilding per cue is
+  // both expensive and self-defeating), so something has to be the moment it
+  // stops being held, and this is the one place that knows a call is over.
+  // Written rather than assumed: `clearDossier` shipped for one commit with a
+  // doc line reading "called when a call ends" and no caller anywhere — the
+  // installed-guard-not-in-the-gate shape, one layer down.
+  if (call) clearDossier(call.id)
 
   // BUG-164 — report how much microphone echo this call carried, so the rate
   // is MEASURED across real calls rather than inferred from the one machine it

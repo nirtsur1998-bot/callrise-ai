@@ -92,6 +92,68 @@ describe('M39 — the dossier says something when there is something to say', ()
     expect(d.text).toContain('Send the pricing comparison')
     expect(d.text).not.toContain('Already did this one')
   })
+
+  it('reads completion the way the app WRITES it, not the way I assumed', () => {
+    // THE BUG THE MEASUREMENT CAUGHT. The first version filtered on `!t.done`.
+    // The app never writes a `done` boolean — it writes `status: 'done'` and a
+    // `completedAt`. On the founder's profile 24 of 28 tasks are complete, so
+    // every one of them was being handed to the model as an outstanding
+    // promise. My own population script used the same wrong field and agreed
+    // with the code, which is why the suite was green and the count was wrong.
+    const tasks: DossierTask[] = [
+      { id: 't1', title: 'Genuinely still open', status: 'open', callId: 'a' },
+      { id: 't2', title: 'Closed by status', status: 'done', callId: 'a' },
+      { id: 't3', title: 'Closed by completedAt', completedAt: '2026-08-21T00:00:00.000Z', callId: 'a' },
+      { id: 't4', title: 'Closed by the boolean', done: true, callId: 'a' }
+    ]
+    const d = buildClientDossier({ contact, calls: RICH, tasks })
+    expect(d.text).toContain('Genuinely still open')
+    expect(d.text).not.toContain('Closed by status')
+    expect(d.text).not.toContain('Closed by completedAt')
+    expect(d.text).not.toContain('Closed by the boolean')
+  })
+})
+
+describe('M39 Stage 4 #4 — a promise that is past due says so', () => {
+  const tasks: DossierTask[] = [
+    { id: 't1', title: 'Send the security doc', status: 'open', dueAt: '2026-08-03T00:00:00.000Z', callId: 'a' },
+    { id: 't2', title: 'Book the follow-up', status: 'open', dueAt: '2026-12-01T00:00:00.000Z', callId: 'a' }
+  ]
+
+  it('names the overdue one as overdue and the other as merely due', () => {
+    const d = buildClientDossier({ contact, calls: RICH, tasks, asOf: '2026-09-11T00:00:00.000Z' })
+    expect(d.text).toContain('Send the security doc — was due 2026-08-03, still open')
+    expect(d.text).toContain('Book the follow-up (due 2026-12-01)')
+  })
+
+  it('ranks the overdue promise above everything else in its section', () => {
+    const d = buildClientDossier({ contact, calls: RICH, tasks, asOf: '2026-09-11T00:00:00.000Z' })
+    const lines = d.text.split('\n')
+    const overdue = lines.findIndex((l) => l.includes('was due 2026-08-03'))
+    const other = lines.findIndex((l) => l.includes('Book the follow-up'))
+    expect(overdue).toBeGreaterThan(-1)
+    expect(overdue).toBeLessThan(other)
+  })
+
+  it('takes the time from the CALLER and never from a clock', () => {
+    // "Overdue" is the one genuinely time-dependent thing in this file, and a
+    // Date.now() inside would make two cues on the same call differ — exactly
+    // what the cached prefix cannot survive. Two builds at two different
+    // stated moments differ; two at the same moment are identical.
+    const early = buildClientDossier({ contact, calls: RICH, tasks, asOf: '2026-07-01T00:00:00.000Z' })
+    const late = buildClientDossier({ contact, calls: RICH, tasks, asOf: '2026-09-11T00:00:00.000Z' })
+    expect(early.text).not.toContain('still open')
+    expect(late.text).toContain('still open')
+    expect(buildClientDossier({ contact, calls: RICH, tasks, asOf: '2026-09-11T00:00:00.000Z' }).text).toBe(late.text)
+  })
+
+  it('with no asOf, nothing is called overdue', () => {
+    // A caller that does not say when it is asking gets no time-dependent
+    // claim, rather than one silently made against the machine's clock.
+    const d = buildClientDossier({ contact, calls: RICH, tasks })
+    expect(d.text).not.toContain('still open')
+    expect(d.text).toContain('Send the security doc (due 2026-08-03)')
+  })
 })
 
 describe('M39 — the dossier is a STABLE PREFIX', () => {
