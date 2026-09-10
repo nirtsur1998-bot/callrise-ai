@@ -26,15 +26,32 @@
  *   1. current valid facts (contact KYC)   — 0 to 4 of 50 contacts carry each
  *                                            field. THIN, kept, because what is
  *                                            there is high-value and hand-entered.
- *   2. open commitments                    — 28 open tasks, 55 calls with a
- *                                            nextAction, 84 with action items. STRONG.
+ *   2. open commitments                    — 4 open tasks (28 total, 24 already
+ *                                            done), 55 calls with a nextAction,
+ *                                            84 with action items. STRONG on the
+ *                                            call-derived side, THIN on tasks —
+ *                                            and this line first read "28 open
+ *                                            tasks" because the filter and the
+ *                                            script that counted for it made the
+ *                                            same wrong assumption about how the
+ *                                            app marks a task done.
  *   3. objection history                   — 55 calls with an objection read,
  *                                            15 with a verified verbatim quote. STRONG.
  *   4. what worked                         — 55 coached calls, 20 contacts with
  *                                            2+ calls to compare. STRONG.
  *   5. deal state                          — 13 of 13 deals have a stage;
  *                                            **0 of 13 have a risk assessment**.
- *                                            Kept for stage; risk omitted.
+ *                                            Kept for stage; risk omitted. The
+ *                                            stage then failed to arrive for
+ *                                            three commits: this builder takes a
+ *                                            `stageLabel` and the store passed
+ *                                            `null`, while the MEASURING script
+ *                                            resolved it properly — so the
+ *                                            measured dossier had a stage and the
+ *                                            shipped one did not. Now 12 of 12
+ *                                            contacts whose deal sits in a named
+ *                                            stage carry it (dossier-store.ts's
+ *                                            `readStageLabel`).
  *   6. stakeholder map                     — **0 contacts name another
  *                                            stakeholder and 0 share a company.**
  *                                            CUT. Building it would ship a
@@ -119,8 +136,10 @@ export interface DossierTask {
   title?: string
   done?: boolean
   /** The app writes `status` and `completedAt`; `done` is accepted too so a
-   *  caller with either shape works. Measured on the founder's profile: 28
-   *  tasks, all open, 25 of them carrying a dueAt. */
+   *  caller with either shape works — and `done` alone is what the FIRST cut of
+   *  this filter read, on a store that has never written it. Measured on the
+   *  founder's profile: 28 tasks, 24 complete, 4 genuinely open, 3 of those
+   *  carrying a dueAt (25 across all 28). */
   status?: string
   completedAt?: string
   dueAt?: string
