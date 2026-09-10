@@ -810,6 +810,20 @@ export function eventPayload(e: CalendarEvent): Record<string, unknown> {
   const scrubbed = scrubProviderForEgress(e.provider)
   if (scrubbed === undefined) delete payload.provider
   else payload.provider = scrubbed
+  // M39 Stage 0 - ATTENDEE EMAILS NEVER LEAVE THE DEVICE.
+  //
+  // These are third-party addresses: people who are not this app's user and who
+  // never agreed to anything here. They are stored locally for exactly one
+  // purpose - resolving which known contact a meeting is with - and that
+  // purpose is entirely local.
+  //
+  // Deleted rather than scrubbed, and deleted HERE for the same reason
+  // `provider` is: this is the single place an event becomes a payload, and the
+  // payload is built with `{ ...e }`. A spread means every field added to
+  // CalendarEvent from now on ships to Supabase BY DEFAULT. BUG-209 is what
+  // that costs - the user's own Google account address, on every event row,
+  // every cycle, under a card saying it stayed on this device.
+  delete payload.attendees
   return payload
 }
 

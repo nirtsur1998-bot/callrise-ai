@@ -64,6 +64,14 @@ function coversNow(e: CalendarEvent, now: number): boolean {
  * Where a key collides, the LOCAL copy wins, because it is the one that can
  * carry `contactId` — provider feeds have no such field (it is "app-local
  * metadata only, never pushed to Google/Outlook", events-fs.ts:75-78).
+ *
+ * M39 Stage 0: the two copies are not interchangeable in the OTHER direction
+ * either. The provider copy is the one that carries `attendees`, and until an
+ * adoption copies them down, only it has them. Picking the local twin for its
+ * `contactId` and discarding the provider twin would throw away the identity
+ * ladder's primary input at the exact moment it is needed — so the winner
+ * INHERITS the loser's invitee list when it has none of its own. Never the
+ * reverse: a local list that exists was written deliberately.
  */
 function collapseMirrors(events: CalendarEvent[]): CalendarEvent[] {
   const byIdentity = new Map<string, CalendarEvent>()
@@ -77,7 +85,14 @@ function collapseMirrors(events: CalendarEvent[]): CalendarEvent[] {
     // Prefer whichever copy carries the hand-made link; then the local one.
     const heldScore = (held.contactId ? 2 : 0) + (held.provider ? 0 : 1)
     const nextScore = (e.contactId ? 2 : 0) + (e.provider ? 0 : 1)
-    if (nextScore > heldScore) byIdentity.set(key, e)
+    const winner = nextScore > heldScore ? e : held
+    const loser = winner === e ? held : e
+    byIdentity.set(
+      key,
+      winner.attendees?.length || !loser.attendees?.length
+        ? winner
+        : { ...winner, attendees: loser.attendees }
+    )
   }
   return [...byIdentity.values()]
 }

@@ -19,9 +19,10 @@ export interface CalendarEvent {
   htmlLink?: string
   /** Google/Outlook-only: true when the event's calendar allows writes. */
   writable?: boolean
-  /** Google/Outlook-only: other invitees (the connected account itself is
-   *  excluded when the provider can tell) — the CRM's calendar-match signal
-   *  for suggesting who a call was with. */
+  /** Other invitees (the connected account itself is excluded when the provider
+   *  can tell) — the CRM's calendar-match signal, and M39's primary identity
+   *  rung. Since M39 Stage 0 a LOCAL event carries it too (adoption writes it).
+   *  Device-only: stripped from every upload by `eventPayload`. */
   attendees?: { email: string; name?: string }[]
   remoteUpdatedAt?: string
   sync?: { state: EventSyncState; lastPushedAt?: string; lastError?: string }

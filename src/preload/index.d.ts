@@ -1632,9 +1632,13 @@ export interface CalendarEvent {
   htmlLink?: string
   /** Google/Outlook-only: true when the event's calendar allows writes. */
   writable?: boolean
-  /** Google/Outlook-only: other invitees (the connected account itself is
-   *  excluded when the provider can tell) — the CRM's calendar-match signal
-   *  for suggesting who a call was with. */
+  /** Other invitees (the connected account itself is excluded when the provider
+   *  can tell) — the CRM's calendar-match signal for suggesting who a call was
+   *  with, and M39's primary identity rung.
+   *  NO LONGER Google/Outlook-only: since M39 Stage 0 a LOCAL event carries it
+   *  too, written by `createEvent` when a provider event is adopted.
+   *  STAYS ON THE DEVICE — `eventPayload` deletes it before any upload
+   *  (src/main/backup.ts), and there is a test over the whole payload. */
   attendees?: { email: string; name?: string }[]
   /** The linked provider's own "last updated" at last sync — the echo-loop
    *  watermark (M14). */
@@ -1677,6 +1681,11 @@ export interface AdoptEventInput extends EventCreateInput {
   provider?: string
   externalId?: string
   remoteUpdatedAt?: string
+  /** M39 Stage 0 — the provider's invitee list, carried down so the local
+   *  record is born with it. Only adoption supplies this today (the New/Edit
+   *  Event dialog has no attendee field), though main's `createEvent` accepts
+   *  it from any caller. Device-only: `eventPayload` strips it from uploads. */
+  attendees?: { email: string; name?: string }[]
 }
 
 export interface EventUpdateInput {

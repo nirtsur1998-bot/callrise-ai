@@ -154,3 +154,48 @@ describe('BUG-226 — the parts that were right stay right', () => {
     expect(matchLiveMeeting([], NOW)).toEqual({ meeting: null, reason: 'none', candidates: 0 })
   })
 })
+
+describe('M39 Stage 0 — collapsing a mirror must not throw away who was invited', () => {
+  // The two copies of a mirrored meeting hold DIFFERENT things: the local one
+  // can carry `contactId`, the provider one carries `attendees`. Collapsing has
+  // to pick a winner, and picking the local twin for its contactId silently
+  // discarded the identity ladder's primary input — at the exact moment the
+  // rest of M39 goes looking for it. So the winner inherits what it lacks.
+  const INVITEE = [{ email: 'sarah.chen@acme-example.com', name: 'Sarah Chen' }]
+
+  it('keeps the invitee list from the copy that loses the collapse', () => {
+    const local = ev({ id: 'local', externalId: 'goog-1', contactId: 'contact-1' })
+    const feed = ev({ id: 'goog-1', source: 'google', provider: 'google:a', attendees: INVITEE })
+
+    for (const order of [
+      [local, feed],
+      [feed, local]
+    ]) {
+      const { meeting } = matchLiveMeeting(order, NOW)
+      expect(meeting?.contactId).toBe('contact-1') // still the local winner
+      expect(meeting?.attendees).toEqual(INVITEE) // and now it has both
+    }
+  })
+
+  it('never lets the loser overwrite a list the winner already has', () => {
+    // A local list was written deliberately (an adoption, or an edit). A stale
+    // provider copy must not replace it.
+    const own = [{ email: 'someone.else@acme-example.com' }]
+    const local = ev({ id: 'local', externalId: 'goog-1', contactId: 'c-1', attendees: own })
+    const feed = ev({ id: 'goog-1', source: 'google', provider: 'google:a', attendees: INVITEE })
+
+    expect(matchLiveMeeting([local, feed], NOW).meeting?.attendees).toEqual(own)
+    expect(matchLiveMeeting([feed, local], NOW).meeting?.attendees).toEqual(own)
+  })
+
+  it('still collapses to ONE candidate — inheriting must not un-dedupe', () => {
+    const local = ev({ id: 'local', externalId: 'goog-1', contactId: 'c-1' })
+    const feed = ev({ id: 'goog-1', source: 'google', provider: 'google:a', attendees: INVITEE })
+    expect(matchLiveMeeting([local, feed], NOW)).toMatchObject({ reason: 'single', candidates: 1 })
+  })
+
+  it('leaves an unmirrored provider event exactly as it is', () => {
+    const feed = ev({ id: 'goog-9', source: 'google', provider: 'google:a', attendees: INVITEE })
+    expect(matchLiveMeeting([feed], NOW).meeting?.attendees).toEqual(INVITEE)
+  })
+})

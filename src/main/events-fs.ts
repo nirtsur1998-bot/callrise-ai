@@ -42,6 +42,39 @@ export interface EventOrphan {
   at: string
 }
 
+/** M39 Stage 0 — one invited person, as the provider reported them. The
+ *  connected account's OWN entry is already excluded upstream by
+ *  `mapAttendees`, so this list is the other side of the meeting. */
+export interface EventAttendee {
+  email: string
+  name?: string
+}
+
+/** Bounded on the way in: a mail-merge invite can carry hundreds of rows, and
+ *  an unbounded array here would land in every event file and every read. 25 is
+ *  far past the size at which `bestOneOnOneMatch` refuses to guess anyway. */
+const MAX_ATTENDEES = 25
+
+function sanitizeAttendees(value: unknown): EventAttendee[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: EventAttendee[] = []
+  const seen = new Set<string>()
+  for (const raw of value.slice(0, MAX_ATTENDEES * 4)) {
+    if (!raw || typeof raw !== 'object') continue
+    const r = raw as Record<string, unknown>
+    const email = typeof r.email === 'string' ? r.email.trim().slice(0, 254).toLowerCase() : ''
+    // An attendee without an address cannot resolve to a contact, so it is not
+    // a partial record worth keeping — it is a row that can only ever be noise.
+    if (!email || !email.includes('@')) continue
+    if (seen.has(email)) continue
+    seen.add(email)
+    const name = typeof r.name === 'string' ? r.name.trim().slice(0, 200) : ''
+    out.push(name ? { email, name } : { email })
+    if (out.length >= MAX_ATTENDEES) break
+  }
+  return out.length ? out : undefined
+}
+
 /**
  * A calendar event stored on disk (one JSON file per event). Times are
  * absolute ISO instants so they're unambiguous across time zones. The
@@ -72,6 +105,29 @@ export interface CalendarEvent {
    *  the TRANSIENT Google-delete state; this flag is the permanent record.
    *  Hidden from every normal listing. */
   deleted?: boolean
+  /**
+   * M39 Stage 0 — WHO WAS INVITED, kept on the device.
+   *
+   * The provider adapters have always built this (`google.ts` and `outlook.ts`
+   * both call `mapAttendees`) and handed it to the renderer IN MEMORY. Nothing
+   * ever wrote it down. Measured 2026-09-10: the local store held 21 events
+   * with ZERO attendees — the field was not even present in the record — and
+   * the Outlook cache held 3 with the same. Every invitee email this app has
+   * ever seen is gone, which is why 0 of the founder's 50 contacts have an
+   * email for a meeting to match against.
+   *
+   * The identity ladder's primary rung — meeting → invitee email → contact →
+   * deal — cannot exist until this is written down. This is that.
+   *
+   * IT NEVER LEAVES THE DEVICE. `backup.ts`'s `eventPayload` builds its payload
+   * with `{ ...e }`, so a NEW FIELD RIDES TO SUPABASE AUTOMATICALLY unless
+   * something stops it — which is precisely how BUG-209 pushed the user's own
+   * Google account address on every event row, every cycle, for months. These
+   * are third-party email addresses belonging to people who are not this app's
+   * user, so `eventPayload` strips them explicitly, and a test asserts that
+   * against the whole serialised payload rather than against the helper.
+   */
+  attendees?: EventAttendee[]
   /** The contact/deal this event is with, if linked from the New/Edit Event
    *  dialog — app-local metadata only, never pushed to Google/Outlook. Powers
    *  the follow-up dashboard's "next scheduled meeting" line. */
@@ -133,6 +189,12 @@ export interface EventCreateInput {
   contactId?: unknown
   dealId?: unknown
   reminderMinutes?: unknown
+  /** M39 Stage 0 — who was invited. Carried in when ADOPTING a Google/Outlook
+   *  event: that is the only moment a provider's invitee list can become a
+   *  local record, because a provider event otherwise lives only in its own
+   *  cache and never enters this store. Never leaves the device —
+   *  `eventPayload` strips it before any upload. */
+  attendees?: unknown
 }
 
 /** Fields the renderer may change (any absent key is left untouched). */
@@ -147,6 +209,9 @@ export interface EventUpdateInput {
   /** See CalendarEvent.callId — written at call-save time, not by the editor. */
   callId?: unknown
   reminderMinutes?: unknown
+  /** M39 Stage 0 — absent key leaves the invitee list untouched, so an ordinary
+   *  edit (retitling a meeting) can never silently drop it. */
+  attendees?: unknown
 }
 
 // Ids build file paths, so they must be tightly constrained (no "../", no
@@ -221,7 +286,10 @@ function sanitizeSync(value: unknown): EventSync | undefined {
 }
 
 /** Coerce an untrusted parsed object into a clean CalendarEvent, or null. */
-function sanitizeEventRecord(value: unknown): CalendarEvent | null {
+/** Exported for test only — M39 Stage 0 needed to assert what the record KEEPS
+ *  (attendees) and what it drops, and going through `listEvents` would test the
+ *  filesystem as well as the rule. Runtime behaviour unchanged. */
+export function sanitizeEventRecord(value: unknown): CalendarEvent | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const v = value as Record<string, unknown>
   if (!isSafeId(v.id)) return null
@@ -244,6 +312,7 @@ function sanitizeEventRecord(value: unknown): CalendarEvent | null {
     sync: sanitizeSync(v.sync),
     orphaned: sanitizeOrphan(v.orphaned),
     deleted: v.deleted === true ? true : undefined, // preserve the tombstone flag
+    attendees: sanitizeAttendees(v.attendees), // M39 Stage 0 — local only
     contactId: isSafeId(v.contactId) ? v.contactId : undefined,
     dealId: isSafeId(v.dealId) ? v.dealId : undefined,
     callId: isSafeId(v.callId) ? v.callId : undefined,
@@ -335,6 +404,12 @@ export async function createEvent(dir: string, input: EventCreateInput): Promise
     contactId: isSafeId(input?.contactId) ? input.contactId : undefined,
     dealId: isSafeId(input?.dealId) ? input.dealId : undefined,
     reminderMinutes: sanitizeReminderMinutes(input?.reminderMinutes),
+    // M39 Stage 0 — the ONE writer. Every other path into this store mutates a
+    // record already read through sanitizeEventRecord (which preserves the
+    // field); this one builds the object from nothing, so a field missing here
+    // is a field that never exists on disk. That is species 101 — the write
+    // proved by a green test while the field was absent on 196 of 196 records.
+    attendees: sanitizeAttendees(input?.attendees),
     createdAt: now,
     updatedAt: now
   }
@@ -435,6 +510,7 @@ export async function updateEvent(
   if ('callId' in patch) event.callId = isSafeId(patch.callId) ? patch.callId : undefined
   if ('reminderMinutes' in patch)
     event.reminderMinutes = sanitizeReminderMinutes(patch.reminderMinutes)
+  if ('attendees' in patch) event.attendees = sanitizeAttendees(patch.attendees)
   // Start/end are resolved together so the window always stays valid/ordered.
   if ('start' in patch || 'end' in patch) {
     const startRaw = 'start' in patch ? patch.start : event.start

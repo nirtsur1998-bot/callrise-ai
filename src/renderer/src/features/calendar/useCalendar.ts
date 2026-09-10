@@ -6,6 +6,38 @@ import { onEventsChanged } from './eventsChanged'
 
 export type EventCreateInput = Parameters<typeof window.api.events.create>[0]
 export type EventUpdateInput = Parameters<typeof window.api.events.update>[1]
+export type AdoptEventInput = Parameters<typeof window.api.events.adopt>[0]
+
+/**
+ * The payload an adoption sends to main, as a pure function so it can be
+ * tested. It was inline in the hook, which made it the one step of the
+ * provider→local crossing with no coverage at all — and M39 Stage 0 put a
+ * field on it (`attendees`) that exists nowhere else in the local store.
+ *
+ * Fall back to the source value only when a field is truly ABSENT (undefined).
+ * An intentional null (notes cleared to empty) must pass through, or clearing
+ * a Google event's notes would be silently reverted.
+ */
+export function adoptPayload(event: CalendarEvent, patch: EventUpdateInput): AdoptEventInput {
+  return {
+    title: patch.title !== undefined ? patch.title : event.title,
+    start: patch.start !== undefined ? patch.start : event.start,
+    end: patch.end !== undefined ? patch.end : event.end,
+    allDay: patch.allDay !== undefined ? patch.allDay : event.allDay,
+    notes: patch.notes !== undefined ? patch.notes : (event.notes ?? null),
+    contactId: patch.contactId !== undefined ? patch.contactId : (event.contactId ?? null),
+    dealId: patch.dealId !== undefined ? patch.dealId : (event.dealId ?? null),
+    provider: event.provider,
+    externalId: event.externalId,
+    remoteUpdatedAt: event.remoteUpdatedAt,
+    // M39 Stage 0 — carry the invitee list down with the adoption. This is the
+    // only moment it can cross: a provider event lives in its own cache and
+    // never enters the local store any other way, so without this line adopting
+    // a Google meeting silently loses who was on it. Not editable from the
+    // dialog, so there is no patch to prefer — the source always wins.
+    attendees: event.attendees
+  }
+}
 
 export interface UseCalendar {
   events: CalendarEvent[]
@@ -201,21 +233,7 @@ export function useCalendar(): UseCalendar {
   // edit, which PATCHes the same Google event and dedups the pulled copy.
   const adoptEvent = useCallback(
     async (event: CalendarEvent, patch: EventUpdateInput) => {
-      // Fall back to the source value only when a field is truly ABSENT
-      // (undefined). An intentional null (e.g. notes cleared to empty) must pass
-      // through, or clearing a Google event's notes would be silently reverted.
-      await window.api.events.adopt({
-        title: patch.title !== undefined ? patch.title : event.title,
-        start: patch.start !== undefined ? patch.start : event.start,
-        end: patch.end !== undefined ? patch.end : event.end,
-        allDay: patch.allDay !== undefined ? patch.allDay : event.allDay,
-        notes: patch.notes !== undefined ? patch.notes : (event.notes ?? null),
-        contactId: patch.contactId !== undefined ? patch.contactId : (event.contactId ?? null),
-        dealId: patch.dealId !== undefined ? patch.dealId : (event.dealId ?? null),
-        provider: event.provider,
-        externalId: event.externalId,
-        remoteUpdatedAt: event.remoteUpdatedAt
-      })
+      await window.api.events.adopt(adoptPayload(event, patch))
       await refresh()
     },
     [refresh]
