@@ -65,6 +65,23 @@ describe('M39 — LiveView mounts the live identity chip', () => {
     expect(src).toContain('identityOfferApplyRef.current = identityOffer.applyToSavedCall')
   })
 
+  it('does not discard the rep’s answer when the buyer name is cleared', () => {
+    // useLiveCues nulls `buyerName` on its own reset, which is reachable
+    // mid-call (the rep switches cues off). Without the `if (!spokenName)
+    // return` guard, that transition wipes a decision the rep has already
+    // made and the chip has already confirmed — and applyToSavedCall then
+    // finds nothing, which is the silent no-op the whole design exists to
+    // prevent, reached from the other end.
+    //
+    // Pinned as source because the state lives in a hook and there is no
+    // render harness here; the shape is one line and losing it is invisible.
+    const hook = readFileSync(join(LIVE, 'useLiveIdentityOffer.ts'), 'utf8')
+    const effect = hook.match(/useEffect\(\(\) => \{[\s\S]*?\}, \[spokenName\]\)/)
+    expect(effect, 'the per-conversation reset effect must still exist').not.toBeNull()
+    expect(effect?.[0]).toContain('if (!spokenName) return')
+    expect(effect?.[0]).toContain('pendingRef.current = null')
+  })
+
   it('never writes the calendar event from the identity offer', () => {
     // The meeting holds the mid-call link, so correcting it is the obvious
     // move — and for an Outlook or Google event that write is an EGRESS to a

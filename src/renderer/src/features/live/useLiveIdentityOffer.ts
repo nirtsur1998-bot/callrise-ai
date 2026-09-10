@@ -25,6 +25,18 @@
  * `contactIntelligence.mode` and consent values the rest of the Live screen
  * already reads, and the name itself only exists when the self-intro opt-in is
  * on. Nothing new is gated here.
+ *
+ * KNOWN LIMIT, stated rather than discovered later: this hook lives in
+ * LiveView, and LiveView unmounts on every screen navigation (its own comment
+ * says so — the call itself survives in LiveCallProvider, the view does not).
+ * So navigating to Pipeline mid-call drops both the held decision and the
+ * dismissal: the chip comes back, and an answer given before the navigation is
+ * gone. That is the same lifetime the clip buffer and the deal-intelligence
+ * report already have, so it is consistent rather than surprising — and the
+ * question is asked again on the Call Detail page after the save, so nothing
+ * is lost permanently. Moving the ref up into LiveCallProvider (beside
+ * `currentMeetingRef`) would fix it; that is a small change and a separate
+ * decision, not something to slip in beside a new surface.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { liveIdentityOffer, type LiveIdentityOffer } from './liveIdentityOffer'
@@ -108,7 +120,18 @@ export function useLiveIdentityOffer(input: {
   // or an acceptance from the previous one must not silence it. Keyed on the
   // name rather than on the call, because `buyerName` is itself one-shot per
   // call in useLiveCues — when it changes, the call changed.
+  //
+  // BUT ONLY ON A NON-NULL NAME, and that guard is the whole point.
+  // `useLiveCues` nulls `buyerName` on its own reset (useLiveCues.ts, the
+  // `shouldReset` branch — reachable mid-call when the rep switches cues off).
+  // Resetting on that transition would clear a decision the rep has already
+  // made and the chip has already confirmed with "Linked to Kerry when this
+  // call saves", and `applyToSavedCall` would then find nothing to apply:
+  // precisely the silent no-op this design exists to prevent, arrived at from
+  // the other end. `applyToSavedCall` clears the ref when it consumes it, so
+  // nothing here needs to clear it on the way out.
   useEffect(() => {
+    if (!spokenName) return
     setDismissed(false)
     setAcceptedName(null)
     pendingRef.current = null
