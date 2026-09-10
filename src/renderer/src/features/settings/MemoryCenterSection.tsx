@@ -8,6 +8,7 @@ import type { Memory, MemoryChangelogEntry, TemporalBackfillRecord } from '../..
 import { Brain } from 'lucide-react'
 import { EmptyState } from '@renderer/components/EmptyState'
 import { useAppSettings } from './useAppSettings'
+import { summariseUsability } from './memoryUsability'
 
 type ScopeFilter = 'rep' | 'business' | 'client'
 
@@ -265,6 +266,9 @@ export function MemoryCenterSection(): React.JSX.Element {
     return (memories ?? []).filter((m) => new Date(m.createdAt).getTime() >= weekAgo).length
   }, [memories, openedAt])
 
+  // BUG-258 — what the Brain can actually USE. See memoryUsability.ts.
+  const usability = useMemo(() => summariseUsability(memories ?? []), [memories])
+
   // BUG-196 shape (c) — the residual's share of client facts is the one
   // measurable signal that the five named client categories do not fit this
   // user's business. Counted, never judged: a high number is information.
@@ -304,11 +308,25 @@ export function MemoryCenterSection(): React.JSX.Element {
 
   return (
     <>
-      {weeklyCount > 0 && (
+      {/* BUG-258 — WHAT IS USABLE, not how much was collected. This card read
+          "N new things learned this week" and rendered only when N > 0, so a
+          profile with 73 memories and ZERO usable by any feature showed either
+          a cheerful number or nothing at all. It now renders whenever there
+          are memories, because "none of these are in use" is the most
+          important thing this screen can say. */}
+      {memories !== null && memories.length > 0 && (
         <Card className="mb-5">
           <p className="text-[13px] text-ink">
-            <strong>{weeklyCount}</strong> new thing{weeklyCount === 1 ? '' : 's'} learned this week.
+            <strong data-testid="memory-usability-headline">{usability.headline}</strong>
           </p>
+          <p className="mt-1 text-[12px] text-faint" data-testid="memory-usability-detail">
+            {usability.detail}
+          </p>
+          {weeklyCount > 0 && (
+            <p className="mt-1 text-[12px] text-faint">
+              {weeklyCount} new thing{weeklyCount === 1 ? '' : 's'} learned this week.
+            </p>
+          )}
         </Card>
       )}
 

@@ -18,11 +18,61 @@ import { getMemoryDb } from './memory-runtime'
 import { getCompiledProfile } from './memories-store'
 import { clientScope, type MemoryScope, type ProfileSize } from './types'
 
+/**
+ * BUG-258 — COUNT THE EMPTY BRANCH.
+ *
+ * `section()` below returns '' — not even the header — when there is nothing to
+ * inject. That is correct prompt hygiene, and it is exactly what hid a dead
+ * feature for months: on the founder's machine all six consumers had been
+ * concatenating an empty string since the Sales Brain shipped, and there was no
+ * log line, no failed call, no header with nothing under it, and no counter.
+ * Nothing recorded how often the empty branch was taken, so a well-behaved
+ * empty case was indistinguishable from a feature that had never once worked.
+ *
+ * This is the cheapest fix for that: integers in memory, no I/O on the hot
+ * path. It does not make the injection work — it makes the SILENCE observable,
+ * which is what was missing.
+ *
+ * The REASON matters more than the count. "Sales Brain is off" is a user
+ * choice, "no db" is a new install, and "compiled but empty" is the state that
+ * means something is wrong — and all three were identical from the outside.
+ */
+export type InjectionOutcome = 'injected' | 'brain-off' | 'no-db' | 'compiled-but-empty'
+
+const injectionCounts = new Map<string, number>()
+
+function note(scope: MemoryScope, outcome: InjectionOutcome): void {
+  // Client scopes collapse to one family: a per-contact key would grow without
+  // bound and would put contact ids in a support bundle.
+  const family = scope.startsWith('client:') ? 'client' : scope
+  const key = `${family}:${outcome}`
+  injectionCounts.set(key, (injectionCounts.get(key) ?? 0) + 1)
+}
+
+/** Counts since launch, keyed `<scope family>:<outcome>`. Integers only — no
+ *  scope ids, no contact ids, no statements. */
+export function injectionStats(): Record<string, number> {
+  return Object.fromEntries([...injectionCounts.entries()].sort())
+}
+
+/** Test-only, so one test's counts cannot leak into another's assertions. */
+export function resetInjectionStats(): void {
+  injectionCounts.clear()
+}
+
 function profileText(scope: MemoryScope, size: ProfileSize): string {
-  if (!isSalesBrainEnabled()) return ''
+  if (!isSalesBrainEnabled()) {
+    note(scope, 'brain-off')
+    return ''
+  }
   const db = getMemoryDb()
-  if (!db) return ''
-  return getCompiledProfile(db, scope, size)?.text ?? ''
+  if (!db) {
+    note(scope, 'no-db')
+    return ''
+  }
+  const text = getCompiledProfile(db, scope, size)?.text ?? ''
+  note(scope, text ? 'injected' : 'compiled-but-empty')
+  return text
 }
 
 /** Wraps `text` in a labeled section the same shape as this codebase's
