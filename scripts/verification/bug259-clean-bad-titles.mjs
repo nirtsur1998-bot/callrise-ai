@@ -54,20 +54,97 @@ const isReasoning = (t) =>
   Boolean(t) && !t.startsWith(DEFAULT_TITLE_PREFIX) && (REASONING_OPENER.test(t) || TASK_WORDS.test(t) || /[:;]$/.test(t))
 
 // --- REFUSE TO RACE THE APP ------------------------------------------------
-let running = ''
-try {
-  running = execSync(
-    'powershell -NoProfile -Command "Get-Process -Name electron,CallRiseAI -ErrorAction SilentlyContinue | Measure-Object | Select-Object -ExpandProperty Count"',
-    { encoding: 'utf8' }
-  ).trim()
-} catch {
-  running = '?'
+//
+// This asks the wrong question if it counts processes named "electron": the
+// founder always has VS Code, Obsidian and other Electron apps open, so a name
+// match refuses forever and teaches the reader to pass a flag that skips it.
+// What matters is whether anything holds THIS PROFILE.
+//
+// It also has to tell "nothing is running" apart from "I could not tell". The
+// first version collapsed both into a refusal — safe, but it reported a
+// determination it had not made, which is the same shape as everything else
+// this milestone has been about.
+function holdersOfProfile() {
+  // DO NOT filter out `--type=` children. On Windows the MAIN process's command
+  // line is just `electron.exe . --remote-debugging-port=NNNN` — the
+  // `--user-data-dir` appears only on the CHILD processes Chromium spawns. A
+  // first attempt at this filtered to parents and then matched on the profile
+  // path, which matches nothing, returns "no holders", and lets the write
+  // through. It did exactly that: this script wrote to the founder's live store
+  // with 14 processes holding it. No damage, by luck rather than design.
+  //
+  // So: every process of either name, parent or child, whose command line
+  // mentions this profile.
+  const ps =
+    "Get-CimInstance Win32_Process -Filter \"Name='electron.exe' OR Name='CallRiseAI.exe'\" | " +
+    'ForEach-Object { "$($_.ProcessId)`t$($_.CommandLine)" }'
+  let out
+  try {
+    out = execSync(`powershell -NoProfile -Command ${JSON.stringify(ps)}`, { encoding: 'utf8' })
+  } catch {
+    return null // genuinely could not determine — NOT the same as zero
+  }
+  const wanted = PROFILE.toLowerCase()
+  return out
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((l) => l.toLowerCase().includes(wanted))
+    .map((l) => l.split('\t')[0])
 }
-if (WRITE && running !== '0' && running !== '') {
-  console.error(`REFUSING: ${running} Electron process(es) are running.`)
-  console.error('The app is the one writer on this store. Close CallRise AI completely,')
-  console.error('then run this again — a second writer racing it is how BUG-185/187 happened.')
-  process.exit(2)
+
+if (WRITE) {
+  const holders = holdersOfProfile()
+  if (holders === null) {
+    console.error('REFUSING: could not determine whether the app is running.')
+    console.error('That is not the same as "it is not running", and this writes to the')
+    console.error('store the app owns. Check by hand, then re-run.')
+    process.exit(2)
+  }
+  if (holders.length > 0) {
+    console.error(`REFUSING: ${holders.length} process(es) still hold ${PROFILE}.`)
+    // Those are Chromium's CHILDREN. Printing them is useless on its own —
+    // `taskkill /T` on a child kills a subtree that does not include the app.
+    // Walk up to the root so the message names a PID that actually works.
+    let roots = []
+    try {
+      const raw = execSync(
+        'powershell -NoProfile -Command "Get-CimInstance Win32_Process | ForEach-Object { \\"$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.Name)\\" }"',
+        { encoding: 'utf8' }
+      )
+      const parent = new Map()
+      const name = new Map()
+      for (const line of raw.split('\n')) {
+        const [pid, ppid, n] = line.trim().split('\t')
+        if (pid) {
+          parent.set(pid, ppid)
+          name.set(pid, n)
+        }
+      }
+      const rootOf = (pid) => {
+        let cur = pid
+        for (let i = 0; i < 20; i++) {
+          const up = parent.get(cur)
+          if (!up || !/electron\.exe|CallRiseAI\.exe/i.test(name.get(up) ?? '')) return cur
+          cur = up
+        }
+        return cur
+      }
+      roots = [...new Set(holders.map(rootOf))]
+    } catch {
+      roots = []
+    }
+    if (roots.length) {
+      console.error('')
+      console.error('Close the app, or kill its tree:')
+      for (const r of roots) console.error(`  taskkill /T /F /PID ${r}`)
+    }
+    console.error('')
+    console.error('The app is the one writer on this store — a second writer racing it is')
+    console.error('how BUG-185/187 happened. Other Electron apps are fine; only this')
+    console.error('profile matters.')
+    process.exit(2)
+  }
 }
 
 // --- FIND ------------------------------------------------------------------

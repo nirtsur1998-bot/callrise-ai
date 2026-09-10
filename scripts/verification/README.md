@@ -1304,3 +1304,61 @@ cost a cycle here, in a new context. That is the argument for it living in this 
 that comment: the person hitting it is reading a launch log, not the source of the app they are
 trying to launch. Give your instance its own `CALLRISE_USER_DATA_DIR` (the lock is keyed on the
 userData path) and its own `--remote-debugging-port`.
+
+### A backticked identifier inside double quotes is EXECUTED, and the file looks almost right
+
+Fourth shell-quoting incident on this project, and like the other three it was caught by
+reading the result, not by the command failing. Writing a tracker note through a
+double-quoted shell string:
+
+```bash
+python -c "
+new = u'... someone drops `tool_choice` to accommodate a model ...'
+"
+```
+
+Bash ran `tool_choice`, `04f4f53` and `maxTokens` as commands, each printed
+`command not found` to stderr, and substituted **empty strings** into the text. The script
+then reported `note added` and exited 0. The paragraph that landed read:
+
+> …the moment someone drops  to accommodate a model that cannot tool-call, which is
+> precisely what  did to titles.
+
+Three words gone, grammar almost intact, exit code clean. Nothing about the output says
+"this is wrong" unless you read the actual bytes.
+
+**The rule that already exists here keeps earning: write files with the file tool, not
+through a shell string.** When a script is unavoidable, write it to a `.py`/`.mjs` file
+first and run the file — heredocs have their own quoting failures (a `'` inside a
+`<<'PY'` block is enough), and this repo has now hit both.
+
+### A guard that names the wrong thing refuses forever, or passes when it should not
+
+`bug259-clean-bad-titles.mjs` must not write to the founder's store while the app owns it.
+Two versions were wrong in opposite directions before one was right, and both looked
+reasonable:
+
+1. **Counted processes named `electron`.** The founder always has VS Code, Obsidian and
+   others open, so this refuses forever — and a guard that always refuses teaches the
+   reader to pass the flag that skips it. It also collapsed "the count command failed"
+   into the same refusal, reporting a determination it had not made.
+2. **Filtered to the MAIN process, then matched the profile path.** On Windows the main
+   process's command line is just `electron.exe . --remote-debugging-port=NNNN`:
+   **`--user-data-dir` appears only on the CHILD processes.** So it matched nothing,
+   concluded "no holders", and let the write through with 14 processes holding the store.
+   No damage, by luck rather than design.
+
+The working version matches **any** process of either name, parent or child, whose command
+line mentions the profile — and then walks `ParentProcessId` up to the tree root, because
+`taskkill /T` on a child kills a subtree that does not include the app.
+
+Two things worth keeping from it:
+
+- **A "sandbox" and the real profile look identical in a process list.** Two instances were
+  running here: one on `Roaming\sales-os` and one on a two-day-old
+  `Temp\bug248-env-a\...\sales-os`. Which parent owned which was *inferred* first and
+  turned out to be backwards; the child-walk is what settled it. Infer nothing about a
+  profile from a start time or a PID order.
+- **Test that a guard can REFUSE, not just that it can pass.** This one passed on its first
+  real run and that read as success. Run it once while the condition is genuinely true.
+
