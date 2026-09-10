@@ -43,10 +43,115 @@
 // Runs whenever a session touches the tracker (a standing rule already), so
 // the founder never has to remember it; the founder reads the index.
 import { readFileSync, writeFileSync, copyFileSync, existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 export const DEFAULT_TRACKER = 'C:/Users/User/Desktop/callrise ai project/04-Bugs/Bug Tracker.md'
 export const STATES = ['OPEN', 'FIXED', 'CLOSED', 'DEFERRED', 'LOGGED']
+
+// ── WHERE A FIX ACTUALLY LIVES ──────────────────────────────────────────────
+//
+// A bare "FIXED" is not a claim about the product. On 2026-09-10 the index read
+// "157 FIXED" while FIFTEEN of those fixes sat on an unmerged branch — no build
+// of `main` contained one of them. The founder: *"someone reading the tracker
+// tomorrow, including you in a fresh session, would take that number as the
+// state of the product. It isn't."*
+//
+// So FIXED is split, and the split is MEASURED rather than declared: the status
+// line names a commit, and this asks git whether that commit is an ancestor of
+// `main`. A status line that names no commit is UNPLACED — reported, loudly,
+// as its own count. It is not folded into either side, because "we don't know"
+// is not evidence for "it shipped".
+// The buckets say what was MEASURED, not what was inferred. "NOT ON MAIN" is
+// not "on a branch": the first version of this said that, and immediately
+// mislabelled BUG-090, whose commits live only on `backup/m29-pre-squash` — a
+// backup ref of a branch that was squashed before merging, so the change may
+// well BE in main under a different sha. A sha that is not an ancestor of main
+// means exactly that and nothing more, which is why the containing refs are
+// printed beside it.
+export const PLACEMENTS = ['ON MAIN', 'NOT ON MAIN', 'UNPLACED']
+const SHA_RE = /\b([0-9a-f]{7,40})\b/g
+
+/** Full shas reachable from a ref, as a Set. One git call, not one per entry. */
+function shasReachableFrom(ref, repo) {
+  try {
+    return new Set(
+      execFileSync('git', ['rev-list', ref], {
+        cwd: repo,
+        encoding: 'utf8',
+        maxBuffer: 64 << 20,
+        // git's own "not a git repository" goes to stderr and would print
+        // through the catch, making a handled condition look like a crash.
+        stdio: ['ignore', 'pipe', 'ignore']
+      })
+        .split('\n')
+        .filter(Boolean)
+    )
+  } catch {
+    return null // not a repo, or no such ref — placement becomes UNKNOWN, not a lie
+  }
+}
+
+/**
+ * Classify each FIXED/CLOSED entry by where its named commit lives.
+ *
+ * Prefix-matched against two sets rather than shelling out per sha: 157 entries
+ * would otherwise be 157 `git merge-base` calls, and a slow tool is a tool that
+ * stops being run.
+ */
+export function placeFixes(statuses, repo = 'C:/Users/User/Desktop/callrise-ai') {
+  const onMain = shasReachableFrom('main', repo)
+  const anywhere = shasReachableFrom('--all', repo)
+  if (!onMain || !anywhere) return { available: false, byId: new Map() }
+
+  const mainArr = [...onMain]
+  const allArr = [...anywhere]
+  const hits = (sha, arr) => arr.some((full) => full.startsWith(sha))
+
+  const byId = new Map()
+  for (const st of statuses) {
+    if (st.state !== 'FIXED' && st.state !== 'CLOSED') continue
+    // The STATUS LINE only, deliberately. A sha buried in the body is not the
+    // entry's claim about itself, and reading one would let an entry be placed
+    // by a commit it merely mentions.
+    const shas = [...String(st.note ?? '').matchAll(SHA_RE)].map((m) => m[1])
+    let placement = 'UNPLACED'
+    let which = null
+    for (const sha of shas) {
+      // A 7-hex word can be an English word or a version string; require it to
+      // resolve to a real commit before believing it is one.
+      if (hits(sha, mainArr)) {
+        placement = 'ON MAIN'
+        which = sha
+        break
+      }
+      if (hits(sha, allArr)) {
+        placement = 'NOT ON MAIN'
+        which = sha
+        // keep looking: another sha on the same line may be on main
+      }
+    }
+    // For anything not on main, say WHERE it does live. A commit reachable only
+    // from a `backup/…` ref is a squash artefact, not outstanding work, and the
+    // difference decides whether someone goes and merges something twice.
+    let refs = []
+    if (placement === 'NOT ON MAIN' && which) {
+      try {
+        refs = execFileSync('git', ['for-each-ref', '--contains', which, '--format=%(refname:short)'], {
+          cwd: repo,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        })
+          .split('\n')
+          .filter(Boolean)
+      } catch {
+        refs = []
+      }
+    }
+    byId.set(st.id, { placement, sha: which, refs })
+  }
+  return { available: true, byId }
+}
 
 /**
  * LANES — the second axis, added 2026-09-09 at the founder's request.
@@ -336,7 +441,7 @@ export function movementByDay(ledger) {
   return [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1))
 }
 
-export function renderIndex(statuses, movement = null) {
+export function renderIndex(statuses, movement = null, placement = null) {
   const counts = Object.fromEntries(STATES.map((s) => [s, statuses.filter((x) => x.state === s).length]))
   const open = statuses.filter((x) => x.state === 'OPEN')
   const laneOf = (x) => (x.lane && LANES[x.lane] ? x.lane : UNTRIAGED)
@@ -345,6 +450,57 @@ export function renderIndex(statuses, movement = null) {
   rows.push(INDEX_START)
   rows.push(`> **Index — ${statuses.length} entries: ${STATES.map((s) => `${counts[s]} ${s}`).join(' · ')}.** Generated from each entry's \`**Status:**\` line; a heading carries no status. Regenerate: \`node scripts/verification/tracker-status.mjs\`.`)
   rows.push('')
+
+  // --- WHERE THE FIXES LIVE ------------------------------------------------
+  // A bare FIXED count is read as the state of the product. It is not one while
+  // any of it sits on an unmerged branch, and on the day this was added most of
+  // it did.
+  if (placement?.available) {
+    const settled = statuses.filter((x) => x.state === 'FIXED' || x.state === 'CLOSED')
+    const at = (p) => settled.filter((x) => (placement.byId.get(x.id)?.placement ?? 'UNPLACED') === p)
+    const onMain = at('ON MAIN')
+    const offMain = at('NOT ON MAIN')
+    const unplaced = at('UNPLACED')
+    const liveBranch = offMain.filter((x) =>
+      (placement.byId.get(x.id)?.refs ?? []).some((r) => !r.startsWith('backup/'))
+    )
+    const backupOnly = offMain.filter((x) => !liveBranch.includes(x))
+    rows.push('### Where the fixes live')
+    rows.push('')
+    rows.push('| | count | what it means |')
+    rows.push('|---|---|---|')
+    rows.push(`| **on \`main\`** | ${onMain.length} | the named commit is an ancestor of main |`)
+    rows.push(`| **on a live branch** | ${liveBranch.length} | fixed, and **no build of main contains it** |`)
+    rows.push(`| only on a backup ref | ${backupOnly.length} | probably squashed INTO main under another sha — check before re-merging |`)
+    rows.push(`| unplaced | ${unplaced.length} | the status line names no commit, so this tool cannot say |`)
+    rows.push('')
+    if (liveBranch.length) {
+      rows.push(`**On a live branch, not on main:** ${liveBranch.map((x) => x.id).join(', ')}.`)
+      rows.push('')
+    }
+    if (backupOnly.length) {
+      rows.push(
+        `**Named commit lives only on a \`backup/…\` ref:** ${backupOnly.map((x) => x.id).join(', ')} — ` +
+          'the branch was squashed before merging, so the CHANGE may be on main under a different ' +
+          'sha. Not outstanding work until someone checks.'
+      )
+      rows.push('')
+    }
+    rows.push(
+      '*Measured, not declared: the status line names a commit and this asks git whether that ' +
+        'commit is an ancestor of `main`. **"Not on main" is a fact about the SHA, not about the ' +
+        'change** — a squashed or rebased commit reaches main under a new one, which is why the ' +
+        'backup-ref row is separate. **Unplaced is not a third kind of fixed** either; it is an ' +
+        'entry whose status line does not say, and "we do not know" is not evidence for "it ' +
+        'shipped". Name the commit in the status line and it places itself.*'
+    )
+    rows.push('')
+  } else {
+    rows.push('### Where the fixes live')
+    rows.push('')
+    rows.push('*Not measured this run — git was unreachable from here. **This is an absence of measurement, not a report that everything is on main.***')
+    rows.push('')
+  }
 
   // --- MOVEMENT ------------------------------------------------------------
   // A total on its own cannot distinguish "nothing closed" from "closed three,
@@ -441,8 +597,8 @@ export function renderIndex(statuses, movement = null) {
 }
 
 /** Insert or replace the index block right after the file's intro (before the first `---`). */
-export function withIndex(text, statuses, movement = null) {
-  const block = renderIndex(statuses, movement)
+export function withIndex(text, statuses, movement = null, placement = null) {
+  const block = renderIndex(statuses, movement, placement)
   const s = text.indexOf(INDEX_START)
   const e = text.indexOf(INDEX_END)
   if (s >= 0 && e > s) return text.slice(0, s) + block + text.slice(e + INDEX_END.length)
@@ -490,7 +646,8 @@ export function main(argv = process.argv.slice(2)) {
   const run = recordRun(file, statuses, new Date().toISOString())
   const byDay = movementByDay(run.ledger)
   const movement = { byDay, since: run.ledger.runs[0]?.at.slice(0, 10) ?? 'now' }
-  const next = withIndex(text, statuses, movement)
+  const placement = placeFixes(statuses)
+  const next = withIndex(text, statuses, movement, placement)
   if (next !== readFileSync(file, 'utf8')) writeFileSync(file, next, 'utf8')
   const delta = run.previous ? diffRuns(run.previous, run.current) : null
   const moved = delta
@@ -500,6 +657,16 @@ export function main(argv = process.argv.slice(2)) {
   const untriaged = open.filter((x) => !(x.lane && LANES[x.lane])).length
   console.log(`written: ${statuses.length} entries — ${counts}${moved}`)
   console.log(`OPEN ${open.length}: ` + [...LANE_ORDER.map((l) => `${open.filter((x) => x.lane === l).length} ${l}`), `${untriaged} ${UNTRIAGED}`].join(', '))
+  if (placement.available) {
+    const settled = statuses.filter((x) => x.state === 'FIXED' || x.state === 'CLOSED')
+    const at = (p) => settled.filter((x) => (placement.byId.get(x.id)?.placement ?? 'UNPLACED') === p).length
+    console.log(
+      `FIXED/CLOSED ${settled.length}: ${at('ON MAIN')} on main, ${at('NOT ON MAIN')} not on main, ` +
+        `${at('UNPLACED')} unplaced (status line names no commit)`
+    )
+  } else {
+    console.log('placement NOT measured this run — git unreachable; this is not a report that everything is on main')
+  }
   return 0
 }
 
