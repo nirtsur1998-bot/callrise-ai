@@ -234,11 +234,25 @@ export function writeSeen(file, statuses, hash) {
  * absence of a lane is NEVER silently bucketed. It becomes UNTRIAGED, which
  * has its own row, its own count and its own instruction.
  */
+// READY MEANS "NOBODY HAS STARTED", NOT "NOTHING IS BLOCKING IT". Corrected
+// 2026-09-10 after a sweep of all 14 READY entries found the lane wrong about
+// TEN of them: four had a FINISHED FIX sitting on an unmerged branch, and six
+// carried a decision the founder had already made. Every one of those is
+// defensibly "not blocked" — and all ten read to the founder as work waiting to
+// start, which is the question they were actually asking.
+//
+// It is the tracker-heading problem again (species 88) one level down: a status
+// field that is technically true and answers a DIFFERENT QUESTION than the one
+// its reader is asking. The founder: *"if a fix is written, that isn't READY
+// regardless of what's blocking it."*
 export const LANES = {
   'WAITING-ON-FOUNDER': 'needs something only the founder can do — a machine, a call, a piece of data',
-  'WAITING-ON-DECISION': 'needs a decision the founder has not made yet',
+  'WAITING-ON-DECISION':
+    'needs a decision the founder has not made yet — INCLUDING how to land work that is already written',
   'IN-FLIGHT': 'someone is working on it right now',
-  READY: 'nothing is blocking it; nobody has started'
+  READY:
+    'NOBODY HAS STARTED. Not merely "unblocked": an entry whose fix is already written, or whose ' +
+    'approach the founder has already decided, is not READY however unblocked it looks'
 }
 export const LANE_ORDER = ['WAITING-ON-FOUNDER', 'WAITING-ON-DECISION', 'IN-FLIGHT', 'READY']
 /** Not a lane. The absence of one — counted and named so it cannot hide. */
