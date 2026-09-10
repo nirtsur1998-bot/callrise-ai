@@ -18,6 +18,9 @@ import { promises as fs } from 'node:fs'
 import { getSupabaseClient, getSignedInUserId } from './auth'
 import { listTasks, importTask, type Task } from './tasks-fs'
 import { listEvents, importEvent, type CalendarEvent } from './events-fs'
+// BUG-209 - google-sync owns provider-string semantics (linkKey lives there),
+// so the scrub does not drag the whole Google client module into backup.ts.
+import { scrubProviderForEgress } from './google-sync'
 import {
   listCallsForBackup,
   callBackupPayload,
@@ -788,9 +791,25 @@ async function measureClockSkew(
  *  re-link an adopted event instead of duplicating it (the old strip-everything
  *  approach made the restored copy AND the pulled chip both show, and editing
  *  the copy inserted a duplicate on the remote calendar). */
-function eventPayload(e: CalendarEvent): Record<string, unknown> {
+/** Exported for BUG-209's test: the scrub is the point of this function, and a
+ *  test of the pure helper alone would stay green if the CALL here were deleted. */
+export function eventPayload(e: CalendarEvent): Record<string, unknown> {
   const payload: Record<string, unknown> = { ...e }
   delete payload.sync
+  // BUG-209 - the ONE value that leaks. For an event on the user's own Google
+  // calendar, `provider` is `google:<calendarId>` and that id IS their account
+  // address, so it was upserted into Supabase on every event row, every cycle,
+  // in the push that has no toggle - while the Backup card said "Your Google
+  // Calendar connection - stays only on this device". The credential did. The
+  // identity did not.
+  //
+  // Done HERE because this is the single place an event becomes a payload;
+  // scrubbing at the call site would leave the next caller to remember.
+  // Outlook providers and non-primary Google calendars pass through untouched
+  // - see scrubProviderForEgress for why the scope is exactly this one value.
+  const scrubbed = scrubProviderForEgress(e.provider)
+  if (scrubbed === undefined) delete payload.provider
+  else payload.provider = scrubbed
   return payload
 }
 

@@ -20,6 +20,8 @@ import {
   httpStatus,
   classifyPushError,
   linkKey,
+  setPrimaryCalendarId,
+  PRIMARY_CALENDAR_PLACEHOLDER,
   type PushResult,
   type DeleteResult
 } from './google-sync'
@@ -261,6 +263,7 @@ export async function disconnect(): Promise<{ ok: boolean }> {
   await clearMode() // back to read-only on the next connect
   await clearCache() // pulled events are meaningless once disconnected
   cachedPrimaryId = null
+  setPrimaryCalendarId(null) // BUG-209 — the shared copy must not outlive the connection
   saveAppSettings({ googleCalendarConnected: false }) // explicit disconnect — no more reconnect nudge
   return { ok: true }
 }
@@ -535,8 +538,18 @@ function eventsUrl(calId: string): string {
   return `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events`
 }
 
-/** The concrete calendar id inside a `google:<calId>` provider, else 'primary'. */
+/** The concrete calendar id inside a `google:<calId>` provider, else 'primary'.
+ *
+ *  BUG-209 — `google:@primary` is the placeholder a backup payload carries in
+ *  place of the account address, and it reaches here only when a restore
+ *  happened before Google was connected, so `resolveProviderFromEgress` had no
+ *  id to put back. Mapping it to Google's own `primary` alias is not a
+ *  workaround: `primary` is a documented calendar id that Google resolves to
+ *  the account's own calendar, so the push lands exactly where the concrete id
+ *  would have sent it. Only the dedupe KEY differs until the next resolve,
+ *  which is a duplicate-looking chip rather than a lost or misfiled event. */
 function calendarIdFromProvider(provider?: string): string {
+  if (provider === PRIMARY_CALENDAR_PLACEHOLDER) return 'primary'
   return provider?.startsWith('google:') ? provider.slice('google:'.length) : 'primary'
 }
 
@@ -554,6 +567,10 @@ async function primaryCalendarId(client: OAuth2Client): Promise<string | null> {
       params: { maxResults: 50 }
     })
     cachedPrimaryId = (res.data.items ?? []).find((i) => i.primary === true)?.id ?? null
+    // BUG-209 — publish it to google-sync, which is where the backup payload and
+    // the restore importer read it from. Set on BOTH paths (found and not found)
+    // so a failed lookup clears a stale value rather than leaving one behind.
+    setPrimaryCalendarId(cachedPrimaryId)
     return cachedPrimaryId
   } catch {
     return null
