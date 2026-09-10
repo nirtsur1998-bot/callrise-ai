@@ -113,7 +113,14 @@ describe('M39 — namesCorrespond, the leniency rule on its own', () => {
     ['Kevin Mooney', 'Kevin'],
     ['Paul Trader', 'Paul'],
     ['sarah', 'Sarah'],
-    ['Sarah  Chen', 'sarah chen']
+    ['Sarah  Chen', 'sarah chen'],
+    // Both sides multi-word, one word further. The founder's corpus contains
+    // NO pair of this shape (4 pairs have both sides multi-word, none with
+    // different word counts), so the data cannot judge this case and the rule
+    // is set by principle: the wider rule only ever removes flags, and on a
+    // surface whose expensive error is the false flag that is the safe side.
+    ['Priya Raman Gupta', 'Priya Raman'],
+    ['Priya Raman', 'Priya Raman Gupta']
   ])('%j and %j are the same person', (a, b) => {
     expect(namesCorrespond(a, b)).toBe(true)
   })
@@ -122,7 +129,12 @@ describe('M39 — namesCorrespond, the leniency rule on its own', () => {
     ['Harvey', 'kerry'],
     ['Philip Collins', 'Philip Genio'],
     ['Thomas', 'emma'],
-    ['Paul Trader', 'Damien Donehue']
+    ['Paul Trader', 'Damien Donehue'],
+    // The leading-run rule must not degenerate into "shares any word": a
+    // shared SURNAME with different first names is two people, and on a
+    // profile where 8 contacts share a first name that is a live risk.
+    ['Anna Donehue', 'Damien Donehue'],
+    ['Raman Priya', 'Priya Raman']
   ])('%j and %j are NOT', (a, b) => {
     expect(namesCorrespond(a, b)).toBe(false)
   })

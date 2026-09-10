@@ -52,9 +52,25 @@ const norm = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, ' ')
  * Do these two names describe the same person? Deliberately generous: only a
  * genuine contradiction should ever reach the rep.
  *
- *   "Kevin"          vs "Kevin Mooney"   -> consistent (the buyer gave less)
- *   "Paul Trader"    vs "Paul"           -> consistent (the buyer gave more)
- *   "Philip Collins" vs "Philip Genio"   -> CONTRADICTION, two different people
+ *   "Kevin"             vs "Kevin Mooney"    -> consistent (the buyer gave less)
+ *   "Paul Trader"       vs "Paul"            -> consistent (the buyer gave more)
+ *   "Priya Raman Gupta" vs "Priya Raman"     -> consistent (same, one word further)
+ *   "Philip Collins"    vs "Philip Genio"    -> CONTRADICTION, two people
+ *
+ * THE RULE IS "the shorter name is a leading run of the longer one", and it
+ * got there by a route worth recording. The first version handled only the
+ * case where one side was a SINGLE word, which flags "Priya Raman Gupta"
+ * against "Priya Raman" — a false flag by this function's own stated
+ * principle. Re-measured on the founder's profile: both rules report 13 raw
+ * contradictions, differing on nothing.
+ *
+ * THAT ZERO IS NOT EVIDENCE THE RULES ARE EQUIVALENT. The population it could
+ * act on is empty: of the 47 spoken/contact pairs, 4 have both sides
+ * multi-word and NONE of those have different word counts, so this corpus
+ * cannot tell the two rules apart at all. The change is made on the principle
+ * instead, and the data says only "no regression". What makes that safe is the
+ * direction: the wider rule can only ever turn a flag OFF. On a surface whose
+ * expensive error is the false flag, more silence is the side to err on.
  */
 export function namesCorrespond(spoken: string, contactName: string): boolean {
   const s = norm(spoken)
@@ -63,16 +79,29 @@ export function namesCorrespond(spoken: string, contactName: string): boolean {
   if (s === c) return true
   const sw = s.split(' ')
   const cw = c.split(' ')
-  // One side gave only a first name, and it is the other's first name.
-  if (sw.length === 1 && cw.length > 1) return sw[0] === cw[0]
-  if (cw.length === 1 && sw.length > 1) return cw[0] === sw[0]
-  return false
+  const [short, long] = sw.length <= cw.length ? [sw, cw] : [cw, sw]
+  return short.every((w, i) => w === long[i])
 }
 
-/** The strict half — the same two rules `matchContactByName` uses in main. */
-function suggestFor(spoken: string, contacts: ContactLike[], excludeId: string): IdentityDisagreement['suggestion'] {
+/**
+ * The strict half — the same two rules `matchContactByName` uses in main.
+ *
+ * EXPORTED so the live chip uses this copy rather than making a fourth. There
+ * are already three implementations of "find the contact for this name" in the
+ * tree (main's matcher, this, and the post-call cascade), and the last count of
+ * "first-wins-on-ambiguity" bugs across them was three. A fourth copy is a
+ * fourth chance to reintroduce it.
+ *
+ * `excludeId` is the contact the record is ALREADY linked to — offering the
+ * link it already has is not an offer. Omit it when nothing is linked.
+ */
+export function suggestContactFor(
+  spoken: string,
+  contacts: ContactLike[],
+  excludeId?: string
+): IdentityDisagreement['suggestion'] {
   const s = norm(spoken)
-  const pool = contacts.filter((c) => c.id !== excludeId)
+  const pool = excludeId ? contacts.filter((c) => c.id !== excludeId) : contacts
 
   const exact = pool.filter((c) => norm(c.name) === s)
   if (exact.length === 1) return { kind: 'link', contact: exact[0] }
@@ -106,7 +135,7 @@ export function identityDisagreement(input: {
   return {
     spokenName: spoken,
     linkedContact: linked,
-    suggestion: suggestFor(spoken, input.contacts, linked.id)
+    suggestion: suggestContactFor(spoken, input.contacts, linked.id)
   }
 }
 

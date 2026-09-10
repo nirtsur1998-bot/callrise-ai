@@ -6,7 +6,7 @@ import { listEntries } from './knowledge-fs'
 import { assembleKnowledgeContext } from './knowledge-context'
 import { listCustomTrackers, saveCustomTrackers } from './custom-trackers'
 import { isSelfIntroExtractionAllowed } from './app-settings'
-import { modelStringOrNull } from './ai/model-placeholders'
+import { isNonName, modelStringOrNull } from './ai/model-placeholders'
 import { consentPermitsCapture } from './consent-gate'
 import { repProfileSection } from './memory/profile-injection'
 
@@ -551,8 +551,22 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
     // from here to the CRM and produced "Create contact for null" on screen.
     // modelStringOrNull() reads any of the model's ways of saying "nothing"
     // as nothing; a real name that merely contains one ("Nunes") is kept.
+    // M39 — and `isNonName` on top, which is WIDER than modelStringOrNull's
+    // absence list and catches the category BUG-163's fix could not: "someone",
+    // "the client", "Speaker 2". The founder's profile carries 7 persisted
+    // `{ name: 'someone', source: 'self-intro' }` records, so this is not a
+    // hypothetical shape — it is the model's actual habit for this field.
+    //
+    // WHY HERE AND NOT AT THE SAVE. calls-fs already refuses to persist one,
+    // which is why those 7 are the last of their kind. But the refusal is at
+    // the END of the pipeline, and this value is on screen long before it: it
+    // labels the other party's turns in the live transcript for the whole
+    // call, and (from this milestone) decides what the live identity chip
+    // offers. Guarding only the write leaves the visible half intact — the rep
+    // spends an hour looking at "someone" and is then offered a contact for
+    // it. One guard, at the moment the name enters the app.
     const claimedName = modelStringOrNull(raw?.buyerName)
-    if (includeBuyerName && claimedName) {
+    if (includeBuyerName && claimedName && !isNonName(claimedName)) {
       const candidateSpeaker =
         typeof raw?.buyerSpeaker === 'number' && Number.isFinite(raw.buyerSpeaker)
           ? Math.trunc(raw.buyerSpeaker)

@@ -36,6 +36,9 @@ import { capturedJustWentLive, playCaptureLiveChime } from './audio/capture-chim
 import { ConsentModal } from '@renderer/features/consent/ConsentModal'
 import { RecordingIndicator } from '@renderer/features/consent/RecordingIndicator'
 import { useCalendar } from '@renderer/features/calendar/useCalendar'
+import { useContacts } from '@renderer/features/contacts/useContacts'
+import { useLiveIdentityOffer } from './useLiveIdentityOffer'
+import { LiveIdentityOfferChip } from './LiveIdentityOfferChip'
 import type { CalendarEvent } from '@renderer/features/calendar/types'
 import { PrepBriefModal, type PrepBriefMeeting } from '@renderer/features/prep-brief/PrepBriefModal'
 import { Waveform } from './components/Waveform'
@@ -174,6 +177,14 @@ export function LiveView({
     healthScoreHistory: []
   }))
 
+  // M39 Stage 2 — the same bridge again, for the live identity offer. Its
+  // answer can only be applied at save time: mid-call there is no Call record
+  // to link a contact to (see useLiveIdentityOffer's own comment on why
+  // wiring the chip's button straight to calls:setContact would silently
+  // no-op), and the hook cannot be called this early because it needs the
+  // buyer name that useLiveCues produces further down.
+  const identityOfferApplyRef = useRef<(callId: string) => Promise<string | null>>(async () => null)
+
   // Wrap the parent's onSaved so every clip captured this call is flushed to
   // window.api.calls.addBookmark against the now-real callId, fire-and-forget,
   // before handing off to whatever the parent wants to do with the saved id.
@@ -197,6 +208,10 @@ export function LiveView({
       if (report.nudges.length > 0 || report.healthScoreHistory.length > 0) {
         void window.api.calls.saveDealIntelligence(callId, report).catch(() => {})
       }
+      // M39 Stage 2 — the rep's answer to the live identity chip, applied to
+      // the record that now exists. Fire-and-forget and already try-wrapped
+      // inside: a link is worth a click, never the call.
+      void identityOfferApplyRef.current(callId)
       // Join the plan to its outcome, at the one moment the join is a FACT
       // rather than a guess: the app already knows which meeting is running,
       // so record it instead of trying to infer it later from contact + time
@@ -280,6 +295,10 @@ export function LiveView({
   // (useCalendar's initial load never hits the network), so this costs
   // nothing extra beyond what Calendar itself already fetches.
   const { events: calEvents, googleEvents, outlookEvents } = useCalendar()
+  // M39 Stage 2 — the contact list and the contact-intelligence mode, for the
+  // live identity offer further down. Both are already loaded elsewhere in the
+  // app on every screen; reading them here costs one list of names.
+  const { contacts } = useContacts()
   const [prepBriefMeeting, setPrepBriefMeeting] = useState<PrepBriefMeeting | null>(null)
   // Date.now() is impure, so "is a meeting happening right now" can't be a
   // useMemo (which runs during render) — it has to live in an effect.
@@ -412,6 +431,34 @@ export function LiveView({
         : undefined,
     [buyerName, buyerIdentityKey]
   )
+
+  // M39 Stage 2 — the live identity offer.
+  //
+  // THE SAME QUESTION THE CALL DETAIL PAGE ALREADY ASKS, moved to where the
+  // answer is still worth something. Post-call the app says "Detected Harvey
+  // on this call — but it's linked to kerry"; on 6 of the founder's 297 calls
+  // that sentence is true and nobody was ever shown it, because by then the
+  // conversation is over. Same words, same buttons, same three outcomes.
+  //
+  // WHAT IT COMPARES: `buyerName` (a self-introduction, extracted by the live
+  // cue, guarded by isNonName in main so "someone" never reaches here) against
+  // `currentMeeting.contactId` — which mid-call is the ONLY thing holding a
+  // link, since the Call record does not exist yet.
+  //
+  // GATES ARE INHERITED, not re-implemented: the contact-intelligence mode
+  // (the same setting the Call Detail surfaces read), and `consent.canRecord`
+  // — the post-call "Detect who this was" button requires exactly that, and it
+  // would be strange for the live version to be freer with the same data.
+  const contactIntelligenceMode = appSettings.contactIntelligence?.mode ?? 'off'
+  const identityOffer = useLiveIdentityOffer({
+    spokenName: buyerName,
+    linkedContactId: currentMeeting?.contactId,
+    contacts,
+    enabled: contactIntelligenceMode !== 'off' && consent.canRecord
+  })
+  useEffect(() => {
+    identityOfferApplyRef.current = identityOffer.applyToSavedCall
+  }, [identityOffer.applyToSavedCall])
 
   // When a call is saved, consent resets to off so it never carries to the next.
   const resetConsent = consent.reset
@@ -1454,6 +1501,29 @@ export function LiveView({
           >
             {transcriptCollapsed ? 'Show transcript' : 'Hide transcript'}
           </button>
+        </div>
+      )}
+      {/* M39 Stage 2 — the live identity offer.
+        *
+        * Placed here, immediately above the transcript, for two reasons. It is
+        * ABOUT the transcript — the name came out of it — so it belongs where
+        * the rep is already looking. And it is outside the transcript's own
+        * scroll box, so it can appear or disappear without shifting a line of
+        * what someone is currently reading.
+        *
+        * Not in Quiet mode. Quiet's contract is that nothing new asks to be
+        * READ mid-call, and this asks to be read. The question keeps until the
+        * call saves — the Call Detail page asks it again — which is exactly
+        * the trade Quiet exists to make. */}
+      {!quiet && identityOffer.offer && (
+        <div className="shrink-0" data-testid="live-identity-offer">
+          <LiveIdentityOfferChip
+            offer={identityOffer.offer}
+            acceptedName={identityOffer.acceptedName}
+            onLink={identityOffer.link}
+            onCreate={identityOffer.create}
+            onDismiss={identityOffer.dismiss}
+          />
         </div>
       )}
       {/* Transcript + the floating cue card (kept above the Ask-coach bar). */}
