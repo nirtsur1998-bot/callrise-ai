@@ -115,6 +115,11 @@ export interface AICompletionRequest {
   system?: string
   messages: AIMessage[]
   maxTokens: number
+  /** BUG-259 — the whole answer is meant to be ONE SHORT LINE, so models that
+   *  emit chain-of-thought until they hit the ceiling are excluded from the
+   *  chain rather than given a bigger budget. Measured: more budget made the
+   *  worst offender WORSE. See ChainCapabilityNeeds.needsBoundedOutput. */
+  needsBoundedOutput?: boolean
   temperature?: number
   purpose: AIPurpose
   /** Explicit model ID, set by completeWithFallback() when a catalog entry

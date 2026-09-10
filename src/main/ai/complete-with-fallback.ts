@@ -1062,6 +1062,11 @@ export function resolveChain(purpose: AIPurpose, opts?: ChainCapabilityNeeds): R
   if (opts?.needsTool) {
     capable = capable.filter((s) => catalogEntry(s.catalogId)?.supportsToolCalling !== false)
   }
+  // BUG-259 — a model that never stops thinking cannot produce a one-line
+  // answer at ANY ceiling, so it is excluded rather than given more budget.
+  if (opts?.needsBoundedOutput) {
+    capable = capable.filter((s) => catalogEntry(s.catalogId)?.unboundedReasoning !== true)
+  }
   if (opts?.needsVision) capable = capable.filter(stepSupportsVision)
   if (opts?.needsDocument) capable = capable.filter(stepSupportsDocuments)
   if (opts) capable = [...capable, ...capabilityFallbackSteps(opts, capable)]
@@ -1248,7 +1253,8 @@ export async function completeWithFallback(req: AICompletionRequest): Promise<AI
   const needs: ChainCapabilityNeeds = {
     needsTool: Boolean(req.tool),
     needsVision: Boolean(req.images?.length),
-    needsDocument: Boolean(req.document)
+    needsDocument: Boolean(req.document),
+    needsBoundedOutput: Boolean(req.needsBoundedOutput)
   }
   const { configured, capable } = resolveChain(purpose, needs)
   logToolCapabilityExclusions(purpose, configured, capable)
@@ -1754,7 +1760,8 @@ export function streamWithFallback(req: AICompletionRequest): StreamWithFallback
   const needs: ChainCapabilityNeeds = {
     needsTool: Boolean(req.tool),
     needsVision: Boolean(req.images?.length),
-    needsDocument: Boolean(req.document)
+    needsDocument: Boolean(req.document),
+    needsBoundedOutput: Boolean(req.needsBoundedOutput)
   }
   const { configured, capable } = resolveChain(purpose, needs)
   logToolCapabilityExclusions(purpose, configured, capable)

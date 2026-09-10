@@ -87,6 +87,17 @@ export interface CatalogEntry {
    *  can't read. Providers without catalog entries (Claude, ChatGPT) are
    *  handled by complete-with-fallback.ts's legacy-step vision set. */
   supportsVision?: true
+  /** BUG-259 — this model does not reliably STOP. Hand-verified by
+   *  measurement, dated in the entry's own comment where set. POSITIVE flag,
+   *  same discipline as supportsVision: undefined = "assumed to terminate",
+   *  so a new entry is never silently excluded.
+   *
+   *  Distinct from slow, and distinct from bad. A model with this flag emits
+   *  chain-of-thought until it hits whatever ceiling you give it, so a bigger
+   *  budget buys more reasoning rather than an answer — which means it cannot
+   *  serve a purpose whose whole output is meant to be one short line. Set it
+   *  only from a measurement, and put the numbers in the comment. */
+  unboundedReasoning?: true
   /** AUDIT FIX (2026-08-24) — hand-verified PDF/document input support. Same
    *  POSITIVE-flag discipline as supportsVision: undefined = "not known to
    *  read documents", so a new entry is never silently sent a PDF it cannot
@@ -361,6 +372,15 @@ export const MODEL_CATALOG: CatalogEntry[] = [
     lane: 'quality',
     modelId: 'nvidia/nemotron-3.5-lightning:free',
     contextWindow: 1_000_000,
+    // BUG-259, MEASURED 2026-09-10 against the app's own title prompt: this
+    // model never stops. At max_tokens 60 it spent 60 and finish_reason was
+    // "length"; at 400 it spent 400; at 1500 it spent 1500 — every time still
+    // mid-thought, and every time the first line was literally "Here's a
+    // thinking process:", which is the string that reached the founder's call
+    // list. At 1500 the reasoning even produced a fragment ("Yes, 5 words")
+    // that passed the title validator, so more budget makes it WORSE, not
+    // better. Excluded from bounded-output purposes; still fine for prose.
+    unboundedReasoning: true,
     retentionPosture: 'unknown',
     retentionUrl: 'https://openrouter.ai/docs/features/privacy-and-logging',
     keyUrl: 'https://openrouter.ai/keys'
