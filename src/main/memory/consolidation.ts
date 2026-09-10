@@ -79,10 +79,49 @@ async function judgeSameFact(a: string, b: string): Promise<boolean> {
         }
       ]
     })
+    // A call that came back WITHOUT a tool call is not a "no" either — the
+    // model declined to answer, and `?.sameFact === true` reads that as
+    // "different fact" exactly like a thrown error does.
+    if (result.toolInput?.sameFact === undefined) noteJudge('no-answer')
+    else noteJudge('answered')
     return result.toolInput?.sameFact === true
   } catch {
+    // BUG-258 — FALSE MEANS "DIFFERENT FACT", so this does not skip the merge:
+    // it ASSERTS non-identity. Every failure here silently creates a duplicate
+    // memory and is recorded identically to a real decision. The behaviour is
+    // deliberately unchanged — failing toward a duplicate is safer than failing
+    // toward merging two facts that might not be the same — but it is no longer
+    // SILENT. The founder: "it's a silent failure with a wrong default, and
+    // it'll be the cause of something eventually."
+    //
+    // Measured 2026-09-10 and worth recording: this was NOT the cause of the
+    // zero merges (the funnel test showed the judge was reachable at most once
+    // in the whole history — the 0.35 distance gate is what blocks everything).
+    // It is fixed on its own merits.
+    noteJudge('failed')
     return false
   }
+}
+
+export type JudgeOutcome = 'answered' | 'no-answer' | 'failed'
+
+const judgeCounts = new Map<JudgeOutcome, number>()
+
+function noteJudge(outcome: JudgeOutcome): void {
+  judgeCounts.set(outcome, (judgeCounts.get(outcome) ?? 0) + 1)
+}
+
+/** Counts since launch. Integers only — no statements, no ids. A non-zero
+ *  `failed` or `no-answer` means duplicates were created that a working judge
+ *  might have merged, and until this existed the two were indistinguishable
+ *  from "these really are different facts". */
+export function judgeStats(): Record<string, number> {
+  return Object.fromEntries([...judgeCounts.entries()].sort())
+}
+
+/** Test-only, so one test's counts cannot leak into another's assertions. */
+export function resetJudgeStats(): void {
+  judgeCounts.clear()
 }
 
 const CONTRADICTION_JUDGE_TOOL: AITool = {
@@ -262,17 +301,89 @@ export function distinctEpisodeCount(evidence: MemoryEvidence[]): number {
   return keys.size
 }
 
-const PROMOTION_THRESHOLD_EPISODES = 3
+/**
+ * BUG-258 — PER SCOPE, because the spec's justification is about PATTERNS and
+ * only two of the three scopes hold patterns.
+ *
+ * The rule was a flat 3 everywhere, from spec section 2: "a pattern seen in 3+
+ * calls becomes a durable fact... one call is a hypothesis, never a fact." That
+ * is exactly right for `rep` and `business` — how someone sells, what their
+ * product costs — which are fed by every call, and where one sighting genuinely
+ * is weak evidence.
+ *
+ * It is wrong for `client`, on two grounds.
+ *
+ * MEASURED on the founder's store 2026-09-10: 297 calls but only 44 contacts
+ * with any linked call, distributed
+ *   {1 call: 24 contacts, 2: 8, 3: 5, 4: 4, 7: 1, 8: 1, 10: 1}
+ * — 55% of contacts have exactly ONE call, 73% fewer than three. A client fact
+ * about them could never promote however well everything else worked. Only 12
+ * contacts (27%) could ever clear a threshold of 3.
+ *
+ * EPISTEMIC, and this is the argument that decides it. "The CFO signs off above
+ * 40k" is not a pattern. It is a fact stated once by someone entitled to state
+ * it. Requiring a buyer to repeat their own budget across three separate calls
+ * before the app will believe them is wrong about WHO THE AUTHORITY IS. The
+ * founder, approving this: *"A client fact that turns out wrong should be
+ * replaced when contradicted, not withheld until repeated."*
+ */
+const PROMOTION_THRESHOLD_EPISODES: Record<'rep' | 'business' | 'client', number> = {
+  rep: 3,
+  business: 3,
+  client: 1
+}
 
-/** Promotes every hypothesis in `scope` with enough independent evidence
- *  episodes to 'active' (spec section 2's episodic→semantic promotion —
- *  "a pattern seen in 3+ calls becomes a durable fact... one call is a
- *  hypothesis, never a fact"). Pure DB work, no AI call — cheap enough to
- *  run after every single call, not just nightly. */
+/**
+ * The floor that carries the burden client scope's second and third sightings
+ * used to.
+ *
+ * MEASURED, not picked. The founder's 14 client hypotheses run min 0.30,
+ * p25 0.86, p50 0.90, p75 1.00 — bimodal, 12 of 14 at or above 0.85 and two
+ * genuinely uncertain ones below. EVERY floor from 0.60 to 0.85 promotes the
+ * same 12; 0.90 promotes 10. So the choice is insensitive across that range,
+ * and 0.85 is the highest value that costs nothing on real data.
+ *
+ * HOW TO TELL IT IS SET WRONG, in each direction:
+ *  - TOO HIGH: client profiles stay empty while Memory Center still reports
+ *    client facts waiting, and profile-injection's `client:compiled-but-empty`
+ *    counter climbs while rep/business inject normally.
+ *  - TOO LOW: wrong client facts reach briefs and cues, and the tell is
+ *    `invalidateMemory` firing on client scope — a fact promoted and then
+ *    contradicted. That rate should sit near zero; a rising one means the floor
+ *    is admitting guesses.
+ */
+const CLIENT_PROMOTION_CONFIDENCE_FLOOR = 0.85
+
+function scopeFamily(scope: MemoryScope): 'rep' | 'business' | 'client' {
+  if (scope === 'rep') return 'rep'
+  if (scope === 'business') return 'business'
+  return 'client'
+}
+
+/** Exported so the rule is testable AS A RULE rather than only through a
+ *  database — the thresholds are the claim, and a claim reachable only via
+ *  SQLite is a claim nobody re-checks. */
+export function qualifiesForPromotion(
+  scope: MemoryScope,
+  evidence: MemoryEvidence[],
+  confidence: number
+): boolean {
+  const family = scopeFamily(scope)
+  if (distinctEpisodeCount(evidence) < PROMOTION_THRESHOLD_EPISODES[family]) return false
+  // The floor applies ONLY where repetition was traded away. Adding it to
+  // rep/business would be a second, unmeasured change riding along with this
+  // one — and they already clear a bar of three independent sightings.
+  if (family === 'client' && confidence < CLIENT_PROMOTION_CONFIDENCE_FLOOR) return false
+  return true
+}
+
+/** Promotes every hypothesis in `scope` that has earned it — see
+ *  `qualifiesForPromotion`. Pure DB work, no AI call, cheap enough to run
+ *  after every single call rather than only nightly. */
 export function promoteHypotheses(db: Database.Database, scope: MemoryScope): void {
   const hypotheses = listMemories(db, { scope, status: 'hypothesis' })
   for (const memory of hypotheses) {
-    if (distinctEpisodeCount(memory.evidence) >= PROMOTION_THRESHOLD_EPISODES) {
+    if (qualifiesForPromotion(scope, memory.evidence, memory.confidence)) {
       promoteToActive(db, memory.id)
     }
   }

@@ -26,6 +26,7 @@ import { currentConsent } from './telemetry/setup'
 import { listQueued } from './telemetry/index'
 import { readSweepSummary, type SweepSummary } from './memory/sweep-record-summary'
 import { injectionStats } from './memory/profile-injection'
+import { judgeStats } from './memory/consolidation'
 
 /**
  * A scrubber for WHOLE DOCUMENTS rather than single fields.
@@ -211,6 +212,9 @@ function sweepSummary(userDataDir: string, destDir: string): void {
           quoteSweep: summary,
           meaning,
           profileInjections: injectionStats(),
+          // BUG-258 - a non-zero mergeJudge.failed/no-answer means duplicate
+          // memories were created that a working judge might have merged.
+          mergeJudge: judgeStats(),
           profileInjectionsMeaning:
             'Counts since launch, keyed <scope family>:<outcome>. A high "compiled-but-empty" means features asked for a profile and received nothing — facts have been learned but none promoted. "brain-off" is a user choice, "no-db" a fresh install; only "compiled-but-empty" indicates a fault.'
         },
