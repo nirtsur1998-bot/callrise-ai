@@ -63,9 +63,16 @@ export function LiveIdentityOfferChip({
   if (acceptedName) {
     return (
       <div className={`rounded-xl border ${tone.ring} px-3 py-2.5`}>
+        {/* The sentence is ONE flex child, not three. With the text bare, the
+            row's `gap-2` applied between every run — so an 8px gap opened on
+            both sides of the bold name and the line read "Linked to  Harvey
+            when this call saves." Invisible in the source, obvious in a
+            screenshot, which is the only reason it was found. */}
         <p className="flex items-center gap-2 text-[12px] font-medium text-ink">
           <Check className="h-3.5 w-3.5 shrink-0 text-positive" />
-          Linked to <span className="font-semibold">{acceptedName}</span> when this call saves.
+          <span>
+            Linked to <span className="font-semibold">{acceptedName}</span> when this call saves.
+          </span>
         </p>
       </div>
     )
