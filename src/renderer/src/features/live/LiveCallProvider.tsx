@@ -31,7 +31,7 @@
 // happens to be showing. This file follows its context/component split too
 // (useLiveCall.ts has the context + hook; this file has only the component),
 // which Fast Refresh requires of any file that exports a component.
-import { useCallback, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useConsent } from '@renderer/features/consent/useConsent'
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import type { CalendarEvent } from '@renderer/features/calendar/types'
@@ -83,13 +83,21 @@ export function LiveCallProvider({ children }: { children: ReactNode }): React.J
   // what lets both hooks tell those apart from a genuine new call; see their
   // own reset-effect comments for the full story.
   const cueSettings = useCueSettings()
+  // M39 — the matched meeting's contact, bridged BACKWARDS to useLiveCues.
+  // `currentMeeting` is declared below (it is set by LiveView, which is the
+  // only place that can run useCalendar), and useLiveCues has to be able to
+  // read it without depending on it — a value would re-wire the cue loop every
+  // time the calendar ticked. Hence a ref declared first and synced after.
+  const meetingContactIdRef = useRef<string | null>(null)
+  const getMeetingContactId = useCallback(() => meetingContactIdRef.current, [])
   const cues = useLiveCues(
     transcription.status === 'listening',
     cueSettings.enabled,
     transcription.getCallId,
     cueSettings.sensitivity,
     transcription.otherPartyLive ? 0 : null,
-    transcription.identifyRep
+    transcription.identifyRep,
+    getMeetingContactId
   )
 
   // LiveView's own calendar-matched "what's happening right now" — genuinely
@@ -97,6 +105,9 @@ export function LiveCallProvider({ children }: { children: ReactNode }): React.J
   // mirroring setOnSaved's shape but for a value useDealIntelligence reacts
   // to reactively rather than reads once at save time.
   const [currentMeeting, setCurrentMeeting] = useState<CalendarEvent | null>(null)
+  useEffect(() => {
+    meetingContactIdRef.current = currentMeeting?.contactId ?? null
+  }, [currentMeeting])
 
   const dealIntelligenceSettings = useDealIntelligenceSettings()
   const dealIntelligence = useDealIntelligence(

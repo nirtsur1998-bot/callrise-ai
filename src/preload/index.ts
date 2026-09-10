@@ -94,8 +94,19 @@ const api = {
       transcript: string,
       repSpeaker: number | null,
       callId?: string,
-      includesBuyerContent?: boolean
-    ) => ipcRenderer.invoke('live:cue', { transcript, repSpeaker, callId, includesBuyerContent })
+      includesBuyerContent?: boolean,
+      /** M39 — who this call is with, from the matched meeting. Main assembles
+       *  the client dossier once per call from it; absent, the prompt is
+       *  byte-for-byte what it was before this milestone. */
+      contactId?: string
+    ) =>
+      ipcRenderer.invoke('live:cue', {
+        transcript,
+        repSpeaker,
+        callId,
+        includesBuyerContent,
+        contactId
+      })
   },
   trackers: {
     /** Turn a rep's plain-English request into a candidate tracker (§4.8).

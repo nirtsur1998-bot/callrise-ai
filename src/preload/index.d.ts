@@ -190,7 +190,12 @@ export interface TranscriptionApi {
      *  buyer-attributed content ever reaches an AI prompt. Keyed on callId,
      *  not sessionId. */
     callId?: string,
-    includesBuyerContent?: boolean
+    includesBuyerContent?: boolean,
+    /** M39 — the contact this call is with, from the matched meeting. Main
+     *  assembles a client dossier from it ONCE per call and puts it at the
+     *  front of the prompt as a cacheable stable prefix. Optional: absent, the
+     *  prompt is byte-for-byte what it was before this milestone. */
+    contactId?: string
   ) => Promise<
     | {
         ok: true

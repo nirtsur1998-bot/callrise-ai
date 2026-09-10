@@ -288,7 +288,13 @@ export function useLiveCues(
   /** Told to the transcript the moment the rep is identified, so already-
    *  recorded turns in this epoch can be back-filled ONCE instead of the UI
    *  re-deriving attribution from mutable state at render time. */
-  onRepIdentified?: (epoch: number, speaker: number) => void
+  onRepIdentified?: (epoch: number, speaker: number) => void,
+  /** M39 — who this call is with, read fresh on every cue rather than captured,
+   *  because the calendar match can arrive after the call has already started.
+   *  Main uses it to assemble the client dossier ONCE per call. A getter and
+   *  not a value, for the same reason `getCallId` is one: this hook must not
+   *  re-wire its subscriptions because a meeting resolved. */
+  getMeetingContactId?: () => string | null
 ): UseLiveCues {
   const [cue, setCue] = useState<LiveCue | null>(null)
   const [suggestions, setSuggestions] = useState<LiveCue[]>([])
@@ -337,6 +343,13 @@ export function useLiveCues(
   useEffect(() => {
     onRepIdentifiedRef.current = onRepIdentified
   }, [onRepIdentified])
+  // M39 — same bridge, same reason: kept out of the subscription effect's
+  // dependencies so a resolving calendar match cannot tear down and rebuild
+  // the cue loop mid-call.
+  const getMeetingContactIdRef = useRef(getMeetingContactId)
+  useEffect(() => {
+    getMeetingContactIdRef.current = getMeetingContactId
+  }, [getMeetingContactId])
   const buyerNameRef = useRef<string | null>(null) // one-shot per call, like repSpeakerRef
   // When buyer capture is live the rep is deterministically channel 0.
   const knownRepRef = useRef<number | null>(knownRepSpeaker)
@@ -615,7 +628,16 @@ export function useLiveCues(
         .slice(-WINDOW_TURNS)
         .some((t) => t.channel !== undefined && t.channel !== knownRepRef.current)
       void window.api.transcription
-        .liveCue(transcript, repSpeakerRef.current, getCallId() ?? undefined, includesBuyerContent)
+        .liveCue(
+          transcript,
+          repSpeakerRef.current,
+          getCallId() ?? undefined,
+          includesBuyerContent,
+          // M39 — read at request time, never captured: the calendar match may
+          // land minutes into a call, and a cue fired before it must not pin
+          // "no client" for the rest of the conversation.
+          getMeetingContactIdRef.current?.() ?? undefined
+        )
         .then((res) => {
           if (!mountedRef.current || generation !== generationRef.current) return
           if (!res.ok) {
