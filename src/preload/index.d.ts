@@ -1120,10 +1120,18 @@ export interface CallsApi {
    *  job and returns immediately; track it through window.api.jobs, and read
    *  its resultData for the per-call failure list. Never runs automatically. */
   backfillTitles: () => Promise<{ ok: boolean; jobId?: string }>
-  /** AI Note Taker's auto-title feature: generate + save a title in one step. */
+  /** AI Note Taker's auto-title feature: generate + save a title in one step.
+   *
+   *  BUG-260 — this ENQUEUES A JOB and returns its id; follow it through
+   *  window.api.jobs, exactly as summarizeCall and coachCall do. It used to
+   *  await the AI call inline on the IPC channel, which made it the one AI
+   *  action in the app with no Activity Center row, no progress and no Stop.
+   *  The `{ ok: true; title }` variant survives only as the fallback for when
+   *  enqueue itself throws. */
   generateTitle: (
     callId: string
   ) => Promise<
+    | { ok: true; jobId: string }
     | { ok: true; title: string }
     // BUG-228 — the reason travels, so a caller can tell a refusal from an
     // empty transcript from a save failure. It used to be a bare

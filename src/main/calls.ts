@@ -107,6 +107,8 @@ const SCAN_JOB_TYPE = 'objections:scanPastCalls'
  *  is the rep's AI budget, one call at a time, and they must be able to watch
  *  it and stop it. Never runs automatically. */
 const TITLE_BACKFILL_JOB_TYPE = 'calls:backfillTitles'
+/** BUG-260 — the single-call counterpart, so the manual button is a job too. */
+const TITLE_ONE_JOB_TYPE = 'calls:titleOne'
 const SUMMARIZE_JOB_TYPE = 'calls:summarize'
 const COACH_JOB_TYPE = 'calls:coach'
 const FIND_COMMITMENTS_JOB_TYPE = 'calls:findCommitments'
@@ -1334,10 +1336,43 @@ export function registerCalls(): void {
   // Thin on purpose — titleOneCall() above is the one implementation, shared
   // with the backfill job, so the two can never drift into disagreeing about
   // what "titling a call" means.
+  //
+  // BUG-260 — but they DID disagree about WHERE IT RUNS. This awaited
+  // titleOneCall() inline on the IPC channel, making a manual "generate title"
+  // the one piece of AI work in the app with no job behind it: nothing in the
+  // Activity Center, no progress, no Stop, no durable record of the failure,
+  // and a renderer promise left hanging for as long as the provider took (one
+  // backfill item was measured at 55 seconds). Titling fifty calls showed a
+  // progress bar; titling one showed nothing at all.
+  //
+  // It now enqueues, exactly like the backfill. The comment above was true of
+  // the LOGIC and false of the DELIVERY — the kind of half-truth that sharing
+  // a helper invites, because "the two can never drift" reads as covering more
+  // than the helper actually covers.
+  getJobManager().registerType<{ callId: string }, GenerateTitleResult>({
+    type: TITLE_ONE_JOB_TYPE,
+    lane: 'BATCH',
+    titleFor: () => 'Naming this call',
+    cancellable: true,
+    executor: {
+      kind: 'inline-async',
+      run: async (input, handle) => titleOneCall(input.callId, { signal: handle.signal })
+    }
+  })
+
   ipcMain.handle(
     'calls:generateTitle',
-    async (_event, callId: string): Promise<GenerateTitleResult> => {
-      return titleOneCall(callId)
+    async (_event, callId: string): Promise<GenerateTitleResult | { ok: true; jobId: string }> => {
+      try {
+        return { ok: true, jobId: getJobManager().enqueue(TITLE_ONE_JOB_TYPE, { callId }).id }
+      } catch (err) {
+        // enqueue genuinely can throw (unregistered type, manager not ready) —
+        // see enqueueCascadeJob's comment. Falling back to the inline path
+        // keeps the rep's button working rather than failing closed, but it is
+        // a FALLBACK and it says so out loud rather than silently.
+        console.error('[title] could not enqueue, running inline:', err)
+        return titleOneCall(callId)
+      }
     }
   )
 }

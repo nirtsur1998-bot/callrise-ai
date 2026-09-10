@@ -114,6 +114,9 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024
 // survives navigating away and back (see calls.ts for the executors).
 const SUMMARIZE_JOB_TYPE = 'calls:summarize'
 const COACH_JOB_TYPE = 'calls:coach'
+// BUG-260 — the manual "generate title" ran inline on the IPC channel, so it
+// was the one AI action with no Activity Center row, no progress and no Stop.
+const TITLE_ONE_JOB_TYPE = 'calls:titleOne'
 const FIND_COMMITMENTS_JOB_TYPE = 'calls:findCommitments'
 const DETECT_JOB_TYPE = 'contactIntelligence:detectName'
 
@@ -330,24 +333,38 @@ export function CallDetail({
   // a title starting "Call · " simply keeps the button, which costs them
   // nothing.
   const isDefaultTitle = /^Call · /.test(call?.title ?? '')
-  const [titling, setTitling] = useState(false)
   const [titleError, setTitleError] = useState<string | null>(null)
+  // BUG-260 — tracked as a JOB, the same way summarize and coach already are.
+  // `titling` is no longer local state: useJobByTarget re-adopts the running
+  // job across a remount, so navigating away and back keeps the spinner
+  // instead of showing an idle button over work that is still going.
+  const [titleJob, startTitleJob] = useJobByTarget(TITLE_ONE_JOB_TYPE, callId, {
+    onSucceeded: () => void notifyChanged(),
+    // BUG-228's other half. The automatic path swallows this outcome three
+    // layers deep; here a human is watching, so say which way it went.
+    onFailed: (job) =>
+      setTitleError(job.error?.message ?? 'Could not generate a title. Please try again.')
+  })
+  const titling = titleJob?.state === 'running' || titleJob?.state === 'queued'
+
   const generateTitle = useCallback(async () => {
     setTitleError(null)
-    setTitling(true)
     try {
       const res = await window.api.calls.generateTitle(callId)
       if (!mountedRef.current) return
-      // BUG-228's other half. The automatic path swallows this outcome three
-      // layers deep; here a human is watching, so say which way it went.
-      if (res.ok) void notifyChanged()
-      else setTitleError('Could not generate a title. Please try again.')
+      if (res.ok && 'jobId' in res && res.jobId) {
+        const fresh = await window.api.jobs.get(res.jobId)
+        if (mountedRef.current && fresh) startTitleJob(fresh)
+      } else if (res.ok) {
+        // The inline FALLBACK path (enqueue threw). Still a real result.
+        void notifyChanged()
+      } else {
+        setTitleError('Could not generate a title. Please try again.')
+      }
     } catch {
       if (mountedRef.current) setTitleError('Could not generate a title. Please try again.')
-    } finally {
-      if (mountedRef.current) setTitling(false)
     }
-  }, [callId, notifyChanged])
+  }, [callId, notifyChanged, startTitleJob])
 
   const summarizeCall = useCallback(async () => {
     setSummaryError(null)
