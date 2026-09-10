@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { linkKey } from './google-sync'
+import { linkKey, resolveProviderFromEgress } from './google-sync'
 import { writeJsonAtomic } from './atomic-write'
 import { purgeCompanionFiles } from './companion-files'
 import { mapWithConcurrency } from './bounded-map'
@@ -546,6 +546,13 @@ export async function importEvent(
 ): Promise<CalendarEvent | null> {
   const event = sanitizeEventRecord(payload)
   if (!event) return null
+  // BUG-209 - put the account address back. The payload carries
+  // `google:@primary` in place of it; this is the user's OWN backup, so the
+  // same account resolves to the same id, which is what keeps `linkKey`
+  // matching the value a pull produces and the dedupe working. If Google is
+  // not connected yet the placeholder stays and heals on the next resolve -
+  // see resolveProviderFromEgress.
+  event.provider = resolveProviderFromEgress(event.provider)
   const current = await readEventRecord(dir, event.id) // raw: tombstones included
   if (
     opts?.onlyIfNewer &&
