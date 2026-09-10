@@ -1362,3 +1362,53 @@ Two things worth keeping from it:
 - **Test that a guard can REFUSE, not just that it can pass.** This one passed on its first
   real run and that read as success. Run it once while the condition is genuinely true.
 
+### STANDING RULE — a driver NEVER accepts a consent surface. Decline it, or report it.
+
+A fresh profile shows the telemetry prompt (*"Help find crashes? (optional, anonymous)"*)
+before the app is usable. A drive that clicks **Yes, send anonymous diagnostics** to get
+past it has done the easiest thing and the wrong one.
+
+The reasoning, which is the part that generalises: **a driver that clicks yes on a consent
+prompt to get past it would do the same on a real profile.** The code path does not know it
+is in a sandbox, the habit does not know it is in a sandbox, and the next drive is one
+`CALLRISE_USER_DATA_DIR` typo away from being on the founder's own store — which this
+project has already done once (see the `APPDATA` section above).
+
+So, for any consent, permission, terms, or opt-in surface a drive meets:
+
+- **Decline it** if declining lets the drive continue. `No thanks` is the privacy-preserving
+  answer and it is almost always enough.
+- **Report it and stop** if the drive genuinely cannot continue without accepting. That is a
+  finding about the flow, not an obstacle to route around.
+- **Never accept.** There is no version of "just to get past it" that is safe, and a drive
+  that accepted one is a drive whose every later screenshot is of a state the user never
+  agreed to.
+
+This is the sibling of the standing rule that the assistant never enters credentials: the
+question is not whether the click is reversible here, it is whether the reflex is safe
+everywhere.
+
+### A failure message about the WRONG THING reads exactly like a failure of the right one
+
+Driving to the Memory Center, two guessed labels in a row came back `NOT FOUND` — from a
+page that had navigated perfectly well. The obvious readings were "Settings did not open"
+or "the section is missing on this build". Both wrong: the page was right, and
+`Sales Brain` / `Memory Center` simply are not what those controls are called. The real
+path is **"What CallRise remembers" → "Review what it remembers"**.
+
+The tell is worth carrying: **a locator that reports NOT FOUND is making a claim about the
+locator, not about the app.** It cannot distinguish "this control does not exist here" from
+"this control is called something else" from "you are on the wrong page entirely", and all
+three arrive as the same string.
+
+Do not guess a third label. **Print every clickable label on the page and read them:**
+
+```js
+const labels = await cdp.evaluate(`(() => [...document.querySelectorAll('button, a, [role="button"], [role="tab"]')]
+  .map(e => (e.textContent || '').trim()).filter(t => t && t.length < 40)
+  .filter((v, i, a) => a.indexOf(v) === i))()`)
+```
+
+Two seconds, and it ends the guessing with a fact. Same family as the navigation rule above
+— assert on what is actually there, never on what you expect to be.
+
