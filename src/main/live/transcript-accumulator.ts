@@ -37,7 +37,22 @@ export type SpeakerRole = 'rep' | 'other' | 'unknown'
 const ECHO_LOOKBACK = 8
 
 /** Below this, an identical string on both channels is more likely to be two
- *  people saying "yes" than an echo. */
+ *  people saying "yes" than an echo.
+ *
+ *  WHY 24 AND NOT 8, measured rather than chosen. Across the founder's real
+ *  store — 173 calls carrying per-segment channel data, 19,933 segments —
+ *  there are **286 cross-channel identical strings** spread over 101 calls.
+ *  **282 of them are under TEN characters**: "okay", "yeah", "yes", "k".
+ *  Exactly four reach the 10-19 band and NONE reaches 24.
+ *
+ *  So on a real corpus this constant is the entire difference between a fix
+ *  that removes nothing it should not, and one that silently deletes 282
+ *  genuine acknowledgements from the rep's own transcript. A threshold of 4 or
+ *  8 would have done the second while passing every unit test in this file.
+ *
+ *  Re-measure with `scripts/verification/bug164-real-corpus.mjs` before
+ *  changing it; it extracts this constant and `echoKey` from THIS file at
+ *  runtime, so it cannot drift from what ships. */
 const ECHO_MIN_CHARS = 24
 
 export interface AccumulatedSegment {
