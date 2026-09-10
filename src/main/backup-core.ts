@@ -99,15 +99,83 @@ async function writeConflictCopy(dir: string, id: string, record: unknown): Prom
  * device's clock a few lines above), so including it would make every
  * comparison unequal and restore the original bug.
  */
-function differsIgnoringTimestamp(a: unknown, b: unknown): boolean {
-  const strip = (v: unknown): string => {
-    if (!v || typeof v !== 'object') return JSON.stringify(v ?? null)
-    const { updatedAt: _ignored, ...rest } = v as Record<string, unknown>
-    // Sorted keys so a differing property ORDER — which JSON.stringify would
-    // otherwise report as a difference — can't manufacture a conflict either.
-    return JSON.stringify(rest, Object.keys(rest).sort())
+/**
+ * BUG-187 — WOULD KEEPING THE CLOUD VERSION DISCARD SOMETHING THE LOCAL COPY
+ * HAS? That is the question a conflict copy exists to answer, and it is not the
+ * question the previous predicate asked.
+ *
+ * `differsIgnoringTimestamp` compared the local record against the UPLOADED
+ * PROJECTION, so it asked *"did the projection change?"*. The projection is not
+ * the record and was never meant to be: `callBackupPayload` emits
+ * `dealId: call.dealId ?? null` for a key the record omits, hard-blanks
+ * `preview` and `segments` to keep the transcript off the wire, and carries
+ * none of the KEEP_LOCAL fields at all. Measured on the founder's store by
+ * `scripts/verification/conflict-guard-reach.ts`: it returned true for
+ * **196 of 196** reachable call records, in both sync scopes. It never once
+ * prevented a conflict copy.
+ *
+ * AND IT COULD NOT BE REPAIRED BY FIXING THOSE NORMALISATIONS. Leave-one-out
+ * over the same 196: neutralising ANY SINGLE differing key silences **0**
+ * records in the default scope (and `dealId` alone silences 74 of 196 in the
+ * transcripts scope, which would have made a single-key fix look like it
+ * worked). The causes are over-determined by four families, three of which are
+ * things the payload is SUPPOSED to differ by. The right-hand side was wrong in
+ * principle, not in detail.
+ *
+ * So this asks the real question, against what the importer actually WROTE:
+ *
+ *   - iterate the keys the LOCAL record has. A key present in `written` but not
+ *     in `local` is an ADDITION — the cloud brought something new — never a loss.
+ *   - `updatedAt` is excluded for the original reason: the written record
+ *     carries the re-stamped value, so including it makes everything differ.
+ *   - per-key comparison, so property ORDER cannot manufacture a difference.
+ *     The sorted-keys trick the old predicate needed is unnecessary here.
+ *
+ * It is also correct for the stores whose `locals` map holds a PROJECTION
+ * rather than a record — `assistant-conversations` maps to `{ id, updatedAt }`
+ * — where the old predicate compared an id against a whole conversation and was
+ * therefore structurally always true. That store has zero conflict files, which
+ * was read as evidence FOR the old model rather than against it (species 106).
+ */
+/** Nothing to lose: absent, null, an empty string, an empty list or an empty
+ *  object. NOT `0` and NOT `false`, which are real values a user can have set. */
+function isEmptyValue(v: unknown): boolean {
+  if (v === undefined || v === null || v === '') return true
+  if (Array.isArray(v)) return v.length === 0
+  if (typeof v === 'object') return Object.keys(v as Record<string, unknown>).length === 0
+  return false
+}
+
+function importWouldDiscard(local: unknown, written: unknown): boolean {
+  if (!local || typeof local !== 'object' || !written || typeof written !== 'object') {
+    return JSON.stringify(local ?? null) !== JSON.stringify(written ?? null)
   }
-  return strip(a) !== strip(b)
+  const l = local as Record<string, unknown>
+  const w = written as Record<string, unknown>
+  for (const key of Object.keys(l)) {
+    if (key === 'updatedAt') continue
+    // YOU CANNOT LOSE WHAT YOU DID NOT HAVE. Found by driving the fix over the
+    // founder's own records rather than by reasoning: 1 of 60 still
+    // manufactured a conflict, on the one call with no local transcript. The
+    // cloud brought one, `preview` went from '' to real text, and a
+    // difference-based test called that a loss. It is a gain — and a guard
+    // that conflicts on gains would put a file beside every record that ever
+    // receives something new.
+    if (isEmptyValue(l[key])) continue
+    if (JSON.stringify(l[key]) !== JSON.stringify(w[key])) return true
+  }
+  return false
+}
+
+/** Remove a conflict copy written pre-emptively and then found unnecessary.
+ *  Best-effort: a leftover identical copy is clutter, and clutter is the side
+ *  this path errs toward deliberately — see the ordering note in reconcileStore. */
+async function removeConflictCopy(dir: string, id: string): Promise<void> {
+  try {
+    await fs.unlink(join(dir, `${id}.conflict`))
+  } catch {
+    /* never existed, or could not be removed — neither is worth failing a restore */
+  }
 }
 
 /**
@@ -172,18 +240,33 @@ export async function reconcileStore<
     // Both sides here are THIS device's own clock (local.updatedAt and the
     // lastSyncAt we wrote ourselves), so they are already comparable — applying
     // the skew correction to only one of them would reintroduce the same bug.
-    if (
-      lastSyncAt &&
-      ts(local.updatedAt) > ts(lastSyncAt) &&
-      local.deleted !== true &&
-      // ...and the two versions actually differ. See differsIgnoringTimestamp:
-      // without this, an app killed mid-sync manufactures one "conflict" per
-      // record on the next restore, all of them identical copies.
-      differsIgnoringTimestamp(local, payload)
-    ) {
-      await writeConflictCopy(dir, local.id, local)
+    const timestampsSayBothMoved =
+      Boolean(lastSyncAt) && ts(local.updatedAt) > ts(lastSyncAt as string) && local.deleted !== true
+
+    // PRESERVE FIRST, DECIDE AFTER — and the order is the safety property.
+    //
+    // Whether a conflict copy is NEEDED can only be answered by what the
+    // importer actually writes, and finding that out means importing, which
+    // replaces the local record. Deciding afterwards would leave a window
+    // where a crash between the import and the copy loses the local version
+    // outright. Writing first inverts the failure: a crash in that window
+    // leaves an extra identical `.conflict` file, which is clutter.
+    //
+    // That is the founder's own rule, from downloadSalesBrainDb's decision
+    // table: "when the choice is 'might lose data' vs 'might leave clutter',
+    // clutter wins."
+    if (timestampsSayBothMoved) await writeConflictCopy(dir, local.id, local)
+
+    const written = await importRecord(dir, payload)
+    if (written) changed++
+
+    // BUG-187 — the real question, asked against what was WRITTEN rather than
+    // against what was uploaded. If nothing was written, or the written record
+    // still carries everything the local copy had, there was no conflict to
+    // preserve and the pre-emptive copy comes back off.
+    if (timestampsSayBothMoved && (!written || !importWouldDiscard(local, written))) {
+      await removeConflictCopy(dir, local.id)
     }
-    if (await importRecord(dir, payload)) changed++
   }
   return changed
 }

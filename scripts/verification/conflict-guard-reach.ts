@@ -36,12 +36,30 @@ import { callBackupPayload, callFullBackupPayload, type Call } from '../../src/m
 const PROFILE = process.argv[2]
 if (!PROFILE) throw new Error('usage: conflict-guard-reach.ts <userDataDir>')
 
-function extractDiffers(): (a: unknown, b: unknown) => boolean {
+/**
+ * Extract whichever predicate `backup-core.ts` currently carries, and SAY WHICH.
+ *
+ * `differsIgnoringTimestamp` was replaced by `importWouldDiscard` when BUG-187
+ * was fixed — a fix this script is what established the need for. Naming the
+ * predicate in the output means a number produced here can never be quoted
+ * against the wrong one. It still fails loudly when neither is present, rather
+ * than silently measuring a stale copy; that refusal fired on the first run
+ * after the rename, which is the behaviour it was built for.
+ */
+function extractPredicate(): { name: string; fn: (a: unknown, b: unknown) => boolean } {
   const src = readFileSync(join(__dirname, '..', '..', 'src', 'main', 'backup-core.ts'), 'utf8')
-  const start = src.indexOf('function differsIgnoringTimestamp(')
-  if (start === -1) throw new Error('differsIgnoringTimestamp not found — did it move or get renamed?')
+  const name = ['differsIgnoringTimestamp', 'importWouldDiscard'].find(
+    (n) => src.indexOf(`function ${n}(`) !== -1
+  )
+  if (!name) {
+    throw new Error(
+      'neither differsIgnoringTimestamp nor importWouldDiscard is in backup-core.ts — ' +
+        'the guard was renamed again. Update this script rather than trusting its output.'
+    )
+  }
+  const start = src.indexOf(`function ${name}(`)
   const end = src.indexOf('\n}', start)
-  if (end === -1) throw new Error('could not find the end of differsIgnoringTimestamp')
+  if (end === -1) throw new Error(`could not find the end of ${name}`)
   const body = src
     .slice(start, end + 2)
     .replace(/: unknown/g, '')
@@ -49,10 +67,13 @@ function extractDiffers(): (a: unknown, b: unknown) => boolean {
     .replace(/: boolean/g, '')
     .replace(/ as Record<string, unknown>/g, '')
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  return new Function(`${body}; return differsIgnoringTimestamp`)() as (a: unknown, b: unknown) => boolean
+  const fn = new Function(`${body}; return ${name}`)() as (a: unknown, b: unknown) => boolean
+  return { name, fn }
 }
 
-const differs = extractDiffers()
+const predicate = extractPredicate()
+const differs = predicate.fn
+console.log(`predicate under measurement: ${predicate.name}()`)
 
 const dir = join(PROFILE, 'calls')
 const all: Call[] = []
