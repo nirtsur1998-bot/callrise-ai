@@ -71,3 +71,118 @@ export function modelStringOrNull(raw: unknown, maxLen = 200): string | null {
   if (isAbsenceAnswer(raw)) return null
   return (raw as string).trim().slice(0, maxLen)
 }
+
+/**
+ * M39 — the SECOND way a model declines to name someone, and the one
+ * `isAbsenceAnswer` cannot see.
+ *
+ * MEASURED on the founder's profile 2026-09-10: 47 calls carry a `self-intro`
+ * speaker identity, 30 distinct names. Twenty-nine are real people. One is the
+ * word **"someone"**, stored six times as a person's name, and it is why six
+ * calls read "someone" where a client's name belongs. `isAbsenceAnswer` caught
+ * 0 of those 6, because "someone" is not a way of saying *nothing* — it is a
+ * way of saying *a person, but I could not tell you which*. Different sentence,
+ * different list.
+ *
+ * SPECIES 86 — a word list catches every example it was built from, which reads
+ * as coverage. Two things are done about that here rather than hoped:
+ *
+ *  1. The list is a CATEGORY, not a collection of sightings: generic references
+ *     to a person (role, pronoun-ish noun, anonymisation placeholder). "someone"
+ *     is one member, added last rather than first.
+ *  2. Articles are stripped before matching, so "the buyer" and "buyer" cost one
+ *     entry, not two, and an unseen "an attendee" is covered by an entry written
+ *     for "attendee".
+ *
+ * AND WHAT IT STILL CANNOT TELL YOU: the corpus contains exactly ONE distinct
+ * escape, so this measures that the fix catches the one real case. It does NOT
+ * establish a low escape rate for the rest — that number is UNKNOWN, not zero.
+ *
+ * DELIBERATELY ABSENT: "guy", "lady", "gentleman". A wrong strip deletes a real
+ * person, Guy is a real first name, and these are rare as model placeholders —
+ * the multi-word forms ("a guy", "some guy") are unambiguous and are listed.
+ */
+const GENERIC_PERSON_WORDS = new Set([
+  // "a person, but I can't say which"
+  'someone',
+  'somebody',
+  'person',
+  'individual',
+  'human',
+  'some guy',
+  'a guy',
+  'some person',
+  'other person',
+  'other party',
+  'other speaker',
+  'second speaker',
+  'first speaker',
+  'speaker',
+  // roles this app talks about — the model answering with the SLOT, not the filler
+  'client',
+  'buyer',
+  'customer',
+  'caller',
+  'callee',
+  'prospect',
+  'lead',
+  'contact',
+  'guest',
+  'participant',
+  'attendee',
+  'rep',
+  'sales rep',
+  'salesperson',
+  'representative',
+  'agent',
+  'user',
+  'member',
+  // anonymisation placeholders
+  'anonymous',
+  'anonymous caller',
+  'unidentified',
+  'unidentified speaker',
+  'unidentified caller',
+  'unnamed',
+  'unnamed speaker',
+  'no one',
+  'nobody',
+  'undisclosed',
+  'redacted',
+  'withheld',
+  'name withheld',
+  'not applicable',
+  'not a name',
+  'no speaker',
+  'test',
+  'test user',
+  'example'
+])
+
+/** "speaker 0", "speaker 1", "spk2", "channel 1", "participant 3" — a diarizer
+ *  label handed back as if it were a name. */
+const SPEAKER_LABEL_RE = /^(speaker|spk|channel|ch|participant|party|caller)\s*[-_#]?\s*\d+$/
+
+/**
+ * True when a model's answer to "what is this person's NAME" is not a name.
+ *
+ * Use ONLY on name fields. It is deliberately not folded into
+ * `isAbsenceAnswer`, which every free-text field calls: "someone" is a perfectly
+ * good answer to a question that is not "who is this", and widening the global
+ * absence vocabulary to fix a name field would change fields nobody looked at.
+ */
+export function isNonName(raw: unknown): boolean {
+  if (isAbsenceAnswer(raw)) return true
+  const stripped = String(raw)
+    .trim()
+    .replace(/^[\s"'`([<{]+|[\s"'`)\]>}]+$/g, '')
+    .replace(/[.,!?]+$/, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+  // Articles first, so one entry covers "buyer", "the buyer" and "a buyer".
+  const bare = stripped.replace(/^(the|a|an|this|that|my|our)\s+/, '')
+  if (GENERIC_PERSON_WORDS.has(stripped) || GENERIC_PERSON_WORDS.has(bare)) return true
+  if (SPEAKER_LABEL_RE.test(bare)) return true
+  return false
+}

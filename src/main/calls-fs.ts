@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs'
-import { isAbsenceAnswer } from './ai/model-placeholders'
+import { isNonName } from './ai/model-placeholders'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from './atomic-write'
@@ -1324,13 +1324,23 @@ export async function listCalls(
  *  `contactId` is never touched either: something real linked that speaker
  *  to a contact record, and throwing the link away to tidy a bad display
  *  name would destroy more than it fixes. (Not observed in the wild; left
- *  alone deliberately rather than guessed at.) */
+ *  alone deliberately rather than guessed at.)
+ *
+ *  M39 — widened from `isAbsenceAnswer` to `isNonName`, because a model has a
+ *  SECOND way of declining to name someone and this guard could not see it:
+ *  not "nothing", but "a person, and I could not tell you which". MEASURED on
+ *  the founder's profile 2026-09-10 — 7 identities named literally **"someone"**
+ *  across 7 calls, none manual, none carrying a contactId, so all 7 are cleaned
+ *  by this read the moment the guard widens. That is exactly the property the
+ *  paragraph above claims and had never had to prove. `isAbsenceAnswer` caught
+ *  0 of the 7; `isNonName` catches 7 and eats none of the 29 real names in the
+ *  same corpus. */
 function dropPlaceholderIdentities(call: Call): void {
   if (!call.speakerIdentities) return
   const next: Record<string, SpeakerIdentityRecord> = {}
   let dropped = false
   for (const [k, rec] of Object.entries(call.speakerIdentities)) {
-    if (rec && rec.source !== 'manual' && !rec.contactId && isAbsenceAnswer(rec.name)) {
+    if (rec && rec.source !== 'manual' && !rec.contactId && isNonName(rec.name)) {
       dropped = true
       continue
     }
@@ -2158,7 +2168,14 @@ export async function setSpeakerIdentity(
     // above, and put "Create contact for null" on the call-detail screen.
     // 'manual' is exempt on purpose: a name the rep typed themselves is
     // ground truth, and it is not this function's place to argue with it.
-    if (source !== 'manual' && isAbsenceAnswer(name)) return call
+    //
+    // M39 — widened to `isNonName`. The claim above ("every automatic writer
+    // lands here") was true and the gate still let 7 identities named
+    // **"someone"** through on the founder's profile, because it was checking
+    // for the model saying *nothing* and the model was saying *a person, but I
+    // could not tell which*. One gate, one word list too narrow — the position
+    // was right, the vocabulary wasn't.
+    if (source !== 'manual' && isNonName(name)) return call
     const confidence = CONFIDENCES.includes(patch.confidence as SpeakerIdentityConfidence)
       ? (patch.confidence as SpeakerIdentityConfidence)
       : 'high' // a manual rename IS the ground truth

@@ -35,7 +35,7 @@ import { join } from 'node:path'
 import { getCall, setCallContact, setSpeakerIdentity, speechSegments } from './calls-fs'
 import { getContactIntelligenceMode, isSelfIntroExtractionAllowed } from './app-settings'
 import { otherPartyKey, detectOtherPartyName } from './contact-intelligence'
-import { createContact, findContactByName, getContact } from './contacts-fs'
+import { createContact, matchContactByName, getContact } from './contacts-fs'
 import { getJobManager } from './jobs/instance'
 import type { Job } from './jobs/types'
 
@@ -227,9 +227,17 @@ export async function maybeAutoCreateContact(callId: string): Promise<void> {
       if (existing) contactId = existing.id
     }
     if (!contactId) {
-      const existing = await findContactByName(contactsDir(), identity.name)
-      if (existing) {
-        contactId = existing.id
+      const match = await matchContactByName(contactsDir(), identity.name)
+      if (match.reason === 'matched') {
+        contactId = match.contact.id
+      } else if (match.reason === 'ambiguous') {
+        // M39 — REFUSE, and do not create. Two contacts share this name and
+        // nothing here can tell which one was on the call. Attaching either is
+        // a coin flip the rep never sees; creating a third is worse, because
+        // it turns an ambiguity the rep could resolve into a duplicate they now
+        // have to find first. Leaving the call unlinked is the honest state,
+        // and the rep is the one who can settle it.
+        return null
       } else {
         const created = await createContact(contactsDir(), { name: identity.name })
         if (created) contactId = created.id

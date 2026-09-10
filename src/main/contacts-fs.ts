@@ -783,17 +783,65 @@ export async function findContactByPhone(dir: string, phoneE164: string): Promis
   return contacts.find((c) => c.phoneE164 === normalized) ?? null
 }
 
-/** Find a contact by exact name, case/whitespace-insensitive. Used by
- *  Contact Intelligence's full-auto attach path (contact-intelligence-ipc.ts)
- *  to avoid creating a duplicate contact when the detected name already
- *  matches an existing one — a plain exact match, not fuzzy, since a wrong
- *  auto-attach to the wrong person is worse than occasionally creating a
- *  near-duplicate the rep can merge later. */
-export async function findContactByName(dir: string, name: string): Promise<Contact | null> {
-  const normalized = name.trim().toLowerCase().replace(/\s+/g, ' ')
-  if (!normalized) return null
+/**
+ * Match a spoken name to a contact — or REFUSE, which is a third answer and
+ * the point of this function.
+ *
+ * This was `findContactByName`: an exact, normalized match ending in
+ * `contacts.find(...)`. That is the same defect BUG-226 fixed for meetings —
+ * **first wins on a tie, silently** — and it is the third place this project
+ * has found it. On the founder's corpus, measured 2026-09-10, the tie is not
+ * hypothetical: **3 exact full-name collisions** and **8 first names shared by
+ * more than one contact** (`kevin` ×3). "Three contacts named Kevin — which
+ * one?" is a correct answer. Picking one is right a third of the time and
+ * silently wrong the rest, and the caller then acts on it.
+ *
+ * `ambiguous` must stay distinguishable from `none`, because the caller does
+ * something different with each: `none` means "create this contact", and
+ * returning `none` on a tie would mint a THIRD Kevin to sit beside the two it
+ * could not choose between.
+ *
+ * THE RULES, in order, each refusing on a tie. They come from the corpus, not
+ * from taste — 50 contacts, **35 of them stored as a first name only**, and 47
+ * real self-introductions of which only 4 were multi-word:
+ *
+ *  1. **Exact name match.** Covers the common case as measured: 37 of the 47
+ *     self-intros are a bare first name that exactly equals a contact's name.
+ *  2. **First+last spoken, single-word contact.** "Paul Trader" → a contact
+ *     stored as "Paul". This is the rung 35 of 50 contacts need, and it is
+ *     where the collisions live, so the tie check earns its keep here.
+ *
+ * A spoken name matching NOTHING is `none` — the caller may create it. What is
+ * deliberately absent is any fuzzy/prefix/edit-distance matching: a wrong
+ * auto-attach to the wrong person is worse than a near-duplicate the rep can
+ * merge, and that trade was the original function's stated reasoning. It still
+ * holds; only the tie handling was wrong.
+ */
+export type ContactNameMatch =
+  | { reason: 'matched'; rule: 'exact' | 'first-name'; contact: Contact }
+  | { reason: 'none'; contact: null }
+  | { reason: 'ambiguous'; contact: null; candidates: Contact[] }
+
+const normalizeName = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, ' ')
+
+export async function matchContactByName(dir: string, name: string): Promise<ContactNameMatch> {
+  const normalized = normalizeName(name)
+  if (!normalized) return { reason: 'none', contact: null }
   const contacts = await listContacts(dir)
-  return (
-    contacts.find((c) => c.name.trim().toLowerCase().replace(/\s+/g, ' ') === normalized) ?? null
-  )
+
+  const exact = contacts.filter((c) => normalizeName(c.name) === normalized)
+  if (exact.length === 1) return { reason: 'matched', rule: 'exact', contact: exact[0] }
+  if (exact.length > 1) return { reason: 'ambiguous', contact: null, candidates: exact }
+
+  const spoken = normalized.split(' ')
+  if (spoken.length > 1) {
+    // Only SINGLE-WORD contacts, so "Paul Trader" cannot match a contact named
+    // "Paul Smith" on a shared first name — that would be a guess about a
+    // different person, not a looser match for the same one.
+    const byFirst = contacts.filter((c) => normalizeName(c.name) === spoken[0])
+    if (byFirst.length === 1) return { reason: 'matched', rule: 'first-name', contact: byFirst[0] }
+    if (byFirst.length > 1) return { reason: 'ambiguous', contact: null, candidates: byFirst }
+  }
+
+  return { reason: 'none', contact: null }
 }
