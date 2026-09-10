@@ -38,7 +38,7 @@ import { EmptyState } from '@renderer/components/EmptyState'
 import { Skeleton } from '@renderer/components/Skeleton'
 import { fieldClass } from '@renderer/components/field'
 import { overallTier, TONE_TO_BADGE, speakerLabel } from '@renderer/features/coaching/meta'
-import { identityDisagreement } from './identityDisagreement'
+import { identityDisagreement, selfIntroName } from './identityDisagreement'
 import { IdentityDisagreementNotice } from './IdentityDisagreementNotice'
 import { openAssistantFor } from '@renderer/features/assistant/assistantNav'
 import { ASSISTANT_SECTION_NAME } from '@renderer/features/assistant/config'
@@ -838,10 +838,16 @@ export function CallDetail({
   // contradicts the contact. Those 6 are exactly the calls this banner could
   // never appear on, and they are the ones where the rep is acting on a wrong
   // client. Same vocabulary, opposite precondition.
+  //
+  // `selfIntroName`, NOT `otherPartyIdentity`. Every line of the notice's copy
+  // asserts the buyer said this out loud, so only a self-intro can be behind
+  // it — see the measurement in identityDisagreement.ts (the wider selector
+  // flags one extra call on this profile today, and that one is the rep's own
+  // manual rename, shown back to them as something the buyer said).
   const disagreement = identityDismissed
     ? null
     : identityDisagreement({
-        spokenName: otherPartyIdentity?.name,
+        spokenName: selfIntroName(call.speakerIdentities),
         linkedContactId: call.contactId,
         contacts
       })

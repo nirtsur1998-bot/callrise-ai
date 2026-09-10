@@ -5,7 +5,9 @@
 // a false flag is the expensive error here, because two of them and the rep
 // stops reading the surface at all.
 import { describe, expect, it } from 'vitest'
-import { identityDisagreement, namesCorrespond } from '../identityDisagreement'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { identityDisagreement, namesCorrespond, selfIntroName } from '../identityDisagreement'
 
 const c = (id: string, name: string): { id: string; name: string } => ({ id, name })
 
@@ -128,5 +130,79 @@ describe('M39 — namesCorrespond, the leniency rule on its own', () => {
   it('treats an empty side as nothing to contradict', () => {
     expect(namesCorrespond('', 'kerry')).toBe(true)
     expect(namesCorrespond('Harvey', '')).toBe(true)
+  })
+})
+
+describe('M39 — only a self-introduction may be flagged', () => {
+  // The notice says "They introduced themselves by name" three different ways
+  // and has no other voice. Feeding it any other source makes that sentence a
+  // false statement about a real person's call. All seven sources in the type
+  // are enumerated here rather than sampled, because "the container the claim
+  // names" is the whole type, not the ones that happen to be populated today.
+  const SOURCES = [
+    'user-profile',
+    'calendar',
+    'contact',
+    'participant-list',
+    'self-intro',
+    'voice-profile',
+    'manual'
+  ] as const
+
+  it.each(SOURCES.filter((s) => s !== 'self-intro'))('ignores a %s identity', (source) => {
+    expect(selfIntroName({ 'mono/spk1': { name: 'Harvey', source } })).toBeUndefined()
+  })
+
+  it('returns the name for a self-intro identity', () => {
+    expect(selfIntroName({ 'mono/spk1': { name: 'Harvey', source: 'self-intro' } })).toBe('Harvey')
+  })
+
+  it('picks the self-intro out of a record that also holds the rep and a rename', () => {
+    // The real shape: the rep's own key is always present, and the founder's
+    // profile carries one manual rename. `find()` order is not something to
+    // rely on, so the selector is asked to skip past both.
+    expect(
+      selfIntroName({
+        'mono/spk0': { name: 'Nir', source: 'user-profile' },
+        'mono/spk2': { name: 'Someone Else', source: 'manual' },
+        'mono/spk1': { name: 'Harvey', source: 'self-intro' }
+      })
+    ).toBe('Harvey')
+  })
+
+  it.each([
+    ['no identities at all', undefined],
+    ['an empty record', {}],
+    ['an undefined entry', { 'mono/spk1': undefined }],
+    ['a non-string name', { 'mono/spk1': { name: 42, source: 'self-intro' } }],
+    ['a missing name', { 'mono/spk1': { source: 'self-intro' } }]
+  ])('returns undefined for %s', (_label, input) => {
+    expect(selfIntroName(input as Parameters<typeof selfIntroName>[0])).toBeUndefined()
+  })
+
+  it('a manual rename that contradicts the link produces NO disagreement', () => {
+    // THE REGRESSION, stated as the product outcome rather than as a call to
+    // the selector: this is the one extra flag the wider selector produced on
+    // the founder's profile, and the rep would have been told the buyer said
+    // a name that the rep typed themselves.
+    const identities = { 'mono/spk1': { name: 'Harvey', source: 'manual' } }
+    expect(
+      identityDisagreement({
+        spokenName: selfIntroName(identities),
+        linkedContactId: 'kerry',
+        contacts: CONTACTS
+      })
+    ).toBeNull()
+  })
+
+  it('CallDetail feeds the disagreement from selfIntroName, not otherPartyIdentity', () => {
+    // A wiring check, because the bug was never in this module — it was in the
+    // ONE line that chose what to hand it. A unit test of the selector cannot
+    // fail if the component stops calling it.
+    const src = readFileSync(join(__dirname, '..', 'CallDetail.tsx'), 'utf8')
+    const call = src.match(/identityDisagreement\(\{[\s\S]*?\}\)/)
+    expect(call, 'CallDetail must still call identityDisagreement').not.toBeNull()
+    expect(call?.[0]).toContain('selfIntroName(call.speakerIdentities)')
+    expect(call?.[0]).not.toContain('otherPartyIdentity')
   })
 })

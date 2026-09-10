@@ -109,3 +109,33 @@ export function identityDisagreement(input: {
     suggestion: suggestFor(spoken, input.contacts, linked.id)
   }
 }
+
+/**
+ * THE ONE SOURCE THIS SURFACE IS ALLOWED TO SPEAK FOR.
+ *
+ * Every line of the notice's copy says "They introduced themselves by name",
+ * so the identity behind it has to actually BE a self-introduction. The
+ * component first fed it `otherPartyIdentity` — "the first identity whose
+ * source isn't user-profile" — which is a wider set: calendar, contact,
+ * participant-list, voice-profile and manual all qualify for that.
+ *
+ * MEASURED on the founder's profile 2026-09-10, which is why this is a fix and
+ * not a tidy-up. Identity records there: 144 user-profile, 47 self-intro, 1
+ * manual. Raw contradictions under the wider selector: 14. Under self-intro
+ * alone: 13. The extra one is the `manual` record — a name the REP TYPED —
+ * and it would have been shown back to them under a sentence claiming the
+ * buyer had said it.
+ *
+ * A manual rename that disagrees with the link is usually not an error either:
+ * renaming the speaker to the human who actually joined, while the call stays
+ * linked to the account's main contact, is a legitimate thing to do. Flagging
+ * it would spend the surface's whole error budget — "two false flags and I
+ * stop reading it" — on the one source where the rep already knows the answer.
+ */
+export function selfIntroName(
+  identities: Record<string, { name?: unknown; source?: unknown } | undefined> | undefined
+): string | undefined {
+  if (!identities) return undefined
+  const found = Object.values(identities).find((v) => v && v.source === 'self-intro')
+  return typeof found?.name === 'string' ? found.name : undefined
+}
