@@ -60,16 +60,24 @@ const byId = new Map(contacts.map((c) => [c.id, c]))
  * Measured cost of getting this wrong: with the strict rule, 7 of 297 calls
  * flagged and 2 of the 7 were the same person described at different lengths.
  */
+//
+// KEPT IN STEP WITH THE PRODUCT, deliberately. This is the same rule
+// `namesCorrespond` uses in identityDisagreement.ts — "the shorter name is a
+// leading run of the longer" — widened there on 2026-09-11 after the narrower
+// version flagged "Priya Raman Gupta" against "Priya Raman". This copy sat on
+// the old rule for a few hours, which is how a measuring instrument starts
+// reporting a number the product would not produce. The two agree on today's
+// corpus (13 raw contradictions either way, because 0 of the 47 pairs can tell
+// them apart) — and "they agree on this data" is not "they are the same rule",
+// which is the whole reason to sync it rather than note it.
 function corresponds(spoken: string, contact: { name: string }): boolean {
   const s = norm(spoken)
   const c = norm(contact.name)
   if (s === c) return true
   const sw = s.split(' ')
   const cw = c.split(' ')
-  // One side gave only a first name, and it is the other's first name.
-  if (sw.length === 1 && cw.length > 1) return sw[0] === cw[0]
-  if (cw.length === 1 && sw.length > 1) return cw[0] === sw[0]
-  return false
+  const [short, long] = sw.length <= cw.length ? [sw, cw] : [cw, sw]
+  return short.every((w, i) => w === long[i])
 }
 
 let calls = 0
