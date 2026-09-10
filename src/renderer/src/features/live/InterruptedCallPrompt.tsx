@@ -96,8 +96,14 @@ export function InterruptedCallPrompt(): React.JSX.Element | null {
     <Modal onClose={() => setDismissed(true)} title="Interrupted call found" size="lg">
       <div className="p-5">
         <div className="flex items-start gap-3">
-          <div className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-warn-soft">
-            <AlertTriangle className="h-4.5 w-4.5 text-warn" strokeWidth={2.25} />
+          {/* BUG-268 — was `bg-warn-soft` / `text-warn`. The token is
+              `--color-warning`, so those class names generate NO CSS and this
+              warning has shipped with no warning colour: an AlertTriangle in
+              default body text on a default background. Verified against the
+              BUILT stylesheet, where `.text-warning` appears and `.text-warn{`
+              does not. */}
+          <div className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-warning-soft">
+            <AlertTriangle className="h-4.5 w-4.5 text-warning" strokeWidth={2.25} />
           </div>
           <div className="min-w-0">
             <h3 className="text-base font-semibold text-ink">
@@ -126,7 +132,7 @@ export function InterruptedCallPrompt(): React.JSX.Element | null {
           {/* Named rather than hidden: a transcript that stops mid-sentence
               needs a visible reason, or it reads as a bug in the recovery. */}
           {current.truncated && (
-            <p className="mt-2 text-xs text-warn">
+            <p className="mt-2 text-xs text-warning">
               The very end of this call may be missing — it was cut off mid-write.
             </p>
           )}

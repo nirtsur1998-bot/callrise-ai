@@ -38,6 +38,8 @@ import { EmptyState } from '@renderer/components/EmptyState'
 import { Skeleton } from '@renderer/components/Skeleton'
 import { fieldClass } from '@renderer/components/field'
 import { overallTier, TONE_TO_BADGE, speakerLabel } from '@renderer/features/coaching/meta'
+import { identityDisagreement } from './identityDisagreement'
+import { IdentityDisagreementNotice } from './IdentityDisagreementNotice'
 import { openAssistantFor } from '@renderer/features/assistant/assistantNav'
 import { ASSISTANT_SECTION_NAME } from '@renderer/features/assistant/config'
 import { Badge } from '@renderer/components/Badge'
@@ -827,6 +829,22 @@ export function CallDetail({
     !identityDismissed &&
     calendarMatches.length === 0 &&
     !!otherPartyIdentity
+  // M39 — the MIRROR of the banner above, for the state it deliberately skips.
+  //
+  // `showIdentitySuggestion` requires `!call.contactId`, so a call that is
+  // already linked never says anything about the name the buyer gave — even
+  // when the two disagree. Measured on the founder's profile: every one of the
+  // 47 calls carrying a self-intro is linked, and on 6 of them the spoken name
+  // contradicts the contact. Those 6 are exactly the calls this banner could
+  // never appear on, and they are the ones where the rep is acting on a wrong
+  // client. Same vocabulary, opposite precondition.
+  const disagreement = identityDismissed
+    ? null
+    : identityDisagreement({
+        spokenName: otherPartyIdentity?.name,
+        linkedContactId: call.contactId,
+        contacts
+      })
   // Is there anything to identify at all? If the contact is already linked,
   // already suggested, or the rep dismissed it, there is nothing to say and
   // nothing to show — an off-state here would be noise about a question that
@@ -1044,6 +1062,17 @@ export function CallDetail({
                 existingContactName={otherPartyContact?.name}
                 onLink={() => otherPartyContact && void linkContact(otherPartyContact.id)}
                 onCreate={() => void createAndLinkIdentity(otherPartyIdentity.name)}
+                onDismiss={dismissIdentity}
+              />
+            </div>
+          )}
+          {/* M39 — the call IS linked, and the buyer said a different name. */}
+          {!autoLinkNotice && contactIntelligenceMode !== 'off' && disagreement && (
+            <div className="mb-3">
+              <IdentityDisagreementNotice
+                disagreement={disagreement}
+                onLink={(contactId) => void linkContact(contactId)}
+                onCreate={() => void createAndLinkIdentity(disagreement.spokenName)}
                 onDismiss={dismissIdentity}
               />
             </div>
