@@ -301,7 +301,16 @@ const KEYS: KeyCardConfig[] = [
   }
 ]
 
-type KeyStatusDot = 'connected' | 'no-key' | 'invalid' | 'rate-limited' | 'unchecked'
+type KeyStatusDot =
+  | 'connected'
+  | 'no-key'
+  | 'invalid'
+  | 'rate-limited'
+  | 'unchecked'
+  /** BUG-250 - the file is on disk and did not decrypt. The only label in this
+   *  list that describes a file the app can SEE and cannot READ, which is the
+   *  whole distinction: "No key" sends someone to fetch one they already have. */
+  | 'unreadable'
 
 /**
  * Session-local: the last verdict this session produced for this card, from
@@ -338,6 +347,10 @@ export function deriveStatusDot(
     if (testResult.ok) return 'connected'
     return /rate.?limit/i.test(testResult.message) ? 'rate-limited' : 'invalid'
   }
+  // BUG-250 - before 'no-key', because an unreadable key IS configured from
+  // the user's side: they entered it, it is on disk, and the app cannot open
+  // it. Telling them there is no key is the defect.
+  if (!status?.configured && status?.unreadable) return 'unreadable'
   return status?.configured ? 'unchecked' : 'no-key'
 }
 
@@ -376,6 +389,9 @@ const STATUS_DOT_CLASS: Record<KeyStatusDot, string> = {
   'no-key': 'bg-line',
   invalid: 'bg-danger',
   'rate-limited': 'bg-warning',
+  // BUG-250 - warning, not neutral: the user has to act (paste it again), and a
+  // grey dot beside a key they entered reads as "nothing here".
+  unreadable: 'bg-warning',
   // Deliberately NOT bg-line: "no key" and "key we haven't checked" are
   // different states and must not render identically. bg-muted is the same
   // neutral dot LiveCallPill already uses for an idle-but-present state.
@@ -385,6 +401,8 @@ const STATUS_DOT_CLASS: Record<KeyStatusDot, string> = {
 export const STATUS_DOT_LABEL: Record<KeyStatusDot, string> = {
   connected: 'Connected',
   'no-key': 'No key',
+  // Founder-approved 2026-09-09.
+  unreadable: 'Saved but unreadable',
   invalid: 'Key invalid',
   'rate-limited': 'Rate limited',
   unchecked: 'Not checked'

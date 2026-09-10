@@ -431,10 +431,32 @@ interface CallBase {
   id: string
   title: string
   createdAt: string // ISO timestamp
-  /** Last modification (save or any edit), ISO timestamp — the ordering key a
-   *  future cloud backup uses for "newest wins". Backfilled from createdAt for
-   *  calls saved before this field existed. */
+  /**
+   * THE SYNC ORDERING KEY, and only that. The value a cloud push compares for
+   * "newest wins", which the server trigger requires to be strictly greater.
+   *
+   * BUG-243 — it used to mean two things at once, and the second one lost.
+   * `touchAllCallsForRepush` bumps every call so a transcripts-scrub can evict
+   * the old rows (the server only accepts strictly-newer ones), which is
+   * correct and load-bearing. The cost was measured on the founder's store:
+   * **all 196 live records carried the same stamp, inside 789 milliseconds** —
+   * one bulk loop had erased the entire modification history of the corpus.
+   *
+   * So "when did the user last change this" moved to `editedAt` below. This
+   * field is free to be bumped by machinery; that one is not.
+   */
   updatedAt: string
+  /**
+   * WHEN A HUMAN LAST CHANGED THIS CALL — a title edit, a summary, a note, a
+   * link, a bookmark. Never touched by sync machinery.
+   *
+   * **ABSENT on every call that predates this field, and deliberately NOT
+   * backfilled.** The founder's rule, and it is the whole reason the split is
+   * worth anything: *"An absent field is honest; a backfilled one is a lie
+   * with a timestamp."* Absent also legitimately means "saved and never
+   * edited" — for those, `createdAt` is the answer and is intact.
+   */
+  editedAt?: string
   durationMs: number
   /** BUG-178 — wall-clock moment the call ended, recorded at save. `durationMs`
    *  is what the app BELIEVES the call lasted; this is what the clock said, so
@@ -897,6 +919,8 @@ export const CALL_FIELD_RULES: { [K in keyof Required<Call>]: CallFieldRule } = 
   title: { cls: 'DERIVED' }, // set by the rep or derived post-save; never from a live blob
   createdAt: { cls: 'METADATA' },
   updatedAt: { cls: 'METADATA' },
+  // BUG-243 - a clock reading about the RECORD, not about anyone's speech.
+  editedAt: { cls: 'METADATA' },
   durationMs: { cls: 'METADATA' },
   // A clock reading, not content: carries no speech and nothing derived from it.
   endedAt: { cls: 'METADATA' },
@@ -1043,6 +1067,103 @@ export const CALL_FIELD_RULES: { [K in keyof Required<Call>]: CallFieldRule } = 
   crmNoteGeneratedAt: { cls: 'METADATA' },
   deleted: { cls: 'METADATA' },
   notes: { cls: 'REP_CONTENT' } // the rep typed it; the buyer has no claim on it
+}
+
+/** How `importCall`'s restore-merge treats one field of a Call. */
+type CallRestoreRule =
+  /** The incoming cloud row decides this field's value — either carried in
+   *  `callBackupPayload` or rebuilt by name in the merge (segments, preview,
+   *  contactId, …). Every one of these is handled explicitly in the literal,
+   *  so a wrong rule here shows up as a contradiction between two readable
+   *  places rather than as an absence. */
+  | 'FROM_ROW'
+  /** NEVER synced — `callBackupPayload` omits it, so the cloud row can only
+   *  ever say "absent" about it. The LOCAL value must survive the merge; a
+   *  cloud row is not evidence that the user cleared it. */
+  | 'KEEP_LOCAL'
+
+/**
+ * EXHAUSTIVE over `Required<Call>` — the same mechanism, and for the same reason,
+ * as `CALL_FIELD_RULES` above: adding a field to the Call record without
+ * saying how a restore-merge treats it is a COMPILE ERROR, not silent data
+ * loss on the next sync.
+ *
+ * This exists because the reconstruction in `importCall` was a
+ * hand-maintained object literal over a growing type, and fell behind it three
+ * separate times:
+ *
+ *  - the four M23 fields (callType, commitments, dealIntelligence, coachChat),
+ *    found by accident while wiring them;
+ *  - `endedAt` (BUG-242) — absent on **196 of 196** live calls on the founder's
+ *    machine, though the writer has set it unconditionally since 2026-09-02.
+ *    It was added SPECIFICALLY so BUG-D's hypothesis could be tested, and the
+ *    sync had been quietly deleting it the whole time;
+ *  - `salesBrainExcluded` (BUG-245), found by enumerating this list against
+ *    the type instead of re-reading the literal. That one is the user's
+ *    explicit "do not feed this call to the Sales Brain" — reverted by a pull.
+ *
+ * Two of the three were found by accident, and the third only because someone
+ * finally compared the literal to the type. The compiler does that comparison
+ * now.
+ */
+const CALL_RESTORE_RULES: { [K in keyof Required<Call>]: CallRestoreRule } = {
+  id: 'FROM_ROW',
+  title: 'FROM_ROW',
+  createdAt: 'FROM_ROW',
+  updatedAt: 'FROM_ROW',
+  // BUG-243 - KEEP_LOCAL for the same reason as endedAt: callBackupPayload
+  // does not carry it, so a cloud row's silence about it is not a delete.
+  // Whether it SHOULD travel is the founder's call, filed beside endedAt's.
+  editedAt: 'KEEP_LOCAL',
+  durationMs: 'FROM_ROW',
+  endedAt: 'KEEP_LOCAL', // BUG-242 — not in callBackupPayload; the cloud never had it
+  contactId: 'FROM_ROW', // three-way: string links, null unlinks, absent preserves
+  dealId: 'FROM_ROW', // identical three-way shape, deliberately
+  callType: 'KEEP_LOCAL',
+  salesBrainExcluded: 'KEEP_LOCAL', // BUG-245 — a privacy choice, not a value to re-derive
+  preview: 'FROM_ROW', // rebuilt from whichever segments won
+  speakerCount: 'FROM_ROW',
+  segments: 'FROM_ROW', // local wins when it has any; see the merge
+  speakerIdentities: 'FROM_ROW', // reconciled, not replaced (mergeSpeakerIdentities)
+  bookmarks: 'FROM_ROW', // same local-wins rule as segments
+  dealIntelligence: 'KEEP_LOCAL',
+  commitments: 'KEEP_LOCAL',
+  coachChat: 'KEEP_LOCAL',
+  summary: 'FROM_ROW',
+  coaching: 'FROM_ROW', // local kept when the creation stamp matches — see the merge
+  attachments: 'FROM_ROW', // cloud metadata wins; local `summary` preserved per id
+  consent: 'FROM_ROW',
+  objectionsMinedAt: 'FROM_ROW',
+  crmNoteGeneratedAt: 'KEEP_LOCAL',
+  deleted: 'FROM_ROW', // a cloud tombstone becomes a real local tombstone
+  notes: 'KEEP_LOCAL'
+}
+
+/** The KEEP_LOCAL keys, DERIVED from the table rather than listed a second
+ *  time — a second list is a second thing to keep in step, which is the
+ *  failure this table exists to end. */
+const RESTORE_KEEP_LOCAL_KEYS = (
+  Object.keys(CALL_RESTORE_RULES) as (keyof Required<Call>)[]
+).filter((k) => CALL_RESTORE_RULES[k] === 'KEEP_LOCAL')
+
+/**
+ * The local-only fields a restore-merge must carry across untouched. Exported
+ * for the test that drives it: the assertion worth having is not "the list has
+ * N entries" but "a record with every local-only field set survives a pull
+ * that mentions none of them".
+ */
+export function keepLocalCallFields(current: Call | null | undefined): Partial<Call> {
+  if (!current) return {}
+  const out: Record<string, unknown> = {}
+  for (const key of RESTORE_KEEP_LOCAL_KEYS) {
+    const value = current[key]
+    // PRESENCE, not truthiness. An empty `commitments` array means "the AI
+    // extraction ran and found zero", which is a real state distinct from
+    // "never ran" (undefined) — a `.length` check collapses both and loses an
+    // honest zero-commitments result on every restore-merge.
+    if (value !== undefined) out[key] = value
+  }
+  return out as Partial<Call>
 }
 
 /**
@@ -1683,34 +1804,17 @@ export async function importCall(
       ...(!deleted && (isoOrUndefined(v.objectionsMinedAt) ?? current?.objectionsMinedAt)
         ? { objectionsMinedAt: isoOrUndefined(v.objectionsMinedAt) ?? current?.objectionsMinedAt }
         : {}),
-      // Never synced (see callBackupPayload) — preserved only across a
-      // same-device restore-merge onto an existing local record, so a
-      // restore can't re-trigger a duplicate AI CRM note.
-      ...(!deleted && current?.crmNoteGeneratedAt
-        ? { crmNoteGeneratedAt: current.crmNoteGeneratedAt }
-        : {}),
       ...(!deleted && bookmarks.length ? { bookmarks } : {}),
       ...(speakerIdentities && Object.keys(speakerIdentities).length ? { speakerIdentities } : {}),
-      // Bugfix (found while wiring M23's own local-only fields below): these
-      // were missing from this reconstruction entirely, so a cloud restore
-      // merging onto an existing local record silently wiped them even
-      // though they're local-only and the cloud row never carries them —
-      // same "preserved only across a same-device restore-merge" rule as
-      // crmNoteGeneratedAt above, just never actually applied to these four.
-      ...(!deleted && current?.callType ? { callType: current.callType } : {}),
-      // Presence (`!== undefined`), not a `.length` truthy check — an empty
-      // array means "the AI extraction ran and found zero," which is a
-      // real, distinct state from "never ran" (undefined). A `.length`
-      // check collapses both to falsy and silently loses an honest
-      // zero-commitments result on every restore-merge.
-      ...(!deleted && current?.commitments !== undefined
-        ? { commitments: current.commitments }
-        : {}),
-      ...(!deleted && current?.dealIntelligence
-        ? { dealIntelligence: current.dealIntelligence }
-        : {}),
-      ...(!deleted && current?.coachChat !== undefined ? { coachChat: current.coachChat } : {}),
-      ...(!deleted && current?.notes ? { notes: current.notes } : {}),
+      // EVERY local-only field, carried across untouched — the cloud row never
+      // held them, so its silence about them is not an instruction to delete.
+      // The set comes from CALL_RESTORE_RULES (exhaustive over Required<Call>)
+      // rather than from a list maintained here, because a list maintained
+      // here is exactly what fell behind the type three times: the four M23
+      // fields, then `endedAt` (BUG-242, gone on 196 of 196 calls) and
+      // `salesBrainExcluded` (BUG-245, a privacy choice a pull reverted).
+      // A tombstone keeps none of it: a deleted call retains no local state.
+      ...(deleted ? {} : keepLocalCallFields(current)),
       ...(deleted ? { deleted: true } : {})
     }
     // Mirror every other persister (saveCall/getCall/listCalls): strip buyer
@@ -1741,6 +1845,13 @@ export async function touchAllCallsForRepush(dir: string): Promise<number> {
       try {
         const raw = JSON.parse(await fs.readFile(join(dir, `${c.id}.json`), 'utf8')) as Call
         if (!raw || typeof raw.id !== 'string') return
+        // BUG-243 — `updatedAt` ONLY, deliberately. NOT touchCall(). This is
+        // machinery moving the sync ordering key so the server accepts a
+        // replacement row; nobody edited anything, and stamping `editedAt`
+        // here is precisely the conflation that flattened all 196 records'
+        // modification history inside 789 milliseconds. If a future change
+        // makes this use touchCall, the split is gone and so is the only
+        // record of when a user last changed a call.
         raw.updatedAt = new Date().toISOString()
         await writeCall(dir, raw)
         touched++
@@ -1760,6 +1871,27 @@ export async function touchAllCallsForRepush(dir: string): Promise<number> {
 // work per callId so same-call mutations run one at a time, while different
 // calls stay fully concurrent.
 const callLocks = new Map<string, Promise<unknown>>()
+
+/**
+ * BUG-243 — every real edit stamps BOTH clocks. The one call every mutator
+ * makes, so the two can never drift apart by someone adding a mutator and
+ * remembering only one of them.
+ *
+ * `updatedAt` is the sync ordering key and machinery may bump it;
+ * `editedAt` is "a human changed this" and nothing but a real edit writes it.
+ * `touchAllCallsForRepush` is the deliberate exception and moves only the
+ * first — which is exactly the asymmetry this function exists to preserve.
+ *
+ * A helper rather than nineteen hand-edited assignments, because nineteen
+ * hand-maintained copies of one rule is the shape that produced BUG-242,
+ * BUG-199 and BUG-123. The value is taken once so both fields are identical
+ * rather than a millisecond apart.
+ */
+function touchCall(call: Call): void {
+  const now = new Date().toISOString()
+  call.updatedAt = now
+  call.editedAt = now
+}
 
 async function withCallLock<T>(callId: string, fn: () => Promise<T>): Promise<T> {
   const prev = callLocks.get(callId) ?? Promise.resolve()
@@ -1788,7 +1920,7 @@ export async function setCallSummary(
     const clean = sanitizeSummary(summary)
     if (!clean) return null // nothing usable to save — signal failure to the caller
     call.summary = clean
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -1806,7 +1938,7 @@ export async function setCallTitle(
     const trimmed = typeof title === 'string' ? title.trim().slice(0, 300) : ''
     if (!trimmed) return call // never blank out the title
     call.title = trimmed
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -1828,7 +1960,7 @@ export async function setCallContact(
     } else {
       return call // not a recognizable id and not an explicit clear — leave as-is
     }
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -1860,7 +1992,7 @@ export async function setCallDeal(
     } else {
       return call // not a recognizable id and not an explicit clear — leave as-is
     }
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -1887,7 +2019,7 @@ export async function setCallCallType(
     } else {
       return call
     }
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -1908,7 +2040,7 @@ export async function setCallSalesBrainExcluded(
     if (!call) return null
     if (excluded) call.salesBrainExcluded = true
     else delete call.salesBrainExcluded
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -1927,7 +2059,7 @@ export async function setCallTypeIfUnset(
     const call = await getCall(dir, callId)
     if (!call || call.callType) return
     call.callType = callType
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
   })
 }
@@ -2001,7 +2133,7 @@ export async function setSpeakerIdentity(
 
     if (patch.name === null) {
       if (call.speakerIdentities) delete call.speakerIdentities[key]
-      call.updatedAt = new Date().toISOString()
+      touchCall(call)
       await writeCall(dir, call)
       return call
     }
@@ -2030,7 +2162,7 @@ export async function setSpeakerIdentity(
       ...call.speakerIdentities,
       [key]: { name, source, confidence, contactId, resolvedAt: new Date().toISOString() }
     }
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -2060,7 +2192,7 @@ export async function addBookmark(
       createdAt: new Date().toISOString()
     }
     call.bookmarks = [...(call.bookmarks ?? []), bookmark]
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     // BUG-028: re-apply retention on this exact write, not just on the next
     // read. getCall() above already stripped the call as of its own read,
     // but a bookmark captured live (before a mid-call consent revoke) can
@@ -2085,7 +2217,7 @@ export async function removeBookmark(
     const call = await getCall(dir, callId)
     if (!call) return null
     call.bookmarks = (call.bookmarks ?? []).filter((b) => b.id !== bookmarkId)
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -2106,7 +2238,7 @@ export async function setAttachmentSummary(
     const clean = sanitizeSummary(summary)
     if (!clean) return null // nothing usable to save — signal failure to the caller
     att.summary = clean
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -2421,7 +2553,7 @@ export async function setCallCoaching(
     const clean = sanitizeCoaching(report, speechSegments(call.segments))
     if (!clean) return null // nothing usable to save — signal failure to the caller
     call.coaching = clean
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -2440,7 +2572,7 @@ export async function setCallCommitments(
     // whatever reaches disk was validated at the point of writing it, not just
     // trusted because it came from the extraction call moments earlier.
     call.commitments = sanitizeCommitments(commitments)
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -2460,7 +2592,7 @@ export async function appendCommitment(
     const call = await getCall(dir, callId)
     if (!call) return null
     call.commitments = sanitizeCommitments([...(call.commitments ?? []), commitment])
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -2540,7 +2672,7 @@ export async function appendCoachChatTurn(
     // the two messages just minted are always among the survivors — the ids
     // returned below can never refer to something this write dropped.
     call.coachChat = [...(call.coachChat ?? []), ...turn].slice(-MAX_CHAT_MESSAGES)
-    call.updatedAt = now
+    touchCall(call)
     await writeCall(dir, call)
     return { call, userMessageId: userEntry.id, assistantMessageId: assistantEntry.id }
   })
@@ -2562,7 +2694,7 @@ export async function appendCallNotes(
     if (!call) return null
     const existing = call.notes ?? ''
     call.notes = (existing ? `${existing}\n\n${clean}` : clean).slice(-MAX_NOTES_CHARS)
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     await writeCall(dir, call)
     return call
   })
@@ -2659,7 +2791,7 @@ export async function setCallDealIntelligence(
     const call = await getCall(dir, callId)
     if (!call) return null
     call.dealIntelligence = sanitizeDealIntelligenceRecord(record)
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     // BUG-115, same shape as BUG-028's fix in addBookmark: re-apply retention on
     // THIS write, not just on the next read. getCall() above stripped the call
     // as of its own read, but `record` is a renderer-supplied blob assembled
@@ -2716,7 +2848,7 @@ export async function addAttachment(
     }
     call.attachments = Array.isArray(call.attachments) ? call.attachments : []
     call.attachments.push(attachment)
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     try {
       await writeCall(dir, call)
     } catch (err) {
@@ -2746,7 +2878,7 @@ export async function removeAttachment(
       }
     }
     call.attachments = (call.attachments ?? []).filter((a) => a.id !== attachmentId)
-    call.updatedAt = new Date().toISOString()
+    touchCall(call)
     try {
       await writeCall(dir, call)
     } catch {

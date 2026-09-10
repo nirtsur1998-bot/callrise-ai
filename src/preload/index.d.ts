@@ -1745,10 +1745,24 @@ export interface AuthApi {
   onChange: (cb: (user: AuthUser | null) => void) => () => void
 }
 
+/** BUG-201 — why an arm was refused. Four of the five are the APP declining;
+ *  only a `getDisplayMedia` rejection AFTER `armed: true` is the user. */
+export type ArmOutcome =
+  | 'armed'
+  | 'platform-unsupported'
+  | 'master-switch-off'
+  | 'no-live-call'
+  | 'consent-not-permitted'
+  | 'unknown'
+
 export interface LoopbackApi {
   /** Arm exactly one system-audio capture grant (synchronous; call right before
-   *  getDisplayMedia, only after consent is recorded). */
-  arm: () => void
+   *  getDisplayMedia, only after consent is recorded).
+   *
+   *  BUG-201 — returns main's verdict instead of discarding it. `armed: false`
+   *  means the APP refused and `reason` says which of the four; the renderer
+   *  must not report that as the user having blocked anything. */
+  arm: () => { armed: boolean; reason: ArmOutcome }
   /** Clear a pending arm (e.g. if capture was cancelled). */
   disarm: () => void
   /** Open the macOS Screen & System Audio Recording settings pane. */
@@ -1848,6 +1862,13 @@ export interface BackupStatus {
   signedIn?: boolean
   lastScrubError?: string
   lastScrubErrorAt?: string
+  /** BUG-246 - the removal request itself could not be WRITTEN DOWN on this
+   *  device (BUG-244: an atomic rename failing with EPERM under contention).
+   *  Distinct from every field above, which all describe a removal that WAS
+   *  recorded and has not finished. Without it an unrecordable erase looks
+   *  exactly like an erase nobody asked for: an empty queue and a reassuring
+   *  card. The erase still runs this session; it will not survive a restart. */
+  scrubQueuePersistError?: { code: string; at: string } | null
 }
 
 export interface BackupApi {
@@ -1915,6 +1936,16 @@ export interface AiKeyStatus {
    * with no provider of its own (Deepgram, CLOUDFLARE_ACCOUNT_ID).
    */
   demotedSince?: number
+  /**
+   * BUG-250 - the key FILE is on disk and could not be decrypted. Distinct
+   * from `configured: false` with no file: that one is genuinely "no key",
+   * this one is "your key is here and this computer cannot open it".
+   *
+   * Set only when `configured` is false. The card renders 'Saved but
+   * unreadable'; Home and the live screen say so too, because telling someone
+   * to go and get a key they already have is the whole defect.
+   */
+  unreadable?: boolean
 }
 
 /** 'anthropic'/'openai' are the original M16 pair. The next six (M20) and
@@ -2081,7 +2112,16 @@ export interface Tier1Api {
     devices?: { hasVirtualMic: boolean; inputCount: number; kinds: string[] }
     tier1Enabled?: boolean
     denoiseStrength?: string
-  }) => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
+  }) => Promise<{
+    ok: boolean
+    path?: string
+    canceled?: boolean
+    error?: string
+    /** BUG-254 — how many ENGINE logs went in, counted apart from the
+     *  always-written `app-diagnostics.json`. Before this, a bundle with no
+     *  logs at all reported exactly what a complete one reported. */
+    engineLogs?: number
+  }>
   getStatus: () => Promise<{
     engineAvailable: boolean
     engineRunning: boolean

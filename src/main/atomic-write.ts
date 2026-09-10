@@ -60,6 +60,49 @@ export async function writeJsonAtomic(path: string, value: unknown): Promise<voi
 }
 
 /**
+ * Windows error codes that mean "someone else is holding this file right now",
+ * not "this write is impossible".
+ *
+ * BUG-244 — on the founder's own machine, under load, `writeJsonAtomic`'s
+ * rename failed with EPERM and its temp file went missing with ENOENT. On
+ * Windows a rename over an existing file fails with EPERM/EACCES while any
+ * other process holds a handle on either side, and a real-time scanner opens
+ * files microseconds after they are created. These are transient by nature:
+ * the same write succeeds moments later.
+ */
+const CONTENDED_WRITE_CODES = new Set(['EPERM', 'EACCES', 'EBUSY', 'ENOENT'])
+
+/**
+ * `writeJsonAtomic` with a bounded retry on transient Windows contention.
+ *
+ * DELIBERATELY OPT-IN, one caller at a time. BUG-244's own closing note is
+ * *"enumerate what each `writeJsonAtomic` caller does when it rejects, and
+ * decide per caller between retry-with-backoff, surface-to-the-user, and
+ * log-and-continue"* — so this does not silently change behaviour for the
+ * dozen existing callers. It is for the writes where a dropped write is not a
+ * stale cache but a broken promise.
+ *
+ * BOUNDED on purpose: ~375 ms total. An unbounded wait would manufacture
+ * exactly the stall BUG-141 is about. If every attempt fails it THROWS — the
+ * caller is expected to do something visible with that, which is the whole
+ * point of using this instead of the plain version.
+ */
+export async function writeJsonAtomicDurable(path: string, value: unknown): Promise<void> {
+  const backoffMs = [25, 50, 100, 200]
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await writeJsonAtomic(path, value)
+      return
+    } catch (err) {
+      const code = (err as { code?: unknown } | null)?.code
+      const retryable = typeof code === 'string' && CONTENDED_WRITE_CODES.has(code)
+      if (!retryable || attempt >= backoffMs.length) throw err
+      await new Promise((resolve) => setTimeout(resolve, backoffMs[attempt]))
+    }
+  }
+}
+
+/**
  * Synchronous variant of writeJsonAtomic, for stores that must stay
  * synchronous (app-settings.ts's loopback-gate check reads in the same tick).
  * Same guarantee: a crash mid-write leaves the previous complete file, never

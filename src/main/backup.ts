@@ -35,12 +35,18 @@ import {
 import { backupRefusedForSandbox } from './sandbox-profile'
 import { memoryDbPath, removeWalSidecars } from './memory/db'
 import { snapshotMemoryDb } from './memory/snapshot'
-import { listContacts, importContact, type Contact } from './contacts-fs'
-import { listDeals, importDeal, type Deal } from './deals-fs'
+import {
+  listContacts,
+  importContact,
+  contactBackupPayload,
+  type Contact
+} from './contacts-fs'
+import { listDeals, importDeal, dealBackupPayload, type Deal } from './deals-fs'
 import { loadDealStagesMeta, applyPulledDealStages } from './deal-stages'
 import {
   loadAppSettings,
   applyPulledSettings,
+  setSalesBrainErasedListener,
   setSyncScopeDisabledListener,
   type BackupSyncScope
 } from './app-settings'
@@ -240,29 +246,117 @@ const SCRUB_KEY_SET: Record<ScrubKey, true> = {
 }
 export const SCRUB_KEYS = Object.keys(SCRUB_KEY_SET) as ScrubKey[]
 
-async function readPendingScrubs(): Promise<ScrubKey[]> {
-  try {
-    const parsed = JSON.parse(await fs.readFile(pendingScrubsPath(), 'utf8')) as { keys?: unknown }
-    const keys = parsed.keys
-    if (!Array.isArray(keys)) return []
-    return SCRUB_KEYS.filter((k) => keys.includes(k))
-  } catch {
-    return []
-  }
+/**
+ * BUG-246 — the scrub queue is where *"the user pressed Forget everything"* is
+ * recorded, and it was written with every failure discarded.
+ *
+ * This set is the same queue held in memory, and it exists because the file
+ * write can fail: BUG-244 measured `writeJsonAtomic`'s rename failing with
+ * EPERM on this very machine under contention. When that happened the erase
+ * intent was never recorded, so `drainPendingScrubs` had nothing to drain AND
+ * `downloadSalesBrainDb`'s BUG-206 guard read an empty queue and restored the
+ * data the user had just erased — under a dialog reading "This cannot be
+ * undone."
+ *
+ * Every read unions this with the file, so a failed write costs durability
+ * across a restart but never costs the erase within the session, and never
+ * costs the restore guard.
+ *
+ * It can be a FALSE positive in one direction only: if the founder's second
+ * app instance drains the queue from the same profile, this instance still
+ * believes a scrub is pending and will refuse to restore. Refusing a restore
+ * is the safe side of that error, and it clears on the next successful drain.
+ */
+const pendingScrubsInMemory = new Set<ScrubKey>()
+
+/** Set when the queue could not be persisted after retries. Read by
+ *  `backup:getStatus` so the Backup card can say the erase was NOT recorded,
+ *  rather than showing an empty queue and implying nothing was asked for. */
+let scrubQueuePersistError: { code: string; at: string } | null = null
+
+/**
+ * TESTS ONLY. The in-memory queue is module state that only a successful
+ * `writePendingScrubs` clears, which is correct in the app (the next drain
+ * clears it) and leaks between cases in a test file.
+ *
+ * Deliberately cannot weaken anything in production: it clears a set that only
+ * ever ADDS refusals, so calling it can never cause an erase or bypass a
+ * guard — the worst it can do is forget an erase, which is the pre-fix
+ * behaviour. `bug246-...test.ts` pins that no shipping source calls it.
+ */
+export function resetPendingScrubMemoryForTests(): void {
+  pendingScrubsInMemory.clear()
+  scrubQueuePersistError = null
 }
 
+async function readPendingScrubs(): Promise<ScrubKey[]> {
+  let fromFile: unknown[] = []
+  try {
+    const parsed = JSON.parse(await fs.readFile(pendingScrubsPath(), 'utf8')) as { keys?: unknown }
+    if (Array.isArray(parsed.keys)) fromFile = parsed.keys
+  } catch {
+    /* no queue file yet, or unreadable — the in-memory set still counts */
+  }
+  return SCRUB_KEYS.filter((k) => fromFile.includes(k) || pendingScrubsInMemory.has(k))
+}
+
+/**
+ * `keys` is the AUTHORITATIVE remaining queue, so the in-memory copy is
+ * replaced rather than merged — a drained key must leave both.
+ *
+ * Durable or loud: retried on transient Windows contention, and if it still
+ * fails the failure is recorded rather than discarded. It does not throw,
+ * because both callers are paths where throwing would abort an erase that is
+ * otherwise proceeding correctly; the in-memory queue carries on.
+ */
 async function writePendingScrubs(keys: ScrubKey[]): Promise<boolean> {
-  // BUG-244 — as above, and this one is a CONSENT path: the user turned a sync
-  // scope off and expects the cloud copy removed. A swallowed write here means
-  // the scrub is silently never queued, while the UI reports the toggle as off.
-  return writeJsonAtomicDurable(
+  // MERGED FROM TWO FIXES, 2026-09-10. BUG-246 (this branch) made the failure
+  // loud; BUG-244 (main) made the write retry transient Windows contention and
+  // stop throwing. Keeping either alone loses the other, and keeping BUG-246's
+  // body against BUG-244's API is the dangerous combination: the `catch` it
+  // relied on can never fire now, so a consent-path write would fail in exactly
+  // the silence BUG-246 exists to end. It branches on the returned boolean.
+  //
+  // In memory FIRST and synchronously, unchanged: the restore guard must be
+  // armed before the write is attempted, whatever the write then does.
+  pendingScrubsInMemory.clear()
+  for (const k of keys) pendingScrubsInMemory.add(k)
+
+  let failure: { code: string; at: string } | null = null
+  const ok = await writeJsonAtomicDurable(
     pendingScrubsPath(),
     { keys },
-    'the queue of cloud scrubs to perform'
+    'the queue of cloud scrubs to perform',
+    {
+      // The real errno, not a generic 'error' — the code is what distinguishes
+      // "a scanner held the file" from "the disk is full", and the Backup card
+      // shows it.
+      onFailure: (_what, err) => {
+        const raw = (err as { code?: unknown } | null)?.code
+        failure = { code: typeof raw === 'string' ? raw : 'error', at: new Date().toISOString() }
+      }
+    }
   )
+
+  if (ok) {
+    scrubQueuePersistError = null
+    return true
+  }
+  scrubQueuePersistError = failure ?? { code: 'error', at: new Date().toISOString() }
+  // Loud in all three places it can be heard: the log, the aggregate signal,
+  // and the status the Backup card reads.
+  console.error(
+    '[backup] the pending-scrub queue could not be written — the erase is recorded in memory only and will NOT survive a restart'
+  )
+  reportBackupStep('scrubQueue.persist', new Error(`scrub queue write failed: ${scrubQueuePersistError.code}`))
+  return false
 }
 
 function queuePendingScrubs(keys: ScrubKey[]): void {
+  // In memory FIRST and synchronously: the restore guard must be armed before
+  // this function returns, because its caller (a "the user erased X" listener)
+  // cannot await and the very next thing that happens may be a restore.
+  for (const k of keys) pendingScrubsInMemory.add(k)
   void (async () => {
     const existing = await readPendingScrubs()
     const merged = SCRUB_KEYS.filter((k) => existing.includes(k) || keys.includes(k))
@@ -917,6 +1011,30 @@ export async function downloadSalesBrainDb(
   //   >=1 memory row          -> DO NOT restore     (the M25 invariant, intact)
   //   0 memory rows           -> restore            (an empty brain is not local truth)
   //   unopenable / corrupt    -> rename aside, THEN restore
+  //
+  // BUG-206 adds ONE row above all of them, and the reason is the whole fix:
+  //
+  //   0 rows AND an erase queued -> DO NOT restore   (the user asked for empty)
+  //
+  // "EMPTY" IS A STATE. "THE USER PRESSED FORGET EVERYTHING" IS AN EVENT.
+  // Inferring the event from the state was the original mistake: every row in
+  // the table above reads the store's CONTENTS and guesses intent from them,
+  // which cannot tell an erase from a broken store, because both are empty.
+  //
+  // So intent is read from where it was actually recorded — the pending-scrub
+  // queue, written when the user pressed the button. Deliberately NOT a marker
+  // inside memory.db: a marker in the thing being erased is unreadable exactly
+  // when the store is broken, which is the one case that must never look like
+  // an erase. The queue is separate, durable, atomic, and self-clearing once
+  // the scrub drains.
+  //
+  // This closes the window between the erase and a successful scrub — an
+  // offline erase followed by a sign-in before the push completes. After the
+  // scrub drains there is no cloud object left to restore anyway.
+  if ((await readPendingScrubs()).includes('salesBrain')) {
+    console.log('[backup] Sales Brain restore skipped: the user erased it and the scrub is pending')
+    return
+  }
   const local = localMemoryCount(dbPath)
   if (local.ok && local.count > 0) {
     return // real local memories — never overwrite them from the cloud
@@ -1179,7 +1297,13 @@ export async function pushAll(): Promise<BackupResult> {
           user_id: userId,
           updated_at: c.updatedAt,
           deleted: c.deleted === true,
-          payload: c
+          // BUG-199 — was `payload: c`, the whole record. Calls have gone
+          // through a payload builder since BUG-115; contacts and deals did
+          // not, so any field added to either reached the cloud on the next
+          // sync with nothing having classified it. The SAME payload today, by
+          // construction — every field is SYNCED — and the next one has to be
+          // classified or it will not compile.
+          payload: contactBackupPayload(c)
         }))
         await upsertRows(client, 'backup_contacts', contactRows, skewMs)
       } catch (err) {
@@ -1196,13 +1320,11 @@ export async function pushAll(): Promise<BackupResult> {
           user_id: userId,
           updated_at: d.updatedAt,
           deleted: d.deleted === true,
-          // outcomeReason travels EXPLICITLY, null when there is none — the
-          // stored record drops the key when empty, so a bare payload cannot
-          // distinguish "cleared on this machine" from "written by an older
-          // build that has never heard of the field". importDeal reads the
-          // difference: null clears, ABSENT preserves. Same three-way
-          // contract callBackupPayload uses for a call's dealId, same reason.
-          payload: { ...d, outcomeReason: d.outcomeReason ?? null }
+          // BUG-199 — was `{ ...d, outcomeReason: … }`, a spread of the whole
+          // record. The builder keeps the outcomeReason three-way contract
+          // (null clears, ABSENT preserves) and adds the exhaustive-over-the-
+          // type guard the call side has had since BUG-115.
+          payload: dealBackupPayload(d)
         }))
         await upsertRows(client, 'backup_deals', dealRows, skewMs)
       } catch (err) {
@@ -1645,6 +1767,13 @@ export function registerBackup(): void {
   // category (drained at the start of the next push, retried until done).
   setSyncScopeDisabledListener((keys) => queuePendingScrubs(expandDisabledScrubKeys(keys)))
 
+  // BUG-206 — an erase joins the SAME path a scope toggle-off already uses.
+  // `salesBrain` was already a scrub key with a proven branch in
+  // drainPendingScrubs (BUG-204's eraseStoragePrefixProven, verified against
+  // the live project). forgetEverything simply never queued one, so the local
+  // wipe was real and the cloud copy outlived it.
+  setSalesBrainErasedListener(() => queuePendingScrubs(['salesBrain']))
+
   // M26 Phase 3 — the MANUAL "Sync now" button is a MAINTENANCE-lane job so
   // its progress is visible (and survives leaving Settings). Deliberately
   // NOT migrated: the three automatic syncNow triggers below (launch,
@@ -1732,6 +1861,14 @@ export function registerBackup(): void {
       // Losing sides of two-device concurrent edits, kept as <id>.conflict —
       // surfaced in the Settings card so "kept" data isn't invisibly lost.
       conflictCount: await countConflictFiles(),
+      // BUG-246 — `pendingScrubs` above is read from a FILE, and that file's
+      // write can fail (BUG-244: EPERM on rename under contention). Without
+      // this field an erase that could not be RECORDED looks exactly like an
+      // erase nobody asked for: an empty queue, no error, a reassuring card.
+      // The erase is still queued in memory and still runs this session; what
+      // is at risk is surviving a restart, and only the user can decide to
+      // retry it.
+      scrubQueuePersistError,
       // Non-blocking hint only: a badly wrong device clock no longer corrupts
       // backup ordering (that's corrected for), but it still makes every
       // locally-displayed time wrong, so it's worth telling the user.

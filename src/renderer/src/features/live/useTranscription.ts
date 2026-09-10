@@ -35,7 +35,40 @@ let nextProducerId = 1
  *  and the call recorded ONLY THE REP for its whole duration while
  *  `consent.recordOtherParty` said true. Nineteen calls on the founder's
  *  machine back to 2026-07-17. */
-export type OtherPartyError = 'denied' | 'no-audio' | 'interrupted' | 'not-ready' | null
+/** BUG-201 — the four `app-*` codes are the APP declining, and they used to
+ *  arrive as `'denied'`, whose banner says "screen & system-audio recording
+ *  was blocked". That sentence is true only when the OS or the user refused;
+ *  for all four of these it sends a rep looking for a permission that is not
+ *  the problem. Main computed the reason all along and the preload discarded
+ *  it (`arm: (): void`). */
+export type OtherPartyError =
+  | 'denied'
+  | 'app-platform-unsupported'
+  | 'app-master-switch-off'
+  | 'app-no-live-call'
+  | 'app-consent-not-permitted'
+  | 'no-audio'
+  | 'interrupted'
+  | 'not-ready'
+  | null
+
+/** Map main's arm verdict onto the renderer's error code. Absent/unknown
+ *  reasons fall back to `'denied'` — the old behaviour — rather than to a
+ *  more specific claim we cannot support. */
+export function otherPartyErrorForArmReason(reason: string): OtherPartyError {
+  switch (reason) {
+    case 'platform-unsupported':
+      return 'app-platform-unsupported'
+    case 'master-switch-off':
+      return 'app-master-switch-off'
+    case 'no-live-call':
+      return 'app-no-live-call'
+    case 'consent-not-permitted':
+      return 'app-consent-not-permitted'
+    default:
+      return 'denied'
+  }
+}
 
 interface UseTranscription {
   status: LiveStatus
@@ -877,10 +910,35 @@ export function useTranscription(
       setOtherPartyError(null)
 
       let audio: MediaStream
+      // BUG-201 — main's verdict, which this line used to discard. `armed:
+      // false` means the APP refused (platform, master switch, no live call,
+      // or consent), NOT that the user blocked anything.
+      //
+      // TWO CONSEQUENCES, both approved by the founder 2026-09-09:
+      //
+      // 1. The rep is told WHICH refusal it was. Reporting all four as
+      //    `'denied'` — "screen & system-audio recording was blocked" — sends
+      //    someone looking for an OS permission that is not the problem.
+      //
+      // 2. We STOP HERE rather than calling getDisplayMedia. Raising an OS
+      //    screen-picker whose outcome this app has already decided to deny
+      //    spends a mid-call interruption on a foregone conclusion; main's
+      //    display-media handler would refuse it a moment later anyway (that
+      //    refusal stays, and is still the authority — this is an early exit,
+      //    not a replacement for it).
+      const armVerdict = window.api.loopback.arm()
+      if (!armVerdict.armed) {
+        console.log(`[loopback] the app declined buyer capture: ${armVerdict.reason}`)
+        window.api.loopback.disarm()
+        setOtherPartyError(otherPartyErrorForArmReason(armVerdict.reason))
+        setBuyerSilentWarning(false)
+        setCrossTalkWarning(false)
+        return
+      }
       try {
-        // Arm the main-process one-shot grant synchronously — no await before
-        // getDisplayMedia, so it stays a user gesture.
-        window.api.loopback.arm()
+        // Arm succeeded; the OS prompt below is now a question with an open
+        // answer. No await between arm and getDisplayMedia — it has to stay
+        // inside the user gesture.
         const display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
         display.getVideoTracks().forEach((t) => t.stop()) // we only want the audio
         if (display.getAudioTracks().length === 0) {

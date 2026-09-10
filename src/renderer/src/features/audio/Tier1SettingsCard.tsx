@@ -67,8 +67,22 @@ export function Tier1DiagnosticsCard(): React.JSX.Element | null {
         tier1Enabled: getTier1Enabled(),
         denoiseStrength: getDenoiseStrength()
       })
-      if (res.ok && res.path) setResult(`Saved to ${res.path}`)
-      else if (!res.canceled) setResult(res.error ? `Export failed: ${res.error}` : 'Export failed.')
+      // BUG-254 — say what actually went in. The export used to report only
+      // that it saved a file, so a zip containing NO engine logs read exactly
+      // like a complete one; the count existed in the main process and was
+      // thrown away. `n === 0` is the case worth wording differently, because
+      // that is the bundle that looks fine and helps nobody.
+      if (res.ok && res.path) {
+        const n = res.engineLogs
+        setResult(
+          n === undefined
+            ? `Saved to ${res.path}`
+            : n === 0
+              ? `Saved to ${res.path} — but no engine logs were found, so this bundle has only the app state.`
+              : `Saved to ${res.path} — ${n} engine log${n === 1 ? '' : 's'} plus the app state.`
+        )
+      } else if (!res.canceled)
+        setResult(res.error ? `Export failed: ${res.error}` : 'Export failed.')
     } finally {
       setExporting(false)
     }

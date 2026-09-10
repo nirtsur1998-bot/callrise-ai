@@ -822,37 +822,87 @@ function ConversationRow({
 
 // --- The screen --------------------------------------------------------------
 
-export function AssistantView({
-  onOpenCall,
-  initialScope = null,
-  onInitialScopeConsumed
+/**
+ * BUG-252 - the conversation pane, and it exists to be KEYED.
+ *
+ * `useAssistantChat` owns seven pieces of per-conversation state. The reset it
+ * runs when `activeId` changes reset THREE of them; `scope` and
+ * `learningExcluded` were written only after the IPC load resolved. Because
+ * the hook was never remounted on a switch - one call site, `activeId` a
+ * `useState` in the parent, no `key` - a conversation switch was a prop change
+ * on a surviving instance, so `useState` values AND `useRef` objects persisted
+ * by construction. Two consequences:
+ *
+ *   1. The scope chip rendered "About <client A>", with a tooltip asserting
+ *      "This conversation is only about <client A>", OVER a different
+ *      conversation, for the whole load. A UI string asserting a scope it is
+ *      not describing.
+ *   2. A reply in flight landed in the wrong conversation: send in A, switch
+ *      to B while it streams, and A's messages, scope and learning setting
+ *      replaced B's.
+ *
+ * THE FIX IS THE KEY, NOT TWO MORE SETTERS. Adding `setScope(null)` and
+ * `setLearningExcludedState(false)` to the reset block fixes today's two
+ * omissions and leaves the next field to be forgotten - which is exactly how
+ * seven pieces of state ended up with three of them reset. Keying this
+ * component on the conversation id makes React discard the whole instance,
+ * every `useState` and every `useRef` (`mountedRef`, `streamingIdRef`,
+ * `ownsTurnRef`), so all seven reset by construction and the stale-send path
+ * closes in the same move.
+ *
+ * WHAT DELIBERATELY STAYS IN THE PARENT: the rail (`metas`, `query`,
+ * `railCollapsed`), `brainStatus`, and `pendingFiles`. The first three must
+ * survive a switch or the rail refetches and flashes. `pendingFiles` must
+ * survive it for a specific reason: a file dropped into the empty state
+ * CREATES a conversation and then switches to it, and this component remounts
+ * at that moment - staging them here would discard the very file that caused
+ * the switch, and orphan it on disk. That case already has a comment and an
+ * owner-pruning effect in the parent; both still apply.
+ */
+function AssistantConversation({
+  activeId,
+  activeMeta,
+  brainStatus,
+  notice,
+  pendingFiles,
+  pendingFirst,
+  onAddFiles,
+  onRemovePendingFile,
+  onClearPendingFiles,
+  onCitation,
+  onNotice,
+  onOpenScopePicker,
+  onConfirm,
+  onStartConversation,
+  onRefreshList
 }: {
-  onOpenCall?: (callId: string) => void
-  /** M28 Part 4 — one-shot: open a NEW conversation about this client
-   *  (from a contact/deal/call page). Consumed once acted on. */
-  initialScope?: AssistantScopeRequest | null
-  onInitialScopeConsumed?: () => void
-}): React.JSX.Element {
-  const [metas, setMetas] = useState<ConversationMeta[] | null>(null) // null = loading
-  const [activeId, setActiveId] = useState<string | null>(null)
-  const [query, setQuery] = useState('')
-  const [draft, setDraft] = useState('')
-  const [railCollapsed, setRailCollapsed] = useState(false)
-  const [citation, setCitation] = useState<AssistantCitation | null>(null)
-  const [confirm, setConfirm] = useState<ConfirmState | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
-  // AUDIT FIX (2026-08-24) — the real status, not a boolean that conflated
-  // "off" (the shipping default), "unavailable" (migration failed) and
-  // "empty" into one message that named the wrong cause for two of them.
-  const [brainStatus, setBrainStatus] = useState<SalesBrainStatus | null>(null)
-  const [pendingFirst, setPendingFirst] = useState<{
+  activeId: string | null
+  activeMeta: ConversationMeta | null
+  brainStatus: SalesBrainStatus | null
+  notice: string | null
+  pendingFiles: PendingAttachment[]
+  pendingFirst: {
     convId: string
     text: string
     voiceNote?: { mediaId: string; durationMs: number }
     attachments?: AssistantAttachment[]
-  } | null>(null)
-  const [pendingFiles, setPendingFiles] = useState<PendingAttachment[]>([])
-  const [scopePickerOpen, setScopePickerOpen] = useState(false)
+  } | null
+  onAddFiles: (files: FileList | null) => void
+  onRemovePendingFile: (id: string) => void
+  onClearPendingFiles: () => void
+  onCitation: (citation: AssistantCitation | null) => void
+  onNotice: (notice: string | null) => void
+  onOpenScopePicker: () => void
+  onConfirm: (state: ConfirmState) => void
+  onStartConversation: (
+    firstMessage?: string,
+    voiceNote?: { mediaId: string; durationMs: number },
+    attachments?: AssistantAttachment[],
+    scope?: AssistantScope
+  ) => Promise<void>
+  onRefreshList: () => void
+}): React.JSX.Element {
+  const [draft, setDraft] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const nearBottomRef = useRef(true)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -873,6 +923,467 @@ export function AssistantView({
   const voice = useVoiceNote({
     onTranscript: (text) => setDraft((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text))
   })
+
+  // Aliases so the moved blocks below are the ORIGINAL code, unedited. The
+  // parent's setters arrive as props under `on*` names; renaming them here
+  // rather than inside 350 lines of JSX is what keeps this a move.
+  const setCitation = onCitation
+  const setNotice = onNotice
+  const startConversation = onStartConversation
+  const refreshList = onRefreshList
+  const addFiles = onAddFiles
+  const removePendingFile = onRemovePendingFile
+  const setConfirm = onConfirm
+  const showEmptyHero = activeId === null
+
+  // BUG-252 - "New chat" used to focus the composer from the rail button. The
+  // rail can no longer reach this ref, and no longer needs to: switching to a
+  // null id changes this component's key and remounts it. Focus on mount ONLY
+  // for the empty state, which is exactly the case that button covered -
+  // focusing on every conversation switch would steal focus from the rail click
+  // that caused it.
+  useEffect(() => {
+    if (activeId === null) textareaRef.current?.focus()
+  }, [activeId])
+  // Reader-respecting autoscroll (audit G): follow the stream only while the
+  // user is already at the bottom; never yank them back up mid-read.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el && nearBottomRef.current) el.scrollTo({ top: el.scrollHeight })
+  }, [chat.messages])
+
+  // Escape cancels an active recording (audit H).
+  useEffect(() => {
+    if (voice.state !== 'recording') return undefined
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') voice.cancelRecording()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [voice])
+
+  const handleSend = useCallback(async (): Promise<void> => {
+    const text = draft.trim()
+    if (!text || chat.sending) return
+    setDraft('')
+    nearBottomRef.current = true
+    const voiceNote = voice.pending ?? undefined
+    voice.clearPending()
+    const attachments = pendingFiles.map((p) => p.attachment)
+    // BUG-252 - `pendingFiles` stays in the parent (see this component's
+    // header), so clearing it is a callback rather than a local setState.
+    onClearPendingFiles()
+    if (!activeId) {
+      await startConversation(text, voiceNote, attachments.length > 0 ? attachments : undefined)
+      return
+    }
+    await chat.send(text, voiceNote, attachments.length > 0 ? attachments : undefined)
+    void refreshList()
+  }, [draft, chat, activeId, startConversation, refreshList, voice, pendingFiles])
+
+  const toggleLearning = useCallback((): void => {
+    if (chat.learningExcluded) {
+      void chat.setLearningExcluded(false)
+      return
+    }
+    setConfirm({
+      title: 'Stop learning from this conversation?',
+      body: 'Anything it already taught the Sales Brain will be forgotten. This cannot be undone.',
+      confirmLabel: 'Stop learning',
+      onConfirm: () => {
+        void chat.setLearningExcluded(true).then((ok) => {
+          if (!ok) {
+            setNotice(
+              'Could not stop learning — Sales Brain storage is unavailable, so nothing could be forgotten. Try again after restarting the app.'
+            )
+          }
+        })
+      }
+    })
+  }, [chat])
+
+  // The chat IS the page: one surface, one reading column.
+  return (
+    <div className="flex min-w-0 flex-1 flex-col">
+      {activeId && (
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line-soft px-5 py-2">
+          <div className="flex min-w-0 items-center gap-2">
+            {chat.scope && (
+              /* M28 Part 4 — the scope indicator: who Rise is talking about. */
+              <Tooltip
+                content={`This conversation is only about ${chat.scope.contactName}. Other clients' memories are never used here.`}
+              >
+                <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 text-[11.5px] font-medium text-accent">
+                  <UserRound className="h-3.5 w-3.5" />
+                  About {chat.scope.contactName}
+                  {chat.scope.company ? ` · ${chat.scope.company}` : ''}
+                </span>
+              </Tooltip>
+            )}
+            <p className="truncate text-[12.5px] font-medium text-muted">
+              {activeMeta?.title ?? ''}
+            </p>
+          </div>
+          <Tooltip
+            content={
+              chat.learningExcluded
+                ? `${ASSISTANT_SECTION_NAME} is not learning from this conversation. Click to turn learning back on (it will not re-learn past messages).`
+                : `${ASSISTANT_SECTION_NAME} can save facts from this conversation to your Sales Brain — always visibly, never silently. Click to exclude this conversation and forget what it already taught.`
+            }
+            className="max-w-sm"
+          >
+            <button
+              type="button"
+              onClick={toggleLearning}
+              className={cn(
+                'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px]',
+                chat.learningExcluded ? 'border-line text-faint' : 'border-accent/40 text-accent'
+              )}
+            >
+              {chat.learningExcluded ? (
+                <BrainCog className="h-3.5 w-3.5" />
+              ) : (
+                <Brain className="h-3.5 w-3.5" />
+              )}
+              {chat.learningExcluded ? 'Not learning' : 'Learning'}
+            </button>
+          </Tooltip>
+        </div>
+      )}
+
+      {showEmptyHero ? (
+        /* Empty state: composed hero in the upper third, chips attached to
+           the copy, composer waiting pinned below — no floating void. */
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto flex w-full max-w-[1140px] flex-col items-center px-6 pt-[16vh] text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft">
+              <Sparkles className="h-6 w-6 text-accent" />
+            </div>
+            <h2 className="mt-4 text-xl font-semibold tracking-tight text-ink">
+              Ask {ASSISTANT_SECTION_NAME} anything
+            </h2>
+            {brainStatus?.state === 'off' ? (
+              <>
+                <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed text-muted">
+                  {ASSISTANT_SECTION_NAME} gets its edge from your Sales Brain — and it&rsquo;s
+                  switched off right now. Turn it on in Settings → Sales Brain, and answers
+                  here start citing your own calls, clients, and deals.
+                </p>
+                <p className="mt-3 text-[12.5px] text-faint">
+                  You can still chat — answers just won&rsquo;t be grounded in your data yet.
+                </p>
+              </>
+            ) : brainStatus?.state === 'unavailable' ? (
+              <>
+                <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed text-muted">
+                  {ASSISTANT_SECTION_NAME} can&rsquo;t reach your Sales Brain — it&rsquo;s on,
+                  but its database didn&rsquo;t open this session, so nothing can be read or
+                  learned until it does. Restarting the app usually fixes it.
+                </p>
+                <p className="mt-3 text-[12.5px] text-faint">
+                  You can still chat — answers just won&rsquo;t be grounded in your data.
+                  Importing more calls won&rsquo;t help while this persists.
+                </p>
+              </>
+            ) : brainStatus?.state === 'empty' ? (
+              <>
+                <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed text-muted">
+                  {ASSISTANT_SECTION_NAME} gets its edge from your Sales Brain — and it&rsquo;s
+                  empty right now. Import your call history or finish the Sales Brain interview
+                  in Settings, then every answer here starts citing what it knows.
+                </p>
+                <p className="mt-3 text-[12.5px] text-faint">
+                  You can still chat — answers just won&rsquo;t be grounded in your data yet.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed text-muted">
+                  Grounded in your Sales Brain — your calls, clients, deals, and selling
+                  patterns. Every claim cites where it came from.
+                </p>
+                <div className="mt-4 flex flex-wrap justify-center gap-2">
+                  {STARTER_PROMPTS.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => void startConversation(p)}
+                      className="rounded-full border border-line px-3.5 py-1.5 text-[12.5px] text-muted hover:border-accent/50 hover:text-ink"
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={onOpenScopePicker}
+              className="mt-5 flex items-center gap-1.5 rounded-full border border-accent/40 px-3.5 py-1.5 text-[12.5px] text-accent hover:bg-accent-soft"
+            >
+              <UserRound className="h-3.5 w-3.5" /> Talk about a specific client
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div
+          ref={scrollRef}
+          role="log"
+          aria-label="Conversation"
+          onScroll={() => {
+            const el = scrollRef.current
+            if (!el) return
+            nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+          }}
+          className="min-h-0 flex-1 overflow-y-auto"
+        >
+          <div className="mx-auto w-full max-w-[1140px] space-y-4 px-6 py-5">
+            {chat.loading && (
+              <div className="space-y-3">
+                <SkeletonRows />
+              </div>
+            )}
+            {!chat.loading && chat.messages.length === 0 && chat.scope && (
+              /* A fresh scoped conversation: say who it's about, offer the
+                 scoped prompts — one click sends. */
+              <div className="rounded-2xl border border-line-soft bg-surface p-5">
+                <p className="text-[14px] font-semibold text-ink">
+                  Talking about {chat.scope.contactName}
+                  {chat.scope.company ? ` at ${chat.scope.company}` : ''}
+                </p>
+                <p className="mt-1 text-[12.5px] text-muted">
+                  {ASSISTANT_SECTION_NAME} leads with their memories, calls, and deals here — and
+                  never mixes in another client.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {scopedPrompts(chat.scope).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => void chat.send(p)}
+                      className="rounded-full border border-line px-3.5 py-1.5 text-[12.5px] text-muted hover:border-accent/50 hover:text-ink"
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {chat.messages.map((m) => (
+              <MessageRow
+                key={m.id}
+                message={m}
+                phase={chat.phase}
+                trace={chat.traces[m.id]}
+                onCite={setCitation}
+                onApplySuggestion={(messageId, s) => void chat.applySuggestion(messageId, s)}
+                onConfirmTask={(messageId, proposalId) =>
+                  void chat.confirmTask(messageId, proposalId)
+                }
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Live-region for errors so screen readers hear them (audit H). */}
+      <div aria-live="polite" className="shrink-0">
+        {chat.error && (
+          <div className="mx-auto mb-2 flex w-full max-w-[1140px] items-center justify-between rounded-xl border border-danger/30 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">
+            <span className="whitespace-pre-wrap">{chat.error}</span>
+            <IconButton icon={X} label="Dismiss error" onClick={chat.clearError} />
+          </div>
+        )}
+        {notice && (
+          <div className="mx-auto mb-2 flex w-full max-w-[1140px] items-center justify-between rounded-xl border border-warning/30 bg-warning-soft px-3 py-2 text-[12.5px] text-warning">
+            <span>{notice}</span>
+            <IconButton icon={X} label="Dismiss notice" onClick={() => setNotice(null)} />
+          </div>
+        )}
+      </div>
+
+      {/* THE composer: one deliberate object — field and controls inside a
+          single bordered surface; recording/transcribing/pending are states
+          of the same object, not boxes around it. */}
+      <div className="shrink-0 px-6 pb-5 pt-1">
+        <div className="mx-auto w-full max-w-[1140px]">
+          {voice.error && (
+            <div
+              aria-live="polite"
+              className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-warning/30 bg-warning-soft px-3 py-1.5 text-[12px] text-warning"
+            >
+              <span>{voice.error}</span>
+              <span className="flex shrink-0 items-center gap-1">
+                {voice.canRetry && (
+                  <Button size="sm" variant="secondary" onClick={() => void voice.retryTranscribe()}>
+                    Retry
+                  </Button>
+                )}
+                <IconButton icon={X} label="Dismiss" onClick={voice.clearError} />
+              </span>
+            </div>
+          )}
+          <div className="rounded-2xl border border-line bg-surface shadow-card focus-within:border-accent/50">
+            {pendingFiles.length > 0 && (
+              /* M28 Part 3 — the send preview: exactly what each file will
+                 contribute, before anything leaves the machine. */
+              <div className="flex flex-wrap gap-2 border-b border-line-soft px-3 py-2">
+                {pendingFiles.map((p) => (
+                  <AttachmentChip
+                    key={p.attachment.id}
+                    attachment={p.attachment}
+                    preview={p.preview}
+                    onRemove={() => removePendingFile(p.attachment.id)}
+                  />
+                ))}
+              </div>
+            )}
+            {voice.pending && (
+              <div className="flex items-center justify-between border-b border-line-soft px-3 py-1.5 text-[12px] text-muted">
+                <span className="flex items-center gap-1.5">
+                  <Mic className="h-3.5 w-3.5" /> Voice note attached ·{' '}
+                  {formatDuration(voice.pending.durationMs)} — transcribed by Deepgram; review
+                  the text, then send.
+                </span>
+                <IconButton icon={Trash2} label="Discard voice note" onClick={voice.discardPending} />
+              </div>
+            )}
+            {/* AUDIT FIX (2026-08-25) — voice-note audio is POSTed to
+                Deepgram's prerecorded REST API, and NOTHING in Rise said so.
+                A consent and transparency gap, not a polish item: the user
+                is recording their own voice, and where it goes is a fact
+                they are entitled to before they finish, not after.
+                Disclosed at BOTH decision points — while recording (they
+                can still Cancel) and on the review chip (they can still
+                Discard) — because a disclosure only shown after the upload
+                would be a notice, not a choice. */}
+            {voice.state === 'recording' && (
+              <div className="border-b border-line-soft px-3 py-1.5 text-[11px] text-faint">
+                Audio is sent to Deepgram to be transcribed. Nothing is sent until you press
+                Done, and Cancel discards the recording without uploading it.
+              </div>
+            )}
+            {voice.state === 'recording' ? (
+              <div className="flex items-center gap-3 px-3 py-2.5">
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-60" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-danger" />
+                </span>
+                <span className="text-[13px] tabular-nums text-ink" role="timer">
+                  {formatDuration(voice.elapsedMs)}
+                </span>
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-elevated">
+                  <div
+                    className="h-full rounded-full bg-danger transition-[width] duration-100"
+                    style={{ width: `${Math.round(voice.level * 100)}%` }}
+                  />
+                </div>
+                <Button variant="secondary" size="sm" icon={X} onClick={voice.cancelRecording}>
+                  Cancel
+                </Button>
+                <Button size="sm" icon={Check} onClick={() => void voice.finishRecording()}>
+                  Done
+                </Button>
+              </div>
+            ) : (
+              <>
+                <textarea
+                  ref={textareaRef}
+                  rows={Math.min(6, Math.max(1, draft.split('\n').length))}
+                  className="block w-full resize-none bg-transparent px-3.5 pt-3 text-[13.5px] leading-relaxed text-ink outline-none placeholder:text-faint"
+                  placeholder={`Message ${ASSISTANT_SECTION_NAME}…`}
+                  aria-label={`Message ${ASSISTANT_SECTION_NAME}`}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      void handleSend()
+                    }
+                  }}
+                />
+                <div className="flex items-center justify-between px-2 py-1.5">
+                  <div className="flex items-center gap-0.5">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.docx,.txt,.md,.csv"
+                      className="hidden"
+                      onChange={(e) => {
+                        void addFiles(e.target.files)
+                        e.target.value = ''
+                      }}
+                    />
+                    <IconButton
+                      icon={Paperclip}
+                      label="Attach a file (images, PDF, DOCX, TXT, MD, CSV)"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={chat.sending}
+                    />
+                    {voice.state === 'transcribing' ? (
+                      <span className="flex items-center gap-1.5 px-2 text-[12px] text-muted">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Transcribing with
+                        Deepgram…
+                      </span>
+                    ) : (
+                      <IconButton
+                        icon={Mic}
+                        label="Record a voice note"
+                        onClick={() => void voice.start()}
+                        disabled={chat.sending}
+                      />
+                    )}
+                  </div>
+                  {chat.sending ? (
+                    <Button variant="stop" size="sm" icon={Square} onClick={() => void chat.stop()}>
+                      Stop
+                    </Button>
+                  ) : (
+                    <Button size="sm" icon={Send} onClick={() => void handleSend()} disabled={!draft.trim()}>
+                      Send
+                    </Button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function AssistantView({
+  onOpenCall,
+  initialScope = null,
+  onInitialScopeConsumed
+}: {
+  onOpenCall?: (callId: string) => void
+  /** M28 Part 4 — one-shot: open a NEW conversation about this client
+   *  (from a contact/deal/call page). Consumed once acted on. */
+  initialScope?: AssistantScopeRequest | null
+  onInitialScopeConsumed?: () => void
+}): React.JSX.Element {
+  const [metas, setMetas] = useState<ConversationMeta[] | null>(null) // null = loading
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [railCollapsed, setRailCollapsed] = useState(false)
+  const [citation, setCitation] = useState<AssistantCitation | null>(null)
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  // AUDIT FIX (2026-08-24) — the real status, not a boolean that conflated
+  // "off" (the shipping default), "unavailable" (migration failed) and
+  // "empty" into one message that named the wrong cause for two of them.
+  const [brainStatus, setBrainStatus] = useState<SalesBrainStatus | null>(null)
+  const [pendingFirst, setPendingFirst] = useState<{
+    convId: string
+    text: string
+    voiceNote?: { mediaId: string; durationMs: number }
+    attachments?: AssistantAttachment[]
+  } | null>(null)
+  const [pendingFiles, setPendingFiles] = useState<PendingAttachment[]>([])
+  const [scopePickerOpen, setScopePickerOpen] = useState(false)
 
   const refreshList = useCallback(async (): Promise<void> => {
     setMetas(await window.api.assistant.listConversations())
@@ -900,22 +1411,6 @@ export function AssistantView({
     [refreshList]
   )
 
-  // Reader-respecting autoscroll (audit G): follow the stream only while the
-  // user is already at the bottom; never yank them back up mid-read.
-  useEffect(() => {
-    const el = scrollRef.current
-    if (el && nearBottomRef.current) el.scrollTo({ top: el.scrollHeight })
-  }, [chat.messages])
-
-  // Escape cancels an active recording (audit H).
-  useEffect(() => {
-    if (voice.state !== 'recording') return undefined
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') voice.cancelRecording()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [voice])
 
   const filtered = useMemo(() => {
     if (!metas) return []
@@ -1044,22 +1539,6 @@ export function AssistantView({
     })
   }, [activeId])
 
-  const handleSend = useCallback(async (): Promise<void> => {
-    const text = draft.trim()
-    if (!text || chat.sending) return
-    setDraft('')
-    nearBottomRef.current = true
-    const voiceNote = voice.pending ?? undefined
-    voice.clearPending()
-    const attachments = pendingFiles.map((p) => p.attachment)
-    setPendingFiles([])
-    if (!activeId) {
-      await startConversation(text, voiceNote, attachments.length > 0 ? attachments : undefined)
-      return
-    }
-    await chat.send(text, voiceNote, attachments.length > 0 ? attachments : undefined)
-    void refreshList()
-  }, [draft, chat, activeId, startConversation, refreshList, voice, pendingFiles])
 
   const handleDelete = useCallback(
     (id: string): void => {
@@ -1087,29 +1566,7 @@ export function AssistantView({
     [refreshList]
   )
 
-  const toggleLearning = useCallback((): void => {
-    if (chat.learningExcluded) {
-      void chat.setLearningExcluded(false)
-      return
-    }
-    setConfirm({
-      title: 'Stop learning from this conversation?',
-      body: 'Anything it already taught the Sales Brain will be forgotten. This cannot be undone.',
-      confirmLabel: 'Stop learning',
-      onConfirm: () => {
-        void chat.setLearningExcluded(true).then((ok) => {
-          if (!ok) {
-            setNotice(
-              'Could not stop learning — Sales Brain storage is unavailable, so nothing could be forgotten. Try again after restarting the app.'
-            )
-          }
-        })
-      }
-    })
-  }, [chat])
-
   const activeMeta = metas?.find((m) => m.id === activeId) ?? null
-  const showEmptyHero = activeId === null
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -1130,11 +1587,7 @@ export function AssistantView({
             <IconButton
               icon={MessageSquarePlus}
               label="New chat"
-              onClick={() => {
-                setActiveId(null)
-                setDraft('')
-                textareaRef.current?.focus()
-              }}
+              onClick={() => setActiveId(null)}
             />
           ) : (
             <Button
@@ -1142,11 +1595,7 @@ export function AssistantView({
               size="sm"
               icon={MessageSquarePlus}
               className="flex-1"
-              onClick={() => {
-                setActiveId(null)
-                setDraft('')
-                textareaRef.current?.focus()
-              }}
+              onClick={() => setActiveId(null)}
             >
               New chat
             </Button>
@@ -1195,354 +1644,27 @@ export function AssistantView({
         )}
       </aside>
 
-      {/* The chat IS the page: one surface, one reading column. */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        {activeId && (
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line-soft px-5 py-2">
-            <div className="flex min-w-0 items-center gap-2">
-              {chat.scope && (
-                /* M28 Part 4 — the scope indicator: who Rise is talking about. */
-                <Tooltip
-                  content={`This conversation is only about ${chat.scope.contactName}. Other clients' memories are never used here.`}
-                >
-                  <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 text-[11.5px] font-medium text-accent">
-                    <UserRound className="h-3.5 w-3.5" />
-                    About {chat.scope.contactName}
-                    {chat.scope.company ? ` · ${chat.scope.company}` : ''}
-                  </span>
-                </Tooltip>
-              )}
-              <p className="truncate text-[12.5px] font-medium text-muted">
-                {activeMeta?.title ?? ''}
-              </p>
-            </div>
-            <Tooltip
-              content={
-                chat.learningExcluded
-                  ? `${ASSISTANT_SECTION_NAME} is not learning from this conversation. Click to turn learning back on (it will not re-learn past messages).`
-                  : `${ASSISTANT_SECTION_NAME} can save facts from this conversation to your Sales Brain — always visibly, never silently. Click to exclude this conversation and forget what it already taught.`
-              }
-              className="max-w-sm"
-            >
-              <button
-                type="button"
-                onClick={toggleLearning}
-                className={cn(
-                  'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px]',
-                  chat.learningExcluded ? 'border-line text-faint' : 'border-accent/40 text-accent'
-                )}
-              >
-                {chat.learningExcluded ? (
-                  <BrainCog className="h-3.5 w-3.5" />
-                ) : (
-                  <Brain className="h-3.5 w-3.5" />
-                )}
-                {chat.learningExcluded ? 'Not learning' : 'Learning'}
-              </button>
-            </Tooltip>
-          </div>
-        )}
-
-        {showEmptyHero ? (
-          /* Empty state: composed hero in the upper third, chips attached to
-             the copy, composer waiting pinned below — no floating void. */
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto flex w-full max-w-[1140px] flex-col items-center px-6 pt-[16vh] text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft">
-                <Sparkles className="h-6 w-6 text-accent" />
-              </div>
-              <h2 className="mt-4 text-xl font-semibold tracking-tight text-ink">
-                Ask {ASSISTANT_SECTION_NAME} anything
-              </h2>
-              {brainStatus?.state === 'off' ? (
-                <>
-                  <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed text-muted">
-                    {ASSISTANT_SECTION_NAME} gets its edge from your Sales Brain — and it&rsquo;s
-                    switched off right now. Turn it on in Settings → Sales Brain, and answers
-                    here start citing your own calls, clients, and deals.
-                  </p>
-                  <p className="mt-3 text-[12.5px] text-faint">
-                    You can still chat — answers just won&rsquo;t be grounded in your data yet.
-                  </p>
-                </>
-              ) : brainStatus?.state === 'unavailable' ? (
-                <>
-                  <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed text-muted">
-                    {ASSISTANT_SECTION_NAME} can&rsquo;t reach your Sales Brain — it&rsquo;s on,
-                    but its database didn&rsquo;t open this session, so nothing can be read or
-                    learned until it does. Restarting the app usually fixes it.
-                  </p>
-                  <p className="mt-3 text-[12.5px] text-faint">
-                    You can still chat — answers just won&rsquo;t be grounded in your data.
-                    Importing more calls won&rsquo;t help while this persists.
-                  </p>
-                </>
-              ) : brainStatus?.state === 'empty' ? (
-                <>
-                  <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed text-muted">
-                    {ASSISTANT_SECTION_NAME} gets its edge from your Sales Brain — and it&rsquo;s
-                    empty right now. Import your call history or finish the Sales Brain interview
-                    in Settings, then every answer here starts citing what it knows.
-                  </p>
-                  <p className="mt-3 text-[12.5px] text-faint">
-                    You can still chat — answers just won&rsquo;t be grounded in your data yet.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed text-muted">
-                    Grounded in your Sales Brain — your calls, clients, deals, and selling
-                    patterns. Every claim cites where it came from.
-                  </p>
-                  <div className="mt-4 flex flex-wrap justify-center gap-2">
-                    {STARTER_PROMPTS.map((p) => (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => void startConversation(p)}
-                        className="rounded-full border border-line px-3.5 py-1.5 text-[12.5px] text-muted hover:border-accent/50 hover:text-ink"
-                      >
-                        {p}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-              <button
-                type="button"
-                onClick={() => setScopePickerOpen(true)}
-                className="mt-5 flex items-center gap-1.5 rounded-full border border-accent/40 px-3.5 py-1.5 text-[12.5px] text-accent hover:bg-accent-soft"
-              >
-                <UserRound className="h-3.5 w-3.5" /> Talk about a specific client
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div
-            ref={scrollRef}
-            role="log"
-            aria-label="Conversation"
-            onScroll={() => {
-              const el = scrollRef.current
-              if (!el) return
-              nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
-            }}
-            className="min-h-0 flex-1 overflow-y-auto"
-          >
-            <div className="mx-auto w-full max-w-[1140px] space-y-4 px-6 py-5">
-              {chat.loading && (
-                <div className="space-y-3">
-                  <SkeletonRows />
-                </div>
-              )}
-              {!chat.loading && chat.messages.length === 0 && chat.scope && (
-                /* A fresh scoped conversation: say who it's about, offer the
-                   scoped prompts — one click sends. */
-                <div className="rounded-2xl border border-line-soft bg-surface p-5">
-                  <p className="text-[14px] font-semibold text-ink">
-                    Talking about {chat.scope.contactName}
-                    {chat.scope.company ? ` at ${chat.scope.company}` : ''}
-                  </p>
-                  <p className="mt-1 text-[12.5px] text-muted">
-                    {ASSISTANT_SECTION_NAME} leads with their memories, calls, and deals here — and
-                    never mixes in another client.
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {scopedPrompts(chat.scope).map((p) => (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => void chat.send(p)}
-                        className="rounded-full border border-line px-3.5 py-1.5 text-[12.5px] text-muted hover:border-accent/50 hover:text-ink"
-                      >
-                        {p}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {chat.messages.map((m) => (
-                <MessageRow
-                  key={m.id}
-                  message={m}
-                  phase={chat.phase}
-                  trace={chat.traces[m.id]}
-                  onCite={setCitation}
-                  onApplySuggestion={(messageId, s) => void chat.applySuggestion(messageId, s)}
-                  onConfirmTask={(messageId, proposalId) =>
-                    void chat.confirmTask(messageId, proposalId)
-                  }
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Live-region for errors so screen readers hear them (audit H). */}
-        <div aria-live="polite" className="shrink-0">
-          {chat.error && (
-            <div className="mx-auto mb-2 flex w-full max-w-[1140px] items-center justify-between rounded-xl border border-danger/30 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">
-              <span className="whitespace-pre-wrap">{chat.error}</span>
-              <IconButton icon={X} label="Dismiss error" onClick={chat.clearError} />
-            </div>
-          )}
-          {notice && (
-            <div className="mx-auto mb-2 flex w-full max-w-[1140px] items-center justify-between rounded-xl border border-warning/30 bg-warning-soft px-3 py-2 text-[12.5px] text-warning">
-              <span>{notice}</span>
-              <IconButton icon={X} label="Dismiss notice" onClick={() => setNotice(null)} />
-            </div>
-          )}
-        </div>
-
-        {/* THE composer: one deliberate object — field and controls inside a
-            single bordered surface; recording/transcribing/pending are states
-            of the same object, not boxes around it. */}
-        <div className="shrink-0 px-6 pb-5 pt-1">
-          <div className="mx-auto w-full max-w-[1140px]">
-            {voice.error && (
-              <div
-                aria-live="polite"
-                className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-warning/30 bg-warning-soft px-3 py-1.5 text-[12px] text-warning"
-              >
-                <span>{voice.error}</span>
-                <span className="flex shrink-0 items-center gap-1">
-                  {voice.canRetry && (
-                    <Button size="sm" variant="secondary" onClick={() => void voice.retryTranscribe()}>
-                      Retry
-                    </Button>
-                  )}
-                  <IconButton icon={X} label="Dismiss" onClick={voice.clearError} />
-                </span>
-              </div>
-            )}
-            <div className="rounded-2xl border border-line bg-surface shadow-card focus-within:border-accent/50">
-              {pendingFiles.length > 0 && (
-                /* M28 Part 3 — the send preview: exactly what each file will
-                   contribute, before anything leaves the machine. */
-                <div className="flex flex-wrap gap-2 border-b border-line-soft px-3 py-2">
-                  {pendingFiles.map((p) => (
-                    <AttachmentChip
-                      key={p.attachment.id}
-                      attachment={p.attachment}
-                      preview={p.preview}
-                      onRemove={() => removePendingFile(p.attachment.id)}
-                    />
-                  ))}
-                </div>
-              )}
-              {voice.pending && (
-                <div className="flex items-center justify-between border-b border-line-soft px-3 py-1.5 text-[12px] text-muted">
-                  <span className="flex items-center gap-1.5">
-                    <Mic className="h-3.5 w-3.5" /> Voice note attached ·{' '}
-                    {formatDuration(voice.pending.durationMs)} — transcribed by Deepgram; review
-                    the text, then send.
-                  </span>
-                  <IconButton icon={Trash2} label="Discard voice note" onClick={voice.discardPending} />
-                </div>
-              )}
-              {/* AUDIT FIX (2026-08-25) — voice-note audio is POSTed to
-                  Deepgram's prerecorded REST API, and NOTHING in Rise said so.
-                  A consent and transparency gap, not a polish item: the user
-                  is recording their own voice, and where it goes is a fact
-                  they are entitled to before they finish, not after.
-                  Disclosed at BOTH decision points — while recording (they
-                  can still Cancel) and on the review chip (they can still
-                  Discard) — because a disclosure only shown after the upload
-                  would be a notice, not a choice. */}
-              {voice.state === 'recording' && (
-                <div className="border-b border-line-soft px-3 py-1.5 text-[11px] text-faint">
-                  Audio is sent to Deepgram to be transcribed. Nothing is sent until you press
-                  Done, and Cancel discards the recording without uploading it.
-                </div>
-              )}
-              {voice.state === 'recording' ? (
-                <div className="flex items-center gap-3 px-3 py-2.5">
-                  <span className="relative flex h-2.5 w-2.5">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-60" />
-                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-danger" />
-                  </span>
-                  <span className="text-[13px] tabular-nums text-ink" role="timer">
-                    {formatDuration(voice.elapsedMs)}
-                  </span>
-                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-elevated">
-                    <div
-                      className="h-full rounded-full bg-danger transition-[width] duration-100"
-                      style={{ width: `${Math.round(voice.level * 100)}%` }}
-                    />
-                  </div>
-                  <Button variant="secondary" size="sm" icon={X} onClick={voice.cancelRecording}>
-                    Cancel
-                  </Button>
-                  <Button size="sm" icon={Check} onClick={() => void voice.finishRecording()}>
-                    Done
-                  </Button>
-                </div>
-              ) : (
-                <>
-                  <textarea
-                    ref={textareaRef}
-                    rows={Math.min(6, Math.max(1, draft.split('\n').length))}
-                    className="block w-full resize-none bg-transparent px-3.5 pt-3 text-[13.5px] leading-relaxed text-ink outline-none placeholder:text-faint"
-                    placeholder={`Message ${ASSISTANT_SECTION_NAME}…`}
-                    aria-label={`Message ${ASSISTANT_SECTION_NAME}`}
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault()
-                        void handleSend()
-                      }
-                    }}
-                  />
-                  <div className="flex items-center justify-between px-2 py-1.5">
-                    <div className="flex items-center gap-0.5">
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        multiple
-                        accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.docx,.txt,.md,.csv"
-                        className="hidden"
-                        onChange={(e) => {
-                          void addFiles(e.target.files)
-                          e.target.value = ''
-                        }}
-                      />
-                      <IconButton
-                        icon={Paperclip}
-                        label="Attach a file (images, PDF, DOCX, TXT, MD, CSV)"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={chat.sending}
-                      />
-                      {voice.state === 'transcribing' ? (
-                        <span className="flex items-center gap-1.5 px-2 text-[12px] text-muted">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Transcribing with
-                          Deepgram…
-                        </span>
-                      ) : (
-                        <IconButton
-                          icon={Mic}
-                          label="Record a voice note"
-                          onClick={() => void voice.start()}
-                          disabled={chat.sending}
-                        />
-                      )}
-                    </div>
-                    {chat.sending ? (
-                      <Button variant="stop" size="sm" icon={Square} onClick={() => void chat.stop()}>
-                        Stop
-                      </Button>
-                    ) : (
-                      <Button size="sm" icon={Send} onClick={() => void handleSend()} disabled={!draft.trim()}>
-                        Send
-                      </Button>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+      {/* BUG-252 - KEYED on the conversation id: a switch discards the whole
+          instance, every useState and every useRef, rather than resetting
+          three of seven fields by hand. */}
+      <AssistantConversation
+        key={activeId ?? '__new__'}
+        activeId={activeId}
+        activeMeta={activeMeta}
+        brainStatus={brainStatus}
+        notice={notice}
+        pendingFiles={pendingFiles}
+        pendingFirst={pendingFirst}
+        onAddFiles={(files) => void addFiles(files)}
+        onRemovePendingFile={removePendingFile}
+        onClearPendingFiles={() => setPendingFiles([])}
+        onCitation={setCitation}
+        onNotice={setNotice}
+        onOpenScopePicker={() => setScopePickerOpen(true)}
+        onConfirm={setConfirm}
+        onStartConversation={startConversation}
+        onRefreshList={() => void refreshList()}
+      />
 
       {citation && (
         <EvidenceModal citation={citation} onClose={() => setCitation(null)} onOpenCall={onOpenCall} />

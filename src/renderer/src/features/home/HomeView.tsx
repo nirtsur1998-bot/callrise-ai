@@ -41,6 +41,7 @@ function MissingKeyBanner({
   onNavigate: (id: NavId) => void
 }): React.JSX.Element | null {
   const [missing, setMissing] = useState(false)
+  const [unreadable, setUnreadable] = useState(false)
   const [dismissed, setDismissed] = useState(false)
 
   useEffect(() => {
@@ -48,7 +49,13 @@ function MissingKeyBanner({
     window.api.aiKeys
       .getStatus()
       .then((status) => {
-        if (!cancelled) setMissing(!status.DEEPGRAM_API_KEY.configured)
+        if (!cancelled) {
+          setMissing(!status.DEEPGRAM_API_KEY.configured)
+          // BUG-250 - a key that is on disk and will not decrypt. Telling this
+          // user it is "free to get, takes a minute" sends them to fetch a key
+          // they already have.
+          setUnreadable(Boolean(status.DEEPGRAM_API_KEY.unreadable))
+        }
       })
       .catch(() => {
         /* can't check — say nothing rather than a false alarm */
@@ -64,16 +71,24 @@ function MissingKeyBanner({
     <div className="mb-5 flex items-start gap-3 rounded-xl border border-warning/30 bg-warning-soft px-4 py-3 text-[13px] text-warning">
       <KeyRound className="mt-0.5 h-4 w-4 shrink-0" />
       <div className="min-w-0 flex-1">
-        <p className="font-medium">Live transcription needs a Deepgram key</p>
+        <p className="font-medium">
+          {/* BUG-250, founder-approved 2026-09-09. */}
+          {unreadable
+            ? "Your saved Deepgram key can't be read on this computer"
+            : 'Live transcription needs a Deepgram key'}
+        </p>
         <p className="mt-0.5 text-[12px] leading-relaxed">
-          Free to get, takes a minute.{' '}
+          {unreadable
+            ? "It's still here, but this computer can't decrypt it. Paste it again in "
+            : 'Free to get, takes a minute. '}
           <button
             type="button"
             onClick={() => onNavigate('settings')}
             className="font-medium underline underline-offset-2 hover:no-underline"
           >
-            Add it in Settings
+            {unreadable ? 'Settings' : 'Add it in Settings'}
           </button>
+          {unreadable ? ' and it works straight away.' : ''}
         </p>
       </div>
       <button

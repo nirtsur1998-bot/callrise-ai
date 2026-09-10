@@ -420,9 +420,15 @@ const api = {
   },
   loopback: {
     // Synchronous so it can run in the same click tick as getDisplayMedia.
-    arm: (): void => {
-      ipcRenderer.sendSync('loopback:arm')
-    },
+    //
+    // BUG-201 — this was `arm: (): void`, and main had been returning its
+    // verdict all along. The renderer therefore could not tell "the APP
+    // declined" from "the USER declined" and reported both as `'denied'`:
+    // "screen & system-audio recording was blocked", which is false for the
+    // four app-side refusals. The answer is handed back now instead of being
+    // discarded one line after it arrives.
+    arm: (): { armed: boolean; reason: string } =>
+      ipcRenderer.sendSync('loopback:arm') as { armed: boolean; reason: string },
     disarm: (): void => {
       ipcRenderer.sendSync('loopback:disarm')
     },

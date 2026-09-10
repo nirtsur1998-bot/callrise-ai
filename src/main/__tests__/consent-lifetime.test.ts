@@ -107,7 +107,10 @@ function rendererPersists(callId: string, consent: unknown): boolean {
 function rendererArms(): boolean {
   const ev: { returnValue?: unknown } = {}
   syncHandlers.get('loopback:arm')!(ev)
-  return ev.returnValue === true
+  // BUG-201 — `{ armed, reason }` now, not a bare boolean. Shape only: `armed`
+  // comes from the same untouched expression, and every assertion here is
+  // about it. See bug201-arm-refusal-has-a-reason.test.ts for `reason`.
+  return (ev.returnValue as { armed?: unknown } | undefined)?.armed === true
 }
 
 /** Chromium asking for the stream. ASYNC because the grant path awaits

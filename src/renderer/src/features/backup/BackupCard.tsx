@@ -201,13 +201,20 @@ export function BackupCard(): React.JSX.Element {
   // the drain is reached. So it is not "retrying", it is stopped, and waiting
   // for a second consecutive failure would wait for ever. Shown immediately.
   const scrubStoppedBySignOut = pendingScrubs.length > 0 && status?.signedIn === false
+  // BUG-246 — the request could not be WRITTEN DOWN. Shown immediately and
+  // ahead of the two above, because they both describe a removal that was
+  // recorded and is retrying, and this one describes a removal that will be
+  // FORGOTTEN if the app quits. No second-failure grace period for the same
+  // reason as the sign-out case: waiting for a recurrence waits for something
+  // that may never come, while the window it warns about is open now.
+  const scrubRequestUnrecorded = Boolean(status?.scrubQueuePersistError)
+  const scrubLabels = (): string =>
+    pendingScrubs
+      .map((k) => OPTIONAL_ITEMS.find((i) => i.key === k)?.label ?? k)
+      .join(', ')
+      .toLowerCase()
   const pendingScrubLabels =
-    scrubFailedTwice || scrubStoppedBySignOut
-      ? pendingScrubs
-          .map((k) => OPTIONAL_ITEMS.find((i) => i.key === k)?.label ?? k)
-          .join(', ')
-          .toLowerCase()
-      : null
+    scrubFailedTwice || scrubStoppedBySignOut || scrubRequestUnrecorded ? scrubLabels() : null
 
   return (
     <Card>
@@ -235,6 +242,26 @@ export function BackupCard(): React.JSX.Element {
               <p className="text-[13px] text-accent">{PHASE_LABEL[phase ?? 'waiting']}</p>
             ) : loading ? (
               <p className="text-[13px] text-faint">Checking status…</p>
+            ) : scrubRequestUnrecorded && pendingScrubLabels ? (
+              // BUG-246 — ABOVE errorMessage, and that ordering was found by
+              // driving the card rather than by reading it. In the sandbox the
+              // dev-refusal message occupied this line and the warning could
+              // never appear; in production a perfectly ordinary "the last
+              // backup didn't finish, it will retry" would have done the same.
+              //
+              // A push error says "your work isn't saved YET" and resolves
+              // itself. An unrecorded erase says "we did not write down that
+              // you asked us to delete something, and it will be forgotten on
+              // restart" — it does not resolve itself, and only the user can
+              // act on it. So it outranks.
+              <p className="text-[13px] text-warning">
+                {/* APPROVED WORD BY WORD by the founder, 2026-09-09, with one
+                    change from the draft: "will be lost" -> "won't survive a
+                    restart", because nothing that existed is lost — the
+                    REQUEST is what fails to persist. Do not reword without
+                    asking again. */}
+                {`Couldn't save your request to remove ${pendingScrubLabels} — it will run now, but won't survive a restart`}
+              </p>
             ) : errorMessage ? (
               <p className="text-[13px] text-warning">{errorMessage}</p>
             ) : pendingScrubLabels ? (
@@ -244,6 +271,8 @@ export function BackupCard(): React.JSX.Element {
               // behaviour was to show the reassuring line and nothing else,
               // forever, while the erase failed on every single push.
               <p className="text-[13px] text-warning">
+                {/* The BUG-246 case is handled above this branch, deliberately
+                    higher than errorMessage — see the comment there. */}
                 {scrubStoppedBySignOut
                   ? `Sign in to finish removing ${pendingScrubLabels} from your account`
                   : `Still removing ${pendingScrubLabels} from your account`}

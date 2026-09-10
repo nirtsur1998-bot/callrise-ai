@@ -110,9 +110,79 @@ const LOCALITY_CLAIMS: RegExp[] = [
  *  with the reason. The key is a `file` + `contains` pair, specific enough
  *  that rewriting the sentence invalidates the entry and brings the guard
  *  back rather than blessing the new wording. */
-const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
+/**
+ * BUG-205's sibling problem, and the reason `entries` and `checkedOn` exist.
+ *
+ * An approved string is A CLAIM WITH A DATE, and a later finding can falsify
+ * it WITHOUT TOUCHING the entry that approved it. `activationSteps.ts`'s
+ * sentence was approved for LOCALITY on 2026-09-08 and is still true about
+ * locality — and BUG-217 then proved its "summaries" clause false, and BUG-222
+ * proved "each client" false for live cues. Two later entries falsify one
+ * sentence an earlier one blessed, and nothing linked the three.
+ *
+ * A STRING MATCHER WAS MEASURED AND REJECTED. Against those three entries a
+ * normalised match on the distinctive fragment caught **1 of 3**: BUG-222
+ * quotes a paraphrase, BUG-218 falsifies a sentence that was never approved.
+ * The misses are not tuning problems — entries dispute a CLAIM, not a string —
+ * and it would have made this suite depend on a vault file that lives outside
+ * git and is edited by two sessions at once.
+ *
+ * So: a DECLARED link and a PERIODIC RE-ASK. `entries` names the tracker
+ * entries that bear on this sentence, and `checkedOn` is when a human last
+ * read it against the code. The gate goes red when that date is older than
+ * STALE_AFTER_DAYS — it cannot tell you the sentence became false, only that
+ * nobody has looked lately, which is the honest limit of a declared field.
+ */
+const STALE_AFTER_DAYS = 120
+
+const ACCOUNTED_FOR: {
+  file: string
+  contains: string
+  because: string
+  /** Tracker entries bearing on this sentence — including ones that dispute
+   *  part of it. Empty is a claim that none do. */
+  entries?: string[]
+  /** ISO date a human last read this sentence against the code. */
+  checkedOn?: string
+}[] = [
+  {
+    file: 'features/home/HomeView.tsx',
+    contains: "Your saved Deepgram key can't be read on this computer",
+    checkedOn: '2026-09-09',
+    entries: ['BUG-250'],
+    because:
+      'BUG-250, founder-approved 2026-09-09. A claim about whether THIS MACHINE CAN READ A FILE, ' +
+      'not about where data lives. The key is on disk and safeStorage cannot decrypt it (the ' +
+      'OSCrypt key in Local State changed); the sentence exists precisely so the user is not told ' +
+      'to fetch a key they already have. It asserts nothing about upload, storage or retention.'
+  },
+  {
+    file: 'features/live/components/LiveStates.tsx',
+    contains: "Your Deepgram key can't be read on this computer",
+    checkedOn: '2026-09-09',
+    entries: ['BUG-250'],
+    because:
+      'BUG-250, founder-approved 2026-09-09. Same sentence and same subject as the HomeView entry ' +
+      'above: this machine cannot decrypt a file it can see. Shown on the live screen because a ' +
+      'rep about to take a call needs to know that pasting it again fixes it immediately.'
+  },
+  {
+    file: 'features/live/LiveView.tsx',
+    checkedOn: '2026-09-09',
+    entries: ['BUG-201'],
+    contains: "CallRise can't capture the other party on this computer",
+    because:
+      'BUG-201, founder-approved 2026-09-09. Not a claim about where data lives — a claim about ' +
+      'a CAPABILITY of this machine. It fires only on the `platform-unsupported` arm refusal ' +
+      '(loopback.ts: process.platform is neither darwin nor win32), and says the app cannot ' +
+      'capture the other party here. It asserts nothing about storage, upload or retention, and ' +
+      'the call it describes produces one-sided audio that syncs on exactly the same terms as any ' +
+      'other. The guard matched "on this computer", which is the right vocabulary to watch — the ' +
+      'sentence is simply about the wrong subject.'
+  },
   {
     file: 'features/assistant/AssistantView.tsx',
+    checkedOn: '2026-09-07',
     contains: 'Nothing is sent until you press',
     because:
       'True, and about the Deepgram live stream: the websocket in src/main/transcription.ts is ' +
@@ -120,6 +190,8 @@ const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
   },
   {
     file: 'features/backup/BackupCard.tsx',
+    checkedOn: '2026-09-08',
+    entries: ['BUG-205'],
     contains: 'Your Google Calendar connection — stays only on this device',
     because:
       'True in the sense a user reads it: the OAuth refresh token is stored separately by ' +
@@ -131,6 +203,8 @@ const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
   },
   {
     file: 'features/settings/TelemetrySection.tsx',
+    checkedOn: '2026-09-08',
+    entries: ['BUG-205'],
     contains: 'nothing is sent',
     because:
       'True: the telemetry-off branch of the same function. Telemetry defaults off and has no ' +
@@ -138,6 +212,8 @@ const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
   },
   {
     file: 'features/settings/TelemetrySection.tsx',
+    checkedOn: '2026-09-08',
+    entries: ['BUG-205'],
     contains: 'A random number made on this computer',
     because:
       'Describes where the anonymous diagnostics id is GENERATED, not where user data is kept. ' +
@@ -145,11 +221,14 @@ const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
   },
   {
     file: 'features/settings/telemetry-copy.ts',
+    checkedOn: '2026-09-07',
     contains: 'or files on your computer',
     because: 'An enumeration of what is NOT sent. True, and the opposite of a false locality claim.'
   },
   {
     file: 'features/settings/SalesBrainSection.tsx',
+    checkedOn: '2026-09-07',
+    entries: ['BUG-200'],
     contains: 'has no memories on this machine',
     because:
       'An empty state about the LOCAL store having nothing to export. Says nothing about whether ' +
@@ -157,6 +236,7 @@ const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
   },
   {
     file: 'features/audio/useMicTest.ts',
+    checkedOn: '2026-09-07',
     contains: 'could not be played back on this computer',
     because:
       'Not a data-location claim — an audio OUTPUT device error. Caught by the broadened ' +
@@ -164,6 +244,7 @@ const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
   },
   {
     file: 'features/calendar/EventDialog.tsx',
+    checkedOn: '2026-09-07',
     contains: 'Notifies you on this computer, only while CallRise AI is open',
     because:
       'Describes where a NOTIFICATION appears, not where data is kept. True: local notifications ' +
@@ -175,6 +256,8 @@ const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
   //    comment for why that asymmetry was the real defect.
   {
     file: 'features/coaching/CoachingView.tsx',
+    checkedOn: '2026-09-08',
+    entries: ['BUG-205'],
     contains: 'nothing new leaves your device',
     because:
       'TRUE, and verified rather than assumed. Skill tracking makes no AI call of its own: ' +
@@ -188,6 +271,8 @@ const ACCOUNTED_FOR: { file: string; contains: string; because: string }[] = [
   },
   {
     file: 'features/home/AccountMigrationNoticeCard.tsx',
+    checkedOn: '2026-09-08',
+    entries: ['BUG-205'],
     contains: 'completely unaffected',
     because:
       'TRUE as written. "Your calls, transcripts, contacts and Sales Brain live on this computer" ' +
@@ -325,6 +410,47 @@ describe('the app makes no false claim about where the user data lives', () => {
         'or add an ACCOUNTED_FOR entry stating why it is not a false claim:\n  ' +
         unaccounted.map((c) => `${c.file}:${c.line}\n    ${c.text.slice(0, 160)}`).join('\n  ')
     ).toEqual([])
+  })
+
+  it('every accounted-for sentence says when a human last read it', () => {
+    // A `because` written in September and never revisited is an argument with
+    // an expiry nobody set. BUG-205's sentence was approved for LOCALITY and
+    // stayed true about locality while BUG-217 and BUG-222 falsified two other
+    // clauses in it - so the question is not "was this argued" but "was it
+    // argued recently enough to still describe the code".
+    for (const a of ACCOUNTED_FOR) {
+      expect(a.checkedOn, `${a.file} has no checkedOn date`).toBeTruthy()
+      expect(a.checkedOn, `${a.file}'s checkedOn is not an ISO date`).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    }
+  })
+
+  it('goes red when nobody has re-read a sentence in STALE_AFTER_DAYS', () => {
+    // The periodic re-ask. It CANNOT tell you a sentence became false - only
+    // that nobody has looked lately, which is the honest limit of a declared
+    // field. A string matcher was measured against the three real instances
+    // and caught 1 of 3; see the note on ACCOUNTED_FOR for why that one is not
+    // built.
+    const now = Date.now()
+    const stale = ACCOUNTED_FOR.filter(
+      (a) => (now - Date.parse(a.checkedOn ?? '1970-01-01')) / 86_400_000 > STALE_AFTER_DAYS
+    )
+    expect(
+      stale.map((a) => `${a.file} (last read ${a.checkedOn})`),
+      `these sentences have not been read against the code in ${STALE_AFTER_DAYS} days. ` +
+        'Re-read each one, then move its checkedOn forward - or fix the sentence. Do not ' +
+        'bump the date without reading it; a bumped date is a lie with a timestamp.'
+    ).toEqual([])
+  })
+
+  it('every declared tracker link is shaped like a tracker id', () => {
+    // Shape only, ON PURPOSE. Checking the ids against the Bug Tracker would
+    // make this suite depend on a vault file outside git that two sessions
+    // edit at once - the exact reason the string matcher was rejected.
+    for (const a of ACCOUNTED_FOR) {
+      for (const id of a.entries ?? []) {
+        expect(id, `${a.file} links a malformed entry id`).toMatch(/^BUG-(\d{3}|D)$/)
+      }
+    }
   })
 
   it('every pinned false site carries a written argument for calling it false', () => {

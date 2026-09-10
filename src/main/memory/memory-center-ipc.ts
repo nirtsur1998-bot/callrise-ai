@@ -4,7 +4,7 @@
 // the same way every other memory-touching call site does.
 import { app, ipcMain } from 'electron'
 import { join } from 'node:path'
-import { isSalesBrainEnabled } from '../app-settings'
+import { isSalesBrainEnabled, notifySalesBrainErased } from '../app-settings'
 import { getCall, setCallSalesBrainExcluded } from '../calls-fs'
 import { getLastInitResult, getMemoryDb } from './memory-runtime'
 import { memoryDbPath, removeBrainShadowCopies } from './db'
@@ -156,6 +156,24 @@ export function registerMemoryCenter(): void {
     if (removed.length) {
       console.log(`[salesBrain] forget everything also removed ${removed.length} shadow copies`)
     }
+    // BUG-206, THE OTHER HALF — the CLOUD copy, which is what actually made
+    // "This cannot be undone" false. The local wipe and the shadow removal
+    // above were both real. The memory.db already sitting in the sales-brain
+    // bucket was untouched; backup.ts then correctly REFUSED to push emptiness
+    // over it ("an erasure travels as a DELETE rather than as an upload of
+    // emptiness"), and the next restore brought every memory back.
+    //
+    // The refusal was never the bug. This handler simply never joined the
+    // erase path the refusal assumes exists.
+    //
+    // QUEUED rather than deleted inline, deliberately: this is the exact path
+    // a sync-scope toggle-off uses, which BUG-204 proved against the live
+    // project. A queued scrub is durable and retried until it succeeds, so an
+    // erase performed offline still reaches the cloud when the machine
+    // reconnects — which an inline delete could not promise. It is also what
+    // downloadSalesBrainDb reads to tell "the user erased this" from "this
+    // store is empty for some other reason".
+    notifySalesBrainErased()
     return { ok: true }
   })
 

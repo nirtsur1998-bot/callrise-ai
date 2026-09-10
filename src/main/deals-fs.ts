@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from './atomic-write'
 import type { DealRiskAssessment, DealRiskLevel, DealRiskReason } from './deal-risk'
 import { mapWithConcurrency } from './bounded-map'
+import { buildEgressPayload, type FieldEgress } from './record-egress'
 
 /** A saved deal (what's stored on disk: one JSON file per deal). Company is
  *  deliberately NOT stored here — it's derived from the linked contact at
@@ -64,6 +65,48 @@ export interface Deal {
    * carries the provenance the file used to. Absent on every hand-made deal.
    */
   origin?: 'backfill'
+}
+
+/**
+ * BUG-199 — EXHAUSTIVE over `Required<Deal>`, the sibling of
+ * `CONTACT_FIELD_RULES` and of `CALL_FIELD_RULES` before it. Adding a field to
+ * a deal without saying whether it may leave the device is a COMPILE ERROR.
+ *
+ * Every field is SYNCED, which is the status quo: `backup.ts` pushed the whole
+ * record, and all of this is the user's own CRM data under the `contacts`
+ * toggle. Nothing that leaves the device changes.
+ */
+export const DEAL_FIELD_RULES: { [K in keyof Required<Deal>]: FieldEgress } = {
+  id: 'SYNCED',
+  title: 'SYNCED',
+  contactId: 'SYNCED',
+  stageId: 'SYNCED',
+  value: 'SYNCED',
+  expectedCloseDate: 'SYNCED',
+  notes: 'SYNCED',
+  createdAt: 'SYNCED',
+  updatedAt: 'SYNCED',
+  riskAssessment: 'SYNCED',
+  riskAssessmentHistory: 'SYNCED',
+  deleted: 'SYNCED', // the tombstone is the whole point of syncing a deletion
+  stageHistory: 'SYNCED',
+  outcomeReason: 'SYNCED', // see the three-way contract in dealBackupPayload
+  origin: 'SYNCED' // BUG-184 — provenance must survive a restore
+}
+
+/** The deal payload the backup pushes — DERIVED from the table above. */
+export function dealBackupPayload(deal: Deal): Record<string, unknown> {
+  return {
+    ...buildEgressPayload(deal, DEAL_FIELD_RULES),
+    // outcomeReason travels EXPLICITLY, null when there is none. The stored
+    // record drops the key when empty, so a bare payload cannot distinguish
+    // "cleared on this machine" from "written by an older build that has never
+    // heard of the field". importDeal reads the difference: null clears,
+    // ABSENT preserves. Same three-way contract callBackupPayload uses for a
+    // call's dealId, same reason — and it has to sit OUTSIDE the derivation,
+    // because the derivation drops undefined to match what the record holds.
+    outcomeReason: deal.outcomeReason ?? null
+  }
 }
 
 export interface DealCreateInput {

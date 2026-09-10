@@ -14,6 +14,13 @@ import { join } from 'node:path'
 const SRC = join(__dirname, '..', '..')
 const read = (rel: string): string => readFileSync(join(SRC, rel), 'utf8')
 
+/** A source pin must look at code. Same helper as latencyPolicy.test.ts and
+ *  bug154-provider-reachability.test.ts — a repo precondition since a test
+ *  matched a comment 40,000 characters from the code it claimed to check and
+ *  passed by luck. */
+const stripComments = (src: string): string =>
+  src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+
 describe('the primitive', () => {
   it('wraps Radix, is themed with the app tokens, and is mounted ONCE at the app root', () => {
     const t = read('components/Tooltip.tsx')
@@ -58,9 +65,16 @@ describe('the 14 hand edits — the explanatory sentences a user reads', () => {
   ]
   for (const [rel, words] of sites) {
     it(`${rel}: "${words.slice(0, 40)}" is Tooltip content, not a title attribute`, () => {
-      const s = read(rel)
+      // COMMENTS STRIPPED FIRST, and this test is why that rule exists rather
+      // than merely a place it is applied. It searched raw source with
+      // `indexOf`, so the FIRST occurrence won — and on 2026-09-10 a code
+      // comment added above the component quoted the tooltip's own sentence
+      // while explaining BUG-252. The test went red pointing at prose 300
+      // lines from the JSX it is actually pinning. Placed BELOW the site, the
+      // same comment would have gone green over the wrong text just as easily.
+      const s = stripComments(read(rel))
       expect(s).toContain("import { Tooltip } from")
-      expect(s).toContain(words)
+      expect(s, 'the sentence must survive in CODE, not only in a comment').toContain(words)
       // the words must not sit in a title= attribute any more
       const idx = s.indexOf(words)
       const before = s.slice(Math.max(0, idx - 220), idx)

@@ -137,6 +137,24 @@ export function LiveView({
   // whole-hook hoist rather than just moving the Recorder object.
   const liveCall = useLiveCall()
   const { consent, buyerIdentityRef, setOnSaved } = liveCall
+  // BUG-250 — is the Deepgram key MISSING, or on disk and unreadable? The
+  // no-key screen says a different sentence for each, because telling someone
+  // to fetch a free key they already have is the whole defect.
+  const [keyUnreadable, setKeyUnreadable] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    void window.api.aiKeys
+      .getStatus()
+      .then((s) => {
+        if (!cancelled) setKeyUnreadable(Boolean(s.DEEPGRAM_API_KEY?.unreadable))
+      })
+      .catch(() => {
+        /* the screen still renders the ordinary no-key copy */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const [consentOpen, setConsentOpen] = useState(false)
 
   // "Clip this" — a local, in-memory clip buffer (no callId exists yet for a
@@ -954,7 +972,8 @@ export function LiveView({
         />
       )
     }
-    if (status === 'no-key') return <NoKeyState onRetry={start} onSample={onOpenSample} />
+    if (status === 'no-key')
+      return <NoKeyState onRetry={start} onSample={onOpenSample} unreadable={keyUnreadable} />
     if (status === 'error') {
       return (
         <CenteredState
@@ -1131,19 +1150,41 @@ export function LiveView({
       {otherPartyError && (
         <InlineBanner tone={otherPartyError === 'interrupted' ? 'warning' : 'danger'}>
           <span>
-            {otherPartyError === 'denied'
-              ? isMac
-                ? "Couldn't record the other party — macOS blocked screen & system-audio recording."
-                : "Couldn't record the other party — screen & system-audio recording was blocked."
-              : otherPartyError === 'no-audio'
-                ? "Couldn't record the other party — no system audio came through."
-                : otherPartyError === 'not-ready'
-                  ? // BUG-172 — said DURING the call, not discovered in the
-                    // transcript afterwards. This is the whole point of the
-                    // state: the app promised to record both sides and could
-                    // not, and a rep who knows can still act on it.
-                    'Only your side is being recorded — the other party could not be captured for this call. Press Try again to attach it.'
-                  : 'The other party’s audio stopped — continuing with your mic only.'}
+            {/* BUG-201, all four founder-approved 2026-09-09. They share the
+                opening of the `not-ready` line below on purpose: a rep learns
+                the shape "Only your side is being recorded — <why>" once, and
+                every one of these is that same situation with a known cause.
+
+                They exist because `'denied'` said "screen & system-audio
+                recording was blocked" for all of them, which is true only when
+                the OS or the user refused. For the four APP-side refusals it
+                sends someone looking for a permission that is not the problem.
+
+                Only the master-switch line can name a fix, because it is the
+                only one of the four that has one. Do not invent actions for
+                the others. */}
+            {otherPartyError === 'app-master-switch-off'
+              ? 'Only your side is being recorded — recording the other party is switched off. Turn it on in Settings → Recording & consent.'
+              : otherPartyError === 'app-consent-not-permitted'
+                ? "Only your side is being recorded — this call's consent doesn't cover recording the other party."
+                : otherPartyError === 'app-no-live-call'
+                  ? 'Only your side is being recorded — the call had already ended when CallRise tried to attach the other party.'
+                  : otherPartyError === 'app-platform-unsupported'
+                    ? "Only your side is being recorded — CallRise can't capture the other party on this computer."
+                    : otherPartyError === 'denied'
+                      ? isMac
+                        ? "Couldn't record the other party — macOS blocked screen & system-audio recording."
+                        : "Couldn't record the other party — screen & system-audio recording was blocked."
+                      : otherPartyError === 'no-audio'
+                        ? "Couldn't record the other party — no system audio came through."
+                        : otherPartyError === 'not-ready'
+                          ? // BUG-172 — said DURING the call, not discovered in
+                            // the transcript afterwards. This is the whole point
+                            // of the state: the app promised to record both
+                            // sides and could not, and a rep who knows can still
+                            // act on it.
+                            'Only your side is being recorded — the other party could not be captured for this call. Press Try again to attach it.'
+                          : 'The other party’s audio stopped — continuing with your mic only.'}
           </span>
           <span className="flex shrink-0 gap-2">
             {otherPartyError === 'denied' && isMac && (

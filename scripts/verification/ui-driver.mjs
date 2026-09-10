@@ -35,18 +35,64 @@
 // state-guard.mjs. This module deliberately does not wrap it for you: the
 // snapshot has to be taken before the app is even launched in some flows, so
 // forcing it here would encourage the wrong shape.
+import { execSync } from 'node:child_process'
 import { connect } from './cdp.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /**
+ * RULE 1b — WHICH PROCESS ANSWERED, not just which folder it was launched from.
+ *
+ * Rule 1 checks the page URL. That distinguishes packaged from dev, and one
+ * worktree from another. It does NOT distinguish two instances launched from
+ * the SAME worktree at different times — which is the case that actually
+ * happens: an instance left running from an earlier session still owns the
+ * port, the new launch silently fails to bind it, and every reading comes from
+ * the old build while the URL check passes, because the URL is identical.
+ *
+ * That cost a whole drive on 2026-09-10 (BUG-252). An instance started the
+ * previous evening owned 9333 against an unrelated scratch profile; the build
+ * under test was never queried once, the app answered "No conversations yet",
+ * and the obvious reading was "the fix broke the screen". Nothing looked wrong
+ * about the driver's own output.
+ *
+ * Resolve the PID that actually owns the listening socket and compare it with
+ * the one the caller launched. CDP will not tell you; netstat will.
+ */
+export function pidOwningPort(port) {
+  const out = execSync('netstat -ano -p tcp', { encoding: 'utf8' })
+  const row = out
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.includes('LISTENING') && new RegExp(`[:.]${port}\\s`).test(l))
+  if (!row) return null
+  const pid = Number(row.split(/\s+/).pop())
+  return Number.isFinite(pid) ? pid : null
+}
+
+/**
  * Connect and REFUSE unless the running app is the build you meant.
  *
  * `expect` is 'packaged' | 'dev' | a substring the page URL must contain.
+ * `expectPid` is the PID you launched — see RULE 1b above; pass it whenever
+ * you started the app yourself, which is every drive that proves a fix.
  * There is no "either is fine" option on purpose — not knowing which build
  * answered is the condition this exists to prevent.
  */
-export async function openApp(port, { expect: expectBuild } = {}) {
+export async function openApp(port, { expect: expectBuild, expectPid } = {}) {
+  if (expectPid !== undefined) {
+    const owner = pidOwningPort(port)
+    if (owner === null) throw new Error(`nothing is LISTENING on port ${port}`)
+    if (owner !== Number(expectPid)) {
+      throw new Error(
+        `port ${port} is owned by PID ${owner}, not the app you launched (PID ${expectPid}).\n` +
+          '  A leftover instance holds the port; your launch could not bind it and is running\n' +
+          '  blind. Check that PID\'s command line, kill it, or use a different port.\n' +
+          '  Do NOT proceed: every reading would come from the wrong build.'
+      )
+    }
+    console.log(`[ui] port ${port} is owned by PID ${expectPid} — the app under test`)
+  }
   const cdp = await connect(port)
   const url = cdp.page.url
   const isPackaged = url.includes('app.asar')
