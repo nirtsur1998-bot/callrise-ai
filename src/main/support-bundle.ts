@@ -25,6 +25,7 @@ import { updateStatus } from './updater/index'
 import { currentConsent } from './telemetry/setup'
 import { listQueued } from './telemetry/index'
 import { readSweepSummary, type SweepSummary } from './memory/sweep-record-summary'
+import { injectionStats } from './memory/profile-injection'
 
 /**
  * A scrubber for WHOLE DOCUMENTS rather than single fields.
@@ -195,9 +196,28 @@ function scrubbedPurposeHealth(src: string, destDir: string): boolean {
  */
 function sweepSummary(userDataDir: string, destDir: string): void {
   const { summary, meaning } = readSweepSummary(userDataDir)
+  // BUG-258 — how often each consumer injected NOTHING, and why. It rides in
+  // this file rather than a new one because it is the same KIND (counts-only)
+  // about the same subsystem, and a new file means re-arguing the bundle's
+  // closing claim. It exists at all because a well-behaved empty case is
+  // indistinguishable from a feature that has never worked: on the founder's
+  // machine every Sales Brain injection had been an empty string for months,
+  // with nothing anywhere recording it.
   writeFileSync(
     join(destDir, 'sales-brain-sweep.json'),
-    scrubDocument(JSON.stringify({ quoteSweep: summary, meaning }, null, 2)),
+    scrubDocument(
+      JSON.stringify(
+        {
+          quoteSweep: summary,
+          meaning,
+          profileInjections: injectionStats(),
+          profileInjectionsMeaning:
+            'Counts since launch, keyed <scope family>:<outcome>. A high "compiled-but-empty" means features asked for a profile and received nothing — facts have been learned but none promoted. "brain-off" is a user choice, "no-db" a fresh install; only "compiled-but-empty" indicates a fault.'
+        },
+        null,
+        2
+      )
+    ),
     'utf8'
   )
 }
