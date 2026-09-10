@@ -376,14 +376,42 @@ export function useLiveCues(
     }
   }, [])
 
+  /**
+   * BUG-225 — hand the samples to the main process, then clear them.
+   *
+   * Touches only refs and `window.api`, so it is stable and safe to call from
+   * the unmount cleanup as well as the main effect. `callId` is passed in
+   * rather than read from `lastCallIdRef` because the main effect overwrites
+   * that ref with the STARTING call's id several lines before the boundary is
+   * handled; reading it there would file every measurement under the next
+   * call. Try-wrapped: a measurement must never be able to break the call it
+   * is measuring.
+   */
+  const flushLatency = useCallback((callId: string | null): void => {
+    try {
+      const samples = latencyRef.current.snapshotSamples()
+      if (samples.deterministic.length > 0 || samples.model.length > 0) {
+        window.api.live.recordCueLatency({ callId, samples })
+      }
+      latencyRef.current.reset()
+    } catch {
+      /* never let the instrument break the thing it measures */
+    }
+  }, [])
+
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
       if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current)
       if (debounceRef.current) clearTimeout(debounceRef.current)
+      // BUG-225 — the provider detaching is a third way a call ends. If the
+      // main effect already flushed at a stop, the tracker is empty and this
+      // sends nothing; if the screen was torn down mid-call, this is the only
+      // thing that saves the measurements.
+      flushLatency(lastCallIdRef.current)
     }
-  }, [])
+  }, [flushLatency])
 
   // Buyer capture live → lock the rep to channel 0 and skip the brain's guess.
   // (Can flip on mid-call; the main effect below re-reads knownRepRef on reset.)
@@ -444,9 +472,39 @@ export function useLiveCues(
       lastCallIdRef.current !== null &&
       currentCallId !== lastCallIdRef.current
     const justDisabled = wasEnabledRef.current && !enabled
+    // BUG-225 - the id of the call that is ENDING, captured before this line
+    // overwrites it. The samples about to be flushed belong to that call, not
+    // to the one starting; using lastCallIdRef after the assignment would file
+    // every measurement under the NEXT call.
+    const endingCallId = lastCallIdRef.current
     lastCallIdRef.current = currentCallId
     wasEnabledRef.current = enabled
     const shouldReset = isGenuineNewCall || justDisabled
+
+    // BUG-225 - PERSIST BEFORE THE RESET, at THREE moments, not one.
+    //
+    // My first attempt hung the flush off `shouldReset`, which was wrong in a
+    // way only a driven test could show: when the rep STOPS a call, `active`
+    // goes false and the call id goes null, so `isGenuineNewCall` is false
+    // (it requires a non-null NEW id) and `justDisabled` is false (cues are
+    // still enabled) - the block returns early and nothing was ever written.
+    // The one boundary that fired was call-A-becomes-call-B without stopping,
+    // which is the RARE one. A test that only checked that boundary passed
+    // and meant nothing.
+    //
+    // So the flush is deliberately NOT gated on shouldReset: going inactive is
+    // itself the moment the measurements stop being replaceable. It also runs
+    // on unmount (the provider detaching is another way a call ends) and on a
+    // genuine call boundary in the active path below - which never reset the
+    // latency tracker at all before this, so call B's percentiles silently
+    // carried call A's samples.
+    //
+    // Flushing more than once per call is expected, not a bug: a capture blip
+    // drops `active` and brings it back mid-call. `appendCueLatency` merges by
+    // call id for exactly that reason - see its comment.
+    //
+    // Fire-and-forget: ending a call must not wait on a disk write.
+    if (!active || !enabled || shouldReset) flushLatency(endingCallId)
 
     if (!active || !enabled) {
       if (!shouldReset) return
@@ -461,7 +519,6 @@ export function useLiveCues(
       // eslint-disable-next-line react-hooks/set-state-in-effect -- clear a visible cue when cues mute / the call ends, but only on a genuine call boundary — see the comment above
       clearCue()
       setSuggestions([])
-      latencyRef.current.reset()
       battlecardsRef.current.reset()
       setLatency(latencyRef.current.report())
       lastTurnEndAtRef.current = null
@@ -797,7 +854,11 @@ export function useLiveCues(
       offUtteranceEnd()
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [active, enabled, clearCue, getCallId])
+    // flushLatency is a useCallback([]) over refs only — listing it satisfies
+    // exhaustive-deps without ever re-running this effect, which matters here:
+    // a spurious re-run of THIS effect wiping call state is what M26 4.5
+    // (BUG-055) is about — see the guard comment at the top of the effect.
+  }, [active, enabled, clearCue, getCallId, flushLatency])
 
   return {
     cue,

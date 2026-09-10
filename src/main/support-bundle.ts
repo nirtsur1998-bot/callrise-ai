@@ -25,6 +25,7 @@ import { updateStatus } from './updater/index'
 import { currentConsent } from './telemetry/setup'
 import { listQueued } from './telemetry/index'
 import { readSweepSummary, type SweepSummary } from './memory/sweep-record-summary'
+import { summariseCueLatency } from './live/cue-latency-log'
 
 /**
  * A scrubber for WHOLE DOCUMENTS rather than single fields.
@@ -65,6 +66,11 @@ export const BUNDLE_FILES = [
   // scrubbing prose because the line is key=value numbers only, pinned by
   // bugd-trap.test.ts's "the log line never carries a transcript word".
   'session-health.log',
+  // BUG-225 — pooled cue latency, so "the cues feel slow" stops being a claim
+  // that neither end can check. Percentiles and counts only: the raw per-call
+  // samples and their call ids stay on the device, which is where the
+  // before/after comparison happens anyway.
+  'cue-latency-summary.json',
   'kern_bridge.log',
   // The engine rotates to `kern_bridge.log.1` (kern_bridge.cpp: g_logPathPrev
   // = g_logPath + L".1"). This list previously said `kern_bridge.prev.log`, a
@@ -102,6 +108,7 @@ export const BUNDLE_CONTENT_KINDS: Record<(typeof BUNDLE_FILES)[number], string>
   'jobs-summary.json': 'counts-and-ids',
   'sales-brain-sweep.json': 'counts-only',
   'session-health.log': 'scrubbed-log',
+  'cue-latency-summary.json': 'counts-only',
   'kern_bridge.log': 'scrubbed-log',
   'kern_bridge.log.1': 'scrubbed-log',
   'kern_bridge_status.json': 'diagnostic-metadata'
@@ -198,6 +205,22 @@ function sweepSummary(userDataDir: string, destDir: string): void {
   writeFileSync(
     join(destDir, 'sales-brain-sweep.json'),
     scrubDocument(JSON.stringify({ quoteSweep: summary, meaning }, null, 2)),
+    'utf8'
+  )
+}
+
+/**
+ * BUG-225 — cue latency as percentiles, never as samples.
+ *
+ * Written UNCONDITIONALLY, like the two summaries above it, because an empty
+ * file that says why it is empty is diagnostic and a missing file is not: "no
+ * calls with cues have ended here" and "this build never measured" look
+ * identical from the outside otherwise, and only one of them is a bug.
+ */
+function cueLatencySummary(userDataDir: string, destDir: string): void {
+  writeFileSync(
+    join(destDir, 'cue-latency-summary.json'),
+    scrubDocument(JSON.stringify(summariseCueLatency(userDataDir), null, 2)),
     'utf8'
   )
 }
@@ -347,6 +370,8 @@ export async function buildSupportBundle(
     collected.push('jobs-summary.json')
     sweepSummary(src.userDataDir, dest)
     collected.push('sales-brain-sweep.json')
+    cueLatencySummary(src.userDataDir, dest)
+    collected.push('cue-latency-summary.json')
 
     writeFileSync(
       join(dest, 'support-summary.txt'),

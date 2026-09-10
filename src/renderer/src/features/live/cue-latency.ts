@@ -81,6 +81,17 @@ export class CueLatencyTracker {
     return { deterministic: this.stats('deterministic'), model: this.stats('model') }
   }
 
+  /** BUG-225 - the RAW samples, for the per-call log that outlives the call.
+   *
+   *  The summary is not enough for the question the log exists to answer: a
+   *  percentile of percentiles is not a percentile, so an across-call p95 has
+   *  to be computed from pooled samples or it weights a 3-cue call the same as
+   *  a 200-cue one and loses the tail entirely. Copies, so a later reset()
+   *  cannot mutate what a caller is still holding. */
+  snapshotSamples(): Record<LatencySource, number[]> {
+    return { deterministic: [...this.samples.deterministic], model: [...this.samples.model] }
+  }
+
   reset(): void {
     this.samples = { deterministic: [], model: [] }
   }

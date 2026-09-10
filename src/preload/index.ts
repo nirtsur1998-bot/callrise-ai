@@ -712,6 +712,13 @@ const api = {
     // ever be able to affect a live call.
     repIdentified: (epoch: number, speaker: number) =>
       ipcRenderer.send('live:repIdentified', epoch, speaker),
+    /** BUG-225 - one line per call, so a before/after comparison of cue
+     *  latency is possible at all. Fire-and-forget: a call must not wait
+     *  on a disk write to end. Numbers only, never cue or transcript text. */
+    recordCueLatency: (entry: {
+      callId: string | null
+      samples: { deterministic: number[]; model: number[] }
+    }) => ipcRenderer.send('live:cueLatency', { ...entry, ts: new Date().toISOString() }),
     listRecoverable: () => ipcRenderer.invoke('live:listRecoverable'),
     recoverCall: (id: string) => ipcRenderer.invoke('live:recoverCall', id),
     discardRecoverable: (id: string) => ipcRenderer.invoke('live:discardRecoverable', id)

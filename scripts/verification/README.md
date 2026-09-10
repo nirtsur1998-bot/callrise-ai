@@ -1304,3 +1304,50 @@ cost a cycle here, in a new context. That is the argument for it living in this 
 that comment: the person hitting it is reading a launch log, not the source of the app they are
 trying to launch. Give your instance its own `CALLRISE_USER_DATA_DIR` (the lock is keyed on the
 userData path) and its own `--remote-debugging-port`.
+
+### `openApp` calls a fully-painted login screen "never painted"
+
+The readiness gate is `document.body.innerText.length > 200`. A fresh sandbox profile has no
+session, so the app opens on the **login screen** — which is 167 characters:
+
+```
+CallRise AI / Your AI assistant for sales calls / Log in / New here? Create an account /
+Not sure yet? See a sample call first / No account needed — nothing is saved.
+```
+
+So `openApp` waits 30 s and throws `app never painted: body text stayed under 200 chars for 30s`
+at an app that painted correctly seconds earlier. Cost during BUG-225: four retries and a
+diagnostic detour before the page was read directly and turned out to be fine.
+
+The threshold is not wrong for a signed-in app, so it is left alone. If you are driving a
+**signed-out sandbox** and only need `window.api` (which preload exposes regardless of auth),
+skip `openApp` and use `connect()` from `cdp.mjs` directly — `bug225-checks.mjs` is the worked
+example. Keep the identity checks either way: `pidOwningPort`, and the renderer port the launch
+itself printed.
+
+### An orphaned Electron holds the debug port, and the new app carries on without one
+
+`shell: true` + `child.kill()` reaps the `cmd` wrapper and leaves Electron running. The next
+launch then prints, in the middle of ordinary startup noise:
+
+```
+bind() returned an error: Only one usage of each socket address ... (0x2740)
+Cannot start http server for devtools.
+```
+
+and **keeps going**. CDP answers — from the orphan. Both instances are dev builds on localhost, so
+`expect: 'dev'` passes and every reading comes from the wrong process. This is taxonomy species 110
+again, reached from a different direction: not a stale app someone left open, but one this script's
+own previous run created.
+
+Two habits, both cheap:
+
+```bash
+# before launching: refuse if anything already holds the port
+netstat -ano -p tcp | grep ':9341 .*LISTENING'
+# when finished: kill the TREE, not the shell
+taskkill /T /F /PID <the pid you spawned>
+```
+
+And tie the CDP target to *this* launch — the renderer port the launch printed, not "it is a dev
+build".
