@@ -13,7 +13,7 @@
 | `verify-green.mjs` | Is the branch green? Read from the typecheck's own `error TS` lines and the suite's own `Test Files` / `Tests` lines, never a wrapper's exit or a count beside the answer (species 4, 14, 69). | nothing | `node scripts/verification/verify-green.mjs` (`--tests`, `--types`, `-- <vitest args>`) | prints `VERDICT: NOT GREEN`, exit 1, on any failed/missing summary or a stray `Errors N error` line. Also the CI gate (`.github/workflows/verify.yml`). Self-test: `src/__tests__/verify-green.test.ts`. |
 | `tracker-status.mjs` | Does every Bug Tracker entry's status line agree with its body? Regenerates the index at the top of the tracker (species 88). | the vault | `node scripts/verification/tracker-status.mjs` (`--check`, `--migrate`, `--file`) | exit 2 and writes NOTHING when a body has a dated closure later than an OPEN status, a heading still carries a status word, or an entry has no status line. Self-test: `src/__tests__/tracker-status.test.ts`. |
 | `state-guard.mjs` (+ `state-guard-selftest.mjs`) | Whatever a drive changes in the real profile is put back by mechanism, not memory — settings AND key files (species 53, 50). | the app's profile | imported by drive scripts: `withRestoredState(...)`; self-test: `node scripts/verification/state-guard-selftest.mjs` | refuses to run a mutation whose target it cannot name unambiguously; the self-test deletes and restores a canary, never a real credential. |
-| `cdp.mjs` | Talk to the running renderer over the Chrome DevTools Protocol (dev app `--remote-debugging-port=9333`; the packaged build honours the same flag — confirmed on the Stage 2 VM). | a running app | imported: `connect()`, `evaluate()`, target picking by page URL | throws when the target is ambiguous; never picks "the nearest plausible" page. |
+| `cdp.mjs` | Talk to the running renderer over the Chrome DevTools Protocol (dev app `--remote-debugging-port=9333`; the packaged build honours the same flag — confirmed on the Stage 2 VM). | a running app | imported: `connect()`, `evaluate()`, target picking by page URL | throws when the target is ambiguous; never picks "the nearest plausible" page. **The URL identifies the FOLDER, not the process** — pass `expectPid` to `openApp` (species 110). |
 | `ui-driver.mjs` | Drive the UI with every rule below built in: click through the element's real hit-test, wait for PAINT not the port, assert the action CHANGED state. | a running app | imported by drive scripts | `actAndExpectChange` fails when nothing changed; hidden-window timers are named as a limit, not worked around. |
 | `screen-sweep.mjs` | Walk every screen of a running build: text a user must never see (raw ids, `undefined`, placeholder copy) and per-screen screenshots hashed in pairs. | a running app | `node scripts/verification/screen-sweep.mjs` | a screen that cannot be reached is reported as unreached, never as clean; identical screenshot pairs fail the theme check. |
 | `occlusion-sweep.mjs` | Is any text drawn on top of by something else? | a running app | `node scripts/verification/occlusion-sweep.mjs` | reports the occluded elements by text; an empty DOM is a refusal, not a zero. |
@@ -203,16 +203,68 @@ shell header on every settings page, and reported "changed: false" for a
 navigation that had in fact worked. A control that cannot distinguish the two
 states is not a control.
 
-### Identity: pin the page URL, not a marker string
+### Identity: the PID you launched. The page URL is NOT enough
 
-The strongest available proof that you are driving YOUR build is the page's own
-URL. `connect()` returns `page.url`; a dev build reports
+**CORRECTED 2026-09-10, after it cost an hour of readings from the wrong build.**
+This section used to say the page URL was "the strongest available proof that you
+are driving YOUR build". It is not proof of identity at all — it is a proof of
+CATEGORY, and the difference is the whole failure.
+
+`connect()` returns `page.url`. A dev build reports
 `file:///C:/Users/User/Desktop/<worktree>/out/renderer/index.html`, which the
-installed app cannot produce. **A path cannot be coincidentally present the way
-a string can** — prefer it over a `git log -S` marker, and keep the process
-start-time check as the second half.
+installed app cannot produce, so the URL does separate packaged from dev, and one
+worktree from another. **It cannot separate two instances launched from the same
+worktree at different times**, because their URLs are character-for-character
+identical.
 
-### The app CANNOT run beside the installed copy — do not spend an hour on it
+**What happened.** An Electron instance left running from the previous evening
+owned `--remote-debugging-port=9333`, pointed at an unrelated scratch profile. A
+fresh launch could not bind the port and ran blind. Every reading for the next
+hour came from the old build: the app answered "No conversations yet" for a
+profile that plainly had two conversations, which read as *"the refactor broke
+the screen"*, and a stale error screen read as *"the fix crashes the app."*
+
+**The thing that made it undetectable is that it was the RIGHT FOLDER.** A check
+that fires on a wrong path would have caught a wrong worktree instantly. This was
+the correct worktree, the correct URL, the correct everything the check looked
+at — and the wrong process.
+
+**So: pass the PID you launched.**
+
+```js
+const app = await openApp(9555, { expect: 'my-worktree/out/renderer', expectPid: 21940 })
+// [ui] port 9555 is owned by PID 21940 — the app under test
+```
+
+`openApp` resolves the owner of the listening socket (`netstat -ano`) and refuses
+when it is not the process you started. CDP will not tell you this; `netstat`
+will. Keep the URL check too — it catches a different error, cheaply.
+
+**And read the app's own stdout.** Launching with `Start-Process -RedirectStandardOutput`
+gives you the lines the app prints about itself, which no external check can fake:
+
+```
+[dev] userData overridden -> C:\Users\...\callrise-bug252-sandbox
+[dev] SANDBOX profile at ...: cloud backup push and pull REFUSED
+```
+
+The general rule, taxonomy species 110: **ask what a COPY of the right thing would
+score on your check.** If it scores the same, you have a category, not an
+identity. A path, a version string, a window title and a build marker are all
+category checks. The identity is the thing you created — the PID you launched,
+the inode you wrote, the token you minted.
+
+*(One precedent got this right and was not encoded anywhere: `docs/M32-stage1-release.md`
+says "identity pinned by page URL **+ process start time**". The second half was
+the missing piece for three milestones, and is now behaviour in `ui-driver`
+rather than something to remember.)*
+
+### The app CAN run beside the installed copy — use `CALLRISE_USER_DATA_DIR`
+
+**STALE SINCE BUG-186 — THIS HEADING IS NO LONGER TRUE. It CAN, and a live
+drive should not touch the founder's data.** Corrected 2026-09-10; the three
+failed attempts below are kept because each is still a real dead end, but the
+conclusion drawn from them is not.
 
 Three attempts, all wrong, in order:
 
@@ -223,15 +275,41 @@ Three attempts, all wrong, in order:
 3. `APPDATA=<temp> electron ...` — `app.getPath('appData')` reads the Windows
    shell API, not the environment variable.
 
-None of them can work, and the reason is in the source: `src/main/index.ts`
-does `app.setPath('userData', join(app.getPath('appData'), 'sales-os'))`. The
-path is **hardcoded**, so every instance shares one userData and therefore one
-single-instance lock. A second instance calls `app.quit()` before `whenReady`.
+**What DOES work: `CALLRISE_USER_DATA_DIR`.** `src/main/index.ts:85` reads it,
+once, gated on `!app.isPackaged` (pinned by `dev-profile-override.test.ts`), so
+no environment on a real user's machine can move their data directory. A
+different userData is a different single-instance lock, so the sandbox instance
+runs happily beside the founder's app.
 
-**So a live drive means closing the founder's running app, and it runs against
-their REAL data.** Ask first — and snapshot `ai-keys/` with per-file hashes plus
-`app-settings.json` before anything, then verify byte-identity afterwards. Read
-only: no typing into a key field, no Save, no Remove, no toggles.
+```powershell
+$env:CALLRISE_USER_DATA_DIR = 'C:\Users\User\AppData\Local\Temp\my-sandbox'
+Start-Process electron.exe -ArgumentList 'out/main/index.js','--remote-debugging-port=9555' `
+  -RedirectStandardOutput sandbox.log -PassThru
+```
+
+The app announces it, and that line is the confirmation to read:
+
+```
+[dev] userData overridden -> C:\Users\User\AppData\Local\Temp\my-sandbox
+[dev] SANDBOX profile at ...: cloud backup push and pull REFUSED (set CALLRISE_SANDBOX_ALLOW_SYNC=1 to allow)
+```
+
+BUG-186 makes the copy refuse push AND pull unless `CALLRISE_SANDBOX_ALLOW_SYNC=1`,
+because a profile copy once pushed to the founder's real cloud backup within a
+minute of starting (species 87: *the isolation of a sandbox is decided by what it
+can REACH, not by where its files live*).
+
+**Signing the sandbox in without touching the real profile:** copy exactly two
+files out of it — `Local State` and `supabase-auth.json`. The session file is
+`safeStorage`-encrypted with the OSCrypt key held in `Local State`, so neither
+works alone. Seed whatever records the drive needs yourself; do NOT copy the
+founder's calls, contacts, deals or conversations, or their real client names end
+up in your screenshots.
+
+**If you genuinely must drive the founder's own profile** — ask first, and
+snapshot `ai-keys/` with per-file hashes plus `app-settings.json` before
+anything, then verify byte-identity afterwards. Read only: no typing into a key
+field, no Save, no Remove, no toggles.
 
 ### The target below the fold: a click that lands on nothing
 
