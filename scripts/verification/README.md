@@ -520,6 +520,33 @@ host.remove()
 if (strayAnswerButtons > 0) throw new Error('cleanup left something behind')
 ```
 
+### Your own `| tail -N` can hide half the problem
+
+`git merge` reported six conflicted files. The command that ran it ended in
+`| tail -8`, so four scrolled past and the resolution began from three. Only a
+later `git diff --name-only --diff-filter=U` showed the rest — after two of the
+missing four had already been "resolved" by a script that assumed it had seen
+them all.
+
+**This is the same family as reading a wrapper's exit code instead of the
+command's**: an instrument silently narrowing what you are looking at, and
+narrowing it *in the direction of less work*, which is the direction that feels
+like progress. `head`, `tail`, `| head -N`, a `slice(0, 200)` in a debug print,
+a `.filter()` added to make output readable — every one of them can turn "six"
+into "three" with no error and no gap in the story.
+
+**Ask the tool for the LIST, not the log.** Where a command has a
+machine-readable enumeration, use it and count:
+
+```bash
+git diff --name-only --diff-filter=U | wc -l     # not: git merge … | tail -8
+npm test 2>&1 | grep -E "Test Files|Tests "      # not: npm test | tail -5
+```
+
+And when you do truncate, truncate the DETAIL and keep the COUNT — a line
+saying "6 conflicts" above eight lines of the first three is honest; eight lines
+of the first three alone is not.
+
 ### A fallback that widens what counts as success can launder a failure
 
 Because the modal portals away, reading `host.innerText` gave **0 chars for a
