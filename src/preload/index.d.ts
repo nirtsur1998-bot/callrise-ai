@@ -2112,7 +2112,16 @@ export interface Tier1Api {
     devices?: { hasVirtualMic: boolean; inputCount: number; kinds: string[] }
     tier1Enabled?: boolean
     denoiseStrength?: string
-  }) => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
+  }) => Promise<{
+    ok: boolean
+    path?: string
+    canceled?: boolean
+    error?: string
+    /** BUG-254 — how many ENGINE logs went in, counted apart from the
+     *  always-written `app-diagnostics.json`. Before this, a bundle with no
+     *  logs at all reported exactly what a complete one reported. */
+    engineLogs?: number
+  }>
   getStatus: () => Promise<{
     engineAvailable: boolean
     engineRunning: boolean

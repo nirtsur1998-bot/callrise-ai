@@ -141,7 +141,17 @@ function compressToZip(stagingDir: string, zipPath: string): Promise<void> {
 
 export async function exportTier1Diagnostics(
   renderer: RendererDiagnostics
-): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> {
+): Promise<{
+  ok: boolean
+  path?: string
+  canceled?: boolean
+  error?: string
+  /** BUG-254 — how many ENGINE logs actually made it in. Counted apart from
+   *  `app-diagnostics.json`, which is written unconditionally: a blended total
+   *  is what let a zero hide, because "1 file" reads as success just as
+   *  readily as "7 files" does. */
+  engineLogs?: number
+}> {
   const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
   const defaultName = `callrise-diagnostics-${new Date().toISOString().slice(0, 10)}.zip`
   const { canceled, filePath } = await dialog.showSaveDialog(win!, {
@@ -155,7 +165,15 @@ export async function exportTier1Diagnostics(
   try {
     mkdirSync(staging, { recursive: true })
 
-    let collected = 0
+    // BUG-254 — this was `collected`, incremented here AND by the manifest
+    // write below, then discarded: the result was `{ ok: true, path }`. A run
+    // that gathered NONE of the engine logs was indistinguishable, to the
+    // caller and to the user, from one that gathered all of them — the
+    // manifest is always written, so the zip is never literally empty and
+    // nothing ever looked wrong. Success reported that nothing threw, not that
+    // anything was collected (species 85). The variable that would have made
+    // it honest was already being computed.
+    let engineLogs = 0
     for (const src of engineDiagnosticFiles(process.env['LOCALAPPDATA'] ?? '')) {
       // BUG-094 — this was a raw copyFileSync and this module never imported
       // the scrubber at all, so the zip shipped kern_bridge.log BYTE FOR BYTE.
@@ -165,7 +183,7 @@ export async function exportTier1Diagnostics(
       // never existed. Same helper as the support bundle now — one mechanism,
       // both callers. scrubbedCopy returns false rather than throwing, which
       // preserves the skip-never-fatal behaviour this loop always had.
-      if (scrubbedCopy(src, join(staging, src.split(/[\\/]/).pop()!))) collected++
+      if (scrubbedCopy(src, join(staging, src.split(/[\\/]/).pop()!))) engineLogs++
     }
     // The renderer used to supply deviceLabels (microphone names, which
     // routinely contain a person's name — "Dana's AirPods"); BUG-122 replaced
@@ -179,10 +197,9 @@ export async function exportTier1Diagnostics(
       scrubDocument(buildAppDiagnostics(renderer)),
       'utf8'
     )
-    collected++
 
     await compressToZip(staging, filePath)
-    return { ok: true, path: filePath }
+    return { ok: true, path: filePath, engineLogs }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   } finally {
