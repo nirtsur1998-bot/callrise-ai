@@ -474,9 +474,15 @@ interface CallBase {
   /**
    * M32 Stage 2 — the DEAL this call belongs to. The join outcome tracking
    * needs, and it did not exist: before this, the only path from a call to a
-   * deal was `call.contactId` → `deal.contactId`, which is **optional** (96 of
-   * 163 calls on the founder's machine have no contact at all) and
-   * **ambiguous** (a contact with two deals gives no way to say which).
+   * deal was `call.contactId` → `deal.contactId`, which is **optional** (201 of
+   * 297 calls on the founder's machine have no contact at all — re-measured
+   * 2026-09-10; this read "96 of 163" from an older corpus) and **ambiguous**
+   * (a contact with two deals gives no way to say which).
+   *
+   * A COUNT IN A COMMENT IS A CLAIM WITH A DATE, and nothing renews it. This
+   * one drifted from 59% to 68% while still reading as current — the fourth
+   * citation decay found this month. If you rely on it, re-measure it; if you
+   * re-measure it, stamp it.
    *
    * EXPLICIT, NEVER INFERRED. A guessed link is indistinguishable from a real
    * one in every later analysis, and a wrong attribution does not announce

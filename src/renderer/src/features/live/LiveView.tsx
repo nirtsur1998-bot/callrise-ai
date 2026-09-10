@@ -64,6 +64,7 @@ import {
 } from './components/LiveStates'
 import { sessionHealthNotice } from './session-health-notice'
 import { lowCaptureNotice } from './low-capture-notice'
+import { matchLiveMeeting } from './matchLiveMeeting'
 
 /** BUG-172 — how long to wait for the call id before giving up and SAYING SO.
  *  Measured on a cold launch: the id lands within a few hundred ms of the
@@ -288,17 +289,15 @@ export function LiveView({
   const dealFacts = useLiveDealFacts(currentMeeting)
   useEffect(() => {
     const now = Date.now()
-    const all = [...calEvents, ...googleEvents, ...outlookEvents]
-    const match = all.find((e) => {
-      if (e.allDay) return false
-      const start = new Date(e.start).getTime()
-      const end = new Date(e.end).getTime()
-      if (!Number.isFinite(start) || !Number.isFinite(end)) return false
-      return now >= start - 10 * 60_000 && now <= end
-    })
+    // BUG-226 — was `all.find(...)`: the first event covering now across three
+    // merged feeds, so the answer depended on which feed loaded first. It now
+    // collapses provider mirrors of one meeting, ranks by how EXPLICIT the
+    // evidence is (a hand-made contact/deal link first), and returns NOTHING
+    // when two meetings are indistinguishable. See matchLiveMeeting.ts.
+    const { meeting: match } = matchLiveMeeting([...calEvents, ...googleEvents, ...outlookEvents], now)
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Date.now() forces this out of render; syncing derived state from the calendar data is exactly what an effect is for
-    setCurrentMeeting(match ?? null)
-    currentMeetingRef.current = match ?? null
+    setCurrentMeeting(match)
+    currentMeetingRef.current = match
     // M26 4.5 — mirror into the Provider's own useDealIntelligence instance,
     // which now lives above this screen and needs the same value. Calendar
     // matching itself stays here (needs useCalendar(), a screen concern);
