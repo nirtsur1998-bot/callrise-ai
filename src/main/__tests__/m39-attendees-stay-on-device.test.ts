@@ -40,6 +40,8 @@ vi.mock('electron', () => ({
   dialog: { showSaveDialog: vi.fn() }
 }))
 
+const { toGoogleBody } = await import('../google-sync')
+const { toGraphBody } = await import('../outlook-sync')
 const { eventPayload } = await import('../backup')
 const { sanitizeEventRecord, createEvent, updateEvent, getEvent, setEventSync } =
   await import('../events-fs')
@@ -145,6 +147,87 @@ describe('M39 — and NOTHING carries them off the device', () => {
     const withField = JSON.stringify(eventPayload({ ...baseEvent, attendees: undefined } as never))
     const without = JSON.stringify(eventPayload({ ...baseEvent } as never))
     expect(withField).toBe(without)
+  })
+})
+
+describe('M39 — nor off the device by the OTHER egress: the calendar push', () => {
+  // Supabase is not the only way out. Every local event with two-way sync on is
+  // also PUSHed to Google or Outlook, and that path was never part of the
+  // original claim — I checked one container thoroughly and called it the whole
+  // house, which is exactly how "call audio never leaves this device" was
+  // proved while it streamed to Deepgram.
+  //
+  // `google.ts:627` says Google-only fields "are left untouched". That is a
+  // COMMENT, and this project has been bitten by comments repeatedly, so it is
+  // not evidence. What makes these two safe is structural and worth stating,
+  // because it is the OPPOSITE shape from `eventPayload`: both builders are
+  // ALLOWLISTS that name every field they send, so a new field on CalendarEvent
+  // cannot ride along. `eventPayload` spreads `{ ...e }` and is safe only
+  // because something deletes the field afterwards. Safe-by-construction and
+  // safe-by-deletion look identical in a green test and age very differently.
+  const invited = {
+    id: 'evt-push',
+    title: 'Renewal call',
+    start: '2026-09-10T10:00:00.000Z',
+    end: '2026-09-10T10:30:00.000Z',
+    allDay: false,
+    source: 'local' as const,
+    reminderMinutes: [10],
+    attendees: [{ email: BUYER, name: 'Sarah Chen' }],
+    createdAt: baseEvent.createdAt,
+    updatedAt: baseEvent.updatedAt
+  }
+
+  it('the whole serialised GOOGLE body contains no attendee address', () => {
+    const body = JSON.stringify(toGoogleBody(invited as never))
+    expect(body).not.toContain(BUYER)
+    expect(body).not.toContain('acme-example.com')
+    expect(body).not.toContain('Sarah Chen')
+    expect(body).not.toContain('attendees')
+    expect(body).toContain('Renewal call') // the push still carries the event
+  })
+
+  it('the whole serialised OUTLOOK body contains no attendee address', () => {
+    const body = JSON.stringify(toGraphBody(invited as never))
+    expect(body).not.toContain(BUYER)
+    expect(body).not.toContain('acme-example.com')
+    expect(body).not.toContain('Sarah Chen')
+    expect(body).not.toContain('attendees')
+    expect(body).toContain('Renewal call')
+  })
+
+  it('an all-day event does not take a different route out', () => {
+    // Both builders branch on allDay and RETURN EARLY, so the non-all-day test
+    // above never executes that branch. An absence proved on one branch says
+    // nothing about the other.
+    const allDay = { ...invited, allDay: true }
+    for (const body of [toGoogleBody(allDay as never), toGraphBody(allDay as never)]) {
+      const s = JSON.stringify(body)
+      expect(s).not.toContain(BUYER)
+      expect(s).not.toContain('attendees')
+    }
+  })
+
+  it('names every key either builder sends, so a NEW field cannot arrive unnoticed', () => {
+    // The guard that actually holds the line. If someone later switches either
+    // builder to a spread, or adds a field, this fails and names it — rather
+    // than the suite staying green while a third-party address starts shipping.
+    expect(Object.keys(toGoogleBody(invited as never)).sort()).toEqual([
+      'description',
+      'end',
+      'reminders',
+      'start',
+      'summary'
+    ])
+    expect(Object.keys(toGraphBody(invited as never)).sort()).toEqual([
+      'body',
+      'end',
+      'isAllDay',
+      'isReminderOn',
+      'reminderMinutesBeforeStart',
+      'start',
+      'subject'
+    ])
   })
 })
 
