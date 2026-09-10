@@ -11,4 +11,11 @@ export interface ChainCapabilityNeeds {
    *  set this need, so documents went to every model in the chain and each
    *  rejection blacklisted a model for four hours across every purpose. */
   needsDocument?: boolean
+  /** BUG-259 — the whole answer is meant to be ONE SHORT LINE (a call title,
+   *  a label), so a model that emits chain-of-thought until it hits the
+   *  ceiling cannot serve it at any budget. Measured on nemotron-3.5-lightning
+   *  2026-09-10: 60, 400 and 1500 tokens all came back mid-thought, and the
+   *  bigger budgets were worse — at 1500 a reasoning fragment slipped past the
+   *  title validator. Excludes catalog entries flagged `unboundedReasoning`. */
+  needsBoundedOutput?: boolean
 }

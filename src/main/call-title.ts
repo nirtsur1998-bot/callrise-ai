@@ -8,6 +8,28 @@ import type { CallSegment } from './calls-fs'
 
 const MAX_INPUT = 12000
 
+/**
+ * BUG-259 — MEASURED, not chosen. This was 60, which is generous for a title
+ * (7-9 output tokens on a model that answers directly) and far too small for
+ * one that thinks first:
+ *
+ *   qwen3.8-27b      7-9 tokens   answers straight away
+ *   gpt-oss-20b      80-135       at 60 it returned EMPTY CONTENT - all the
+ *   gpt-oss-120b     151-199      budget went to a `reasoning` field, so the
+ *                                 app got nothing and fell back to the date
+ *   nemotron-3.5     never        60, 400 and 1500 all came back mid-thought
+ *
+ * So 60 was silently costing every title on the gpt-oss family — not a bad
+ * title, NO title, indistinguishable from "the model failed". 400 covers the
+ * measured worst case (199) with room, and costs nothing on a model that
+ * stops at 9: max_tokens is a CEILING, not a reservation, and the two that
+ * answer briefly still spend nine tokens.
+ *
+ * The fourth row is not a budget problem and is not fixed here - see
+ * `needsBoundedOutput` below.
+ */
+const MAX_TITLE_TOKENS = 400
+
 /** Exported for the BUG-234 baseline harness — measuring a REPLICA of this
  *  schema would measure the replica. Runtime behaviour unchanged. */
 export const TITLE_TOOL: AITool = {
@@ -206,7 +228,11 @@ export async function generateCallTitle(
   try {
     const result = await completeWithFallback({
       purpose: 'other',
-      maxTokens: 60,
+      maxTokens: MAX_TITLE_TOKENS,
+      // BUG-259 - the whole answer is one short line, so a model that emits
+      // chain-of-thought until it hits the ceiling is excluded rather than
+      // given a bigger one. More budget made nemotron WORSE, not better.
+      needsBoundedOutput: true,
       tool: TITLE_TOOL,
       // Threaded so Stop lands INSIDE the request. Every adapter passes
       // req.signal to its SDK; the backfill's Stop was only observed between
@@ -240,7 +266,8 @@ export async function generateCallTitle(
   try {
     const result = await completeWithFallback({
       purpose: 'other',
-      maxTokens: 60,
+      maxTokens: MAX_TITLE_TOKENS,
+      needsBoundedOutput: true, // see attempt 1
       signal: opts?.signal,
       messages: [{ role: 'user', content: `${TEXT_PROMPT}${body}` }]
     })
