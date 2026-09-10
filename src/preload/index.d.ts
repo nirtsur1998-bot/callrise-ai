@@ -190,7 +190,13 @@ export interface TranscriptionApi {
      *  buyer-attributed content ever reaches an AI prompt. Keyed on callId,
      *  not sessionId. */
     callId?: string,
-    includesBuyerContent?: boolean
+    includesBuyerContent?: boolean,
+    /** BUG-222 — the client this call is with, so the cue prompt can carry what
+     *  the Sales Brain knows about them. From the matched MEETING's hand-made
+     *  contact link (trustworthy only since BUG-226 stopped that match
+     *  guessing); main falls back to the call's own contactId and injects
+     *  nothing when both are absent. Never inferred. */
+    contactId?: string
   ) => Promise<
     | {
         ok: true

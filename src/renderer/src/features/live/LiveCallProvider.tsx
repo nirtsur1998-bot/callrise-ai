@@ -82,6 +82,34 @@ export function LiveCallProvider({ children }: { children: ReactNode }): React.J
   // mid-call mono<->multichannel restart too. `getCallId` (not `status`) is
   // what lets both hooks tell those apart from a genuine new call; see their
   // own reset-effect comments for the full story.
+  // LiveView's own calendar-matched "what's happening right now" — genuinely
+  // screen-local (needs useCalendar()) — bridged in via a plain setter,
+  // mirroring setOnSaved's shape but for a value useDealIntelligence reacts
+  // to reactively rather than reads once at save time.
+  //
+  // BUG-222 — HOISTED above useLiveCues so the cue prompt can carry the client.
+  // The state is unchanged; what is new is its position and the ref beside it.
+  //
+  // REF-BACKED, and that is the whole care in this change.
+  // `getMeetingContactId` is a useCallback([]) reading a ref, so its identity
+  // NEVER changes. Passing `currentMeeting` itself, or a callback closed over
+  // it, would change identity the moment a meeting resolves — re-running the
+  // cue effect mid-call. That re-run is BUG-055: it wipes the interrupt
+  // channel's cooldown and dedupe state, which is what let an already-
+  // suppressed cue fire again the moment a blip passed.
+  const currentMeetingRef = useRef<CalendarEvent | null>(null)
+  const [currentMeeting, setCurrentMeetingState] = useState<CalendarEvent | null>(null)
+  const setCurrentMeeting = useCallback((meeting: CalendarEvent | null) => {
+    currentMeetingRef.current = meeting
+    setCurrentMeetingState(meeting)
+  }, [])
+  /** BUG-226 is what makes this safe to use at all: the match now collapses
+   *  provider mirrors of one meeting, ranks on the hand-made contact link, and
+   *  returns NOTHING when it cannot tell two meetings apart. Before that it was
+   *  "the first event covering now", and a guessed client injected into a cue is
+   *  worse than no client — a cue arrives as advice with nothing on it to check. */
+  const getMeetingContactId = useCallback(() => currentMeetingRef.current?.contactId ?? null, [])
+
   const cueSettings = useCueSettings()
   const cues = useLiveCues(
     transcription.status === 'listening',
@@ -89,14 +117,9 @@ export function LiveCallProvider({ children }: { children: ReactNode }): React.J
     transcription.getCallId,
     cueSettings.sensitivity,
     transcription.otherPartyLive ? 0 : null,
-    transcription.identifyRep
+    transcription.identifyRep,
+    getMeetingContactId
   )
-
-  // LiveView's own calendar-matched "what's happening right now" — genuinely
-  // screen-local (needs useCalendar()) — bridged in via a plain setter,
-  // mirroring setOnSaved's shape but for a value useDealIntelligence reacts
-  // to reactively rather than reads once at save time.
-  const [currentMeeting, setCurrentMeeting] = useState<CalendarEvent | null>(null)
 
   const dealIntelligenceSettings = useDealIntelligenceSettings()
   const dealIntelligence = useDealIntelligence(

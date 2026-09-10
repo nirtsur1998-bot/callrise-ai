@@ -94,8 +94,20 @@ const api = {
       transcript: string,
       repSpeaker: number | null,
       callId?: string,
-      includesBuyerContent?: boolean
-    ) => ipcRenderer.invoke('live:cue', { transcript, repSpeaker, callId, includesBuyerContent })
+      includesBuyerContent?: boolean,
+      /** BUG-222 — the client this call is with, so the cue prompt can carry
+       *  what the Sales Brain knows about them. Comes from the matched
+       *  meeting's HAND-MADE contact link; main falls back to the call's own
+       *  and injects nothing when both are absent. */
+      contactId?: string
+    ) =>
+      ipcRenderer.invoke('live:cue', {
+        transcript,
+        repSpeaker,
+        callId,
+        includesBuyerContent,
+        contactId
+      })
   },
   trackers: {
     /** Turn a rep's plain-English request into a candidate tracker (§4.8).

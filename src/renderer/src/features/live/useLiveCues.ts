@@ -288,7 +288,22 @@ export function useLiveCues(
   /** Told to the transcript the moment the rep is identified, so already-
    *  recorded turns in this epoch can be back-filled ONCE instead of the UI
    *  re-deriving attribution from mutable state at render time. */
-  onRepIdentified?: (epoch: number, speaker: number) => void
+  onRepIdentified?: (epoch: number, speaker: number) => void,
+  /**
+   * BUG-222 — which CLIENT this call is with, so the cue prompt can carry what
+   * the Sales Brain knows about them.
+   *
+   * A GETTER, and it must be a STABLE REFERENCE — the same constraint
+   * `getCallId` above carries, for the same reason. The obvious version of this
+   * parameter is `contactId: string | null`, or a `useCallback` over the matched
+   * meeting; both change identity the moment the meeting resolves, which
+   * re-runs the effect below, which is precisely the BUG-055 defect that effect
+   * was written to close. The provider hands down a ref-backed getter instead.
+   *
+   * Read at REQUEST time rather than captured, so a contact linked mid-call is
+   * picked up by the next cue instead of the one after a reset.
+   */
+  getContactId?: () => string | null
 ): UseLiveCues {
   const [cue, setCue] = useState<LiveCue | null>(null)
   const [suggestions, setSuggestions] = useState<LiveCue[]>([])
@@ -321,6 +336,21 @@ export function useLiveCues(
   // decision was based on, so a genuine call boundary can be told apart from
   // `active` merely blipping mid-call.
   const lastCallIdRef = useRef<string | null>(null)
+  /**
+   * BUG-222 — the contact getter, held in a ref and refreshed on render.
+   *
+   * The parameter's doc says it must be stable. This makes that DEFENCE rather
+   * than a REQUEST: the main effect below reads `getContactIdRef.current`, so
+   * even a caller who passes a fresh closure every render cannot re-run it. A
+   * ref assignment is free; a re-run of that effect on a mid-call meeting change
+   * is BUG-055, which cost the interrupt channel's cooldown and dedupe state.
+   *
+   * Assigned during render on purpose — an effect would leave the ref one render
+   * stale, and the value it holds is only ever READ inside a callback, never
+   * during render, so there is nothing here for concurrent rendering to tear.
+   */
+  const getContactIdRef = useRef(getContactId)
+  getContactIdRef.current = getContactId
   const wasEnabledRef = useRef(enabled)
 
   const cueRef = useRef<LiveCue | null>(null)
@@ -615,7 +645,16 @@ export function useLiveCues(
         .slice(-WINDOW_TURNS)
         .some((t) => t.channel !== undefined && t.channel !== knownRepRef.current)
       void window.api.transcription
-        .liveCue(transcript, repSpeakerRef.current, getCallId() ?? undefined, includesBuyerContent)
+        .liveCue(
+          transcript,
+          repSpeakerRef.current,
+          getCallId() ?? undefined,
+          includesBuyerContent,
+          // BUG-222 — read here, at request time. Not captured in the effect's
+          // closure: a rep who links the contact mid-call should have it on the
+          // NEXT cue, not after whatever would next cause a reset.
+          getContactIdRef.current?.() ?? undefined
+        )
         .then((res) => {
           if (!mountedRef.current || generation !== generationRef.current) return
           if (!res.ok) {
