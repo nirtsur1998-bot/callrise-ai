@@ -108,7 +108,9 @@ describe('the call boundary is where held identity state dies', () => {
     const src = readFileSync(join(__dirname, '..', 'LiveCallProvider.tsx'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
-    const body = src.match(/const onSaved = useCallback\(\(callId: string\) => \{[\s\S]*?\}, \[\]\)/)
+    const body = src.match(
+      /const onSaved = useCallback\(\(callId: string\) => \{[\s\S]*?\}, \[\]\)/
+    )
     expect(body, 'onSaved must still exist').not.toBeNull()
     const handoff = body![0].indexOf('onSavedRef.current?.(callId)')
     const clear = body![0].indexOf('liveIdentity.current = {')

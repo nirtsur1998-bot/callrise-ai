@@ -18,6 +18,7 @@
 // Both are now pinned below rather than fixed and forgotten.
 import { describe, expect, it } from 'vitest'
 import { buildClientDossier, type DossierInput } from '../clientDossier'
+import type { MinedObjection } from '../objectionPreload'
 
 const ASOF = '2026-09-11T00:00:00.000Z'
 const call = (id: string, createdAt: string, over: Record<string, unknown> = {}) => ({
@@ -40,6 +41,17 @@ const base = (over: Partial<DossierInput> = {}): DossierInput => ({
 
 const text = (input: DossierInput): string => buildClientDossier(input).text
 
+/** A mined objection with the fields the real type requires. Built rather than
+ *  cast: the first version of these fixtures was `[...] as DossierInput['objections']`,
+ *  which typecheck rejected — correctly, since they were missing `id` and
+ *  carried a `contactId` the type does not have. A cast would have silenced a
+ *  fixture that does not resemble the records. */
+const objection = (callId: string, type: string): MinedObjection => ({
+  id: `${callId}-${type}`,
+  callId,
+  type
+})
+
 describe('M39 — the section actually reaches the rendered dossier', () => {
   it('renders the heading and the line, not just the item', () => {
     const out = text(
@@ -60,11 +72,23 @@ describe('M39 — the section actually reaches the rendered dossier', () => {
     expect(out).toContain('The deal moved to Proposal.')
   })
 
-  it('every section a dossier can emit is present in the render ORDER', () => {
-    // The general form of bug 1. Build a dossier with every signal switched on
-    // and assert that each section the builder REPORTS is also a heading in the
-    // text — a section can only be reported if ORDER rendered it, so a new
-    // unlisted section shows up as a line that exists nowhere.
+  it('the rich case renders every section it reports', () => {
+    // HOLLOW AS FIRST WRITTEN, and kept for the narrower thing it does prove.
+    //
+    // It was "every section a dossier can emit is present in ORDER", looping
+    // over `built.sections` — which `render` populates ONLY from ORDER. An
+    // unlisted section never enters that array, so the loop had nothing to
+    // iterate and passed with the bug present. Red-checked by removing the new
+    // section from ORDER: the specific test below went red, this one did not.
+    //
+    // The general claim cannot be made by a test at all, and is now made by the
+    // COMPILER: `DossierSection` is a union, `ORDER` is declared
+    // `satisfies readonly DossierSection[]`, and a completeness check makes an
+    // omission a build error. Red-checked by adding a member to the union —
+    // TS2741, as intended.
+    //
+    // What survives here is worth having on its own: a dossier with every
+    // signal on renders all of them, and none is swallowed by the cap.
     const full = base({
       contact: { id: 'c1', name: 'Harvey', company: 'Acme' },
       deal: {
@@ -103,10 +127,7 @@ describe('M39 — the section actually reaches the rendered dossier', () => {
         },
         { id: 't2', contactId: 'c1', title: 'Call the bank', dueAt: '2026-09-02' }
       ],
-      objections: [
-        { callId: 'call-1', type: 'price', contactId: 'c1' },
-        { callId: 'call-2', type: 'timing', contactId: 'c1' }
-      ] as DossierInput['objections']
+      objections: [objection('call-1', 'price'), objection('call-2', 'timing')]
     })
     const built = buildClientDossier(full)
     expect(built.sections.length).toBeGreaterThan(3)
@@ -117,9 +138,17 @@ describe('M39 — the section actually reaches the rendered dossier', () => {
     }
   })
 
-  it('a dossier with no rendered section is EMPTY, not a bare CLIENT line', () => {
-    // Bug 2. A contact with nothing to say must get '' so the prompt is
-    // byte-for-byte the pre-M39 prompt — not a heading with a name under it.
+  it('a contact with nothing to say gets an EMPTY dossier', () => {
+    // A contact with nothing to say must get '' so the prompt is byte-for-byte
+    // the pre-M39 prompt — not a heading with a name under it.
+    //
+    // STATED PLAINLY: this does NOT defend bug 2. It passes under the old
+    // `!kept.length` guard too, because with zero items both guards agree. The
+    // case that separated them — items exist but none renders — cannot be
+    // reached through the public API now that an unlisted section is a compile
+    // error, which is the right place for it to be impossible. The
+    // `out.sections.length` guard stays as defence in depth; the compiler is
+    // what actually prevents the bug.
     const out = buildClientDossier(base({ calls: [], tasks: [], objections: [] }))
     expect(out.text).toBe('')
     expect(out.chars).toBe(0)
@@ -239,10 +268,7 @@ describe('M39 — what counts as changed', () => {
   it('reports a shift in what they push back on', () => {
     const out = text(
       base({
-        objections: [
-          { callId: 'call-1', type: 'trust' },
-          { callId: 'call-2', type: 'approval' }
-        ] as DossierInput['objections']
+        objections: [objection('call-1', 'trust'), objection('call-2', 'approval')]
       })
     )
     expect(out).toContain('Their pushback shifted from trust to approval.')
@@ -251,10 +277,7 @@ describe('M39 — what counts as changed', () => {
   it('says nothing when the pushback did not shift', () => {
     const out = text(
       base({
-        objections: [
-          { callId: 'call-1', type: 'trust' },
-          { callId: 'call-2', type: 'trust' }
-        ] as DossierInput['objections']
+        objections: [objection('call-1', 'trust'), objection('call-2', 'trust')]
       })
     )
     expect(out).not.toContain('pushback shifted')
@@ -265,10 +288,7 @@ describe('M39 — what counts as changed', () => {
     // pushback shifted from other to trust" is noise wearing a fact's clothes.
     const out = text(
       base({
-        objections: [
-          { callId: 'call-1', type: 'other' },
-          { callId: 'call-2', type: 'trust' }
-        ] as DossierInput['objections']
+        objections: [objection('call-1', 'other'), objection('call-2', 'trust')]
       })
     )
     expect(out).not.toContain('pushback shifted')

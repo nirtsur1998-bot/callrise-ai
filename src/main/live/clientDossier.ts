@@ -315,8 +315,34 @@ function sinceLastCall(
 const UNCLASSIFIED_TYPES = new Set(['other', 'unknown', 'none', ''])
 
 /** One line of the dossier, with the rank that decides what survives the cap. */
+/**
+ * Every heading the dossier can emit.
+ *
+ * A UNION RATHER THAN A STRING, and the reason is a bug this file shipped.
+ * `render` iterates ORDER, not the items, so a section missing from ORDER is
+ * dropped in silence: "Since your last call with them" produced lines, ranked
+ * above most of the dossier, survived the cap, and rendered to nothing — 0 of
+ * 50 contacts against a measured population of 6.
+ *
+ * The first attempt to guard that was a test looping over the dossier's
+ * reported `sections`, which is populated BY ORDER — so an unlisted section
+ * never enters it and the loop was vacuous. It passed with the bug present.
+ * A test cannot check this; the type can. `ORDER` below is declared
+ * `readonly Section[]` and checked for completeness at compile time, so
+ * omitting a section is a build error rather than a blank space in a prompt.
+ */
+export type DossierSection =
+  | 'Known facts'
+  | 'Deal'
+  | 'Since your last call with them'
+  | 'Open commitments'
+  | 'They have pushed back on this before'
+  | 'Last call'
+  | 'What they pushed back on'
+  | 'How these calls have gone'
+
 interface Item {
-  section: string
+  section: DossierSection
   line: string
   /** Higher survives. relevance × confidence × recency, all in this number. */
   rank: number
@@ -562,7 +588,15 @@ export function buildClientDossier(input: DossierInput): Dossier {
     'Last call',
     'What they pushed back on',
     'How these calls have gone'
-  ]
+  ] as const satisfies readonly DossierSection[]
+  // COMPLETENESS, checked by the compiler rather than by a test that could not
+  // see the omission. Adding a member to `DossierSection` without adding it to
+  // ORDER makes this line fail to compile: the object's keys are exactly
+  // ORDER's members, and it must satisfy a record over the whole union.
+  const _orderIsComplete: Record<DossierSection, true> = Object.fromEntries(
+    ORDER.map((s) => [s, true])
+  ) as Record<(typeof ORDER)[number], true>
+  void _orderIsComplete
   const byRank = [...items].sort((a, b) => b.rank - a.rank || a.line.localeCompare(b.line))
 
   /** Render a candidate set. Separated from the budgeting so the cap can be

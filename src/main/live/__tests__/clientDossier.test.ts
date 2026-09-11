@@ -117,7 +117,12 @@ describe('M39 — the dossier says something when there is something to say', ()
     const tasks: DossierTask[] = [
       { id: 't1', title: 'Genuinely still open', status: 'open', callId: 'a' },
       { id: 't2', title: 'Closed by status', status: 'done', callId: 'a' },
-      { id: 't3', title: 'Closed by completedAt', completedAt: '2026-08-21T00:00:00.000Z', callId: 'a' },
+      {
+        id: 't3',
+        title: 'Closed by completedAt',
+        completedAt: '2026-08-21T00:00:00.000Z',
+        callId: 'a'
+      },
       { id: 't4', title: 'Closed by the boolean', done: true, callId: 'a' }
     ]
     const d = buildClientDossier({ contact, calls: RICH, tasks })
@@ -137,8 +142,20 @@ describe('M39 — the dossier says something when there is something to say', ()
 
 describe('M39 Stage 4 #4 — a promise that is past due says so', () => {
   const tasks: DossierTask[] = [
-    { id: 't1', title: 'Send the security doc', status: 'open', dueAt: '2026-08-03T00:00:00.000Z', callId: 'a' },
-    { id: 't2', title: 'Book the follow-up', status: 'open', dueAt: '2026-12-01T00:00:00.000Z', callId: 'a' }
+    {
+      id: 't1',
+      title: 'Send the security doc',
+      status: 'open',
+      dueAt: '2026-08-03T00:00:00.000Z',
+      callId: 'a'
+    },
+    {
+      id: 't2',
+      title: 'Book the follow-up',
+      status: 'open',
+      dueAt: '2026-12-01T00:00:00.000Z',
+      callId: 'a'
+    }
   ]
 
   it('names the overdue one as overdue and the other as merely due', () => {
@@ -161,11 +178,23 @@ describe('M39 Stage 4 #4 — a promise that is past due says so', () => {
     // Date.now() inside would make two cues on the same call differ — exactly
     // what the cached prefix cannot survive. Two builds at two different
     // stated moments differ; two at the same moment are identical.
-    const early = buildClientDossier({ contact, calls: RICH, tasks, asOf: '2026-07-01T00:00:00.000Z' })
-    const late = buildClientDossier({ contact, calls: RICH, tasks, asOf: '2026-09-11T00:00:00.000Z' })
+    const early = buildClientDossier({
+      contact,
+      calls: RICH,
+      tasks,
+      asOf: '2026-07-01T00:00:00.000Z'
+    })
+    const late = buildClientDossier({
+      contact,
+      calls: RICH,
+      tasks,
+      asOf: '2026-09-11T00:00:00.000Z'
+    })
     expect(early.text).not.toContain('still open')
     expect(late.text).toContain('still open')
-    expect(buildClientDossier({ contact, calls: RICH, tasks, asOf: '2026-09-11T00:00:00.000Z' }).text).toBe(late.text)
+    expect(
+      buildClientDossier({ contact, calls: RICH, tasks, asOf: '2026-09-11T00:00:00.000Z' }).text
+    ).toBe(late.text)
   })
 
   it('with no asOf, nothing is called overdue', () => {
@@ -235,7 +264,11 @@ describe('M39 — the cap actually caps', () => {
 
   it('reports what the cap dropped instead of hiding it', () => {
     // A truncated dossier and a thin one look identical from outside.
-    const fat: DossierContact = { ...contact, title: 'A'.repeat(200), personalNotes: 'B'.repeat(200) }
+    const fat: DossierContact = {
+      ...contact,
+      title: 'A'.repeat(200),
+      personalNotes: 'B'.repeat(200)
+    }
     const d = buildClientDossier({ contact: fat, calls: RICH, tasks: [], maxChars: 150 })
     expect(d.dropped).toBeGreaterThan(0)
   })
