@@ -34,6 +34,7 @@ const POISON_EMAIL = 'danawhitfield1998@example.com'
 const POISON_PATH = 'C:\\Users\\User\\Desktop\\callrise-ai\\private-note.txt'
 const POISON_TRANSCRIPT = "customer said their card is 4111 1111 1111 1111 don't tell anyone"
 const POISON_DETAIL = 'OpenAI returned invalid_request: prompt contains banned phrase XYZZY-SECRET'
+const POISON_CALL_ID = 'call-01J8ZQ7XYZZYCALLID'
 
 function bundleFiles(dest: string): Set<string> {
   return new Set(readdirSync(dest))
@@ -175,6 +176,22 @@ function plantAllSources(): void {
         cancellable: false
       }
     ])
+  )
+
+  // BUG-225 — the cue latency log. Two calls so the summary has something to
+  // pool, and a call id that IS an identifier so "ids stay on the device" is a
+  // testable claim rather than a description of a file that had none.
+  writeFileSync(
+    join(userDataDir, 'cue-latency.jsonl'),
+    `${JSON.stringify({
+      ts: '2026-09-09T10:00:00.000Z',
+      callId: POISON_CALL_ID,
+      samples: { deterministic: [380, 410, 445], model: [1900, 2400] }
+    })}\n${JSON.stringify({
+      ts: '2026-09-09T11:00:00.000Z',
+      callId: 'call-002',
+      samples: { deterministic: [395], model: [2100, 9800] }
+    })}\n`
   )
 
   // Backup state — included whole, but must still pass through scrub().
@@ -382,14 +399,51 @@ describe('buildSupportBundle — privacy pin', () => {
     expect(summary).toContain('<email>')
   })
 
+  it('BUG-225 — cue latency leaves as percentiles, and the call ids stay home', async () => {
+    plantAllSources()
+    const r = await buildSupportBundle(src(), downloadsDir)
+    const raw = readFileSync(join(r.path!, 'cue-latency-summary.json'), 'utf8')
+
+    // Asserted against the WHOLE serialised file, not against the summariser's
+    // return value: the thing that can go wrong here is the bundle writing a
+    // different object than the one the unit test checked. BUG-209's lesson —
+    // eleven green tests that would all have stayed green with the call gone.
+    expect(raw).not.toContain(POISON_CALL_ID)
+    expect(raw).not.toContain('call-002')
+    expect(raw).not.toContain('samples') // the raw arrays never leave
+
+    const s = JSON.parse(raw)
+    expect(s.calls).toBe(2)
+    // Pooled across both calls: 4 deterministic samples, 4 model samples. A
+    // per-call average would have reported neither of these.
+    expect(s.deterministic).toMatchObject({ calls: 2, count: 4, p50: 395, max: 445 })
+    expect(s.model).toMatchObject({ calls: 2, count: 4, p50: 2100, max: 9800 })
+    // Every published number is one that genuinely occurred.
+    for (const v of [s.deterministic.p50, s.deterministic.p95, s.model.p50, s.model.p95])
+      expect([380, 410, 445, 395, 1900, 2400, 2100, 9800]).toContain(v)
+  })
+
+  it('BUG-225 — an empty log says so, rather than reporting healthy zeros', async () => {
+    const r = await buildSupportBundle(src(), downloadsDir)
+    const s = JSON.parse(readFileSync(join(r.path!, 'cue-latency-summary.json'), 'utf8'))
+    expect(s).toMatchObject({ calls: 0, deterministic: { count: 0, p50: null }, model: { p95: null } })
+    expect(s.meaning).toContain('absence of data')
+  })
+
   it('missing sources are skipped, never fatal — a fresh install still gets a bundle', async () => {
     const r = await buildSupportBundle(src(), downloadsDir)
     expect(r.ok).toBe(true)
-    // sales-brain-sweep.json is written UNCONDITIONALLY, like jobs-summary.json:
-    // "the sweep has not run on this machine" is itself the answer a support
+    // sales-brain-sweep.json, jobs-summary.json and cue-latency-summary.json
+    // are written UNCONDITIONALLY: "the sweep has not run on this machine" and
+    // "no call with cues has ended here" are themselves the answers a support
     // reader needs, and an absent file would read as an absent feature.
     expect(bundleFiles(r.path!)).toEqual(
-      new Set(['support-summary.txt', 'jobs-summary.json', 'sales-brain-sweep.json'])
+      new Set([
+        'support-summary.txt',
+        'jobs-summary.json',
+        'sales-brain-sweep.json',
+        'cue-latency-summary.json'
+      ])
     )
   })
 

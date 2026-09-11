@@ -300,6 +300,7 @@ import { registerEvents } from './events'
 import { registerLiveCue } from './live-cue'
 import { registerLoopbackCapture } from './loopback'
 import { registerLiveTranscriptIpc } from './live/live-transcript-ipc'
+import { registerCueLatencyLog } from './live/cue-latency-log'
 import {
   redactPendingClosedJournals,
   retireCompletedJournals,
@@ -764,6 +765,8 @@ app.whenReady().then(async () => {
   registerDealBackfill()
   registerEvents()
   registerLiveCue()
+  // BUG-225 - give the cue latency instrument somewhere to put its answer.
+  registerCueLatencyLog()
   registerLoopbackCapture()
   registerGoogle()
   registerOutlook()

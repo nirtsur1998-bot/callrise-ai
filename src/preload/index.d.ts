@@ -3198,6 +3198,12 @@ export interface LiveApi {
    *  copy carries the same attribution the on-screen one does. */
   repIdentified: (epoch: number, speaker: number) => void
   /** Interrupted calls awaiting a decision. Never acts on them. */
+  /** BUG-225 - one line per call so cue latency can be compared before and
+   *  after a change. Fire-and-forget; numbers only, never cue text. */
+  recordCueLatency: (entry: {
+    callId: string | null
+    samples: { deterministic: number[]; model: number[] }
+  }) => void
   listRecoverable: () => Promise<RecoverableCall[]>
   /** Turn one into a real saved call, on the rep's explicit say-so. */
   recoverCall: (id: string) => Promise<{ ok: boolean; call?: CallSummary }>
