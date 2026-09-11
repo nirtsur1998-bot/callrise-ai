@@ -77,6 +77,11 @@ export type EgressCategory =
   | 'ai'
   /** Telegram and WhatsApp: messages into real chats belonging to real people. */
   | 'alerts'
+  /** Hugging Face: the ~23 MB embedding model transformers.js downloads the
+   *  first time the Sales Brain embeds anything. A content-only DOWNLOAD — it
+   *  sends nothing about the user, which is why it is not `ai`. Found by the
+   *  gate refusing it as an unlisted host, not by anyone enumerating it. */
+  | 'models'
   /** Not in the enumeration. Refused, and the refusal names the host so the
    *  next integration gets a row here instead of a surprise. */
   | 'unknown'
@@ -89,7 +94,8 @@ export const GRANTABLE: readonly EgressCategory[] = [
   'calendar',
   'transcription',
   'ai',
-  'alerts'
+  'alerts',
+  'models'
 ]
 
 export interface EgressDecision {
@@ -138,7 +144,26 @@ const HOSTS: ReadonlyArray<readonly [suffix: string, category: EgressCategory]> 
   ['api.mistral.ai', 'ai'],
   // alerts
   ['api.telegram.org', 'alerts'],
-  ['graph.facebook.com', 'alerts']
+  ['graph.facebook.com', 'alerts'],
+  // models — FOUND BY THE GATE, not by the enumeration.
+  //
+  // The first launch of a sandbox holding the founder's real records logged
+  // `SANDBOX egress REFUSED (unknown) huggingface.co` three times. Nobody had
+  // listed it: `memory/embeddings.ts` pulls the ~23 MB quantized
+  // all-MiniLM-L6-v2 through transformers.js the first time the Sales Brain
+  // embeds anything, and `env.allowLocalModels = false` means there is no
+  // offline path. Default-deny caught what the enumeration missed, which is the
+  // entire argument for default-deny.
+  //
+  // Its own category rather than `ai`, because the direction is opposite: this
+  // is a content-only DOWNLOAD of model weights and sends nothing about the
+  // user — while `ai` sends transcripts, prompts and the client dossier. A
+  // sandbox that wants embeddings to work should not have to open the door
+  // that sends a buyer's quotes to a provider.
+  ['huggingface.co', 'models'],
+  ['cdn-lfs.huggingface.co', 'models'],
+  ['cdn-lfs-us-1.hf.co', 'models'],
+  ['hf.co', 'models']
 ]
 
 function hostMatches(host: string, suffix: string): boolean {
@@ -184,10 +209,19 @@ export function classifyEgress(
     return { category, allowed: category === 'auth' || granted.has('sync'), host }
   }
 
+  // LONGEST SUFFIX WINS, not first-listed. `router.huggingface.co` is an
+  // inference endpoint (`ai`) and `huggingface.co` is a model download
+  // (`models`), and both match it — so a first-match rule would make the answer
+  // depend on the order of a list nobody thinks of as ordered. One reshuffle,
+  // or one new entry added in the obvious place, and a sandbox granted `models`
+  // would quietly be allowed to send a buyer's quotes to an inference endpoint.
+  let best: { suffix: string; category: EgressCategory } | null = null
   for (const [suffix, category] of HOSTS) {
-    if (hostMatches(host, suffix)) {
-      return { category, allowed: granted.has(category), host }
-    }
+    if (!hostMatches(host, suffix)) continue
+    if (!best || suffix.length > best.suffix.length) best = { suffix, category }
+  }
+  if (best) {
+    return { category: best.category, allowed: granted.has(best.category), host }
   }
 
   return { category: 'unknown', allowed: false, host }

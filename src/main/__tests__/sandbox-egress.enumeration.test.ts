@@ -139,7 +139,8 @@ describe('BUG-263 — the categories stay meaningful', () => {
       calendar: 'https://graph.microsoft.com/v1.0/me/events',
       transcription: 'wss://api.deepgram.com/v1/listen',
       ai: 'https://api.anthropic.com/v1/messages',
-      alerts: 'https://api.telegram.org/bot1/sendMessage'
+      alerts: 'https://api.telegram.org/bot1/sendMessage',
+      models: 'https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/config.json'
     }
     for (const c of GRANTABLE) {
       expect(Object.keys(probes), `no probe URL for category "${c}"`).toContain(c)

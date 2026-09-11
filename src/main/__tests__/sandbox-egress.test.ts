@@ -50,7 +50,18 @@ describe('BUG-263 — every enumerated egress path is classified', () => {
     ['Groq', 'https://api.groq.com/openai/v1/chat/completions', 'ai'],
     ['Gemini', 'https://generativelanguage.googleapis.com/v1beta/models/x:generateContent', 'ai'],
     ['Telegram alerts', 'https://api.telegram.org/bot123/sendMessage', 'alerts'],
-    ['WhatsApp alerts', 'https://graph.facebook.com/v20.0/1/messages', 'alerts']
+    ['WhatsApp alerts', 'https://graph.facebook.com/v20.0/1/messages', 'alerts'],
+    // FOUND BY THE GATE, not by the enumeration: a sandbox on the founder's
+    // real records logged `REFUSED (unknown) huggingface.co` three times on
+    // first launch. transformers.js pulls the ~23 MB embedding model the first
+    // time the Sales Brain embeds anything, and `allowLocalModels = false`
+    // leaves no offline path. Nobody had listed it. Default-deny caught what
+    // the enumeration missed, which is the whole argument for default-deny.
+    [
+      'Hugging Face model download',
+      'https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/model_quantized.onnx',
+      'models'
+    ]
   ]
 
   it.each(PATHS)('%s is %s and REFUSED by default', (_name, url, category) => {
@@ -157,6 +168,40 @@ describe('BUG-263 — parsing the grant', () => {
     expect(g.has('sync')).toBe(true)
     expect(g.has('calendar')).toBe(true)
     expect(g.has('ai')).toBe(false)
+  })
+
+  it('a model DOWNLOAD is not the same door as sending a prompt', () => {
+    // The direction is opposite, so the category is separate: `models` pulls
+    // weights and sends nothing about the user; `ai` sends transcripts, prompts
+    // and the client dossier — which carries a buyer's verbatim quotes from
+    // earlier calls. A sandbox that wants embeddings to work should not have to
+    // open the door that sends those.
+    const modelsOnly = new Set(['models'])
+    expect(
+      classifyEgress('https://huggingface.co/Xenova/x/resolve/main/m.onnx', modelsOnly).allowed
+    ).toBe(true)
+    expect(classifyEgress('https://api.anthropic.com/v1/messages', modelsOnly).allowed).toBe(false)
+    const aiOnly = new Set(['ai'])
+    expect(
+      classifyEgress('https://huggingface.co/Xenova/x/resolve/main/m.onnx', aiOnly).allowed
+    ).toBe(false)
+    // …and the inference host is still `ai`, not `models`, despite the name.
+    expect(classifyEgress('https://router.huggingface.co/v1/chat', aiOnly).category).toBe('ai')
+    expect(classifyEgress('https://router.huggingface.co/v1/chat', modelsOnly).allowed).toBe(false)
+  })
+
+  it('the MORE SPECIFIC host wins, not whichever is listed first', () => {
+    // `router.huggingface.co` matches both `router.huggingface.co` (ai) and
+    // `huggingface.co` (models). A first-match rule makes the answer depend on
+    // the order of a list nobody thinks of as ordered — reshuffle it, or add an
+    // entry in the obvious place, and a sandbox granted `models` is quietly
+    // allowed to send a buyer's quotes to an inference endpoint.
+    //
+    // Red-checkable: swap the two HOSTS entries. Under longest-suffix-wins
+    // nothing moves; under first-match this flips.
+    expect(classifyEgress('https://router.huggingface.co/v1/x').category).toBe('ai')
+    expect(classifyEgress('https://huggingface.co/Xenova/x').category).toBe('models')
+    expect(classifyEgress('https://cdn-lfs.huggingface.co/x').category).toBe('models')
   })
 
   it('"all" grants every grantable category and nothing more', () => {
