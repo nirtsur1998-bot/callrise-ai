@@ -64,23 +64,45 @@ export function LiveCallProvider({ children }: { children: ReactNode }): React.J
   // [onSaved])`) therefore only ever runs once, at Provider mount, exactly as
   // intended: the ACTUAL callback can still change freely underneath it via
   // setOnSaved below, without touching useTranscription at all.
-  const onSaved = useCallback((callId: string) => {
-    onSavedRef.current?.(callId)
-  }, [])
-  const setOnSaved = useCallback((cb: ((callId: string) => void) | null) => {
-    onSavedRef.current = cb
-  }, [])
-
   // M39 — the rep's mid-call identity answer, held at the CALL's lifetime
   // rather than the view's. See `LiveIdentityHeld` in useLiveCall.ts for what
   // was actually breaking and why the fix is a ref up here rather than a
-  // cleanup down there. Cleared by the hook itself when it consumes the
-  // decision at save, and re-keyed by `forName` when a new buyer is heard.
+  // cleanup down there.
   const liveIdentity = useRef<LiveIdentityHeld>({
     decision: null,
     dismissed: false,
     forName: null
   })
+
+  const onSaved = useCallback((callId: string) => {
+    onSavedRef.current?.(callId)
+    // …AND THEN THE CALL IS OVER, so the held identity answer goes with it.
+    //
+    // THE REGRESSION THIS EXISTS TO CLOSE, which the first version of the
+    // lifetime fix shipped: `forName` was added so a REMOUNT mid-call would
+    // not wipe an answer already given. But two calls with the same buyer in
+    // one session produce the same `forName` — so a "no, that's not Harvey"
+    // dismissal on call one carried into call two and the chip never asked
+    // again. The guard written to survive a navigation also survived a new
+    // call. Moving a bug and fixing it look identical until you name the
+    // boundary the state is supposed to respect, and that boundary is the
+    // CALL, which is exactly here.
+    //
+    // Ordered AFTER the handler, and that ordering is load-bearing:
+    // `handleSaved` calls `applyToSavedCall`, which reads `decision` and nulls
+    // it SYNCHRONOUSLY before its first await. Resetting first would discard
+    // the answer a moment before it was applied.
+    //
+    // KNOWN HOLE, stated rather than found later: a call abandoned without
+    // saving never reaches here, so its held answer survives into the next
+    // one. `endCall` is not a renderer event, and the save is the only signal
+    // this side has. The blast radius is one stale question, not a wrong
+    // link — `applyToSavedCall` is never called for a call that did not save.
+    liveIdentity.current = { decision: null, dismissed: false, forName: null }
+  }, [])
+  const setOnSaved = useCallback((cb: ((callId: string) => void) | null) => {
+    onSavedRef.current = cb
+  }, [])
 
   const transcription = useTranscription(
     consent.recordRef,

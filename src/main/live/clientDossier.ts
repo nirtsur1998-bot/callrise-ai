@@ -127,7 +127,11 @@ export interface DossierCall {
   coaching?: {
     overallScore?: number
     nextAction?: string
-    dimensions?: { key?: string; comment?: string; evidence?: { verified?: boolean; quote?: string } }[]
+    dimensions?: {
+      key?: string
+      comment?: string
+      evidence?: { verified?: boolean; quote?: string }
+    }[]
   }
 }
 
@@ -153,6 +157,10 @@ export interface DossierDeal {
   contactId?: string
   stageId?: string
   value?: number
+  /** Stage transitions, newest last, as `deals-fs.ts` writes them. Present on
+   *  4 of the founder's 13 deals — measured, so the "since your last call"
+   *  line's thinness is a known property rather than a surprise. */
+  stageHistory?: { stageId?: string; changedAt?: string }[]
 }
 
 export interface DossierInput {
@@ -211,6 +219,101 @@ function clean(s: unknown, max = 220): string {
   return t.length <= max ? t : `${t.slice(0, max - 1).trimEnd()}…`
 }
 
+/**
+ * What moved between this contact's LAST call and the one before it.
+ *
+ * The window is (previous call, now]. Not (previous, last]: a task closed the
+ * morning after the last call is still news to a rep starting the next one,
+ * and the alternative — silently ignoring everything since — would make the
+ * line quietly wrong rather than merely absent.
+ *
+ * `asOf` is not consulted. Nothing here is relative to the present moment, so
+ * there is no clock read to make the cached prefix drift mid-call.
+ *
+ * Returns at most three lines, one per signal, in a fixed order — never sorted
+ * by a timestamp, which would reorder the prefix between two assemblies of the
+ * same call if a record were rewritten underneath it (BUG-185 does exactly
+ * that on every sync).
+ */
+function sinceLastCall(
+  contactId: string,
+  callsNewestFirst: DossierCall[],
+  input: DossierInput
+): string[] {
+  if (callsNewestFirst.length < 2) return []
+  const prevAt = Date.parse(callsNewestFirst[1]?.createdAt ?? '')
+  if (!Number.isFinite(prevAt)) return []
+  const out: string[] = []
+
+  // 1. The deal moved. 4 of 13 of the founder's deals carry a stageHistory at
+  //    all, so this is thin by construction — stated, not discovered later.
+  const deal = input.deal
+  const moves = (deal?.stageHistory ?? [])
+    .filter((h) => {
+      const t = Date.parse(h?.changedAt ?? '')
+      return Number.isFinite(t) && t > prevAt
+    })
+    .map((h) => h.stageId)
+  const landedOn = moves.length ? moves[moves.length - 1] : null
+  if (landedOn) {
+    // TWO FACTS, and the line must not blur them: something moved inside the
+    // window (the history says so), and the deal is at THIS stage now (the
+    // record says so). They are not the same claim — 2 of the founder's deals
+    // have a history that stops short of their current stage, so the last
+    // recorded transition is not where the deal ended up.
+    //
+    // Only the CURRENT stage has a resolved label; a historical stageId would
+    // have to be rendered as a raw id ("404325fd-6b90-…"), which is worse in a
+    // prompt than not naming it. So: say it moved, and say where it stands —
+    // never "moved to X" unless X is both.
+    const now = clean(input.stageLabel, 40)
+    out.push(
+      landedOn === deal?.stageId && now
+        ? `The deal moved to ${now}.`
+        : now
+          ? `The deal has moved since — it is at ${now} now.`
+          : 'The deal moved to a new stage.'
+    )
+  }
+
+  // 2. A promise to THIS contact was kept. Only 11 of 28 tasks carry a
+  //    contactId, so the call-linked fallback matters as much as the direct one.
+  const callIds = new Set(callsNewestFirst.map((c) => c.id))
+  const closed = input.tasks
+    .filter((t) => {
+      if (t.contactId !== contactId && !(t.callId && callIds.has(t.callId))) return false
+      const at = Date.parse(t.completedAt ?? '')
+      return Number.isFinite(at) && at > prevAt
+    })
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+  const firstClosed = clean(closed[0]?.title, 100)
+  if (firstClosed) {
+    out.push(
+      closed.length > 1
+        ? `You have since done: ${firstClosed} (and ${closed.length - 1} more).`
+        : `You have since done: ${firstClosed}.`
+    )
+  }
+
+  // 3. What they push back on shifted. The only signal here that is about the
+  //    BUYER rather than about the rep, which is why it is kept despite firing
+  //    for one contact on today's corpus.
+  const typeOn = (callId: string): string | null => {
+    const mine = (input.objections ?? []).filter((o) => o.callId === callId)
+    const named = mine.find((o) => o.type && !UNCLASSIFIED_TYPES.has(String(o.type).toLowerCase()))
+    return named ? String(named.type) : null
+  }
+  const before = typeOn(callsNewestFirst[1]!.id)
+  const after = typeOn(callsNewestFirst[0]!.id)
+  if (before && after && before !== after) {
+    out.push(`Their pushback shifted from ${clean(before, 30)} to ${clean(after, 30)}.`)
+  }
+
+  return out
+}
+
+const UNCLASSIFIED_TYPES = new Set(['other', 'unknown', 'none', ''])
+
 /** One line of the dossier, with the rank that decides what survives the cap. */
 interface Item {
   section: string
@@ -267,7 +370,10 @@ export function buildClientDossier(input: DossierInput): Dossier {
   // Stage only. 0 of 13 deals on the real profile carry a risk assessment, so a
   // risk line would be a line that never appears.
   if (input.deal) {
-    const bits = [clean(input.deal.title, 60), input.stageLabel ? `stage: ${clean(input.stageLabel, 40)}` : '']
+    const bits = [
+      clean(input.deal.title, 60),
+      input.stageLabel ? `stage: ${clean(input.stageLabel, 40)}` : ''
+    ]
       .filter(Boolean)
       .join(' — ')
     if (bits) items.push({ section: 'Deal', line: bits, rank: 85 })
@@ -315,6 +421,37 @@ export function buildClientDossier(input: DossierInput): Dossier {
       section: 'Open commitments',
       line: `Agreed last call (${isoDay(calls[0]?.createdAt)}): ${lastAction}`,
       rank: 79
+    })
+  }
+
+  // --- 2b. Since the last call (Stage 4 #5) -----------------------------------
+  //
+  // MEASURED BEFORE IT WAS WRITTEN, and the number the founder had was wrong.
+  // It was sized to them as "14 of 20 multi-call contacts have something that
+  // moved". Counted properly — with the time window the feature actually uses,
+  // and after the `status: 'done'` task fix — it is **6 of 20**, i.e. 6 of 50
+  // contacts would ever see this line: 2 a deal stage, 3 a completed task, 1 a
+  // changed objection read. Comparable to objection pre-loading (7 of 50),
+  // which shipped.
+  //
+  // THE FOURTH SIGNAL WAS CUT, not because it was empty but because it was not
+  // a change: "the last call produced a summary and the one before it did not"
+  // fires for 1 contact and says nothing a rep can use. If the data cannot
+  // support a claim, say nothing rather than something vague.
+  //
+  // WHY IT IS WORTH A LINE AT ALL, given a rep did most of this themselves:
+  // the value is not news, it is not re-promising. A rep who already sent the
+  // proposal should not offer to send it again, and the objection shift — what
+  // they pushed back on LAST time versus the time before — is the one signal
+  // here that is genuinely about the buyer rather than about the rep.
+  const changes = sinceLastCall(contact.id, calls, input)
+  for (const line of changes) {
+    items.push({
+      section: 'Since your last call with them',
+      line,
+      // Above objection history (82), below an overdue promise (84): recent
+      // movement is the most actionable thing after something going wrong.
+      rank: 83
     })
   }
 
@@ -407,9 +544,19 @@ export function buildClientDossier(input: DossierInput): Dossier {
   // --- assemble --------------------------------------------------------------
   // Ranked globally, so the cap drops the least valuable line in the whole
   // dossier rather than truncating whichever section happens to come last.
+  // A SECTION MISSING FROM THIS LIST IS SILENTLY DROPPED. `render` iterates
+  // ORDER, not `items`, so a new section can produce lines, rank above most of
+  // the dossier, survive the cap, and render to nothing at all — which is
+  // exactly what "Since your last call with them" did on its first run: 0 of
+  // 50 contacts, from a population measured at 6. Nothing threw, nothing was
+  // red, and the only reason it was caught is that the zero was CHECKED
+  // against the population rather than read as "there was nothing to say".
+  // `clientDossier.sectionOrder.test.ts` now fails if any emitted section is
+  // not listed here.
   const ORDER = [
     'Known facts',
     'Deal',
+    'Since your last call with them',
     'Open commitments',
     'They have pushed back on this before',
     'Last call',
@@ -449,6 +596,12 @@ export function buildClientDossier(input: DossierInput): Dossier {
     out = render(kept)
   }
   const dropped = items.length - kept.length
-  if (!kept.length) return { text: '', chars: 0, sections: [], dropped }
+  // EMPTY IS DECIDED BY WHAT RENDERED, not by what was collected. `kept.length`
+  // counts items; an item whose section is missing from ORDER contributes
+  // none of them, so a dossier could come back as the bare line "CLIENT: Foo"
+  // — a heading, a name, and nothing to know. Measured when the new section
+  // was unlisted: coverage read 30 of 50 instead of 29, and the extra one was
+  // precisely that empty shell being handed to the model as context.
+  if (!out.sections.length) return { text: '', chars: 0, sections: [], dropped }
   return { text: out.text, chars: out.text.length, sections: out.sections, dropped }
 }

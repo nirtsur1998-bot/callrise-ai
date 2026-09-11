@@ -11,6 +11,8 @@
 //
 // Three cases, each one a mistake that has actually been made here once.
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { resetHeldForNewName } from '../useLiveIdentityOffer'
 import type { LiveIdentityHeld } from '../useLiveCall'
 
@@ -73,5 +75,45 @@ describe('resetHeldForNewName', () => {
     expect(resetHeldForNewName(h, 'Priya')).toBe(true)
     expect(resetHeldForNewName(h, 'Priya')).toBe(false)
     expect(resetHeldForNewName(h, 'Priya')).toBe(false)
+  })
+
+  it('asks again on the NEXT call with the same buyer, once the call boundary clears it', () => {
+    // THE REGRESSION THE FIRST LIFETIME FIX SHIPPED. Two calls with Harvey in
+    // one session: the rep dismisses on call one, and `forName` is 'Harvey'.
+    // Call two re-detects 'Harvey', the guard says "same name, keep it", and
+    // the chip never asks. The guard written to survive a REMOUNT also
+    // survived a new CALL.
+    //
+    // The state does not belong to a name; it belongs to a name WITHIN a call.
+    // `LiveCallProvider.onSaved` is where the call ends, so that is where it
+    // is cleared — modelled here as the reset it performs.
+    const h = answered('Harvey')
+    h.current.dismissed = true
+
+    // …call one saves. The provider clears the held answer.
+    h.current = { decision: null, dismissed: false, forName: null }
+
+    // …call two, same buyer.
+    expect(resetHeldForNewName(h, 'Harvey')).toBe(true)
+    expect(h.current.dismissed).toBe(false)
+    expect(h.current.decision).toBeNull()
+  })
+})
+
+describe('the call boundary is where held identity state dies', () => {
+  it('the provider clears it inside onSaved, AFTER handing off to the view', () => {
+    // Order is load-bearing: handleSaved calls applyToSavedCall, which reads
+    // the decision and nulls it synchronously before its first await.
+    // Clearing first would discard the answer a moment before applying it.
+    const src = readFileSync(join(__dirname, '..', 'LiveCallProvider.tsx'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+    const body = src.match(/const onSaved = useCallback\(\(callId: string\) => \{[\s\S]*?\}, \[\]\)/)
+    expect(body, 'onSaved must still exist').not.toBeNull()
+    const handoff = body![0].indexOf('onSavedRef.current?.(callId)')
+    const clear = body![0].indexOf('liveIdentity.current = {')
+    expect(handoff, 'the handoff must be present').toBeGreaterThan(-1)
+    expect(clear, 'the clear must be present').toBeGreaterThan(-1)
+    expect(clear).toBeGreaterThan(handoff)
   })
 })

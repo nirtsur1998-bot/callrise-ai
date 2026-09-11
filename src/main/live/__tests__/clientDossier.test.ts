@@ -23,6 +23,20 @@ import {
 
 const contact: DossierContact = { id: 'c1', name: 'ZZ Brett' }
 
+/** The lines under ONE heading. A dossier now has sections that can mention the
+ *  same record for opposite reasons — a task is either still open or since
+ *  done — so a whole-text `not.toContain` asserts something much wider than the
+ *  claim being made, and breaks the moment a second section has anything true
+ *  to say about it. Returns '' when the section is absent. */
+const section = (text: string, heading: string): string => {
+  const lines = text.split('\n')
+  const start = lines.indexOf(`${heading}:`)
+  if (start === -1) return ''
+  const rest = lines.slice(start + 1)
+  const end = rest.findIndex((l) => !l.startsWith('- '))
+  return (end === -1 ? rest : rest.slice(0, end)).join('\n')
+}
+
 const call = (over: Partial<DossierCall> & { id: string }): DossierCall => ({
   contactId: 'c1',
   createdAt: '2026-08-20T09:42:00.000Z',
@@ -107,10 +121,17 @@ describe('M39 — the dossier says something when there is something to say', ()
       { id: 't4', title: 'Closed by the boolean', done: true, callId: 'a' }
     ]
     const d = buildClientDossier({ contact, calls: RICH, tasks })
-    expect(d.text).toContain('Genuinely still open')
-    expect(d.text).not.toContain('Closed by status')
-    expect(d.text).not.toContain('Closed by completedAt')
-    expect(d.text).not.toContain('Closed by the boolean')
+    // SCOPED TO ITS OWN SECTION, and why is worth keeping. This was
+    // `expect(d.text).not.toContain(…)` over the whole dossier, and Stage 4 #5
+    // made it fail correctly: "Closed by completedAt" is stamped 2026-08-21,
+    // after RICH's previous call, so "Since your last call with them" now
+    // reports it — as a promise KEPT, which is the opposite claim from the one
+    // this test makes, and a true one.
+    const open = section(d.text, 'Open commitments')
+    expect(open).toContain('Genuinely still open')
+    expect(open).not.toContain('Closed by status')
+    expect(open).not.toContain('Closed by completedAt')
+    expect(open).not.toContain('Closed by the boolean')
   })
 })
 
