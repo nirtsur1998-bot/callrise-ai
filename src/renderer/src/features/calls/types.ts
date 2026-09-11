@@ -122,6 +122,11 @@ interface CallBase {
    *  elapsed time and `durationMs` is the claim, and the two can be compared.
    *  Absent on every call saved before 2026-09-02. */
   endedAt?: string
+  /** M39 — the version of the build that wrote this record, stamped by MAIN at
+   *  save (never taken from the renderer). Absent on every call saved before
+   *  it existed, and never backfilled. Mirrors `Call.appVersion` in
+   *  main/calls-fs.ts — this is one of the repo's known duplicated types. */
+  appVersion?: string
   speakerCount: number
   preview: string
   /** The contact this call is linked to, if any. */

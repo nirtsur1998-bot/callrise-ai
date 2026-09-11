@@ -7,6 +7,7 @@
 // conversation thrown away without anyone seeing it — so neither is allowed to
 // happen automatically. The rep is asked.
 import { ipcMain } from 'electron'
+import { currentAppVersion } from '../app-version'
 import { getCall, saveCall, toSummary, type CallSummary } from '../calls-fs'
 import {
   discardJournal,
@@ -108,18 +109,28 @@ export async function recoverCall(id: string, callsDir: string): Promise<CallSum
   const replayed = replayJournal(journal)
   if (replayed.segments.length === 0) return null
 
-  const summary = await saveCall(callsDir, {
-    startedAt: replayed.startedAt,
-    durationMs: replayed.durationMs,
-    segments: replayed.segments,
-    // The consent recorded DURING the call, not a fresh default. Passing
-    // undefined here would default to recordOtherParty:false and
-    // applyConsentRetention would delete the buyer's entire half of a
-    // buyer-capture call — silently, at the exact moment the rep asked us to
-    // rescue it. saveCall re-sanitizes this, so a tampered journal still
-    // cannot grant a permission the call never had.
-    ...(replayed.consent ? { consent: replayed.consent } : {})
-  })
+  const summary = await saveCall(
+    callsDir,
+    {
+      startedAt: replayed.startedAt,
+      durationMs: replayed.durationMs,
+      segments: replayed.segments,
+      // The consent recorded DURING the call, not a fresh default. Passing
+      // undefined here would default to recordOtherParty:false and
+      // applyConsentRetention would delete the buyer's entire half of a
+      // buyer-capture call — silently, at the exact moment the rep asked us to
+      // rescue it. saveCall re-sanitizes this, so a tampered journal still
+      // cannot grant a permission the call never had.
+      ...(replayed.consent ? { consent: replayed.consent } : {})
+    },
+    // M39 — the RECOVERING build's version: that is the build writing this
+    // record, which is what `Call.appVersion` claims. Forgetting this path would
+    // leave the field absent on precisely the calls most likely to be
+    // investigated — the ones that were interrupted. Read through the
+    // try-wrapped helper: the handler above this swallows throws into
+    // `{ ok: false }`, so a version read must never be able to cost a rescue.
+    { appVersion: currentAppVersion() }
+  )
   // M27 E2 — written BEFORE retireJournal(), which is the whole point: if
   // the process dies between this line and that one, the marker survives
   // (it's its own file, already durably on disk) and the next attempt takes

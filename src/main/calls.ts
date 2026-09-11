@@ -1,4 +1,5 @@
 import { app, ipcMain } from 'electron'
+import { currentAppVersion } from './app-version'
 import { join } from 'node:path'
 import mammoth from 'mammoth'
 import { generatePostCallBrief, type PostCallBriefResult } from './post-call-brief'
@@ -467,7 +468,8 @@ export function registerCalls(): void {
       beginSave()
       let summary: Awaited<ReturnType<typeof saveCall>>
       try {
-        summary = await saveCall(callsDir(), effective)
+        // M39 — main stamps the build, not the renderer. See `Call.appVersion`.
+        summary = await saveCall(callsDir(), effective, { appVersion: currentAppVersion() })
       } finally {
         endSave()
       }

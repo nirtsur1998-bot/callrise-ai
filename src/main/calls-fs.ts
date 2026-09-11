@@ -466,6 +466,32 @@ interface CallBase {
    *  copy (one of the repo's known duplicated types), so both must be edited.
    *  Absent on every call saved before it existed. */
   endedAt?: string
+  /**
+   * M39 — the version of the build that WROTE this record, stamped by main at
+   * save. Founder-approved data-model change, 2026-09-11: *"one field,
+   * additive, absent on existing records rather than backfilled."*
+   *
+   * WHY IT EXISTS. `endedAt` was found absent on 297 of 297 real calls,
+   * including one saved after the fix that should have kept it. The natural
+   * question — was that an old build, or a failing fix? — could not be
+   * answered, because no field on a call record names the build that wrote it,
+   * and `updatedAt` cannot stand in (BUG-185 restamps it on every file). A
+   * question that has to be reconstructed from git history and a guess about
+   * when an app was restarted is a question that will be asked again.
+   *
+   * WHAT IT MEANS, exactly:
+   *  - It comes from MAIN (`app.getVersion()`), never from the renderer's
+   *    payload — a value that decides which build to blame must not be one the
+   *    thing being blamed can supply.
+   *  - A RECOVERED call carries the recovering build's version: that is the
+   *    build that wrote the record, which is what this field claims.
+   *  - A DEV build reports package.json's version, so this tells releases
+   *    apart, not two dev checkouts of the same version.
+   *  - ABSENT means "saved before this field existed". Never backfilled —
+   *    "an absent field is honest; a backfilled one is a lie with a timestamp."
+   *  - Local-only: not in `callBackupPayload`, KEEP_LOCAL on restore.
+   */
+  appVersion?: string
   speakerCount: number
   preview: string
   /** The contact this call is linked to (manual, or confirmed from a calendar
@@ -930,6 +956,9 @@ export const CALL_FIELD_RULES: { [K in keyof Required<Call>]: CallFieldRule } = 
   durationMs: { cls: 'METADATA' },
   // A clock reading, not content: carries no speech and nothing derived from it.
   endedAt: { cls: 'METADATA' },
+  // M39 — a build version string about the RECORD. No speech, nothing derived
+  // from anyone's words, so no stripping rule applies.
+  appVersion: { cls: 'METADATA' },
   contactId: { cls: 'METADATA' },
   // Same class as contactId: a link, not content. Carries no buyer speech and
   // nothing derived from it, so it survives every stripping rule intact.
@@ -1123,6 +1152,9 @@ const CALL_RESTORE_RULES: { [K in keyof Required<Call>]: CallRestoreRule } = {
   editedAt: 'KEEP_LOCAL',
   durationMs: 'FROM_ROW',
   endedAt: 'KEEP_LOCAL', // BUG-242 — not in callBackupPayload; the cloud never had it
+  // M39 — same reason, and the one that matters most here: this field exists to
+  // diagnose a field a sync deleted. It must not be deletable the same way.
+  appVersion: 'KEEP_LOCAL',
   contactId: 'FROM_ROW', // three-way: string links, null unlinks, absent preserves
   dealId: 'FROM_ROW', // identical three-way shape, deliberately
   callType: 'KEEP_LOCAL',
@@ -1220,8 +1252,27 @@ function applyConsentRetention(call: Call): void {
   }
 }
 
-export async function saveCall(dir: string, input: CallSaveInput): Promise<CallSummary> {
+/** A build version as `app.getVersion()` reports it, or undefined. Refused
+ *  rather than stored when malformed: this field exists to settle arguments
+ *  about which build did something, and a free-text value cannot. */
+function sanitizeAppVersion(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined
+  const t = v.trim()
+  return /^[0-9A-Za-z.+-]{1,40}$/.test(t) ? t : undefined
+}
+
+/**
+ * @param meta Supplied by MAIN, never by the renderer. `appVersion` is the build
+ *   writing this record; a value inside `input` is ignored, because the field
+ *   exists to identify builds and must not be writable by the one in question.
+ */
+export async function saveCall(
+  dir: string,
+  input: CallSaveInput,
+  meta?: { appVersion?: string }
+): Promise<CallSummary> {
   await ensureDir(dir)
+  const appVersion = sanitizeAppVersion(meta?.appVersion)
   const segments = sanitizeSegments(input?.segments)
   const startedAt = typeof input?.startedAt === 'string' ? input.startedAt : ''
   const createdDate =
@@ -1246,6 +1297,9 @@ export async function saveCall(dir: string, input: CallSaveInput): Promise<CallS
       typeof input?.endedAt === 'string' && !Number.isNaN(Date.parse(input.endedAt))
         ? new Date(input.endedAt).toISOString()
         : new Date().toISOString(),
+    // M39 — from `meta`, never from `input`. Absent rather than defaulted when
+    // main supplied nothing usable. See `Call.appVersion`.
+    ...(appVersion ? { appVersion } : {}),
     speakerCount: countSpeakers(segments),
     preview: transcriptText.slice(0, 160),
     segments,

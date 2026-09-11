@@ -22,7 +22,11 @@ import {
 import { tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
 
-vi.mock('electron', () => ({ app: { getPath: () => tmpdir() } }))
+// `getVersion` added for M39's `Call.appVersion`. This mock is how that field's
+// crash-safety requirement was found: without it, seven recovery tests threw
+// `app.getVersion is not a function` — loudly here, but silently in production,
+// where `live:recoverCall` turns any throw into `{ ok: false }`.
+vi.mock('electron', () => ({ app: { getPath: () => tmpdir(), getVersion: () => '1.12.0-test' } }))
 
 const {
   setCallJournalsDirForTests,
@@ -70,9 +74,10 @@ afterEach(() => {
 
 type Word = { speaker: number; text: string; channel?: number }
 
-function result(words: Word[], over: Record<string, unknown> = {}): Parameters<
-  typeof recordResult
->[0] {
+function result(
+  words: Word[],
+  over: Record<string, unknown> = {}
+): Parameters<typeof recordResult>[0] {
   return {
     transcript: words.map((w) => w.text).join(' '),
     words,
@@ -135,6 +140,9 @@ describe('force-quit mid-call → relaunch → transcript recoverable', () => {
     expect(saved?.segments.map((s) => s.text)).toEqual(['first thing', 'second thing'])
     // It is a real call, indistinguishable from a normally-saved one.
     expect(await listCalls(callsDir)).toHaveLength(1)
+    // M39 — including which build wrote it. The recovery path is the one most
+    // likely to be investigated, so it is the one that most needs to say.
+    expect(saved?.appVersion).toBe('1.12.0-test')
   })
 
   it('a recovered call is no longer offered a second time', async () => {
@@ -380,7 +388,12 @@ describe('consent survives recovery', () => {
 
   it('a mic-only call recovers fully even with no consent record at all', async () => {
     beginCall({ restart: false })
-    recordResult(result([{ speaker: 0, text: 'mono words' }, { speaker: 1, text: 'more mono' }]))
+    recordResult(
+      result([
+        { speaker: 0, text: 'mono words' },
+        { speaker: 1, text: 'more mono' }
+      ])
+    )
     crash()
 
     const [found] = await afterRelaunch()
@@ -426,8 +439,7 @@ describe('M27 E2 — recovery survives a crash between saving and retiring the j
     const firstAttempt = await saveCall(callsDir, {
       startedAt: found.startedAt,
       durationMs: found.durationMs,
-      segments: (await readJournal(found.id).then((j) => (j ? replayJournal(j) : null)))!
-        .segments
+      segments: (await readJournal(found.id).then((j) => (j ? replayJournal(j) : null)))!.segments
     })
     await markJournalRecoveredAsCall(found.id, firstAttempt.id)
     // Deliberately no retireJournal() call here — this is the crash.
@@ -550,7 +562,11 @@ describe('1.2.5 hotfix — consent redaction of the raw journal', () => {
       crash()
       expect((await listOrphanJournals()).map((j) => j.id)).not.toContain(id)
       expect(journalHasWords({ events: [{ t: 'result', at: 1, p: result([]) }] })).toBe(false)
-      expect(journalHasWords({ events: [{ t: 'result', at: 1, p: result([{ speaker: 0, text: 'hi' }]) }] })).toBe(true)
+      expect(
+        journalHasWords({
+          events: [{ t: 'result', at: 1, p: result([{ speaker: 0, text: 'hi' }]) }]
+        })
+      ).toBe(true)
     })
 
     it('the sweep retires an EMPTY bare journal once it is a day old, never a fresh one, never one with words', async () => {
@@ -558,13 +574,33 @@ describe('1.2.5 hotfix — consent redaction of the raw journal', () => {
       const header = (id: string, startedAt: string): string =>
         JSON.stringify({ v: 1, callJournalId: id, startedAt })
       const empty = JSON.stringify({ t: 'result', at: 500, p: result([]) })
-      const spoken = JSON.stringify({ t: 'result', at: 500, p: result([{ speaker: 1, text: 'real words' }]) })
+      const spoken = JSON.stringify({
+        t: 'result',
+        at: 500,
+        p: result([{ speaker: 1, text: 'real words' }])
+      })
       const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
       const fresh = new Date().toISOString()
-      writeFileSync(join(journalFolder(), 'old-empty.jsonl'), `${header('old-empty', old)}\n${empty}\n`, 'utf8')
-      writeFileSync(join(journalFolder(), 'old-header-only.jsonl'), `${header('old-header-only', old)}\n`, 'utf8')
-      writeFileSync(join(journalFolder(), 'fresh-empty.jsonl'), `${header('fresh-empty', fresh)}\n${empty}\n`, 'utf8')
-      writeFileSync(join(journalFolder(), 'old-spoken.jsonl'), `${header('old-spoken', old)}\n${spoken}\n`, 'utf8')
+      writeFileSync(
+        join(journalFolder(), 'old-empty.jsonl'),
+        `${header('old-empty', old)}\n${empty}\n`,
+        'utf8'
+      )
+      writeFileSync(
+        join(journalFolder(), 'old-header-only.jsonl'),
+        `${header('old-header-only', old)}\n`,
+        'utf8'
+      )
+      writeFileSync(
+        join(journalFolder(), 'fresh-empty.jsonl'),
+        `${header('fresh-empty', fresh)}\n${empty}\n`,
+        'utf8'
+      )
+      writeFileSync(
+        join(journalFolder(), 'old-spoken.jsonl'),
+        `${header('old-spoken', old)}\n${spoken}\n`,
+        'utf8'
+      )
 
       const removed = await retireCompletedJournals()
 
@@ -577,13 +613,25 @@ describe('1.2.5 hotfix — consent redaction of the raw journal', () => {
       mkdirSync(journalFolder(), { recursive: true })
       const header = (id: string): string =>
         JSON.stringify({ v: 1, callJournalId: id, startedAt: new Date().toISOString() })
-      const line = JSON.stringify({ t: 'result', at: 1000, p: result([{ speaker: 1, text: 'kept words' }]) })
+      const line = JSON.stringify({
+        t: 'result',
+        at: 1000,
+        p: result([{ speaker: 1, text: 'kept words' }])
+      })
       // pre-BUG-189 normal save: .jsonl + .done (+ a .redacted marker)
-      writeFileSync(join(journalFolder(), 'old-save.jsonl'), `${header('old-save')}\n${line}\n`, 'utf8')
+      writeFileSync(
+        join(journalFolder(), 'old-save.jsonl'),
+        `${header('old-save')}\n${line}\n`,
+        'utf8'
+      )
       writeFileSync(join(journalFolder(), 'old-save.done'), '', 'utf8')
       writeFileSync(join(journalFolder(), 'old-save.redacted'), '', 'utf8')
       // pre-BUG-189 recovery: .jsonl.recovered (+ marker)
-      writeFileSync(join(journalFolder(), 'old-rec.jsonl.recovered'), `${header('old-rec')}\n${line}\n`, 'utf8')
+      writeFileSync(
+        join(journalFolder(), 'old-rec.jsonl.recovered'),
+        `${header('old-rec')}\n${line}\n`,
+        'utf8'
+      )
       writeFileSync(join(journalFolder(), 'old-rec.redacted'), '', 'utf8')
       // an unrecovered crash: a bare .jsonl — the ONLY copy of that call
       writeFileSync(join(journalFolder(), 'crash.jsonl'), `${header('crash')}\n${line}\n`, 'utf8')
@@ -653,7 +701,9 @@ describe('1.2.5 hotfix — consent redaction of the raw journal', () => {
     // The buyer's words exist nowhere under the journals directory.
     expect(readdirSync(journalFolder()).filter((f) => f.startsWith(found.id))).toEqual([])
     for (const f of readdirSync(journalFolder())) {
-      expect(readFileSync(join(journalFolder(), f), 'utf8')).not.toContain('buyer on the crashed call')
+      expect(readFileSync(join(journalFolder(), f), 'utf8')).not.toContain(
+        'buyer on the crashed call'
+      )
     }
   })
 
@@ -700,10 +750,7 @@ describe('1.2.5 hotfix — consent redaction of the raw journal', () => {
 
       // Simulating "the next launch": running it again only retries the bad
       // one — the two good ones are already marked and are not re-touched.
-      const goodContentBefore = readFileSync(
-        join(journalFolder(), 'legacy-good-1.jsonl'),
-        'utf8'
-      )
+      const goodContentBefore = readFileSync(join(journalFolder(), 'legacy-good-1.jsonl'), 'utf8')
       await redactPendingClosedJournals()
       expect(readFileSync(join(journalFolder(), 'legacy-good-1.jsonl'), 'utf8')).toBe(
         goodContentBefore
