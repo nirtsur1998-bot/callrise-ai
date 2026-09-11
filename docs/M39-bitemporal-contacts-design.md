@@ -40,7 +40,7 @@ noticed it had changed). Contacts have neither.
 |---|---|
 | contacts | 50 |
 | contacts carrying **any** of the dossier's 8 facts | **5** |
-| field values in the proposed dated set | **19** |
+| field values in the decided dated set (13 fields) | **22**, on 6 contacts |
 | per-field date, source, or history on any contact | **none** |
 | distinct `updatedAt` values across all 50 contacts | **1** — `2026-09-10T17:37:47.699Z`, a sync restamp |
 | contacts with dated `comments` (`createdAt` + `source`) | 14, holding 28 comments |
@@ -52,17 +52,25 @@ a working precedent for dated, sourced entries.
 
 ## What gets dated
 
-**A field is dated when some consumer asserts it as current truth about the buyer's situation.**
-Identity is not situation.
+> **DECIDED, 2026-09-11.** The founder: *"the ones a buyer tells you and that change — company,
+> role, and any free-text notes field that holds claims. Not name, not email, not phone. Those
+> change for administrative reasons rather than being facts about the deal, and dating them adds
+> noise without answering a question I'd ask."*
+>
+> That rule, applied to every field on the record, gives the table below. It differs from the first
+> proposal in two ways: `company` moves to DATED, and the three free-text fields that hold claims
+> (`personalNotes`, `notes`, `briefingNotes`) are all dated. **22 values across 6 of 50 contacts**
+> fall in the dated set on the founder's profile, measured under this rule. Where a field was a
+> judgement call under it — `industry`, `companySize`, `communicationStyle` — it is left undated.
 
 | Class | Fields | Why |
 |---|---|---|
-| **DATED** (10) | `title`, `decisionAuthority`, `budgetIndication`, `timeline`, `competitors`, `currentTooling`, `knownObjections`, `personalNotes`, `otherStakeholders`, `dealValue` | Each can be true in July and false in September. The first eight are exactly what the dossier renders. |
-| **IDENTITY** | `name`, `email`, `phone*`, `company`, `cid`, `country`, `timezone`, `website`, `industry`, … | A changed email is a *correction*, not "was true then". Current value only. |
+| **DATED** (13) | `company`, `title`, `decisionAuthority`, `budgetIndication`, `timeline`, `competitors`, `currentTooling`, `knownObjections`, `otherStakeholders`, `dealValue`, `personalNotes`, `notes`, `briefingNotes` | Things a buyer tells you that can be true in July and false in September. Includes all eight the dossier renders. |
+| **UNDATED** | `name`, `email`, `phone`, `phoneCountry`, `phoneE164`, `cid`, `registeredAt`, `country`, `timezone`, `website`, `industry`, `companySize`, `registrationNumber`, `verificationStatus`, `leadSource`, `pipelineStage`, `lastContactDate`, `preferredLanguage`, `communicationStyle` | Change for administrative reasons, not as facts about the deal. Current value only. |
 | **RECORD** | `id`, `createdAt`, `updatedAt`, `deleted`, `comments`, and the new history field | About the record, not the buyer. |
 
 **Enforced by the compiler, the way `CONTACT_FIELD_RULES` already enforces egress:** a new
-`CONTACT_TEMPORAL_RULES: { [K in keyof Required<Contact>]: 'DATED' | 'IDENTITY' | 'RECORD' }`.
+`CONTACT_TEMPORAL_RULES: { [K in keyof Required<Contact>]: 'DATED' | 'UNDATED' | 'RECORD' }`.
 Adding a contact field without deciding whether it is dated becomes a build error, not a stale
 fact in a prompt six months later.
 
@@ -77,7 +85,7 @@ field is added:
 ```ts
 interface ContactFact {
   id: string                                // uuid — the merge key across devices
-  field: DatedContactField                  // which of the 10
+  field: DatedContactField                  // which of the 13
   value: string | number | null             // null = the rep cleared the field
   // EVENT time — when it was true in the world
   validFrom: string
@@ -135,7 +143,7 @@ just typed.
 
 **No backfill, and no existing contact file is rewritten by the release.**
 
-The alternative — synthesising an `approx` fact for each of the 19 existing values — has nothing
+The alternative — synthesising an `approx` fact for each of the 22 existing values — has nothing
 honest to date them with. `createdAt` is when the record was saved, not when the budget became
 true. `updatedAt` is one restamp shared by all 50 contacts. A backfilled date would be, in the
 founder's words about `appVersion`, *a lie with a timestamp.*
@@ -144,7 +152,7 @@ So an existing value with no history is read as **undated**: `validFrom` NULL, m
 at least when we learned it" — precisely how `memory.db`'s `validityClause` already treats a row the
 backfill never reached. History for a field begins at its first write after the release.
 
-**The cost, stated:** those 19 values stay undated until someone touches them.
+**The cost, stated:** those 22 values stay undated until someone touches them.
 
 ---
 
@@ -211,7 +219,7 @@ fact would lose the loser's fact entirely.
 
 **Change:** on import, **union `factHistory` by fact `id`** — never drop a fact present locally —
 re-derive every `validUntil`/`supersededBy` and every current DATED value from the merged
-history, and keep newest-wins for IDENTITY fields only. If the merged history is larger than the
+history, and keep newest-wins for UNDATED fields only. If the merged history is larger than the
 incoming row's, bump `updatedAt` (see 1 — otherwise the server trigger keeps refusing the
 restore). Same principle as calls' `mergeSpeakerIdentities`: reconciled, not replaced. This also makes history immune to the
 restamp that currently gives all 50 contacts one `updatedAt`.
@@ -246,7 +254,7 @@ exactly the kind of field an erase path written before it existed would miss.
 - **It dates a fact; it does not decide the fact is stale.** The model sees "noted 2026-08-21" and
   can weigh it. Nothing expires. Expiry rules per field would be a separate decision, and a
   guessed one is worse than a visible date.
-- **The 19 existing values stay undated.**
+- **The 22 existing values stay undated.**
 - **The dossier gets slightly longer.** About 14 characters per dated line, inside a 1,200-character
   cap. On the 3 contacts that already hit the cap, one lower-ranked line may drop.
 
@@ -254,13 +262,17 @@ exactly the kind of field an erase path written before it existed would miss.
 
 ## Decisions for the founder
 
-1. **Scope** — the 10 dated fields above, identity fields undated. *Recommended.*
-2. **Clearing a field redacts history, or keeps it.** Recommended: **redact** — keep the dates and
-   the source, remove the words (`value: null`, `redacted: true`). "What was true when" survives;
-   what the rep deleted does not. Strip, not scrub.
-3. **No backfill** of the 19 existing values. *Recommended*, and consistent with the `appVersion`
-   ruling.
-4. **History syncs** with the contact, under the existing contacts toggle. *Recommended.*
+**All four DECIDED by the founder, 2026-09-11.** Still not built.
+
+1. **Scope — DECIDED:** things a buyer tells you that change — company, role, and every free-text
+   field that holds claims. Not name, email or phone. The 13 fields in the table above.
+2. **Clearing a field — DECIDED: redact.** Keep the dates and the source, remove the words
+   (`value: null`, `redacted: true`). *"If I delete something I mean it gone, not archived"* —
+   otherwise deleted words survive in synced history, which is the `.conflict` shape again.
+3. **Backfill — DECIDED: none.** All 50 contacts share one `updatedAt`, so any date would be
+   fabricated. Absent is honest.
+4. **Sync — DECIDED: history syncs** with the contact, under the existing contacts toggle — which is
+   safe only because of decision 2.
 
 ---
 
