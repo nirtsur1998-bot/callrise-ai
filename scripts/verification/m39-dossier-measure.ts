@@ -72,7 +72,8 @@ const contacts = readAll<DossierContact>('contacts')
 const calls = readAll<DossierCall>('calls')
 const tasks = readAll<DossierTask>('tasks')
 const deals = readAll<DossierDeal>('deals')
-const objections = readAll<import('../../src/main/live/objectionPreload').MinedObjection>('objection-queue')
+const objections =
+  readAll<import('../../src/main/live/objectionPreload').MinedObjection>('objection-queue')
 // Frozen, and passed rather than read inside the builder — the same value for
 // every contact here, so the comparison between them is not also a comparison
 // between two moments.
@@ -96,6 +97,18 @@ console.log(
   `corpus: ${calls.length} call records, ${contacts.length} contacts, ${deals.length} deals, ${tasks.length} tasks`
 )
 console.log(`cap: ${DEFAULT_DOSSIER_CHARS} chars`)
+// The founder's rule, 2026-09-11, enforced by
+// `verification-scripts-enter-at-the-product.test.ts`: a script that
+// re-implements what the product does must SAY SO beside its numbers, in its
+// output, every time — not in a comment a reader of the output never sees.
+// This one loads the records itself and calls the builder directly, so nothing
+// below is evidence about what the app sends.
+console.log('')
+console.log('⚠ EVERY NUMBER BELOW IS measured by re-implementation — this script calls')
+console.log('  buildClientDossier directly, NOT ensureDossier. It reports section counts')
+console.log('  and cap drops that ensureDossier does not expose, and it is the wrong')
+console.log('  instrument for any claim about the product. For that, use')
+console.log('  scripts/verification/m39-ensuredossier-measure.ts.')
 console.log('')
 
 // --- 1 & 4: how much, and for whom nothing ---------------------------------
@@ -110,7 +123,13 @@ const rows = contacts.map((contact) => {
     objections,
     asOf: ASOF
   })
-  return { name: contact.name, chars: d.chars, sections: d.sections.length, dropped: d.dropped, text: d.text }
+  return {
+    name: contact.name,
+    chars: d.chars,
+    sections: d.sections.length,
+    dropped: d.dropped,
+    text: d.text
+  }
 })
 
 const nonEmpty = rows.filter((r) => r.chars > 0)
@@ -118,25 +137,41 @@ const empty = rows.length - nonEmpty.length
 const sorted = [...nonEmpty].sort((a, b) => b.chars - a.chars)
 const median = sorted.length ? sorted[Math.floor(sorted.length / 2)].chars : 0
 console.log(`contacts with a dossier            : ${nonEmpty.length} of ${rows.length}`)
-console.log(`contacts that get NOTHING          : ${empty}  <- the number that decides whether this exists for a rep`)
-console.log(`chars — max ${sorted[0]?.chars ?? 0}, median ${median}, min ${sorted[sorted.length - 1]?.chars ?? 0}`)
+console.log(
+  `contacts that get NOTHING          : ${empty}  <- the number that decides whether this exists for a rep`
+)
+console.log(
+  `chars — max ${sorted[0]?.chars ?? 0}, median ${median}, min ${sorted[sorted.length - 1]?.chars ?? 0}`
+)
 console.log(`contacts hitting the cap (dropped>0): ${nonEmpty.filter((r) => r.dropped > 0).length}`)
 console.log(`sections filled — max ${Math.max(0, ...nonEmpty.map((r) => r.sections))}`)
 console.log('')
 console.log('top 5 by size:')
 for (const r of sorted.slice(0, 5)) {
-  console.log(`  ${String(r.chars).padStart(4)} chars, ${r.sections} sections, ${r.dropped} dropped — ${r.name}`)
+  console.log(
+    `  ${String(r.chars).padStart(4)} chars, ${r.sections} sections, ${r.dropped} dropped — ${r.name}`
+  )
 }
 
 // --- 2: is it byte-stable? --------------------------------------------------
 let unstable = 0
 for (const contact of contacts) {
   const deal = deals.find((d) => d.contactId === contact.id) ?? null
-  const args = { contact, deal, stageLabel: stageLabel(deal?.stageId), calls, tasks, objections, asOf: ASOF }
+  const args = {
+    contact,
+    deal,
+    stageLabel: stageLabel(deal?.stageId),
+    calls,
+    tasks,
+    objections,
+    asOf: ASOF
+  }
   if (buildClientDossier(args).text !== buildClientDossier(args).text) unstable++
 }
 console.log('')
-console.log(`byte-identical across two builds    : ${contacts.length - unstable} of ${contacts.length}`)
+console.log(
+  `byte-identical across two builds    : ${contacts.length - unstable} of ${contacts.length}`
+)
 if (unstable) console.log('  ^ NOT a stable prefix — prompt caching would miss on every cue.')
 
 // --- 3: what does assembly cost? -------------------------------------------
@@ -146,15 +181,27 @@ const target = sorted[0]
 const targetContact = contacts.find((c) => c.name === target?.name)
 if (targetContact) {
   const deal = deals.find((d) => d.contactId === targetContact.id) ?? null
-  const args = { contact: targetContact, deal, stageLabel: stageLabel(deal?.stageId), calls, tasks, objections, asOf: ASOF }
+  const args = {
+    contact: targetContact,
+    deal,
+    stageLabel: stageLabel(deal?.stageId),
+    calls,
+    tasks,
+    objections,
+    asOf: ASOF
+  }
   for (let i = 0; i < 50; i++) buildClientDossier(args)
   const N = 200
   const t0 = performance.now()
   for (let i = 0; i < N; i++) buildClientDossier(args)
   const per = (performance.now() - t0) / N
   console.log('')
-  console.log(`assembly time, largest dossier      : ${per.toFixed(2)} ms  (mean of ${N}, over all ${calls.length} call records)`)
-  console.log(`  as a share of BUG-225's 2,290 ms live-cue baseline : ${((per / 2290) * 100).toFixed(2)}%`)
+  console.log(
+    `assembly time, largest dossier      : ${per.toFixed(2)} ms  (mean of ${N}, over all ${calls.length} call records)`
+  )
+  console.log(
+    `  as a share of BUG-225's 2,290 ms live-cue baseline : ${((per / 2290) * 100).toFixed(2)}%`
+  )
   console.log(`  built ONCE per call, not per cue`)
   console.log('')
   console.log(`the largest dossier, verbatim (${target?.chars} chars):`)
