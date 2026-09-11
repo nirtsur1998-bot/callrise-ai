@@ -87,6 +87,50 @@ describe('BUG-263 — nothing in the renderer talks to the network directly', ()
   })
 })
 
+describe("BUG-263 — nothing in main uses Electron's own network stack", () => {
+  // THE PATHS THE PATCH CANNOT SEE. `globalThis.fetch` and node's http/https
+  // are patched; Electron's `net` module is a separate stack built on
+  // Chromium's, and `net.fetch` / `net.request` / `session.fetch` go straight
+  // past both. A new integration reaching for `net` — the natural choice for
+  // anything that wants the app's proxy settings — would be ungated in a
+  // sandbox with nothing saying so.
+  //
+  // Two known consumers, both checked rather than assumed:
+  //   - electron-updater (`updater/index.ts`) uses Electron's net. It is
+  //     DEV-INERT by the library's own guard, not by ours — the sandbox log
+  //     says so in as many words: "Skip checkForUpdates because application is
+  //     not packed and dev update config is not forced". Verified by reading a
+  //     real sandbox launch, not from the docs.
+  //   - `crashReporter.start({ uploadToServer: false })` never uploads, and
+  //     index.ts carries a standing prohibition on changing that.
+  const files = walk(join(SRC, 'main'))
+
+  it('no main-process source imports `net` from electron', () => {
+    const offenders: string[] = []
+    for (const f of files) {
+      const text = readFileSync(f, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+      for (const m of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*'electron'/g)) {
+        if (/(^|[,\s])net(\s*,|\s*$)/.test(m[1])) offenders.push(f.slice(SRC.length + 1))
+      }
+      if (/\bnet\.(fetch|request)\s*\(/.test(text)) offenders.push(f.slice(SRC.length + 1))
+      if (/\bsession\.[A-Za-z]*\.?fetch\s*\(/.test(text)) offenders.push(f.slice(SRC.length + 1))
+    }
+    expect(
+      offenders,
+      "Electron's net stack bypasses the sandbox egress guard entirely. Either " +
+        'route this through global fetch, or gate it at the call site and add a ' +
+        "row to BUG-263's enumeration saying which kind of gate caught it."
+    ).toEqual([])
+  })
+
+  it('the crash reporter still never uploads', () => {
+    const index = readFileSync(join(SRC, 'main', 'index.ts'), 'utf8')
+    expect(index).toContain('crashReporter.start({ uploadToServer: false')
+  })
+})
+
 describe('BUG-263 — the categories stay meaningful', () => {
   it('every grantable category is reachable by at least one classified host', () => {
     // A category nobody can trigger is a checkbox, not a gate.
