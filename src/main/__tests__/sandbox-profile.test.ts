@@ -56,9 +56,19 @@ describe('wiring, pinned as text (index.ts and backup.ts cannot be imported here
 
   it('index.ts marks the sandbox from the ONE override read, and reads the allow flag exactly once', () => {
     const src = read('index.ts')
-    expect(src).toMatch(/markSandboxProfile\(devProfileOverride, process\.env\['CALLRISE_SANDBOX_ALLOW_SYNC'\] === '1'\)/)
+    // The flag is now hoisted into a const because BUG-263's egress gate needs
+    // the SAME value: two `process.env` reads of one variable is how the two
+    // halves of a guard start disagreeing about whether they are on. This test
+    // fired on exactly that when the gate was added — the invariant it defends
+    // (one read) is unchanged; only the shape it takes is.
+    expect(src).toMatch(
+      /const sandboxAllowSync = process\.env\['CALLRISE_SANDBOX_ALLOW_SYNC'\] === '1'/
+    )
+    expect(src).toMatch(/markSandboxProfile\(devProfileOverride, sandboxAllowSync\)/)
     expect((src.match(/CALLRISE_SANDBOX_ALLOW_SYNC/g) ?? []).length).toBe(1)
     expect(src).toContain('describeSandboxProfile()')
+    // …and the egress gate is fed from that same const, not a second read.
+    expect(src).toMatch(/parseGranted\(process\.env\['CALLRISE_SANDBOX_ALLOW'\], sandboxAllowSync\)/)
   })
 
   it('backup.ts refuses BOTH push and pull before touching the client', () => {

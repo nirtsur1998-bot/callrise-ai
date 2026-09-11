@@ -89,10 +89,28 @@ app.setPath('userData', userDataDir)
 // BUG-186 — a profile COPY must not reach the real cloud backup unless asked.
 // Told from here (the one override read above) rather than read again in
 // backup.ts; the allow flag is read exactly once, here.
-markSandboxProfile(devProfileOverride, process.env['CALLRISE_SANDBOX_ALLOW_SYNC'] === '1')
+//
+// ONE READ, TWO CONSUMERS. BUG-263's egress gate needs the same flag, and the
+// first version of that change read `process.env` a second time — which
+// `sandbox-profile.test.ts` caught at the gate, correctly: two reads of one
+// variable is how the two halves of a guard start disagreeing about whether
+// they are on. Hoisted, so there is still exactly one read.
+const sandboxAllowSync = process.env['CALLRISE_SANDBOX_ALLOW_SYNC'] === '1'
+markSandboxProfile(devProfileOverride, sandboxAllowSync)
 {
   const line = describeSandboxProfile()
   if (line) console.log(line)
+}
+// BUG-263 — and the backup is only ONE of ten ways out. A sandbox that printed
+// the line above was treated as isolated and put two fictional meetings into
+// the founder's real Outlook calendar. So when the profile is overridden, every
+// outbound path is refused unless its category is granted. Guarded by the same
+// `devProfileOverride` as everything above it: a packaged build cannot reach
+// this branch, because it never reads the variable that sets it.
+if (devProfileOverride) {
+  const granted = parseGranted(process.env['CALLRISE_SANDBOX_ALLOW'], sandboxAllowSync)
+  installSandboxEgressGuard(granted)
+  console.log(describeSandboxEgress(granted))
 }
 
 registerCrashLogging()
@@ -288,6 +306,7 @@ import {
   sweepJournalsForMissingCalls
 } from './live/call-journal'
 import { describeSandboxProfile, markSandboxProfile } from './sandbox-profile'
+import { describeSandboxEgress, installSandboxEgressGuard, parseGranted } from './sandbox-egress'
 import { sweepOrphanedCompanions, recordIsGone } from './companion-files'
 import { registerGoogle } from './google'
 import { registerOutlook } from './outlook'
