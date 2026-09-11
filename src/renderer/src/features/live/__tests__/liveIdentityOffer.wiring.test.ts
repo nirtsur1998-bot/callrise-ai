@@ -75,11 +75,35 @@ describe('M39 — LiveView mounts the live identity chip', () => {
     //
     // Pinned as source because the state lives in a hook and there is no
     // render harness here; the shape is one line and losing it is invisible.
+    // The RULE is now behaviour-tested in resetHeldForNewName.test.ts rather
+    // than matched as source text; what is pinned here is that the effect
+    // still routes through it, because an effect that inlined the condition
+    // again would pass every test in that file while doing something else.
     const hook = readFileSync(join(LIVE, 'useLiveIdentityOffer.ts'), 'utf8')
-    const effect = hook.match(/useEffect\(\(\) => \{[\s\S]*?\}, \[spokenName\]\)/)
+    const effect = hook.match(/useEffect\(\(\) => \{[\s\S]*?\}, \[spokenName, held\]\)/)
     expect(effect, 'the per-conversation reset effect must still exist').not.toBeNull()
-    expect(effect?.[0]).toContain('if (!spokenName) return')
-    expect(effect?.[0]).toContain('pendingRef.current = null')
+    expect(effect?.[0]).toContain('resetHeldForNewName(held, spokenName)')
+  })
+
+  it('holds the answer at the CALL’s lifetime, not the view’s', () => {
+    const view = readFileSync(join(LIVE, 'LiveView.tsx'), 'utf8')
+    const call = view.match(/useLiveIdentityOffer\(\{[\s\S]*?\}\)/)
+    // A view-local ref here would compile, render, work in every manual test
+    // that does not navigate, and quietly lose an answer on the one that does.
+    expect(call?.[0]).toContain('held: liveCall.liveIdentity')
+
+    const provider = readFileSync(join(LIVE, 'LiveCallProvider.tsx'), 'utf8')
+    expect(provider).toContain('const liveIdentity = useRef<LiveIdentityHeld>')
+    expect(provider).toMatch(/liveIdentity,/)
+  })
+
+  it('restores the chip’s confirmation from the held answer on remount', () => {
+    // Surviving in the ref is not enough: if `acceptedName` initialised to
+    // null the chip would ask the question again while the answer sat behind
+    // it, which is the same defect the rep would experience.
+    const hook = readFileSync(join(LIVE, 'useLiveIdentityOffer.ts'), 'utf8')
+    expect(hook).toContain('useState(held.current.dismissed)')
+    expect(hook).toMatch(/useState<string \| null>\(\(\) => \{\s*const d = held\.current\.decision/)
   })
 
   it('never writes the calendar event from the identity offer', () => {

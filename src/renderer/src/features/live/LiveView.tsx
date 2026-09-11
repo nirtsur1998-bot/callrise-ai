@@ -3,7 +3,13 @@ import { useDesignPreview } from '@renderer/features/settings/useDesignPreview'
 import { GlanceLine } from './hud/GlanceLine'
 import { StateStrip } from './hud/StateStrip'
 import { useGlanceCue } from './hud/useGlanceCue'
-import { loadHudLayout, loadTranscriptCollapsed, saveHudLayout, saveTranscriptCollapsed, type HudLayout } from './hud/hudCore'
+import {
+  loadHudLayout,
+  loadTranscriptCollapsed,
+  saveHudLayout,
+  saveTranscriptCollapsed,
+  type HudLayout
+} from './hud/hudCore'
 import { MIC_OUTCOME_TEXT } from '@renderer/features/audio/micOutcome'
 import {
   Mic,
@@ -313,7 +319,10 @@ export function LiveView({
     // collapses provider mirrors of one meeting, ranks by how EXPLICIT the
     // evidence is (a hand-made contact/deal link first), and returns NOTHING
     // when two meetings are indistinguishable. See matchLiveMeeting.ts.
-    const { meeting: match } = matchLiveMeeting([...calEvents, ...googleEvents, ...outlookEvents], now)
+    const { meeting: match } = matchLiveMeeting(
+      [...calEvents, ...googleEvents, ...outlookEvents],
+      now
+    )
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Date.now() forces this out of render; syncing derived state from the calendar data is exactly what an effect is for
     setCurrentMeeting(match)
     currentMeetingRef.current = match
@@ -377,8 +386,7 @@ export function LiveView({
   // state must survive a navigation and an ordinary mid-call restart, not
   // reset on either. This screen is a pure attach/subscribe client for them
   // now, same shape it already is for the transcript.
-  const { enabled, setEnabled, sensitivity, setSensitivity, quiet, setQuiet } =
-    liveCall.cueSettings
+  const { enabled, setEnabled, sensitivity, setSensitivity, quiet, setQuiet } = liveCall.cueSettings
   const {
     cue,
     dismiss,
@@ -454,7 +462,12 @@ export function LiveView({
     spokenName: buyerName,
     linkedContactId: currentMeeting?.contactId,
     contacts,
-    enabled: contactIntelligenceMode !== 'off' && consent.canRecord
+    enabled: contactIntelligenceMode !== 'off' && consent.canRecord,
+    // The answer lives at the CALL's lifetime, not this view's. Navigating to
+    // Pipeline and back mid-call used to build a fresh ref and leave an answer
+    // the rep had already given unreachable, while the chip asked again. See
+    // `liveIdentity` in useLiveCall.ts for the full trace.
+    held: liveCall.liveIdentity
   })
   useEffect(() => {
     identityOfferApplyRef.current = identityOffer.applyToSavedCall
@@ -492,7 +505,10 @@ export function LiveView({
    *  than re-derived per element, because the Deal Intelligence panel was
    *  missing exactly this check and nothing made that visible. */
   const liveSurfaceVisible =
-    status === 'listening' || status === 'connecting' || status === 'reconnecting' || status === 'paused'
+    status === 'listening' ||
+    status === 'connecting' ||
+    status === 'reconnecting' ||
+    status === 'paused'
 
   const autoBuyerAttemptedRef = useRef(false)
   /** BUG-172 — how many times we have waited for the call id this call, and a
@@ -509,7 +525,8 @@ export function LiveView({
   }, [status])
   useEffect((): undefined | (() => void) => {
     if (autoBuyerAttemptedRef.current) return undefined
-    if (status !== 'listening' || !canRecordOther || otherPartyLive || otherPartyError) return undefined
+    if (status !== 'listening' || !canRecordOther || otherPartyLive || otherPartyError)
+      return undefined
 
     // BUG-172 — THE CALL ID MAY NOT EXIST YET, AND THAT IS NOT A FAILURE.
     //
@@ -939,7 +956,9 @@ export function LiveView({
     setHudLayoutState(l)
   }
   const glance = designPreview && hudLayout === 'glance'
-  const [transcriptCollapsed, setTranscriptCollapsedState] = useState(() => loadTranscriptCollapsed())
+  const [transcriptCollapsed, setTranscriptCollapsedState] = useState(() =>
+    loadTranscriptCollapsed()
+  )
   const setTranscriptCollapsed = (c: boolean): void => {
     saveTranscriptCollapsed(c)
     setTranscriptCollapsedState(c)
@@ -1110,7 +1129,11 @@ export function LiveView({
               data-testid="hud-layout-switch"
               onClick={() => setHudLayout(glance ? 'full' : 'glance')}
               className="no-drag rounded-lg border border-line px-2.5 py-1 text-[12px] text-muted hover:text-ink"
-              title={glance ? 'Show the full live screen' : 'Show the glance HUD (one line, the state strip, the transcript)'}
+              title={
+                glance
+                  ? 'Show the full live screen'
+                  : 'Show the glance HUD (one line, the state strip, the transcript)'
+              }
             >
               {glance ? 'Full' : 'Glance'}
             </button>
@@ -1125,9 +1148,11 @@ export function LiveView({
           {!glance && !quiet && status === 'listening' && engagementScore !== null && (
             <EngagementGauge score={engagementScore} />
           )}
-          {!glance && !quiet && status === 'listening' && monologue !== null && monologue.ms > 0 && (
-            <MonologueMeter state={monologue} />
-          )}
+          {!glance &&
+            !quiet &&
+            status === 'listening' &&
+            monologue !== null &&
+            monologue.ms > 0 && <MonologueMeter state={monologue} />}
           <StatusBadge status={status} />
           <div className="flex min-w-[70px] items-center gap-1.5 text-[13px]">
             {(status === 'listening' || status === 'paused') &&
@@ -1142,7 +1167,11 @@ export function LiveView({
                 // so it now renders on its own; the millisecond READING still
                 // requires a number to show, and falls back to the notice.
                 if (!notice && latencyMs === null) return null
-                const tone = notice ? 'danger' : (latencyMs as number) < 500 ? 'positive' : 'warning'
+                const tone = notice
+                  ? 'danger'
+                  : (latencyMs as number) < 500
+                    ? 'positive'
+                    : 'warning'
                 return (
                   <>
                     <span
@@ -1176,12 +1205,12 @@ export function LiveView({
       </div>
 
       {/* BUG-176 — near-total capture loss, said DURING the call.
-        *
-        * Deliberately NOT folded into the small health indicator above: that
-        * indicator is gated on `latencyMs !== null`, and latencyMs is only ever
-        * set when transcript text arrives (useTranscription: `if (text) {`).
-        * So the one readout that could report 'nothing is arriving' is hidden
-        * exactly when nothing arrives. A banner, on its own gate. */}
+       *
+       * Deliberately NOT folded into the small health indicator above: that
+       * indicator is gated on `latencyMs !== null`, and latencyMs is only ever
+       * set when transcript text arrives (useTranscription: `if (text) {`).
+       * So the one readout that could report 'nothing is arriving' is hidden
+       * exactly when nothing arrives. A banner, on its own gate. */}
       {status === 'listening' &&
         (() => {
           const low = lowCaptureNotice({ health, segments })
@@ -1348,19 +1377,25 @@ export function LiveView({
               // Before this it wasn't even distinguishable from "not paused"
               // at all (see useLiveCues.ts's own comment on the strict-
               // equality bug this closes).
-              <>AI coaching cues are temporarily unavailable (the model is taking too long to respond
-                right now) — transcription is unaffected. Resumes automatically.</>
+              <>
+                AI coaching cues are temporarily unavailable (the model is taking too long to
+                respond right now) — transcription is unaffected. Resumes automatically.
+              </>
             ) : coachingPausedReason === 'quota-exhausted' ? (
               // BUG-058 Phase 3 — a genuine free-tier quota exhaustion is a
               // different condition from an ordinary rate limit: no amount
               // of waiting a few seconds fixes it, so this says so honestly
               // instead of implying it'll clear itself shortly.
-              <>AI coaching cues are temporarily unavailable (a configured model&rsquo;s free-tier
+              <>
+                AI coaching cues are temporarily unavailable (a configured model&rsquo;s free-tier
                 quota is used up) — transcription is unaffected. Add another provider&rsquo;s key in
-                Settings, or wait for it to reset.</>
+                Settings, or wait for it to reset.
+              </>
             ) : (
-              <>AI coaching cues are temporarily unavailable (every configured model is unreachable or
-                rate-limited right now) — transcription is unaffected. Resumes automatically.</>
+              <>
+                AI coaching cues are temporarily unavailable (every configured model is unreachable
+                or rate-limited right now) — transcription is unaffected. Resumes automatically.
+              </>
             )}
           </span>
         </InlineBanner>
@@ -1504,17 +1539,17 @@ export function LiveView({
         </div>
       )}
       {/* M39 Stage 2 — the live identity offer.
-        *
-        * Placed here, immediately above the transcript, for two reasons. It is
-        * ABOUT the transcript — the name came out of it — so it belongs where
-        * the rep is already looking. And it is outside the transcript's own
-        * scroll box, so it can appear or disappear without shifting a line of
-        * what someone is currently reading.
-        *
-        * Not in Quiet mode. Quiet's contract is that nothing new asks to be
-        * READ mid-call, and this asks to be read. The question keeps until the
-        * call saves — the Call Detail page asks it again — which is exactly
-        * the trade Quiet exists to make. */}
+       *
+       * Placed here, immediately above the transcript, for two reasons. It is
+       * ABOUT the transcript — the name came out of it — so it belongs where
+       * the rep is already looking. And it is outside the transcript's own
+       * scroll box, so it can appear or disappear without shifting a line of
+       * what someone is currently reading.
+       *
+       * Not in Quiet mode. Quiet's contract is that nothing new asks to be
+       * READ mid-call, and this asks to be read. The question keeps until the
+       * call saves — the Call Detail page asks it again — which is exactly
+       * the trade Quiet exists to make. */}
       {!quiet && identityOffer.offer && (
         <div className="shrink-0" data-testid="live-identity-offer">
           <LiveIdentityOfferChip
@@ -1527,7 +1562,11 @@ export function LiveView({
         </div>
       )}
       {/* Transcript + the floating cue card (kept above the Ask-coach bar). */}
-      <div className={glance && transcriptCollapsed ? 'hidden' : 'relative flex min-h-0 flex-1 flex-col'}>
+      <div
+        className={
+          glance && transcriptCollapsed ? 'hidden' : 'relative flex min-h-0 flex-1 flex-col'
+        }
+      >
         <TranscriptView
           segments={segments}
           interimText={interimText}

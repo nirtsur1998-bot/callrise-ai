@@ -26,26 +26,39 @@
  * already reads, and the name itself only exists when the self-intro opt-in is
  * on. Nothing new is gated here.
  *
- * KNOWN LIMIT, stated rather than discovered later: this hook lives in
- * LiveView, and LiveView unmounts on every screen navigation (its own comment
- * says so — the call itself survives in LiveCallProvider, the view does not).
- * So navigating to Pipeline mid-call drops both the held decision and the
- * dismissal: the chip comes back, and an answer given before the navigation is
- * gone. That is the same lifetime the clip buffer and the deal-intelligence
- * report already have, so it is consistent rather than surprising — and the
- * question is asked again on the Call Detail page after the save, so nothing
- * is lost permanently. Moving the ref up into LiveCallProvider (beside
- * `currentMeetingRef`) would fix it; that is a small change and a separate
- * decision, not something to slip in beside a new surface.
+ * THE LIFETIME — and what the first version of this comment got wrong.
+ *
+ * This hook lives in LiveView, and LiveView unmounts on every screen
+ * navigation. The original header said that dropped the held decision. Traced
+ * properly, it does not: `setOnSaved` is deliberately never cleared on unmount
+ * (see its doc comment in useLiveCall.ts), so `handleSaved` outlives the view,
+ * and its closure still reaches a `useRef` object whose fiber is gone. An
+ * unmount on its own is harmless.
+ *
+ * The loss is on the way BACK. A remount builds a FRESH ref,
+ * `identityOfferApplyRef` is repointed at the new closure, and the answer
+ * given before the navigation becomes unreachable — while the chip, whose
+ * `dismissed`/`acceptedName` are plain `useState`, asks again as if nothing
+ * had been said. Right about the consequence, wrong about the trigger, which
+ * matters: "don't navigate away" was never the mitigation, and the case that
+ * actually loses an answer is the one a rep is most likely to do — check the
+ * pipeline, come back.
+ *
+ * FIXED by moving the held answer up to `LiveCallProvider`, whose lifetime is
+ * the CALL's rather than the view's (`liveIdentity` in useLiveCall.ts). The
+ * hook still owns the question; it no longer owns the answer. `held` is
+ * optional so the hook stays testable and usable without a Provider, and the
+ * fallback is the old view-lifetime ref — said out loud, because a default
+ * that silently reintroduces the bug would be worse than no default.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { liveIdentityOffer, type LiveIdentityOffer } from './liveIdentityOffer'
 import type { Contact } from '@renderer/features/contacts/types'
+import type { LiveIdentityHeld } from './useLiveCall'
 
 /** What the rep chose, kept until there is a call record to write it to. */
 export type PendingDecision =
-  | { kind: 'link'; contactId: string; contactName: string }
-  | { kind: 'create'; name: string }
+  { kind: 'link'; contactId: string; contactName: string } | { kind: 'create'; name: string }
 
 /** The two IPC calls the decision needs, named so a test can supply them.
  *  There is no renderHook in this repo, so the part worth testing — the
@@ -89,6 +102,41 @@ export async function applyIdentityDecision(
   }
 }
 
+/**
+ * Should a newly-heard spoken name wipe the answer currently held?
+ *
+ * Pulled out of the effect and exported so the rule can be TESTED rather than
+ * pinned as source text. There is no render harness in this repo, so an
+ * assertion that the effect contains a particular line is the best a test
+ * could otherwise do — and the three cases below are exactly the ones that
+ * have gone wrong once each:
+ *
+ *   - `null` name: `useLiveCues` nulls `buyerName` mid-call when the rep
+ *     switches cues off. Resetting there wipes an answer already given and
+ *     already confirmed on screen.
+ *   - SAME name: the effect re-runs on every mount, and the held state now
+ *     outlives the view — so without this, coming back from Pipeline resets
+ *     the very answer hoisting the ref was meant to preserve.
+ *   - DIFFERENT name: a new conversation. The old answer must not carry, or a
+ *     later buyer inherits an earlier one's link.
+ *
+ * Mutates `held` and returns whether it did, so a caller can sync its render
+ * state without duplicating the condition.
+ */
+export function resetHeldForNewName(
+  held: { current: LiveIdentityHeld },
+  spokenName: string | null
+): boolean {
+  if (!spokenName) return false
+  // Exact comparison, deliberately, not case- or whitespace-insensitive: this
+  // value comes from the model on one call and is only ever compared with
+  // itself within that call, so the only way it can differ is that the model
+  // said something different — which is a new answer to ask about.
+  if (held.current.forName === spokenName) return false
+  held.current = { decision: null, dismissed: false, forName: spokenName }
+  return true
+}
+
 export interface UseLiveIdentityOffer {
   /** What to show, or null for "say nothing" — the answer on most calls. */
   offer: LiveIdentityOffer | null
@@ -110,11 +158,28 @@ export function useLiveIdentityOffer(input: {
   linkedContactId: string | null | undefined
   contacts: Contact[]
   enabled: boolean
+  /** Where the rep's answer LIVES. Pass `liveCall.liveIdentity` so it survives
+   *  this view unmounting and remounting. Omitted, it falls back to a
+   *  view-lifetime ref and the pre-fix behaviour. */
+  held?: { current: LiveIdentityHeld }
 }): UseLiveIdentityOffer {
   const { spokenName, linkedContactId, contacts, enabled } = input
-  const [dismissed, setDismissed] = useState(false)
-  const [acceptedName, setAcceptedName] = useState<string | null>(null)
-  const pendingRef = useRef<PendingDecision | null>(null)
+  const fallback = useRef<LiveIdentityHeld>({
+    decision: null,
+    dismissed: false,
+    forName: null
+  })
+  const held = input.held ?? fallback
+
+  // React state mirrors the ref only so the chip re-renders; the REF is the
+  // truth, and it is what a remount reads back. Initialised FROM the ref, so
+  // coming back to the Live screen mid-call shows "Linked to Kerry when this
+  // call saves" rather than asking again.
+  const [dismissed, setDismissed] = useState(held.current.dismissed)
+  const [acceptedName, setAcceptedName] = useState<string | null>(() => {
+    const d = held.current.decision
+    return d ? (d.kind === 'link' ? d.contactName : d.name) : null
+  })
 
   // A new name means a new conversation's worth of question, so a dismissal
   // or an acceptance from the previous one must not silence it. Keyed on the
@@ -130,50 +195,59 @@ export function useLiveIdentityOffer(input: {
   // precisely the silent no-op this design exists to prevent, arrived at from
   // the other end. `applyToSavedCall` clears the ref when it consumes it, so
   // nothing here needs to clear it on the way out.
+  //
+  // AND ONLY ON A *DIFFERENT* NAME, which is new with the hoisted ref. The
+  // effect re-runs on every mount, so without `forName` a remount mid-call
+  // would reset the very answer this change exists to preserve — the bug
+  // moved rather than fixed.
   useEffect(() => {
-    if (!spokenName) return
+    if (!resetHeldForNewName(held, spokenName)) return
     setDismissed(false)
     setAcceptedName(null)
-    pendingRef.current = null
-  }, [spokenName])
+  }, [spokenName, held])
 
   const offer = useMemo(
     () =>
-      enabled && !dismissed
-        ? liveIdentityOffer({ spokenName, linkedContactId, contacts })
-        : null,
+      enabled && !dismissed ? liveIdentityOffer({ spokenName, linkedContactId, contacts }) : null,
     [enabled, dismissed, spokenName, linkedContactId, contacts]
   )
 
-  const link = useCallback((contactId: string, contactName: string) => {
-    pendingRef.current = { kind: 'link', contactId, contactName }
-    setAcceptedName(contactName)
-  }, [])
+  const link = useCallback(
+    (contactId: string, contactName: string) => {
+      held.current.decision = { kind: 'link', contactId, contactName }
+      setAcceptedName(contactName)
+    },
+    [held]
+  )
 
-  const create = useCallback((name: string) => {
-    pendingRef.current = { kind: 'create', name }
-    setAcceptedName(name)
-  }, [])
+  const create = useCallback(
+    (name: string) => {
+      held.current.decision = { kind: 'create', name }
+      setAcceptedName(name)
+    },
+    [held]
+  )
 
   const dismiss = useCallback(() => {
+    held.current.decision = null
+    held.current.dismissed = true
     setDismissed(true)
-    pendingRef.current = null
     setAcceptedName(null)
-  }, [])
+  }, [held])
 
   const applyToSavedCall = useCallback(
     async (callId: string): Promise<string | null> => {
-      const decision = pendingRef.current
+      const decision = held.current.decision
       // Cleared BEFORE the awaits: a second save of the same conversation (a
       // recovery, a retry) must not re-apply a decision that already landed or
       // already failed. The rep answered once.
-      pendingRef.current = null
+      held.current.decision = null
       return applyIdentityDecision(decision, callId, contacts, {
         setContact: (id, contactId) => window.api.calls.setContact(id, contactId),
         createContact: (input) => window.api.contacts.create(input)
       })
     },
-    [contacts]
+    [contacts, held]
   )
 
   return { offer, acceptedName, link, create, dismiss, applyToSavedCall }

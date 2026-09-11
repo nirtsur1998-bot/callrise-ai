@@ -54,6 +54,39 @@ export interface LiveCallContextValue extends UseTranscriptionReturn {
    *  about that call's clips and Deal Intelligence report. Clearing it would
    *  only make that one case silently skip work that should still happen. */
   setOnSaved: (cb: ((callId: string) => void) | null) => void
+  /** M39 — the rep's mid-call answer to "is this Harvey?", held HERE rather
+   *  than in the hook that asks, because the hook lives in `LiveView` and
+   *  `LiveView` unmounts on every navigation.
+   *
+   *  WHAT WAS ACTUALLY BROKEN, traced rather than assumed. Navigating AWAY is
+   *  fine on its own: `setOnSaved` is deliberately never cleared, so
+   *  `handleSaved` survives the unmount and its closure still reaches the
+   *  hook's ref even after the fiber is gone. The loss happens on the way
+   *  BACK — a remount builds a fresh `useRef`, `identityOfferApplyRef` is
+   *  repointed at the new closure, and the answer given before the navigation
+   *  becomes unreachable while the chip asks again as if nothing had been
+   *  said. The hook's own header called this "the held decision is dropped on
+   *  navigation", which was right about the consequence and wrong about the
+   *  trigger.
+   *
+   *  A plain mutable object, not state: nothing re-renders on it, and it must
+   *  live exactly as long as the CALL does — the Provider's lifetime, not the
+   *  view's. `forName` is what makes keeping it safe: a held answer belongs to
+   *  one spoken name, so a different buyer on a later call cannot inherit it. */
+  liveIdentity: { current: LiveIdentityHeld }
+}
+
+/** The held mid-call identity answer. Shaped here rather than in the hook so
+ *  the Provider can own it without importing the view's hook. */
+export interface LiveIdentityHeld {
+  decision:
+    | { kind: 'link'; contactId: string; contactName: string }
+    | { kind: 'create'; name: string }
+    | null
+  /** The rep said "no" to this name; do not ask again for it on this call. */
+  dismissed: boolean
+  /** Which spoken name the two fields above are an answer ABOUT. */
+  forName: string | null
 }
 
 export const LiveCallContext = createContext<LiveCallContextValue | null>(null)

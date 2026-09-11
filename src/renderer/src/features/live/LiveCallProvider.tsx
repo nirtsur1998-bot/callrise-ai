@@ -40,7 +40,7 @@ import { useLiveCues } from './useLiveCues'
 import { useDealIntelligenceSettings } from '@renderer/features/deal-intelligence/useDealIntelligenceSettings'
 import { useDealIntelligence } from '@renderer/features/deal-intelligence/useDealIntelligence'
 import { useTranscription } from './useTranscription'
-import { LiveCallContext, type LiveCallContextValue } from './useLiveCall'
+import { LiveCallContext, type LiveCallContextValue, type LiveIdentityHeld } from './useLiveCall'
 
 interface BuyerIdentity {
   key: string
@@ -53,8 +53,7 @@ export function LiveCallProvider({ children }: { children: ReactNode }): React.J
   // useConsent's own doc comment) — just evaluated here now, since this is
   // where useConsent itself lives.
   const appSettings = useAppSettings().settings
-  const standingConsent =
-    appSettings.allowOtherPartyRecording && appSettings.alwaysRecordOtherParty
+  const standingConsent = appSettings.allowOtherPartyRecording && appSettings.alwaysRecordOtherParty
 
   const consent = useConsent(standingConsent)
   const buyerIdentityRef = useRef<BuyerIdentity | null>(null)
@@ -72,7 +71,23 @@ export function LiveCallProvider({ children }: { children: ReactNode }): React.J
     onSavedRef.current = cb
   }, [])
 
-  const transcription = useTranscription(consent.recordRef, consent.reset, onSaved, buyerIdentityRef)
+  // M39 — the rep's mid-call identity answer, held at the CALL's lifetime
+  // rather than the view's. See `LiveIdentityHeld` in useLiveCall.ts for what
+  // was actually breaking and why the fix is a ref up here rather than a
+  // cleanup down there. Cleared by the hook itself when it consumes the
+  // decision at save, and re-keyed by `forName` when a new buyer is heard.
+  const liveIdentity = useRef<LiveIdentityHeld>({
+    decision: null,
+    dismissed: false,
+    forName: null
+  })
+
+  const transcription = useTranscription(
+    consent.recordRef,
+    consent.reset,
+    onSaved,
+    buyerIdentityRef
+  )
 
   // M26 4.5 (BUG-055) — hoisted alongside the transcript, for the same
   // reason and the same way: both engines' timing-dependent state (the
@@ -127,6 +142,7 @@ export function LiveCallProvider({ children }: { children: ReactNode }): React.J
     consent,
     buyerIdentityRef,
     setOnSaved,
+    liveIdentity,
     cueSettings,
     cues,
     dealIntelligenceSettings,
