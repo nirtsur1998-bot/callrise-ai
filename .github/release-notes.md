@@ -2,6 +2,14 @@
 
 CallRise AI listens to your sales calls on your own PC, transcribes them, and coaches you live and afterwards. Your calls stay on your machine.
 
+### New in 1.12.0
+
+- **Live coaching remembers who you're talking to.** When a call is matched to a known contact, live coaching now includes what that contact has told you before, sent to your AI provider with the transcript. It needs earlier calls with that contact, so it applies to some contacts and not others — on the profile it was tested on, 30 of 50.
+- **"Since your last call."** When something moved since you last spoke — the deal changed stage, you kept a promise, or what they push back on shifted — the coach knows. This is deliberately rare: 5 of 50 contacts on the tested profile. Most calls will not show it, and that is expected.
+- **Checks who you're talking to.** If the name a buyer gives doesn't match the contact your meeting is linked to, CallRise asks during the call instead of after.
+- **Support bundles include cue timing** — percentiles and counts only, no call ids and no samples.
+- Fixed: the "we found a call that was never saved" prompt now shows its warning colour.
+
 ### Which file to download
 
 - **`CallRise-AI-Windows.exe`** — the installer. This is the one to take. It installs for your user only, no administrator rights needed.
