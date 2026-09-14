@@ -123,7 +123,7 @@ export function registerCrmNoteGenerator(): void {
         ])
         if (!noteResult.ok) throw new Error('Could not draft a note. Please try again.')
 
-        return { note: noteResult.note, facts }
+        return { note: noteResult.note, facts, callId }
       }
     }
   })
@@ -196,7 +196,11 @@ export function registerCrmNoteGenerator(): void {
     ): Promise<{ ok: boolean }> => {
       try {
         if (!isNoteGeneratorEnabled()) return { ok: false }
-        const contact = await applyKycField(contactsDir(), contactId, field, text)
+        // M39 §8 — date the fact to the call the job harvested it from.
+        const origin = jobId ? resultOf(getJobManager().get(jobId)) : null
+        const call = origin?.callId ? await getCall(callsDir(), origin.callId) : null
+        const evidence = call ? { callId: call.id, at: call.createdAt } : undefined
+        const contact = await applyKycField(contactsDir(), contactId, field, text, evidence)
         if (contact) scheduleBackup()
         if (contact && jobId && factId) {
           recordDecision(jobId, { kind: 'fact-accepted', factId })

@@ -165,6 +165,19 @@ describe('THE STRUCTURAL GUARD — no Contact field may be silently dropped agai
   const FULL: Required<Contact> = {
     id: '22222222-2222-4222-8222-222222222222',
     name: 'Dana Levi',
+    // M39 §8 — one open fact, already in the store's normalised shape (ISO ms,
+    // no derived window), so the round trip is an identity.
+    factHistory: [
+      {
+        id: 'f1',
+        field: 'timeline',
+        value: 'Q4',
+        validFrom: '2026-07-14T10:00:00.000Z',
+        validFromSource: 'approx',
+        recordedAt: '2026-07-14T10:00:00.000Z',
+        source: 'user'
+      }
+    ],
     company: 'Acme',
     cid: 'C-1001',
     registeredAt: '2026-01-15',

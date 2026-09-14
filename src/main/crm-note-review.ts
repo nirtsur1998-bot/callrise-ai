@@ -33,6 +33,11 @@ export interface CrmNoteJobResult {
   note: string
   facts: KycFact[]
   review?: CrmNoteReview
+  /** M39 §8 — the call the facts were harvested from, so an accepted fact is
+   *  dated to that call. Read back through the job at apply time rather than
+   *  re-resolving "most recent call", which a call linked in between would
+   *  get wrong. Absent on jobs from before this field existed. */
+  callId?: string
 }
 
 export type CrmNoteDecision =

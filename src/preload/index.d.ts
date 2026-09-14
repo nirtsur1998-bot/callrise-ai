@@ -1297,6 +1297,37 @@ export interface Contact extends ContactKycFields {
   /** Last modification (create or edit); a future backup's "newest wins" key. */
   updatedAt: string
   comments?: ContactComment[]
+  /** M39 §8 — bi-temporal history of the dated fields (main: contact-facts.ts).
+   *  Read-only here: the store writes it; a patch carrying it is ignored. */
+  factHistory?: ContactFact[]
+}
+
+/** One dated fact about a contact — see src/main/contact-facts.ts. */
+export interface ContactFact {
+  id: string
+  field:
+    | 'company'
+    | 'title'
+    | 'decisionAuthority'
+    | 'budgetIndication'
+    | 'timeline'
+    | 'competitors'
+    | 'currentTooling'
+    | 'knownObjections'
+    | 'otherStakeholders'
+    | 'dealValue'
+    | 'personalNotes'
+    | 'notes'
+    | 'briefingNotes'
+  value: string | number | null
+  validFrom: string
+  validFromSource: 'call' | 'stated' | 'approx'
+  validUntil?: string
+  recordedAt: string
+  supersededBy?: string
+  source: 'user' | 'ai-accepted' | 'import'
+  callId?: string
+  redacted?: true
 }
 
 export interface ContactCreateInput extends ContactKycInput {

@@ -99,6 +99,12 @@ import {
   formatObjectionPreload,
   type MinedObjection
 } from './objectionPreload'
+import {
+  describeFactDate,
+  factsAsOf,
+  type ContactFact,
+  type DatedContactField
+} from '../contact-facts'
 
 /** Only the fields this module reads, so a caller can pass its own shapes. */
 export interface DossierContact {
@@ -115,6 +121,10 @@ export interface DossierContact {
   knownObjections?: string
   currentTooling?: string
   personalNotes?: string
+  /** M39 §8 — when present, "Known facts" is read AS OF the call's start and
+   *  each dated line carries its absolute day. Absent (every contact until its
+   *  first dated write), the flat values render exactly as before. */
+  factHistory?: ContactFact[]
 }
 
 export interface DossierCall {
@@ -374,7 +384,15 @@ export function buildClientDossier(input: DossierInput): Dossier {
   // --- 1. Current valid facts ------------------------------------------------
   // Hand-entered or rep-accepted, so confidence is high; thin on this corpus
   // (0-4 of 50 contacts per field) but worth the most per character when present.
-  const FACTS: [keyof DossierContact, string][] = [
+  //
+  // M39 §8 — BI-TEMPORAL when the contact carries history: each fact is the
+  // one whose window contains `asOf` (the call's start), so a dossier rebuilt
+  // for an OLD call shows what was true THEN, and a cleared value is absent
+  // rather than "known". The suffix is an absolute ISO day — "(since
+  // 2026-07-14, from a call)", "(noted 2026-08-21)" — never a relative date,
+  // so the cached prefix stays byte-identical across the call. A contact with
+  // no history renders its flat values exactly as before, undated.
+  const FACTS: [DatedContactField & keyof DossierContact, string][] = [
     ['title', 'Role'],
     ['decisionAuthority', 'Decision authority'],
     ['budgetIndication', 'Budget'],
@@ -384,12 +402,19 @@ export function buildClientDossier(input: DossierInput): Dossier {
     ['knownObjections', 'Known objections'],
     ['personalNotes', 'Personal']
   ]
+  const dated = input.asOf && contact.factHistory?.length ? factsAsOf(contact, input.asOf) : null
   for (const [key, label] of FACTS) {
-    const v = clean(contact[key], 140)
-    if (v) items.push({ section: 'Known facts', line: `${label}: ${v}`, rank: 90 })
+    const fact = dated ? dated[key] : null
+    const v = clean(dated ? fact?.value : contact[key], 140)
+    if (!v) continue
+    const when = fact ? describeFactDate(fact) : ''
+    items.push({ section: 'Known facts', line: `${label}: ${v}${when}`, rank: 90 })
   }
-  if (contact.company) {
-    items.push({ section: 'Known facts', line: `Company: ${clean(contact.company, 60)}`, rank: 88 })
+  const companyFact = dated ? dated.company : null
+  const company = clean(dated ? companyFact?.value : contact.company, 60)
+  if (company) {
+    const when = companyFact ? describeFactDate(companyFact) : ''
+    items.push({ section: 'Known facts', line: `Company: ${company}${when}`, rank: 88 })
   }
 
   // --- 5. Deal state ---------------------------------------------------------

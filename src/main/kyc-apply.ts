@@ -5,6 +5,7 @@
 // copies that could quietly drift apart.
 import { KYC_UPDATABLE_FIELDS } from './coaching-chat'
 import { updateContact, type Contact } from './contacts-fs'
+import type { FactEvidence } from './contact-facts'
 
 /** Parses free text like "$50k", "1,200,000", "around 75000" into a plain
  *  number, or null if nothing numeric could be pulled out — the caller must
@@ -33,12 +34,18 @@ export function parseDealValue(text: string): number | null {
 /** Validates `field` against KYC_UPDATABLE_FIELDS, parses/rejects a numeric
  *  dealValue, then writes the single field via updateContact(). Returns null
  *  on any rejection (unknown field, unparseable dealValue, contact not
- *  found) — never partially applies. */
+ *  found) — never partially applies.
+ *
+ *  `evidence` (M39 §8) — the call the suggestion came from. Both callers hold
+ *  it, and it is what dates a DATED field's fact to the call rather than to
+ *  the click; an UNDATED field (industry, pipelineStage…) records no fact
+ *  either way — the store decides that from CONTACT_TEMPORAL_RULES. */
 export async function applyKycField(
   dir: string,
   contactId: string,
   field: string,
-  text: string
+  text: string,
+  evidence?: FactEvidence
 ): Promise<Contact | null> {
   if (!(KYC_UPDATABLE_FIELDS as readonly string[]).includes(field)) return null
   let value: string | number = text
@@ -52,5 +59,5 @@ export async function applyKycField(
     if (parsed === null) return null
     value = parsed
   }
-  return updateContact(dir, contactId, { [field]: value } as Partial<Contact>)
+  return updateContact(dir, contactId, { [field]: value } as Partial<Contact>, evidence)
 }

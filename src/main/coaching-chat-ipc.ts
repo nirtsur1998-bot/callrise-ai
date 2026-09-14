@@ -487,11 +487,13 @@ export function registerCoachingChat(): void {
           // sanitizeValue() silently coerced it to undefined (wiping any
           // existing dealValue) while still reporting ok:true. applyKycField()
           // rejects up front instead, leaving the existing value untouched.
+          // M39 §8 — the fact is dated to THIS call, not to the click.
           const contact = await applyKycField(
             contactsDir(),
             call.contactId,
             suggestion.field,
-            suggestion.text
+            suggestion.text,
+            { callId: call.id, at: call.createdAt }
           )
           if (contact) scheduleBackup()
           return { ok: !!contact }
