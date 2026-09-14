@@ -2,13 +2,14 @@
 
 CallRise AI listens to your sales calls on your own PC, transcribes them, and coaches you live and afterwards. Your calls stay on your machine.
 
-### New in 1.12.0
+### New in 1.13.0
 
-- **Live coaching remembers who you're talking to.** When a call is matched to a known contact, live coaching now includes what that contact has told you before, sent to your AI provider with the transcript. It needs earlier calls with that contact, so it applies to some contacts and not others — on the profile it was tested on, 30 of 50.
-- **"Since your last call."** When something moved since you last spoke — the deal changed stage, you kept a promise, or what they push back on shifted — the coach knows. This is deliberately rare: 5 of 50 contacts on the tested profile. Most calls will not show it, and that is expected.
-- **Checks who you're talking to.** If the name a buyer gives doesn't match the contact your meeting is linked to, CallRise asks during the call instead of after.
-- **Support bundles include cue timing** — percentiles and counts only, no call ids and no samples.
-- Fixed: the "we found a call that was never saved" prompt now shows its warning colour.
+- **Update every machine you use.** A backup bug re-uploaded every record on every sync, and an edit made on one machine could be overwritten by another machine's older copy. Fixed — but only once every machine on your account runs this version. Until then, keep edits to one machine.
+- **You can now switch off what live coaching remembers.** Since 1.12.0, when a call is matched to a known contact, live coaching now includes what that contact has told you before, sent to your AI provider with the transcript (it applies to some contacts and not others — 30 of 50 on the tested profile). There is now a switch for it: **Voice AI → "Use what this client told you before"**, or **Turn off** on the call itself. It is on by default.
+- **The name check is cleaner.** The "who are you talking to?" prompt no longer shows the previous call's name for the first seconds of a new call, and when two of your contacts share a name it lists both so you can pick — it never offers to create a duplicate.
+- **Saving a call no longer changes your calendar.** Linking a call to the meeting it happened in is app bookkeeping; it no longer pushes that meeting to Outlook or Google.
+- Fixed: the dots on a contact's timeline were half hidden.
+- Carried over from 1.12.0: "Since your last call" (deliberately rare — 5 of 50 contacts on the tested profile) and cue timing in support bundles (percentiles and counts only).
 
 ### Which file to download
 
