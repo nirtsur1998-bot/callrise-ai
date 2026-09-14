@@ -255,6 +255,12 @@ export interface UseLiveCues {
    *  caller can build a SpeakerIdentities map for live display. */
   buyerName: string | null
   buyerIdentityKey: string | null
+  /** BUG-272 — forget the buyer's name at the CALL boundary. The session
+   *  effect below resets it only once the NEXT call's id has arrived, which is
+   *  after the live identity chip has already rendered the previous buyer
+   *  against the new meeting. The Provider calls this from onSaved, after the
+   *  handoff, at the same moment it clears the held identity answer. */
+  clearBuyerName: () => void
   /** M20 — every model in the fallback chain failed the most recent
    *  liveCue() attempt. Non-blocking: transcription is unaffected, this
    *  just means AI cues are temporarily unavailable. Clears itself the
@@ -351,6 +357,15 @@ export function useLiveCues(
     getMeetingContactIdRef.current = getMeetingContactId
   }, [getMeetingContactId])
   const buyerNameRef = useRef<string | null>(null) // one-shot per call, like repSpeakerRef
+  // BUG-272 — the ref, the name and its speaker key are one fact and are
+  // cleared together, whether by the session-boundary effect or by the
+  // Provider at save. Stable identity (no deps) so the Provider can hold it
+  // in a ref without re-wiring anything.
+  const clearBuyerName = useCallback((): void => {
+    buyerNameRef.current = null
+    setBuyerName(null)
+    setBuyerIdentityKey(null)
+  }, [])
   // When buyer capture is live the rep is deterministically channel 0.
   const knownRepRef = useRef<number | null>(knownRepSpeaker)
   const lastCallAtRef = useRef(0) // last brain call
@@ -539,9 +554,7 @@ export function useLiveCues(
       setEngagementScore(null)
       monologueRef.current.reset()
       setMonologue(null)
-      buyerNameRef.current = null
-      setBuyerName(null)
-      setBuyerIdentityKey(null)
+      clearBuyerName()
       return
     }
 
@@ -893,6 +906,7 @@ export function useLiveCues(
     monologue,
     buyerName,
     buyerIdentityKey,
+    clearBuyerName,
     coachingPaused,
     coachingPausedReason
   }

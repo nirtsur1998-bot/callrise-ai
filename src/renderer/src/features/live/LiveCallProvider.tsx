@@ -99,7 +99,17 @@ export function LiveCallProvider({ children }: { children: ReactNode }): React.J
     // this side has. The blast radius is one stale question, not a wrong
     // link — `applyToSavedCall` is never called for a call that did not save.
     liveIdentity.current = { decision: null, dismissed: false, forName: null }
+    // BUG-272 — AND THE INPUT GOES WITH THE ANSWER. Clearing the held answer
+    // alone left `buyerName` (useLiveCues) alive until the next call's id
+    // arrived, so the chip rendered the PREVIOUS buyer against the NEXT
+    // meeting for the opening seconds of a call — seen on the founder's
+    // machine: "Detected Harvey Welsh … linked to Linda", 4 s in, nobody yet
+    // speaking. Same boundary, same ordering rule, same known hole (an
+    // abandoned call keeps its name, as it keeps its answer). The hook is
+    // created below this callback, hence the ref.
+    clearBuyerNameRef.current()
   }, [])
+  const clearBuyerNameRef = useRef<() => void>(() => {})
   const setOnSaved = useCallback((cb: ((callId: string) => void) | null) => {
     onSavedRef.current = cb
   }, [])
@@ -136,6 +146,11 @@ export function LiveCallProvider({ children }: { children: ReactNode }): React.J
     transcription.identifyRep,
     getMeetingContactId
   )
+  // BUG-272 — wire the hook's clear into the save-boundary callback above.
+  // `clearBuyerName` is deps-free in the hook, so this runs once.
+  useEffect(() => {
+    clearBuyerNameRef.current = cues.clearBuyerName
+  }, [cues.clearBuyerName])
 
   // LiveView's own calendar-matched "what's happening right now" — genuinely
   // screen-local (needs useCalendar()) — bridged in via a plain setter,
