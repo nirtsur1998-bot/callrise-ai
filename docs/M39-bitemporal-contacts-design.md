@@ -5,6 +5,28 @@ dated, what happens to existing rows, what an "as of" answer looks like, what br
 data-model change, so nothing here is built. It is sized to land *after* the M39 release, not in
 it.
 
+> **BUILT 2026-09-14** on branch `claude/bitemporal-contacts` (stacked on `claude/backup-restamp` —
+> the import merge's `updatedAt` bump is safe only on top of the BUG-279 fix). Code:
+> `src/main/contact-facts.ts` (pure rules), `contacts-fs.ts` (write path, import merge),
+> `kyc-apply.ts` + the two AI-accept handlers (`evidence` dates a fact to its call),
+> `live/clientDossier.ts` (Known facts as of the call). Built as written, with three things the
+> design did not spell out:
+> 1. **An older build's flat edit is kept AND dated.** "Re-derive every current DATED value from the
+>    merged history" would silently *revert* a dated field an older build edited and pushed without a
+>    fact. When the incoming flat value differs from history and nothing in the incoming row's own
+>    history explains it, an `import` fact is synthesised for it, dated to the row's `updatedAt`
+>    (`approx`). An old build's clearing is honoured the same way, and redacts.
+> 2. **The bump is strict, and floored.** `updatedAt` is bumped only when local held fact ids the
+>    incoming row lacked — identical history bumps nothing (or BUG-279's loop re-opens here) — and
+>    the bump is at least 1 ms above the row's own stamp, so a row stamped ahead of this machine's
+>    clock cannot out-rank it.
+> 3. **A fact per CHANGED field, not per write.** The Contact form sends every field on every save;
+>    an unchanged value writes no fact. Redaction wins a shared fact id in either direction, and a
+>    clearing on one device redacts that field's older facts the clearing device never saw (a value
+>    entered *after* the clearing is a new claim and keeps its words).
+>
+> Population on 2026-09-14: 48 live contacts, 8 with a dated value, 29 values — none dated by this.
+
 ## Contents
 
 - [The problem, in one record](#the-problem-in-one-record)
