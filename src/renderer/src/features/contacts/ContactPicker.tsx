@@ -16,7 +16,15 @@ interface ContactPickerProps {
   /** Hide the unlink (X) button — for callers where a contact is mandatory
    *  (e.g. a deal always belongs to someone), only "Change" is offered. */
   required?: boolean
+  /** BUG-273 — one line that tells same-named contacts apart ("5 calls · last
+   *  3d ago"). Rendered ONLY under rows whose name collides with another row
+   *  in the current results, so unique names look exactly as before. Two
+   *  rows both reading "Harvey" with nothing between them is what a rep saw
+   *  on the founder's profile; the first happened to be right. */
+  describe?: (contact: Contact) => string | undefined
 }
+
+const normName = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, ' ')
 
 /** A searchable dropdown of existing contacts, with a "create new" shortcut —
  *  used to link a saved call to a contact (manual fallback for calls with no
@@ -26,7 +34,8 @@ export function ContactPicker({
   contacts,
   onSelect,
   onCreate,
-  required
+  required,
+  describe
 }: ContactPickerProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -55,6 +64,13 @@ export function ContactPicker({
     if (!q) return contacts
     return contacts.filter((c) => [c.name, c.company].some((f) => f?.toLowerCase().includes(q)))
   }, [contacts, query])
+  // Names that appear more than once in the CURRENT results — the only rows
+  // that get a distinguisher.
+  const collidingNames = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const c of results) counts.set(normName(c.name), (counts.get(normName(c.name)) ?? 0) + 1)
+    return new Set([...counts].filter(([, n]) => n > 1).map(([k]) => k))
+  }, [results])
 
   return (
     <div ref={rootRef} className="relative">
@@ -131,6 +147,9 @@ export function ContactPicker({
                   <div className="min-w-0 flex-1">
                     <p className="truncate">{c.name}</p>
                     {c.company && <p className="truncate text-[11px] text-faint">{c.company}</p>}
+                    {describe && collidingNames.has(normName(c.name)) && (
+                      <p className="truncate text-[11px] text-muted">{describe(c)}</p>
+                    )}
                   </div>
                 </button>
               ))

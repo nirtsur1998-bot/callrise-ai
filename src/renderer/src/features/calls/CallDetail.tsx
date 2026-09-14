@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Trash2,
   Clock,
@@ -38,7 +38,12 @@ import { EmptyState } from '@renderer/components/EmptyState'
 import { Skeleton } from '@renderer/components/Skeleton'
 import { fieldClass } from '@renderer/components/field'
 import { overallTier, TONE_TO_BADGE, speakerLabel } from '@renderer/features/coaching/meta'
-import { identityDisagreement, selfIntroName } from './identityDisagreement'
+import { identityDisagreement, selfIntroName, suggestContactFor } from './identityDisagreement'
+import {
+  buildContactStats,
+  formatRelative,
+  type ContactStats
+} from '@renderer/features/contacts/contactStats'
 import { IdentityDisagreementNotice } from './IdentityDisagreementNotice'
 import { openAssistantFor } from '@renderer/features/assistant/assistantNav'
 import { ASSISTANT_SECTION_NAME } from '@renderer/features/assistant/config'
@@ -164,6 +169,42 @@ export function CallDetail({
   // scroller it is attached to — including the re-measure on open, via its
   // ResizeObserver, which is why no flag has to be re-armed here any more.
   const { contacts, create: createContact } = useContacts()
+  // BUG-273 — the distinguisher for same-named contacts is the one thing that
+  // separates them — call count and recency — and that needs the call list.
+  // Fetched ONLY when the contact list actually has a name collision
+  // (ContactsView pays this read on every mount; here it is paid by the
+  // profiles that need it — `calls.list()` walks every call file, BUG-248).
+  // Hooks, so they sit here above the `if (!call)` early return.
+  const hasNameCollision = useMemo(() => {
+    const seen = new Set<string>()
+    for (const c of contacts) {
+      const k = c.name.trim().toLowerCase().replace(/\s+/g, ' ')
+      if (seen.has(k)) return true
+      seen.add(k)
+    }
+    return false
+  }, [contacts])
+  const [contactStats, setContactStats] = useState<Map<string, ContactStats> | null>(null)
+  useEffect(() => {
+    if (!hasNameCollision) return
+    let active = true
+    void window.api.calls.list().then((list) => {
+      if (active) setContactStats(buildContactStats(list))
+    })
+    return () => {
+      active = false
+    }
+  }, [hasNameCollision])
+  const describeContact = useCallback(
+    (c: { id: string }): string | undefined => {
+      if (!contactStats) return undefined
+      const s = contactStats.get(c.id)
+      if (!s) return 'no calls yet'
+      const n = s.callCount
+      return `${n} call${n === 1 ? '' : 's'}${s.lastCallAt ? ` · last ${formatRelative(s.lastCallAt)}` : ''}`
+    },
+    [contactStats]
+  )
   const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([])
   // M23 Workstream D — Outlook events used to never reach the calendar-match
   // banner/auto-link at all (only googleEvents was ever fetched here), so an
@@ -821,6 +862,19 @@ export function CallDetail({
   const otherPartyContact = otherPartyIdentity?.contactId
     ? contacts.find((c) => c.id === otherPartyIdentity.contactId)
     : undefined
+  // BUG-273 — when the identity did NOT come from a contact record, look the
+  // NAME up the way the live chip and the disagreement notice do. Before this
+  // the banner never consulted contacts by name at all, so every
+  // self-introduced buyer got "Create contact for X" — including one whose
+  // name two live contacts already carried.
+  const identitySuggestion =
+    otherPartyIdentity && !otherPartyContact
+      ? suggestContactFor(otherPartyIdentity.name, contacts)
+      : undefined
+  // (The distinguisher these candidates carry — `describeContact` — is a hook
+  // and lives with the other hooks near the top of the component, above the
+  // `if (!call)` early return. The gate's rules-of-hooks check caught the
+  // first draft of this placing it here.)
   // Calendar-match (above) always takes priority — it carries an email, a
   // stronger signal than a bare detected name, so never show both banners.
   const showIdentitySuggestion =
@@ -1066,7 +1120,10 @@ export function CallDetail({
               <IdentityContactSuggestion
                 name={otherPartyIdentity.name}
                 existingContactName={otherPartyContact?.name}
+                suggestion={identitySuggestion}
+                describe={describeContact}
                 onLink={() => otherPartyContact && void linkContact(otherPartyContact.id)}
+                onLinkCandidate={(contactId) => void linkContact(contactId)}
                 onCreate={() => void createAndLinkIdentity(otherPartyIdentity.name)}
                 onDismiss={dismissIdentity}
               />
@@ -1132,6 +1189,7 @@ export function CallDetail({
             contacts={contacts}
             onSelect={(contactId) => void linkContact(contactId)}
             onCreate={createContact}
+            describe={describeContact}
           />
           {/* M32 Stage 2 — the deal link sits directly under the contact link
               because they are the same kind of fact about this call, and
