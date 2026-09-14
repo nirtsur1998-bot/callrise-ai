@@ -56,6 +56,30 @@ export const toServerIso = (deviceIso: string | undefined | null, skewMs: number
 export const toDeviceIso = (serverIso: string | undefined | null, skewMs: number): string =>
   new Date(ts(serverIso) + skewMs).toISOString()
 
+/**
+ * BUG-279 — below this much measured skew the correction is switched OFF.
+ *
+ * The skew is re-measured on every pull and every push, and each measurement
+ * carries the network jitter of one round trip (tens of ms). A pull stamps a
+ * record `edit + skewPull`; the push ten minutes later uploads
+ * `edit + skewPull - skewPush`. Whenever the two measurements differ, that is
+ * not the value the server holds, and whenever it is LARGER the server's trigger
+ * accepts it as a fresh edit — so a correctly-clocked machine would keep
+ * re-uploading every record it owns, a few milliseconds "newer" each cycle.
+ *
+ * The correction exists for clocks that are wrong by hours (M21: 48h). A clock
+ * within a few seconds of the server is not wrong in any sense that matters to
+ * "which of two human edits came first", so inside this band the timestamps
+ * round-trip through the server byte-for-byte and a re-push is the no-op the
+ * trigger promises. The founder's machine measures about -0.4 s.
+ */
+export const CLOCK_SKEW_DEAD_BAND_MS = 5_000
+
+/** The skew to actually apply: the measured value, or 0 inside the dead band
+ *  (and 0 for an unmeasurable skew — the previous behaviour, never a failure). */
+export const effectiveSkewMs = (measured: number | null | undefined): number =>
+  typeof measured === 'number' && Math.abs(measured) >= CLOCK_SKEW_DEAD_BAND_MS ? measured : 0
+
 /** One record as stored in a backup_* table. */
 export interface CloudRow {
   id: string
@@ -211,12 +235,25 @@ export async function reconcileStore<
     if (row.deleted) payload.deleted = true // older rows may predate the in-payload flag
     // Re-express the incoming record on THIS device's clock before it goes any
     // further. The payload was stamped by whichever device pushed it, so it is
-    // a foreign (and possibly badly wrong) clock; the row's server_updated_at is
-    // the authoritative instant. Converting here means the importers' own
-    // onlyIfNewer re-check — which compares payload.updatedAt against the
-    // on-disk updatedAt as plain device times — agrees with the skew-corrected
-    // verdict below instead of overruling it.
-    payload.updatedAt = toDeviceIso(row.server_updated_at, skewMs)
+    // a foreign (and possibly badly wrong) clock. Converting here means the
+    // importers' own onlyIfNewer re-check — which compares payload.updatedAt
+    // against the on-disk updatedAt as plain device times — agrees with the
+    // skew-corrected verdict below instead of overruling it.
+    //
+    // BUG-279 — the instant carried across is the row's EDIT time
+    // (`updated_at`, already on the server's timeline: upsertRows normalises it
+    // on the way up), NOT the server's WRITE time (`server_updated_at`).
+    // `server_updated_at` decides "is the cloud copy newer" below and nothing
+    // else. Stamping the write time onto the local record made every pull
+    // manufacture a newer edit: the next push uploaded it as `updated_at`, the
+    // trigger accepted it (later than what it held), stamped a newer write time,
+    // and the next pull imported that. Every record on the founder's machine —
+    // 432 of 432 across five stores — carried the same few milliseconds of
+    // "last edited", and a genuine edit on one machine lost to the other
+    // machine's re-upload of the stale copy (the deal note in BUG-279). With
+    // the edit time carried instead, a re-push is the server no-op the trigger
+    // promises, and a stale re-upload never out-ranks a real edit.
+    payload.updatedAt = toDeviceIso(row.updated_at, skewMs)
     const local = locals.get(row.id)
 
     if (!local) {

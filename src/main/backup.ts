@@ -67,6 +67,7 @@ import {
   toServerMs,
   toServerIso,
   toDeviceIso,
+  effectiveSkewMs,
   type CloudRow
 } from './backup-core'
 import { getJobManager } from './jobs/instance'
@@ -1145,7 +1146,7 @@ export async function pushAll(): Promise<BackupResult> {
     // Clock offset for this push — every uploaded updated_at is normalised onto
     // the server's timeline with it. Best-effort: unmeasurable → 0 → previous
     // behaviour, never a failed push.
-    const skewMs = (await measureClockSkew(client)) ?? 0
+    const skewMs = effectiveSkewMs(await measureClockSkew(client))
 
     // Privacy scrubs first (toggle-offs waiting to take effect in the cloud) —
     // the transcripts scrub touches calls so THIS push replaces their rows.
@@ -1484,7 +1485,10 @@ export async function pullAll(): Promise<RestoreResult> {
     // an unmeasurable skew applies a 0 correction (the old behaviour) rather
     // than failing the restore.
     const measuredSkew = await measureClockSkew(client)
-    const skewMs = measuredSkew ?? 0
+    // BUG-279 — the raw measurement is kept in state (it drives the clock-skew
+    // warning); the CORRECTION is zero inside the dead band, so a normal
+    // machine's timestamps round-trip through the server exactly.
+    const skewMs = effectiveSkewMs(measuredSkew)
     if (measuredSkew !== null) {
       await writeState({
         clockSkewMs: measuredSkew,
