@@ -301,6 +301,19 @@ const RECONCILE_JOB_TYPE = 'calendar:reconcile'
  *  `shouldDrainOnReconcile`. `events:delete` still returns {ok:true} before
  *  the remote delete is attempted; its failure now shows the same way when
  *  the un-tombstone path records a lastError. */
+/** BUG-276 — a patch that carries ONLY fields the app writes about an event
+ *  (today: `callId`, the meeting→call join) and nothing a calendar provider
+ *  mirrors. Such a patch must never schedule a provider push: it is not an
+ *  edit the rep made, and pushing it is how a local-only meeting reached the
+ *  founder's real Outlook. Exported for the test; the list is exhaustive on
+ *  purpose — a new app-only field is added here or it pushes. */
+export const INTERNAL_EVENT_FIELDS = ['callId'] as const
+export function isInternalAnnotation(patch: unknown): boolean {
+  if (!patch || typeof patch !== 'object') return false
+  const keys = Object.keys(patch as Record<string, unknown>)
+  return keys.length > 0 && keys.every((k) => (INTERNAL_EVENT_FIELDS as readonly string[]).includes(k))
+}
+
 function schedulePush(id: string): void {
   void enqueuePush(id, () => syncPush(id)).then((changed) => {
     if (changed) notifyEventsChanged()
@@ -376,7 +389,13 @@ export function registerEvents(): void {
   ipcMain.handle('events:update', async (_e, id: string, patch: EventUpdateInput) => {
     const event = await updateEvent(eventsDir(), id, patch) // local truth first
     if (event) {
-      schedulePush(id)
+      // BUG-276 — the call-save join (`{ callId }`, written by LiveView when a
+      // call is saved during a meeting) is APP METADATA, not a calendar edit
+      // the rep made. Scheduling a push for it turned a meeting the rep kept
+      // local-only into an Outlook event the moment a call was saved during
+      // it — driven on the founder's real profile 2026-09-14. The backup and
+      // the change broadcast still run; only the provider push is skipped.
+      if (!isInternalAnnotation(patch)) schedulePush(id)
       scheduleBackup()
       notifyEventsChanged()
     }

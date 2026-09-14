@@ -226,8 +226,20 @@ export function LiveView({
       // marker on a calendar chip, and must never interfere with saving the
       // call itself, which is the part that actually matters.
       const meeting = currentMeetingRef.current
+      // BUG-275 — say what was joined, or that nothing was. On the founder's
+      // profile the join happened on 1 of 4 calls and nothing recorded why;
+      // one metadata-only line (ids, no titles) makes the next occurrence
+      // readable from the console instead of inferred from files.
+      console.log(
+        `[live] call saved — meeting join: ${meeting ? `${meeting.id} (source ${meeting.source})` : 'none'}`
+      )
       if (meeting && meeting.source === 'local') {
-        void window.api.events.update(meeting.id, { callId }).catch(() => {})
+        // Fire-and-forget still — but the OUTCOME is logged. `.catch(() => {})`
+        // alone hid why the join landed on 1 of 4 calls (BUG-275).
+        void window.api.events.update(meeting.id, { callId }).then(
+          (r) => console.log(`[live] meeting join written: ${r ? 'yes' : 'no (event not found)'}`),
+          (e) => console.log(`[live] meeting join FAILED: ${String((e as Error)?.message ?? e)}`)
+        )
       }
       onSaved?.(callId)
     },
