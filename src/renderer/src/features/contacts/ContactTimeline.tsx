@@ -104,7 +104,11 @@ export function ContactTimeline({
 
   return (
     <div>
-      <ul className="border-l-2 border-line-soft space-y-4 pl-4">
+      {/* ml-2 keeps the dots inside the scrolling column: they hang 6px to the
+          left of the list (centred on the 2px line), and the column is
+          `overflow-y-auto`, which clips on the x axis too — without the margin
+          the left half of every dot was cut off. */}
+      <ul className="ml-2 border-l-2 border-line-soft space-y-4 pl-4">
         {visible.map((entry) => (
           <TimelineRow key={entry.key} entry={entry} />
         ))}
@@ -129,7 +133,7 @@ function TimelineRow({ entry }: { entry: TimelineEntry }): React.JSX.Element {
   return (
     <li className="relative">
       <span
-        className={`absolute -ml-[21px] mt-0.5 grid h-3.5 w-3.5 place-items-center rounded-full ${dot}`}
+        className={`absolute -ml-[24px] mt-0.5 grid h-3.5 w-3.5 place-items-center rounded-full ${dot}`}
       >
         <TimelineIcon entry={entry} />
       </span>
