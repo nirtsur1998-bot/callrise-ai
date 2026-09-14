@@ -61,7 +61,12 @@ describe('dealIntelligence — defaults and sanitize', () => {
       enabledTypes: { risk: true, opportunity: true, tactical: true },
       frequency: 'balanced'
     })
-    expect(s.liveCues).toEqual({ enabled: true, sensitivity: 'low', quiet: false })
+    expect(s.liveCues).toEqual({
+      enabled: true,
+      sensitivity: 'low',
+      quiet: false,
+      clientContext: true
+    })
   })
 
   it('an invalid sensitivity/frequency value collapses to the safe default, never a made-up one', async () => {
@@ -143,19 +148,56 @@ describe('liveCues — merge semantics and persistence', () => {
     const { saveAppSettings } = await freshModule()
     saveAppSettings({ liveCues: { enabled: false } })
     const next = saveAppSettings({ liveCues: { sensitivity: 'high' } })
-    expect(next.liveCues).toEqual({ enabled: false, sensitivity: 'high', quiet: false })
+    expect(next.liveCues).toEqual({
+      enabled: false,
+      sensitivity: 'high',
+      quiet: false,
+      clientContext: true
+    })
   })
 
   it('M34 3c — quiet persists on its own and never touches the mute or sensitivity', async () => {
     const { saveAppSettings, loadAppSettings } = await freshModule()
     saveAppSettings({ liveCues: { enabled: false, sensitivity: 'high' } })
     const next = saveAppSettings({ liveCues: { quiet: true } })
-    expect(next.liveCues).toEqual({ enabled: false, sensitivity: 'high', quiet: true })
+    expect(next.liveCues).toEqual({
+      enabled: false,
+      sensitivity: 'high',
+      quiet: true,
+      clientContext: true
+    })
     // Survives a reload from disk; a non-boolean collapses to the default (off).
     expect(loadAppSettings().liveCues.quiet).toBe(true)
     expect(
       saveAppSettings({ liveCues: { quiet: 'yes' as unknown as boolean } }).liveCues.quiet
     ).toBe(false)
+  })
+
+  // BUG-270 — the dossier switch. Default ON (founder, 2026-09-14); the
+  // consent-class direction for anything malformed is OFF; and the gate main
+  // reads is the same value, from disk, every time.
+  it('BUG-270 — clientContext defaults ON, persists OFF, and collapses to OFF when malformed', async () => {
+    const { saveAppSettings, loadAppSettings, isClientContextAllowed } = await freshModule()
+    expect(isClientContextAllowed()).toBe(true) // fresh install: the 1.12.0 behaviour
+    const off = saveAppSettings({ liveCues: { clientContext: false } })
+    expect(off.liveCues).toEqual({
+      enabled: true,
+      sensitivity: 'low',
+      quiet: false,
+      clientContext: false
+    })
+    expect(loadAppSettings().liveCues.clientContext).toBe(false)
+    expect(isClientContextAllowed()).toBe(false) // read fresh, not cached
+    // A patch that names the key with anything but `true` turns it OFF.
+    saveAppSettings({ liveCues: { clientContext: true } })
+    expect(isClientContextAllowed()).toBe(true)
+    expect(
+      saveAppSettings({ liveCues: { clientContext: 'yes' as unknown as boolean } }).liveCues
+        .clientContext
+    ).toBe(false)
+    // An absent key leaves it alone — the other switches must not touch it.
+    saveAppSettings({ liveCues: { clientContext: true } })
+    expect(saveAppSettings({ liveCues: { quiet: true } }).liveCues.clientContext).toBe(true)
   })
 
   it('an invalid sensitivity value collapses to the default (low), never a made-up one', async () => {
@@ -175,7 +217,12 @@ describe('liveCues — merge semantics and persistence', () => {
     // real persistence, not an in-memory value surviving by luck.
     const second = await freshModule()
     const s = second.loadAppSettings()
-    expect(s.liveCues).toEqual({ enabled: false, sensitivity: 'medium', quiet: false })
+    expect(s.liveCues).toEqual({
+      enabled: false,
+      sensitivity: 'medium',
+      quiet: false,
+      clientContext: true
+    })
     expect(s.dealIntelligence.enabled).toBe(true)
     expect(s.dealIntelligence.sensitivity).toBe('quiet')
   })

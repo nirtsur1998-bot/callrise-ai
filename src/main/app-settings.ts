@@ -194,12 +194,24 @@ export interface LiveCueSettings {
    *  quiet removes reading, the mute removes the tap — two switches, both
    *  meaningful, no third state to explain. */
   quiet: boolean
+  /** BUG-270 — "Use what this client told you before". When a live call is
+   *  calendar-matched to a known contact, that contact's dossier — hand-entered
+   *  fields, prior-call summaries, open promises, the deal stage and their
+   *  VERBATIM QUOTES from earlier calls — is placed at the front of every live
+   *  cue and sent to the user's AI provider with the transcript. 1.12.0
+   *  shipped that with no way to see it or stop it (founder's condition:
+   *  "should be able to see that and stop it"). This is the stop. MAIN gates
+   *  on it (`isClientContextAllowed`, read by live-cue.ts), never the
+   *  renderer alone. Default ON — founder decision 2026-09-14 — because the
+   *  switch exists to be seen and used, not to change what 1.12.0 does. */
+  clientContext: boolean
 }
 
 const EMPTY_LIVE_CUES: LiveCueSettings = {
   enabled: true, // default ON — same as the hook it replaces
   sensitivity: 'low',
-  quiet: false // default: today's screen; the founder decides from a real call
+  quiet: false, // default: today's screen; the founder decides from a real call
+  clientContext: true // BUG-270 — default ON, founder decision
 }
 
 const CUE_SENSITIVITIES: CueSensitivity[] = ['low', 'medium', 'high']
@@ -213,7 +225,9 @@ function sanitizeLiveCues(value: unknown): LiveCueSettings {
   return {
     enabled: typeof v.enabled === 'boolean' ? v.enabled : EMPTY_LIVE_CUES.enabled,
     sensitivity: sanitizeCueSensitivity(v.sensitivity),
-    quiet: typeof v.quiet === 'boolean' ? v.quiet : EMPTY_LIVE_CUES.quiet
+    quiet: typeof v.quiet === 'boolean' ? v.quiet : EMPTY_LIVE_CUES.quiet,
+    clientContext:
+      typeof v.clientContext === 'boolean' ? v.clientContext : EMPTY_LIVE_CUES.clientContext
   }
 }
 
@@ -223,7 +237,11 @@ function mergeLiveCues(current: LiveCueSettings, patch: unknown): LiveCueSetting
   return {
     enabled: 'enabled' in p ? p.enabled === true : current.enabled,
     sensitivity: 'sensitivity' in p ? sanitizeCueSensitivity(p.sensitivity) : current.sensitivity,
-    quiet: 'quiet' in p ? p.quiet === true : current.quiet
+    quiet: 'quiet' in p ? p.quiet === true : current.quiet,
+    // `=== true` on purpose (like the others): a patch that names the key with
+    // anything but true turns it OFF — the safe direction for a consent-class
+    // switch. Absent key = untouched.
+    clientContext: 'clientContext' in p ? p.clientContext === true : current.clientContext
   }
 }
 
@@ -1328,6 +1346,14 @@ export function isAutoUpdateEnabled(): boolean {
 export function isSelfIntroExtractionAllowed(): boolean {
   const s = loadAppSettings().speakerId
   return s.enabled && s.allowSelfIntroExtraction
+}
+
+/** BUG-270 — the ONE gate live-cue.ts checks before attaching a matched
+ *  contact's dossier (their earlier words) to a cue. Read from disk per call
+ *  of this function, never cached, so a switch flipped mid-call takes effect
+ *  on the next cue. Off means the prompt is byte-for-byte pre-M39. */
+export function isClientContextAllowed(): boolean {
+  return loadAppSettings().liveCues.clientContext
 }
 
 /** The single gate coach.ts must check before computing/storing anything

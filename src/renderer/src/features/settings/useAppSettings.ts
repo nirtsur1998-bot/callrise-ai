@@ -84,7 +84,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     enabledTypes: { risk: true, opportunity: true, tactical: true },
     frequency: 'balanced'
   },
-  liveCues: { enabled: true, sensitivity: 'low', quiet: false },
+  liveCues: { enabled: true, sensitivity: 'low', quiet: false, clientContext: true },
   jobConcurrency: { interactive: 2, batch: 1, maintenance: 1 },
   jobNotifications: { nativeEnabled: true },
   // BUG-227. All false is both the real default AND the safe placeholder:

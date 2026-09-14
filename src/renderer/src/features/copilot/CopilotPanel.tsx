@@ -285,6 +285,18 @@ export function CopilotPanel({
             disabled={!cues.enabled}
             className="mt-3 w-full"
           />
+          {/* BUG-270 — the dossier switch, where the rep looks for cue settings.
+              The description is the release note's own sentence, because a
+              rep who read the note should recognise it here. The founder's
+              condition: see it AND stop it — the row is both. */}
+          <div className="mt-3">
+            <ToggleRow
+              label="Use what this client told you before"
+              checked={cues.clientContext}
+              onChange={cues.setClientContext}
+              description="When a call is matched to a known contact, what they said on earlier calls is sent to your AI provider with the transcript."
+            />
+          </div>
         </Section>
 
         {/* Microphone */}
@@ -330,16 +342,23 @@ function ToggleRow({
   label,
   checked,
   onChange,
-  busy
+  busy,
+  description
 }: {
   label: string
   checked: boolean
   onChange: (v: boolean) => void
   busy?: boolean
+  /** One sentence under the label saying what the switch actually does —
+   *  used where the label alone would hide a consequence (BUG-270). */
+  description?: string
 }): React.JSX.Element {
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border border-line-soft bg-canvas px-3 py-2.5">
-      <span className="text-[13px] text-ink">{label}</span>
+      <span className="min-w-0 text-[13px] text-ink">
+        {label}
+        {description && <span className="mt-0.5 block text-[12px] text-muted">{description}</span>}
+      </span>
       {busy ? (
         <Loader2 className="h-4 w-4 shrink-0 animate-spin text-faint" />
       ) : (

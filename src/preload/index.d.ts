@@ -2485,6 +2485,8 @@ export interface LiveCueSettings {
   sensitivity: CueSensitivity
   /** M34 3c — see main/app-settings.ts. */
   quiet: boolean
+  /** BUG-270 — the dossier switch; see main/app-settings.ts. */
+  clientContext: boolean
 }
 
 /** M23 — see main/app-settings.ts's Coach2Settings for the exact behavior. */

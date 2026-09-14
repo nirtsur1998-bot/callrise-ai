@@ -386,7 +386,8 @@ export function LiveView({
   // state must survive a navigation and an ordinary mid-call restart, not
   // reset on either. This screen is a pure attach/subscribe client for them
   // now, same shape it already is for the transcript.
-  const { enabled, setEnabled, sensitivity, setSensitivity, quiet, setQuiet } = liveCall.cueSettings
+  const { enabled, setEnabled, sensitivity, setSensitivity, quiet, setQuiet, clientContext, setClientContext } =
+    liveCall.cueSettings
   const {
     cue,
     dismiss,
@@ -982,9 +983,32 @@ export function LiveView({
             banner={
               currentMeeting ? (
                 <InlineBanner tone="positive">
-                  <span className="flex min-w-0 items-center gap-2 text-left">
-                    <Sparkles className="h-4 w-4 shrink-0" />
-                    <span className="truncate">Meeting now: {currentMeeting.title}</span>
+                  <span className="flex min-w-0 flex-col gap-0.5 text-left">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <Sparkles className="h-4 w-4 shrink-0" />
+                      <span className="truncate">Meeting now: {currentMeeting.title}</span>
+                    </span>
+                    {/* BUG-270 — say it where it applies, while it applies: this
+                        meeting is matched to a contact, cues are on, and the
+                        switch is on, so their earlier words WILL go to the
+                        provider on the next call. One line, one way to stop it. */}
+                    {currentMeeting.contactId && enabled && clientContext && (
+                      <span className="flex min-w-0 items-center gap-2 text-[12px] text-muted">
+                        <span className="truncate">
+                          Coaching will use what{' '}
+                          {contacts.find((c) => c.id === currentMeeting.contactId)?.name ??
+                            'this client'}{' '}
+                          told you before
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setClientContext(false)}
+                          className="shrink-0 underline decoration-dotted underline-offset-2 hover:text-ink"
+                        >
+                          Turn off
+                        </button>
+                      </span>
+                    )}
                   </span>
                   <Button
                     variant="secondary"

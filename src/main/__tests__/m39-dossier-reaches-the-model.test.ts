@@ -63,6 +63,50 @@ describe('M39 — the contactId reaches the main process', () => {
     expect(src).toMatch(/ensureDossier\(\s*app\.getPath\('userData'\),\s*dossierCallId,\s*dossierContactId/)
   })
 
+  // BUG-270 — the switch. Three pins, one per half of the founder's condition
+  // ("see it AND stop it") plus the one that makes the stop real:
+  //   - MAIN gates the dossier on isClientContextAllowed(), on the same `if`
+  //     that calls ensureDossier — not the renderer, which could be bypassed;
+  //   - the Voice AI panel carries the row with the release note's sentence;
+  //   - the Live banner says it where it applies, with a way to turn it off.
+  it('BUG-270 — main gates the dossier on the switch, on the ensureDossier branch itself', () => {
+    const src = code(read('main', 'live-cue.ts'))
+    expect(src).toMatch(/import \{[^}]*isClientContextAllowed[^}]*\} from '\.\/app-settings'/)
+    expect(src).toMatch(
+      /if \(dossierCallId && dossierContactId && clientContextAllowed\) \{[\s\S]*?ensureDossier\(/
+    )
+    expect(src).toContain('const clientContextAllowed = isClientContextAllowed()')
+    // And it says what it decided, once per call, in the app's own log.
+    expect(src).toContain("'OFF by setting (liveCues.clientContext)'")
+  })
+
+  it('BUG-270 — the Voice AI panel shows the switch with the disclosure sentence', () => {
+    const src = code(read('renderer', 'src', 'features', 'copilot', 'CopilotPanel.tsx'))
+    expect(src).toContain('label="Use what this client told you before"')
+    expect(src).toContain('checked={cues.clientContext}')
+    expect(src).toContain('onChange={cues.setClientContext}')
+    expect(src).toContain(
+      'When a call is matched to a known contact, what they said on earlier calls is sent to your AI provider with the transcript.'
+    )
+  })
+
+  it('BUG-270 — the Live banner says it where it applies and offers Turn off', () => {
+    const src = code(read('renderer', 'src', 'features', 'live', 'LiveView.tsx'))
+    expect(src).toMatch(/currentMeeting\.contactId && enabled && clientContext &&/)
+    expect(src).toContain('told you before')
+    expect(src).toContain('onClick={() => setClientContext(false)}')
+    expect(src).toContain('Turn off')
+  })
+
+  it('BUG-270 — the renderer hook mirrors the field and writes it through settings.update', () => {
+    const src = code(read('renderer', 'src', 'features', 'live', 'useCueSettings.ts'))
+    expect(src).toContain("window.api.settings.update({ liveCues: { clientContext: v } })")
+    // Loaded values are PUBLISHED to every instance, not set locally — the
+    // cross-instance sync BUG-270 needed (see useCueSettings.sync.test.ts).
+    expect(src).toContain('clientContext: s.liveCues.clientContext !== false')
+    expect(src).toMatch(/publish\(\{ clientContext: v \}\)/)
+  })
+
   it('LiveView pushes the matched meeting into the PROVIDER, not only its own state', () => {
     // LiveView keeps a local `currentMeeting` AND the provider keeps one. The
     // dossier reads the provider's, through meetingContactIdRef. If LiveView

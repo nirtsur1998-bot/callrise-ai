@@ -43,7 +43,11 @@ vi.mock('../ai/complete-with-fallback', () => ({
 }))
 vi.mock('../app-settings', () => ({
   isSelfIntroExtractionAllowed: () => false,
-  isSalesBrainEnabled: () => false
+  isSalesBrainEnabled: () => false,
+  // BUG-270 — liveCue reads the dossier switch on every cue; a mock without
+  // it routes every cue down the throw branch (species 93) and these tests
+  // go red for a reason that has nothing to do with consent.
+  isClientContextAllowed: () => true
 }))
 
 const { setConsentGateDirForTests, persistActiveConsent, clearActiveConsent } =

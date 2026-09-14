@@ -5,11 +5,15 @@ import { completeWithFallback, AllModelsExhaustedError } from './ai/complete-wit
 import { listEntries } from './knowledge-fs'
 import { assembleKnowledgeContext } from './knowledge-context'
 import { listCustomTrackers, saveCustomTrackers } from './custom-trackers'
-import { isSelfIntroExtractionAllowed } from './app-settings'
+import { isClientContextAllowed, isSelfIntroExtractionAllowed } from './app-settings'
 import { isNonName, modelStringOrNull } from './ai/model-placeholders'
 import { consentPermitsCapture } from './consent-gate'
 import { ensureDossier } from './live/dossier-store'
 import { repProfileSection } from './memory/profile-injection'
+
+/** BUG-270 — call ids whose client-context decision has been logged once.
+ *  Bounded by the number of calls in a process lifetime; a string per call. */
+const loggedDossierDecision = new Set<string>()
 
 // A fast, cheap "next question" suggestion for the live monologue cue. Uses
 // the 'coaching-cue' purpose for low latency — this runs mid-call and must
@@ -535,12 +539,29 @@ export async function liveCue(input: unknown): Promise<LiveCueResult> {
   const dossierCallId = typeof body.callId === 'string' ? body.callId : ''
   const dossierContactId = typeof body.contactId === 'string' ? body.contactId : ''
   let dossier = ''
-  if (dossierCallId && dossierContactId) {
+  // BUG-270 — the switch. Checked HERE, in main, on every cue: a renderer that
+  // kept sending contactId with the switch off would still get no dossier.
+  // Read fresh each time (it is a settings-file read, cheap beside the model
+  // call) so turning it off mid-call stops the very next cue.
+  const clientContextAllowed = isClientContextAllowed()
+  if (dossierCallId && dossierContactId && clientContextAllowed) {
     // Never lets a dossier failure cost the cue: ensureDossier swallows its own
     // errors and returns '', and this catch is the belt to that pair of braces.
     dossier = await ensureDossier(app.getPath('userData'), dossierCallId, dossierContactId).catch(
       () => ''
     )
+  }
+  // One line per call, metadata only (no names, no text), so a driven check
+  // can read the gate's decision from the app's own stdout instead of
+  // inferring it from cue wording. Same posture as the sandbox egress lines.
+  if (dossierCallId && !loggedDossierDecision.has(dossierCallId)) {
+    loggedDossierDecision.add(dossierCallId)
+    const decision = !dossierContactId
+      ? 'no matched contact'
+      : !clientContextAllowed
+        ? 'OFF by setting (liveCues.clientContext)'
+        : `sent (${dossier.length} chars)`
+    console.log(`[live-cue] client context for this call: ${decision}`)
   }
 
   try {
