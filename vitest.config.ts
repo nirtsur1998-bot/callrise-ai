@@ -14,6 +14,9 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    // BUG-277 — strip the developer's real provider keys from process.env
+    // before any test file is imported. See the setup file's header.
+    setupFiles: ['./src/__tests__/setup/strip-provider-env.setup.ts'],
     /**
      * 20s, raised from vitest's 5s DEFAULT on 2026-08-31 (M32).
      *
