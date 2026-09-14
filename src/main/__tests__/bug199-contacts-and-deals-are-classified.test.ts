@@ -58,6 +58,7 @@ const FULL_CONTACT: Required<Contact> = {
   communicationStyle: 'email-first',
   timezone: 'America/New_York',
   personalNotes: 'two kids, cycles',
+  factHistory: [],
   briefingNotes: 'wants a phased rollout',
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-09-09T00:00:00.000Z',

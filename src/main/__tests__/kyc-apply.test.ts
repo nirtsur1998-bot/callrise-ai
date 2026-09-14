@@ -55,6 +55,24 @@ describe('applyKycField', () => {
     return contact.id
   }
 
+  // M39 §8 — evidence dates the fact to the CALL; an undated field records none.
+  it('dates an accepted DATED fact to its call, and records nothing for an UNDATED field', async () => {
+    const id = await makeContact()
+    const at = '2026-07-14T10:00:00.000Z'
+    const dated = await applyKycField(dir, id, 'budgetIndication', '$50k', { callId: 'call-jul', at })
+    expect(dated?.factHistory?.[0]).toMatchObject({
+      field: 'budgetIndication',
+      value: '$50k',
+      validFrom: at,
+      validFromSource: 'call',
+      source: 'ai-accepted',
+      callId: 'call-jul'
+    })
+    const undated = await applyKycField(dir, id, 'industry', 'Fintech', { callId: 'call-jul', at })
+    expect(undated?.industry).toBe('Fintech')
+    expect(undated?.factHistory).toHaveLength(1) // still just the budget fact
+  })
+
   it('writes an allowed text field', async () => {
     const id = await makeContact()
     const updated = await applyKycField(dir, id, 'industry', 'Fintech')

@@ -4,6 +4,17 @@ import { randomUUID } from 'node:crypto'
 import { writeJsonAtomic } from './atomic-write'
 import { mapWithConcurrency } from './bounded-map'
 import { buildEgressPayload, type FieldEgress } from './record-egress'
+import {
+  DATED_CONTACT_FIELDS,
+  applyHistoryToFlat,
+  currentFact,
+  mergeFactHistories,
+  recordFact,
+  sanitizeFactHistory,
+  type ContactFact,
+  type DatedContactField,
+  type FactEvidence
+} from './contact-facts'
 
 /** A comment left on a contact — either the rep's own note, or an AI-drafted
  *  one from a linked call (opt-in, see CrmSettings.autoGenerateNotes). */
@@ -98,6 +109,12 @@ export interface Contact {
    *  propagate to a future cloud backup. Hidden from every normal listing. */
   deleted?: boolean
   comments?: ContactComment[]
+  /** M39 §8 — bi-temporal history of the DATED fields (see contact-facts.ts):
+   *  when each value was true in the world and when the app learned it. The
+   *  flat fields above stay authoritative for "now"; this is written ONLY by
+   *  this store (never accepted from a renderer patch), reconciled by fact id
+   *  on import, and absent on every contact until its first dated write. */
+  factHistory?: ContactFact[]
 }
 
 /**
@@ -165,7 +182,10 @@ export const CONTACT_FIELD_RULES: { [K in keyof Required<Contact>]: FieldEgress 
   createdAt: 'SYNCED',
   updatedAt: 'SYNCED',
   deleted: 'SYNCED', // the tombstone is the whole point of syncing a deletion
-  comments: 'SYNCED'
+  comments: 'SYNCED',
+  // Founder's decision 4 (2026-09-11): history syncs with the contact, under
+  // the same toggle — safe only because clearing REDACTS (decision 2).
+  factHistory: 'SYNCED'
 }
 
 /** The contact payload the backup pushes — DERIVED from the table above, so it
@@ -369,6 +389,81 @@ function sanitizePhoneE164(value: unknown): string | undefined {
   return typeof value === 'string' && E164_RE.test(value.trim()) ? value.trim() : undefined
 }
 
+/** The store's OWN sanitizer for one dated field's value — the same rule and
+ *  the same cap the flat field gets, so a fact off disk or off the cloud can
+ *  never carry what the field itself could not. */
+function sanitizeDatedValue(field: DatedContactField, raw: unknown): string | number | undefined {
+  switch (field) {
+    case 'company':
+      return sanitizeOptionalText(raw, MAX_COMPANY)
+    case 'title':
+    case 'decisionAuthority':
+    case 'budgetIndication':
+    case 'timeline':
+      return sanitizeOptionalText(raw, MAX_SHORT_TEXT)
+    case 'otherStakeholders':
+    case 'competitors':
+    case 'knownObjections':
+    case 'currentTooling':
+    case 'personalNotes':
+      return sanitizeMultilineText(raw, MAX_LONG_TEXT)
+    case 'notes':
+      return sanitizeMultilineText(raw, MAX_NOTES)
+    case 'briefingNotes':
+      return sanitizeMultilineText(raw, MAX_BRIEFING)
+    case 'dealValue':
+      return sanitizeValue(raw)
+  }
+}
+
+const sameValue = (
+  a: string | number | null | undefined,
+  b: string | number | null | undefined
+): boolean => (a ?? undefined) === (b ?? undefined)
+
+/**
+ * Append a fact for every DATED field the write actually CHANGED, then let the
+ * history decide the flat value (the open fact with the latest validFrom — so
+ * an accepted suggestion from an older call never overwrites what the rep
+ * typed today). An unchanged field writes no fact: the Contact form sends
+ * every field on every save, and a fact per save would be churn, not history.
+ */
+function recordChangedFacts(
+  before: Contact,
+  after: Contact,
+  fields: readonly DatedContactField[],
+  evidence: FactEvidence | undefined,
+  now: string
+): void {
+  let history = after.factHistory
+  for (const field of fields) {
+    if (sameValue(before[field], after[field])) continue
+    history = recordFact(history, {
+      field,
+      value: after[field] ?? null,
+      validFrom: evidence?.at ?? now,
+      validFromSource: evidence ? 'call' : 'approx',
+      source: evidence ? 'ai-accepted' : 'user',
+      ...(evidence ? { callId: evidence.callId } : {}),
+      recordedAt: now
+    })
+  }
+  if (!history) return
+  after.factHistory = history
+  setFlatFromHistory(after, history)
+}
+
+/** The flat value of every dated field WITH an open fact follows that fact;
+ *  fields without history are left exactly as they are. */
+function setFlatFromHistory(contact: Contact, history: readonly ContactFact[]): void {
+  const derived = applyHistoryToFlat({ ...contact }, history)
+  for (const field of DATED_CONTACT_FIELDS) {
+    if (!currentFact(history, field)) continue
+    if (derived[field] === undefined) delete contact[field]
+    else (contact as Record<DatedContactField, string | number | undefined>)[field] = derived[field]
+  }
+}
+
 async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true })
 }
@@ -439,13 +534,17 @@ function sanitizeContactRecord(value: unknown): Contact | null {
     personalNotes: sanitizeMultilineText(v.personalNotes, MAX_LONG_TEXT),
     briefingNotes: sanitizeMultilineText(v.briefingNotes, MAX_BRIEFING),
     createdAt,
-    updatedAt
+    updatedAt,
+    // M39 §8 — a closed literal, like `comments` (BUG-095): leave this line out
+    // and every read strips the history. Element-by-element, windows re-derived.
+    factHistory: sanitizeFactHistory(v.factHistory, sanitizeDatedValue)
   }
 }
 
 export async function createContact(
   dir: string,
-  input: ContactCreateInput
+  input: ContactCreateInput,
+  evidence?: FactEvidence
 ): Promise<Contact | null> {
   const name = sanitizeOptionalText(input?.name, MAX_NAME)
   if (!name) return null
@@ -488,8 +587,15 @@ export async function createContact(
     createdAt: now,
     updatedAt: now
   }
+  // A dated value present at creation is a first write: history begins here.
+  recordChangedFacts({ ...contact, ...blankDated() }, contact, DATED_CONTACT_FIELDS, evidence, now)
   await writeContact(dir, contact)
   return contact
+}
+
+/** Every dated field explicitly undefined — the "before" of a brand-new record. */
+function blankDated(): Partial<Record<DatedContactField, undefined>> {
+  return Object.fromEntries(DATED_CONTACT_FIELDS.map((f) => [f, undefined]))
 }
 
 export async function listContacts(
@@ -564,23 +670,32 @@ function withContactLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
   return result
 }
 
+/**
+ * `evidence` — the call a value came from, when the writer knows it (the two
+ * AI-accepted paths do). It dates the fact to the CALL, not to the click.
+ * A patch never carries `factHistory`: the store writes history, the renderer
+ * does not, and an unknown key in a patch is ignored like any other.
+ */
 export function updateContact(
   dir: string,
   id: string,
-  patch: ContactUpdateInput
+  patch: ContactUpdateInput,
+  evidence?: FactEvidence
 ): Promise<Contact | null> {
   if (!isSafeId(id)) return Promise.resolve(null)
-  return withContactLock(id, () => updateContactUnlocked(dir, id, patch))
+  return withContactLock(id, () => updateContactUnlocked(dir, id, patch, evidence))
 }
 
 async function updateContactUnlocked(
   dir: string,
   id: string,
-  patch: ContactUpdateInput
+  patch: ContactUpdateInput,
+  evidence?: FactEvidence
 ): Promise<Contact | null> {
   const contact = await getContact(dir, id)
   if (!contact) return null
   if (!patch || typeof patch !== 'object') return contact
+  const before: Contact = { ...contact }
 
   if ('name' in patch) {
     const next = sanitizeOptionalText(patch.name, MAX_NAME)
@@ -633,7 +748,17 @@ async function updateContactUnlocked(
   if ('briefingNotes' in patch)
     contact.briefingNotes = sanitizeMultilineText(patch.briefingNotes, MAX_BRIEFING)
 
-  contact.updatedAt = new Date().toISOString() // mark modified (future backup ordering key)
+  const now = new Date().toISOString()
+  // M39 §8 — only the dated fields THIS patch named are candidates; the rest
+  // were not written and cannot have changed.
+  recordChangedFacts(
+    before,
+    contact,
+    DATED_CONTACT_FIELDS.filter((f) => f in patch),
+    evidence,
+    now
+  )
+  contact.updatedAt = now // mark modified (the backup's newest-wins key)
 
   try {
     await writeContact(dir, contact)
@@ -738,15 +863,23 @@ export async function importContact(
   // write below races a concurrent local edit, and a stale cloud copy could
   // overwrite the fresher record the "onlyIfNewer" check is meant to protect.
   return withContactLock(contact.id, async () => {
-    if (opts?.onlyIfNewer) {
-      try {
-        const raw = await fs.readFile(join(dir, `${contact.id}.json`), 'utf8')
-        const current = sanitizeContactRecord(JSON.parse(raw))
-        if (current && Date.parse(current.updatedAt) >= Date.parse(contact.updatedAt)) return null
-      } catch {
-        /* no current record (or unreadable) — proceed with the import */
-      }
+    let current: Contact | null = null
+    try {
+      const raw = await fs.readFile(join(dir, `${contact.id}.json`), 'utf8')
+      current = sanitizeContactRecord(JSON.parse(raw))
+    } catch {
+      /* no current record (or unreadable) — proceed with the import */
     }
+    if (
+      opts?.onlyIfNewer &&
+      current &&
+      Date.parse(current.updatedAt) >= Date.parse(contact.updatedAt)
+    ) {
+      return null
+    }
+    // M39 §8 — history is RECONCILED, never replaced. Newest-wins stays the
+    // rule for every UNDATED field; a tombstone on either side keeps none.
+    if (current && !current.deleted && !contact.deleted) reconcileHistory(current, contact)
     await ensureDir(dir)
     try {
       await writeContact(dir, contact)
@@ -755,6 +888,57 @@ export async function importContact(
     }
     return contact
   })
+}
+
+/**
+ * Union the two histories by fact id (a fact present locally is NEVER dropped;
+ * redaction wins a shared id in either direction), then:
+ *
+ * - An OLDER build edits a dated field and pushes the flat value with no fact.
+ *   Re-deriving the flat values from history would silently REVERT that edit.
+ *   So when the incoming flat value differs from what the merged history says
+ *   and nothing in the incoming row's own history explains it, an `import`
+ *   fact is synthesised for it, dated to the row's own `updatedAt` (approx) —
+ *   the edit is kept AND dated, and nothing is lost either way.
+ * - Every dated field with an open fact then follows the history; a field
+ *   with no history at all keeps whatever newest-wins gave it (the 29 undated
+ *   values on the founder's profile are never blanked by a pull).
+ * - If local held facts the incoming row lacked, the cloud copy is missing
+ *   history: bump `updatedAt` so the next push beats the server's newest-wins
+ *   trigger and the cloud regains it. STRICTLY that case — identical history
+ *   bumps nothing, or the loop BUG-279 closed would re-open here.
+ */
+function reconcileHistory(current: Contact, incoming: Contact): void {
+  const localHistory = current.factHistory ?? []
+  const incomingHistory = incoming.factHistory ?? []
+  if (!localHistory.length && !incomingHistory.length) return
+  const { merged, restoredFromLocal } = mergeFactHistories(localHistory, incomingHistory)
+  let history = merged
+  for (const field of DATED_CONTACT_FIELDS) {
+    const open = currentFact(history, field)
+    if (!open) continue
+    const flat = incoming[field]
+    if (sameValue(open.value, flat)) continue
+    const theirs = currentFact(incomingHistory, field)
+    if (theirs && sameValue(theirs.value, flat)) continue // the incoming history explains it
+    history = recordFact(history, {
+      field,
+      value: flat ?? null,
+      validFrom: incoming.updatedAt,
+      validFromSource: 'approx',
+      source: 'import',
+      recordedAt: incoming.updatedAt
+    })
+  }
+  incoming.factHistory = history
+  setFlatFromHistory(incoming, history)
+  if (restoredFromLocal) {
+    // Newer than the row the server holds, whatever this machine's clock says:
+    // a row stamped ahead of us (skew) would otherwise out-rank the bump and
+    // the cloud copy would stay history-less.
+    const floor = Date.parse(incoming.updatedAt) + 1
+    incoming.updatedAt = new Date(Math.max(Date.now(), floor)).toISOString()
+  }
 }
 
 // --- Lookups for M19 Task 2's speaker-identification cascade ----------------

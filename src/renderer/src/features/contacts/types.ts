@@ -11,6 +11,36 @@ export interface ContactComment {
   source: 'user' | 'ai'
 }
 
+/** M39 §8 — one dated fact about a contact (main: contact-facts.ts). Read-only
+ *  in the renderer: history is written by the store, never sent in a patch. */
+export interface ContactFact {
+  id: string
+  field:
+    | 'company'
+    | 'title'
+    | 'decisionAuthority'
+    | 'budgetIndication'
+    | 'timeline'
+    | 'competitors'
+    | 'currentTooling'
+    | 'knownObjections'
+    | 'otherStakeholders'
+    | 'dealValue'
+    | 'personalNotes'
+    | 'notes'
+    | 'briefingNotes'
+  /** null = cleared (and redacted). */
+  value: string | number | null
+  validFrom: string
+  validFromSource: 'call' | 'stated' | 'approx'
+  validUntil?: string
+  recordedAt: string
+  supersededBy?: string
+  source: 'user' | 'ai-accepted' | 'import'
+  callId?: string
+  redacted?: true
+}
+
 export interface Contact {
   id: string
   name: string
@@ -60,4 +90,6 @@ export interface Contact {
   createdAt: string
   updatedAt: string
   comments?: ContactComment[]
+  /** M39 §8 — bi-temporal history of the dated fields; absent until the first dated write. */
+  factHistory?: ContactFact[]
 }
