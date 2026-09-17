@@ -705,8 +705,7 @@ export interface AssistantApi {
      *  including a different client's scoped one. */
     conversationId: string
   ) => Promise<
-    | { ok: true; attachment: AssistantAttachment; preview: string }
-    | { ok: false; message: string }
+    { ok: true; attachment: AssistantAttachment; preview: string } | { ok: false; message: string }
   >
   discardAttachment: (id: string) => Promise<boolean>
   /** M28 Phase 3 — one-shot voice-note transcription (Deepgram prerecorded
@@ -1133,9 +1132,7 @@ export interface CallsApi {
    *  action in the app with no Activity Center row, no progress and no Stop.
    *  The `{ ok: true; title }` variant survives only as the fallback for when
    *  enqueue itself throws. */
-  generateTitle: (
-    callId: string
-  ) => Promise<
+  generateTitle: (callId: string) => Promise<
     | { ok: true; jobId: string }
     | { ok: true; title: string }
     // BUG-228 — the reason travels, so a caller can tell a refusal from an
@@ -3238,8 +3235,24 @@ export interface LiveApi {
     samples: { deterministic: number[]; model: number[] }
   }) => void
   listRecoverable: () => Promise<RecoverableCall[]>
-  /** Turn one into a real saved call, on the rep's explicit say-so. */
-  recoverCall: (id: string) => Promise<{ ok: boolean; call?: CallSummary }>
+  /** Turn one into a real saved call, on the rep's explicit say-so.
+   *  BUG-271 — mirrors main's RecoverCallIpcResult: a failure names the step
+   *  that failed, and a saved call whose tidy-up stumbled is still `ok: true`
+   *  (the stumbles are listed in `degraded`). */
+  recoverCall: (id: string) => Promise<
+    | {
+        ok: true
+        call: CallSummary
+        degraded: Array<'mark-recovered' | 'retire-journal' | 'redact-journal'>
+      }
+    | { ok: false; reason: 'nothing-to-recover' | 'bad-request' }
+    | {
+        ok: false
+        reason: 'step-failed'
+        step: 'read-journal' | 'replay' | 'save' | 'unknown'
+        message: string
+      }
+  >
   /** Throw one away, on the rep's explicit say-so. */
   discardRecoverable: (id: string) => Promise<{ ok: boolean }>
 }
