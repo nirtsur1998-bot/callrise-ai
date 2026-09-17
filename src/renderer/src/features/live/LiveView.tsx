@@ -1114,7 +1114,14 @@ export function LiveView({
           itself, divider and all, via `empty:hidden`. The Recording pill above
           this bar is not part of it and is untouched. */}
       <div className="flex flex-wrap items-center gap-4 rounded-[var(--radius-card)] border border-line bg-surface px-5 py-3 shadow-[var(--shadow-hud)]">
-        <div className="flex min-w-[240px] flex-1 items-center gap-3">
+        {/* `min-w-fit`, not a fixed minimum. With `min-w-[240px]` this cluster
+            could be laid out NARROWER than Stop + pause + trace + status, and
+            its overflow painted straight over the context cluster's chips
+            ("Listening · 248 ms" on top of Budget · Timeline) in the width band
+            where the two clusters share a row. The founder saw it on a real
+            call; a viewport sweep reproduced it at one width. The cluster now
+            claims its content width and the context cluster wraps below it. */}
+        <div className="flex min-w-fit flex-1 items-center gap-3">
           {stoppable ? (
             <button
               type="button"
@@ -1146,7 +1153,7 @@ export function LiveView({
             <Waveform analyser={analyser} active={status === 'listening'} />
           </div>
           <StatusBadge status={status} />
-          <div className="flex min-w-[70px] items-center gap-1.5 text-dense">
+          <div className="flex min-w-[70px] shrink-0 items-center gap-1.5 whitespace-nowrap text-dense">
             {(status === 'listening' || status === 'paused') &&
               (() => {
                 const notice = sessionHealthNotice(health)

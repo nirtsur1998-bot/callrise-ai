@@ -155,7 +155,10 @@ export function GlanceLine({
             {shown.text}
           </span>
           <span
-            className="hidden shrink-0 truncate font-mono text-2xs text-muted sm:inline"
+            // `min-w-0 max-w-[40%]` and NOT `shrink-0`: the evidence may
+            // ellipsize, the sentence keeps priority; with `shrink-0` a long
+            // quote ran past the row's right edge (founder's screenshot).
+            className="hidden min-w-0 max-w-[40%] truncate font-mono text-2xs text-muted sm:inline"
             data-testid={isGhost ? undefined : 'glance-evidence'}
           >
             {evidenceText}
