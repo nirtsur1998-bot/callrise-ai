@@ -20,6 +20,8 @@ function errorMessage(code: string): string {
       return "Couldn't install — the audio device wasn't found on disk."
     case 'install failed':
       return "Couldn't install — something went wrong copying the audio device. Try again."
+    case 'uninstall failed':
+      return "Couldn't remove the audio device — it's still installed. Try again."
     case 'unsupported-architecture':
       // Belt and braces: the card returns early on an Intel Mac so this should
       // be unreachable from the UI. It exists because virtualmic.ts can return
@@ -35,7 +37,7 @@ function errorMessage(code: string): string {
  *  cleans the mic and publishes it as the "Sales OS Microphone" device — which
  *  the user then selects in Zoom/Meet (or here) so the buyer hears clean audio. */
 export function NoiseCancellationCard(): React.JSX.Element | null {
-  const { status, busy, error, start, stop, installDriver } = useVirtualMic()
+  const { status, busy, error, start, stop, installDriver, uninstallDriver } = useVirtualMic()
 
   // The noise-cancellation engine is a macOS Core Audio driver — it doesn't
   // exist on other platforms (a Windows version is its own future project), so
@@ -136,6 +138,30 @@ export function NoiseCancellationCard(): React.JSX.Element | null {
           >
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Install
+          </button>
+        </div>
+      )}
+
+      {/* The counterpart to Install, which had none.
+          Dragging CallRise to the Trash cannot remove a driver from
+          /Library/Audio/Plug-Ins/HAL, so without this the only way off a
+          machine was a `sudo rm -rf` the user would have to be told. Kept
+          deliberately quiet — small, plain text, no destructive-red styling —
+          because it must be findable without competing with Turn on/off.
+          Shown only when there is actually something to remove. */}
+      {driverInstalled && (
+        <div className="mt-3 flex items-center justify-between gap-3 border-t border-line-soft pt-2.5">
+          <p className="text-[11px] text-faint">
+            Removes the &ldquo;Sales OS Microphone&rdquo; audio device from this Mac. Noise
+            cancellation stops working until you install it again.
+          </p>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void uninstallDriver()}
+            className="shrink-0 rounded-lg border border-line px-2.5 py-1 text-[11px] font-medium text-faint transition hover:bg-elevated hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Remove
           </button>
         </div>
       )}

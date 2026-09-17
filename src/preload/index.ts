@@ -585,6 +585,10 @@ const api = {
     // One-click install of the HAL driver — still needs the OS's own admin
     // password prompt (unavoidable for a system audio device), but no terminal.
     installDriver: () => ipcRenderer.invoke('virtualmic:installDriver'),
+    // The counterpart install never had. An app that puts a system audio device
+    // on someone's machine has to be able to take it off — dragging the app to
+    // the Trash does not, and cannot.
+    uninstallDriver: () => ipcRenderer.invoke('virtualmic:uninstallDriver'),
     // Fires when the helper's running/denoise state changes (started, stopped, crashed).
     onChanged: (cb: (status: unknown) => void) => subscribe('virtualmic:changed', cb)
   },

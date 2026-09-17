@@ -2213,6 +2213,12 @@ export interface VirtualMicApi {
   /** One-click install of the HAL driver (still shows the OS's own admin
    *  password prompt — that part can't be automated away). */
   installDriver: () => Promise<{ ok: boolean; error?: string }>
+  /** Removes the HAL driver again. Same admin prompt, and it stops the helper
+   *  first and restarts coreaudiod, so the device actually disappears rather
+   *  than lingering in every picker until the next reboot. Returns ok:true when
+   *  the bundle is already absent — verified by reading the path back, not by
+   *  trusting the shell's exit code. */
+  uninstallDriver: () => Promise<{ ok: boolean; error?: string }>
   /** Fires when the helper's running/denoise state changes. */
   onChanged: (cb: (status: VirtualMicStatus) => void) => () => void
 }

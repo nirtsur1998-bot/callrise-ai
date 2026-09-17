@@ -223,6 +223,57 @@ function isAppleSilicon(): boolean {
   return appleSiliconCache
 }
 
+/**
+ * Removes the Core Audio driver from /Library/Audio/Plug-Ins/HAL.
+ *
+ * WHY THIS EXISTS AT ALL. Until now there was `installDriver()` and no
+ * counterpart, and nothing in the app or in electron-builder.yml removed the
+ * bundle — so dragging CallRise to the Trash left a system-level audio driver
+ * behind on a stranger's machine, permanently, with no affordance anywhere to
+ * take it off. An app that installs an audio device at admin level has to be
+ * able to remove it; the alternative is asking people to run `sudo rm -rf` on a
+ * path they have to be told.
+ *
+ * Deliberately stops the helper FIRST. Removing the bundle out from under a
+ * running michelper would leave it writing into a shared-memory ring nothing
+ * reads, and the device would linger in the picker until coreaudiod restarted.
+ *
+ * `killall coreaudiod` is not optional: without it the removed device stays
+ * listed until the next reboot, so the user would be told it was removed while
+ * still seeing it — the exact shape of unexplained failure the rest of this
+ * milestone has been removing.
+ */
+async function uninstallDriver(): Promise<{ ok: boolean; error?: string }> {
+  if (process.platform !== 'darwin') {
+    return { ok: false, error: 'noise cancellation is only available on macOS' }
+  }
+  if (!existsSync(DRIVER_PATH)) return { ok: true } // already absent — nothing to do
+
+  // Stop our own helper before pulling the device out from under it.
+  await stopHelper()
+
+  const script = `do shell script "rm -rf '${DRIVER_PATH}' && killall coreaudiod" with administrator privileges`
+  try {
+    await execFileAsync('/usr/bin/osascript', ['-e', script])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (message.includes('User canceled') || message.includes('-128')) {
+      return { ok: false, error: 'cancelled' }
+    }
+    return { ok: false, error: 'uninstall failed' }
+  }
+  // Read the result back rather than trusting osascript's exit code: the whole
+  // point of this function is that the file is gone, so that is what gets
+  // checked. `killall` returns non-zero when coreaudiod was not running, which
+  // would otherwise read as a failed removal.
+  if (existsSync(DRIVER_PATH)) {
+    broadcast()
+    return { ok: false, error: 'uninstall failed' }
+  }
+  broadcast()
+  return { ok: true }
+}
+
 function getStatus(): VirtualMicStatus {
   const helperPath = resolveHelperPath()
   return {
@@ -461,6 +512,7 @@ export function registerVirtualMic(): void {
   ipcMain.handle('virtualmic:start', () => startHelper())
   ipcMain.handle('virtualmic:stop', () => stopHelper())
   ipcMain.handle('virtualmic:installDriver', () => installDriver())
+  ipcMain.handle('virtualmic:uninstallDriver', () => uninstallDriver())
 }
 
 // Ensure the helper never outlives the app (it captures the mic).
