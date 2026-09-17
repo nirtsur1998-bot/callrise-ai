@@ -222,16 +222,19 @@ export function InlineBanner({
   tone: 'warning' | 'danger' | 'positive'
   children: ReactNode
 }): React.JSX.Element {
+  // INSTRUMENT PANEL: a 40px row on the card radius, the tone carried by a
+  // 3px left rule and an 8% fill rather than a tinted border all round.
+  // min-h, not h — the BUG-201 sentences wrap on a narrow window.
   const cls =
     tone === 'danger'
-      ? 'border-danger/30 bg-danger-soft text-danger'
+      ? 'border-l-danger bg-danger/8 text-danger'
       : tone === 'positive'
-        ? 'border-positive/30 bg-positive-soft text-positive'
-        : 'border-warning/30 bg-warning-soft text-warning'
+        ? 'border-l-positive bg-positive/8 text-positive'
+        : 'border-l-warning bg-warning/8 text-warning'
   return (
     <div
       className={cn(
-        'flex items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-sm',
+        'flex min-h-10 items-center justify-between gap-3 rounded-[var(--radius-card)] border border-line border-l-[3px] px-4 py-1.5 text-sm',
         cls
       )}
     >

@@ -1106,91 +1106,47 @@ export function LiveView({
         otherPartyCaptureLive={otherPartyLive}
       />
 
-      {/* Control bar */}
-      <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-line-soft bg-surface px-5 py-4">
-        {stoppable ? (
-          <button
-            type="button"
-            onClick={stopWithChecklist}
-            className="no-drag flex items-center gap-2 rounded-xl bg-danger-soft px-4 py-2.5 text-sm font-semibold text-danger ring-1 ring-inset ring-danger/30 transition hover:bg-danger/20"
-          >
-            <Square className="h-4 w-4 fill-current" /> Stop
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={start}
-            className="no-drag flex items-center gap-2 rounded-xl bg-accent-fill px-4 py-2.5 text-sm font-semibold text-on-accent shadow-sm transition hover:brightness-110 active:scale-95"
-          >
-            <Mic className="h-4 w-4" /> Start
-          </button>
-        )}
-
-        {/* M34 3d — one line, two glances: stage · risk · last call. Records
-            only, present only on a matched-meeting call, absent otherwise
-            (no placeholder). Rendered in EVERY mode including Quiet: it is a
-            fixed fact, not an instrument, and it never changes during the
-            call. Left of the must-ask strip so the first glance is "where
-            this deal stands" and the second is "what is still unasked". */}
-        {!glance && <DealFactsLine facts={dealFacts} />}
-        {recording && <MustAskStrip state={checklist} />}
-
-        {(status === 'listening' || status === 'paused') && (
-          <IconButton
-            icon={status === 'paused' ? Play : Pause}
-            onClick={togglePause}
-            label={status === 'paused' ? 'Resume' : 'Pause'}
-            className="no-drag h-9 w-9 border border-line"
-          />
-        )}
-
-        <div className="min-w-[120px] flex-1">
-          <Waveform analyser={analyser} active={status === 'listening'} />
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          {allowOtherPartyRecording && (
-            <OtherPartyControl consent={consent} onOpen={() => setConsentOpen(true)} />
-          )}
-          {/* M34 3c-A — Quiet sits BESIDE the cues mute, deliberately two
-              switches: quiet removes what must be READ (gauge, meter, rail,
-              deal-intelligence panel); the mute removes the one deterministic
-              interrupt that taps you. Founder's call from a real call: quiet
-              keeps the interrupt cue. Health/status is never hidden in any
-              mode — a capture failure staying visible is the whole point of
-              BUG-177's fix. */}
-          {designPreview && (
+      {/* Control bar — INSTRUMENT PANEL: three clusters with 1px dividers
+          rather than one wrapping row at equal weight. Transport (start/stop,
+          pause, the trace, the session state and its latency), context (the
+          deal facts, the must-ask strip, the other-party control) and coaching
+          (layout, quiet, cues, the gauges). A cluster with nothing in it hides
+          itself, divider and all, via `empty:hidden`. The Recording pill above
+          this bar is not part of it and is untouched. */}
+      <div className="flex flex-wrap items-center gap-4 rounded-[var(--radius-card)] border border-line bg-surface px-5 py-3 shadow-[var(--shadow-hud)]">
+        <div className="flex min-w-[240px] flex-1 items-center gap-3">
+          {stoppable ? (
             <button
               type="button"
-              data-testid="hud-layout-switch"
-              onClick={() => setHudLayout(glance ? 'full' : 'glance')}
-              className="no-drag rounded-lg border border-line px-2.5 py-1 text-[12px] text-muted hover:text-ink"
-              title={
-                glance
-                  ? 'Show the full live screen'
-                  : 'Show the glance HUD (one line, the state strip, the transcript)'
-              }
+              onClick={stopWithChecklist}
+              className="no-drag flex items-center gap-2 rounded-xl bg-danger-soft px-4 py-2.5 text-sm font-semibold text-danger ring-1 ring-inset ring-danger/30 transition hover:bg-danger/20"
             >
-              {glance ? 'Full' : 'Glance'}
+              <Square className="h-4 w-4 fill-current" /> Stop
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={start}
+              className="no-drag flex items-center gap-2 rounded-xl bg-accent-fill px-4 py-2.5 text-sm font-semibold text-on-accent shadow-sm transition hover:brightness-110 active:scale-95"
+            >
+              <Mic className="h-4 w-4" /> Start
             </button>
           )}
-          {!glance && <QuietToggle quiet={quiet} onToggle={setQuiet} />}
-          <CueControls
-            enabled={enabled}
-            onToggle={setEnabled}
-            sensitivity={sensitivity}
-            onSensitivity={setSensitivity}
-          />
-          {!glance && !quiet && status === 'listening' && engagementScore !== null && (
-            <EngagementGauge score={engagementScore} />
+
+          {(status === 'listening' || status === 'paused') && (
+            <IconButton
+              icon={status === 'paused' ? Play : Pause}
+              onClick={togglePause}
+              label={status === 'paused' ? 'Resume' : 'Pause'}
+              className="no-drag h-9 w-9 border border-line"
+            />
           )}
-          {!glance &&
-            !quiet &&
-            status === 'listening' &&
-            monologue !== null &&
-            monologue.ms > 0 && <MonologueMeter state={monologue} />}
+
+          <div className="min-w-[120px] flex-1">
+            <Waveform analyser={analyser} active={status === 'listening'} />
+          </div>
           <StatusBadge status={status} />
-          <div className="flex min-w-[70px] items-center gap-1.5 text-[13px]">
+          <div className="flex min-w-[70px] items-center gap-1.5 text-dense">
             {(status === 'listening' || status === 'paused') &&
               (() => {
                 const notice = sessionHealthNotice(health)
@@ -1223,7 +1179,7 @@ export function LiveView({
                     <span
                       title={notice?.title}
                       className={cn(
-                        'font-medium tabular-nums',
+                        'font-mono font-medium tabular-nums',
                         tone === 'danger'
                           ? 'text-danger'
                           : tone === 'positive'
@@ -1237,6 +1193,62 @@ export function LiveView({
                 )
               })()}
           </div>
+        </div>
+
+        {/* Context: what is true about this deal and this call. */}
+        <div className="flex flex-wrap items-center gap-3 border-l border-line pl-4 empty:hidden">
+          {/* M34 3d — one line, two glances: stage · risk · last call. Records
+              only, present only on a matched-meeting call, absent otherwise
+              (no placeholder). Rendered in EVERY mode including Quiet: it is a
+              fixed fact, not an instrument, and it never changes during the
+              call. Left of the must-ask strip so the first glance is "where
+              this deal stands" and the second is "what is still unasked". */}
+          {!glance && <DealFactsLine facts={dealFacts} />}
+          {recording && <MustAskStrip state={checklist} />}
+          {allowOtherPartyRecording && (
+            <OtherPartyControl consent={consent} onOpen={() => setConsentOpen(true)} />
+          )}
+        </div>
+
+        {/* Coaching: the switches and gauges. */}
+        <div className="flex flex-wrap items-center gap-3 border-l border-line pl-4 empty:hidden">
+          {/* M34 3c-A — Quiet sits BESIDE the cues mute, deliberately two
+              switches: quiet removes what must be READ (gauge, meter, rail,
+              deal-intelligence panel); the mute removes the one deterministic
+              interrupt that taps you. Founder's call from a real call: quiet
+              keeps the interrupt cue. Health/status is never hidden in any
+              mode — a capture failure staying visible is the whole point of
+              BUG-177's fix. */}
+          {designPreview && (
+            <button
+              type="button"
+              data-testid="hud-layout-switch"
+              onClick={() => setHudLayout(glance ? 'full' : 'glance')}
+              className="no-drag rounded-md border border-line px-2.5 py-1 text-2xs font-medium text-muted hover:border-line-strong hover:text-ink"
+              title={
+                glance
+                  ? 'Show the full live screen'
+                  : 'Show the glance HUD (one line, the state strip, the transcript)'
+              }
+            >
+              {glance ? 'Full' : 'Glance'}
+            </button>
+          )}
+          {!glance && <QuietToggle quiet={quiet} onToggle={setQuiet} />}
+          <CueControls
+            enabled={enabled}
+            onToggle={setEnabled}
+            sensitivity={sensitivity}
+            onSensitivity={setSensitivity}
+          />
+          {!glance && !quiet && status === 'listening' && engagementScore !== null && (
+            <EngagementGauge score={engagementScore} />
+          )}
+          {!glance &&
+            !quiet &&
+            status === 'listening' &&
+            monologue !== null &&
+            monologue.ms > 0 && <MonologueMeter state={monologue} />}
         </div>
       </div>
 
@@ -1563,12 +1575,16 @@ export function LiveView({
             now={glanceCue.now}
             dealFacts={dealFacts}
           />
+          {/* INSTRUMENT PANEL: GlanceLine now owns an always-mounted 44px
+              slot, so this column's height no longer changes when a cue
+              arrives or expires — the toggle below and the transcript under
+              it stay exactly where they are. */}
           <GlanceLine cue={glanceCue.cue} onDismiss={glanceCue.dismiss} />
           <button
             type="button"
             data-testid="transcript-collapse"
             onClick={() => setTranscriptCollapsed(!transcriptCollapsed)}
-            className="no-drag text-[11px] text-faint hover:text-ink"
+            className="no-drag rounded-md border border-line px-2 py-0.5 text-2xs font-medium text-muted hover:border-line-strong hover:text-ink"
           >
             {transcriptCollapsed ? 'Show transcript' : 'Hide transcript'}
           </button>

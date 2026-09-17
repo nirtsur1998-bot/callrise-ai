@@ -31,7 +31,9 @@ export function Waveform({ analyser, active }: WaveformProps): React.JSX.Element
       const w = canvas.width
       const h = canvas.height
       ctx.clearRect(0, 0, w, h)
-      ctx.lineWidth = 2 * dpr
+      // INSTRUMENT PANEL: a 4px trace on a 40px canvas — a needle, not a hair.
+      ctx.lineWidth = 4 * dpr
+      ctx.lineCap = 'round'
       ctx.lineJoin = 'round'
       const style = getComputedStyle(canvas)
       ctx.strokeStyle = active
@@ -63,5 +65,5 @@ export function Waveform({ analyser, active }: WaveformProps): React.JSX.Element
     }
   }, [analyser, active])
 
-  return <canvas ref={canvasRef} className="h-14 w-full" />
+  return <canvas ref={canvasRef} className="h-10 w-full" />
 }
