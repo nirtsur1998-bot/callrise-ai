@@ -233,12 +233,27 @@ Worth reading before trusting any of the above as "Mac parity is done".
   transcription, ai, alerts and models. So: no live transcription, no dual-channel capture, no
   Google/Outlook sync, no Supabase backup, no AI features were exercised. Stage 4 work, untouched.
 - **No `.env`** on this machine, so AI/auth config paths are unexercised beyond sign-in.
-- **Auto-update not examined at all** — no `latest-mac.yml`, no `electron-updater` Mac path,
-  no DMG/zip artifact. `electron-builder.yml` has `mac: notarize: false`, `target: [dmg]` only (no
-  zip, which electron-updater needs on macOS), no signing identity, and
-  `publish.url: https://example.com/auto-updates` — a placeholder. Stage 3.
-- **Packaged build never produced.** Everything above is the dev build. The detection addon's
-  asar-unpacked path, code signing and notarization are all untested here.
+- **Auto-update not examined.** ~~no `latest-mac.yml`~~, ~~`publish.url:
+  https://example.com/auto-updates` — a placeholder~~ — **BOTH CORRECTED, see below.** Now audited
+  properly in [`M40-stage3-mac-release-audit.md`](M40-stage3-mac-release-audit.md).
+- **Packaged build never produced.** Everything above is the dev build. **Superseded** — a real
+  `--mac dmg zip` package was built for the Stage 3 audit. The detection addon's asar-unpacked path
+  is still untested, and nothing was signed or notarized.
+
+> ### CORRECTION — two claims above were read off the stale 0.1.0 tree
+>
+> Both were written before this checkout was fast-forwarded, and both are wrong on 1.14.0:
+>
+> - **"no `latest-mac.yml`"** — wrong. It **is** produced, even with dmg-only targets.
+> - **"`publish.url: https://example.com/auto-updates` — a placeholder"** — wrong. `publish:` is a
+>   real GitHub provider config with `releaseType: release`, carrying a long comment about v1.0.0
+>   having shipped as a silent draft.
+>
+> The underlying *concern* survives and turned out to be real, for a different reason: `target:
+> [dmg]` alone does break macOS auto-update, because `MacUpdater.js` requires a **zip** and
+> explicitly excludes `dmg`. That is confirmed from the installed updater's source and the fix is
+> verified. But the two statements above were not evidence for it — they were stale readings that
+> happened to point at a real problem, which is not the same thing.
 - **Whether the npm-11 script gate also affects the Windows machine.** It is an npm behaviour, not a
   platform one, so it probably does — but that is reasoning, not a measurement.
 
