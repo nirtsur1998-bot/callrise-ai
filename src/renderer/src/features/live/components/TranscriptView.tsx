@@ -268,6 +268,11 @@ export function TranscriptView({
             interimText={interimText}
             repSpeaker={repSpeaker}
             identities={identities}
+            // INSTRUMENT PANEL: the live treatment of speaker labels (left
+            // rule, small semibold label, bordered 'unsure' chip, interim at
+            // 60% ink). Only this consumer passes it; CallDetail, PracticeMode,
+            // ViewCallModal and the sample call render exactly as before.
+            live
           />
         )}
       </div>

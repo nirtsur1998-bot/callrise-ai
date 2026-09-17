@@ -19,28 +19,30 @@ const CONFIDENCE_DOT: Record<'high' | 'medium' | 'low', string> = {
 
 // A distinct color per speaker (cycles for many speakers), using the
 // theme-aware decorative speaker palette (not the status-color tokens).
+// `rule` is the live treatment's 3px left rule — the same hue as the dot,
+// as a border-l-* colour, used only when SpeakerTranscript is told `live`.
 const SPEAKER_STYLES = [
-  { dot: 'bg-speaker-1', label: 'text-speaker-1' },
-  { dot: 'bg-speaker-2', label: 'text-speaker-2' },
-  { dot: 'bg-speaker-3', label: 'text-speaker-3' },
-  { dot: 'bg-speaker-4', label: 'text-speaker-4' },
-  { dot: 'bg-speaker-5', label: 'text-speaker-5' },
-  { dot: 'bg-speaker-6', label: 'text-speaker-6' }
+  { dot: 'bg-speaker-1', label: 'text-speaker-1', rule: 'border-l-speaker-1' },
+  { dot: 'bg-speaker-2', label: 'text-speaker-2', rule: 'border-l-speaker-2' },
+  { dot: 'bg-speaker-3', label: 'text-speaker-3', rule: 'border-l-speaker-3' },
+  { dot: 'bg-speaker-4', label: 'text-speaker-4', rule: 'border-l-speaker-4' },
+  { dot: 'bg-speaker-5', label: 'text-speaker-5', rule: 'border-l-speaker-5' },
+  { dot: 'bg-speaker-6', label: 'text-speaker-6', rule: 'border-l-speaker-6' }
 ]
 
 // The dominant real-world case (a 1:1 rep/buyer call) gets its own calmer
 // treatment instead of the decorative palette: the rep reads as the app's
 // accent color, the buyer as a neutral — closer to how the rest of the UI
 // already distinguishes "you" from everyone else.
-const REP_STYLE = { dot: 'bg-accent', label: 'text-accent' }
-const BUYER_STYLE = { dot: 'bg-faint', label: 'text-muted' }
+const REP_STYLE = { dot: 'bg-accent', label: 'text-accent', rule: 'border-l-accent' }
+const BUYER_STYLE = { dot: 'bg-faint', label: 'text-muted', rule: 'border-l-faint' }
 
 function speakerStyle(
   speaker: number,
   repSpeaker: number | null,
   speakerCount: number,
   role?: SpeakerRole
-): { dot: string; label: string } {
+): { dot: string; label: string; rule: string } {
   // The turn's own recorded attribution wins when it has one (M21).
   if (role === 'rep') return REP_STYLE
   if (role === 'other' && speakerCount <= 2) return BUYER_STYLE
@@ -95,6 +97,8 @@ interface SegmentRowProps {
   index: number
   repSpeaker: number | null
   speakerCount: number
+  /** The live screen's treatment — see SpeakerTranscriptProps.live. */
+  live: boolean
   identities?: SpeakerIdentities
   query: string
   matchOffset: number
@@ -121,6 +125,7 @@ const SegmentRow = memo(function SegmentRow({
   index,
   repSpeaker,
   speakerCount,
+  live,
   identities,
   query,
   matchOffset,
@@ -157,9 +162,12 @@ const SegmentRow = memo(function SegmentRow({
   )
 
   return (
-    <div>
+    // INSTRUMENT PANEL (live only): the speaker's colour is a 3px left rule
+    // down the turn instead of a dot beside the label, so a scrolling column
+    // of turns reads as a ledger rather than a chat.
+    <div className={cn(live && cn('border-l-[3px] pl-3', style.rule))}>
       <div className="mb-1 flex items-center gap-2">
-        <span className={cn('h-1.5 w-1.5 rounded-full', style.dot)} />
+        {!live && <span className={cn('h-1.5 w-1.5 rounded-full', style.dot)} />}
         {isEditing ? (
           <input
             autoFocus
@@ -178,7 +186,8 @@ const SegmentRow = memo(function SegmentRow({
             onClick={() => onStartEdit(index, identity?.name ?? '')}
             disabled={!onRename}
             className={cn(
-              'group flex items-center gap-1 text-xs font-semibold uppercase tracking-wide',
+              'group flex items-center gap-1 font-semibold uppercase tracking-wide',
+              live ? 'text-2xs' : 'text-xs',
               style.label,
               onRename && 'cursor-pointer hover:underline'
             )}
@@ -198,7 +207,14 @@ const SegmentRow = memo(function SegmentRow({
         )}
         {!identity && seg.role === 'unknown' && (
           <Tooltip content="We could not tell who was speaking here, so this turn is not attributed to anyone.">
-            <span className="text-[10px] font-medium uppercase tracking-wide text-faint">unsure</span>
+            <span
+              className={cn(
+                'text-[10px] font-medium uppercase tracking-wide text-faint',
+                live && 'rounded border border-line px-1.5 leading-4'
+              )}
+            >
+              unsure
+            </span>
           </Tooltip>
         )}
       </div>
@@ -232,6 +248,12 @@ interface SpeakerTranscriptProps {
    *  field). Omit for read-only surfaces (live view, the "peek" modal,
    *  practice mode) where an accidental rename mid-flow would be surprising. */
   onRename?: (key: string, name: string) => void
+  /** INSTRUMENT PANEL — the live screen's treatment: a 3px left rule per
+   *  turn in place of the speaker dot, a text-2xs semibold label row,
+   *  'unsure' as a bordered chip, and interim words at 60% ink. Only the live
+   *  TranscriptView passes this; every other consumer (CallDetail, practice
+   *  mode, ViewCallModal, the sample call) is unchanged by its absence. */
+  live?: boolean
 }
 
 /** Renders a transcript grouped into speaker turns. Shared by the Live view
@@ -243,7 +265,8 @@ export function SpeakerTranscript({
   highlightQuery,
   activeMatchIndex,
   identities,
-  onRename
+  onRename,
+  live = false
 }: SpeakerTranscriptProps): React.JSX.Element {
   // Keyed by segment INDEX, not speakerKey(seg) — speakerKey is shared by
   // every turn a speaker takes (mergeSegments only merges consecutive runs),
@@ -349,6 +372,7 @@ export function SpeakerTranscript({
           index={index}
           repSpeaker={repSpeaker}
           speakerCount={speakerCount}
+          live={live}
           identities={identities}
           query={query}
           matchOffset={matchOffsets ? matchOffsets[index] : 0}
@@ -362,7 +386,11 @@ export function SpeakerTranscript({
           onCancelEdit={cancelEdit}
         />
       ))}
-      {interimText ? <p className="text-[17px] leading-[1.7] text-faint">{interimText}</p> : null}
+      {interimText ? (
+        <p className={cn('text-[17px] leading-[1.7]', live ? 'text-ink/60' : 'text-faint')}>
+          {interimText}
+        </p>
+      ) : null}
     </div>
   )
 }
