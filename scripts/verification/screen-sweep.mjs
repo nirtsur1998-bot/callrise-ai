@@ -215,10 +215,41 @@ await wait(800)
 bucket = []
 
 console.log('--- screens and detail pages ---')
+// The Calls screen opens on its LIVE tab. The saved calls — the only things
+// that match the 'Call ·' prefix below — are on the PAST tab, so without this
+// click the next two visits can never find a row.
+//
+// They did not fail loudly. They reported `SKIP … only 0 rows`, which reads as
+// "this profile has no calls" and is a claim about the POPULATION when the real
+// cause was the TAB. With three seeded calls present and `calls.list()`
+// returning 3, the sweep still said 0 — so these two states had almost certainly
+// never been exercised on any platform, while the summary line counted them as
+// deliberate skips. Found 2026-09-17 (M40) running the first populated sweep.
 await visit('Calls list', await click('Calls'))
+await click('Past')
+await wait(1200)
+bucket = []
 await visit('Call detail (newest)', await click('Call ·', 'prefix', 0))
+// KNOWN LIMITATION — 'Call detail (4th)' still does not reach a second call,
+// and the cause is NOT yet established. Recorded rather than guessed at.
+//
+// What IS established, from a freshly launched app with six saved calls
+// (`calls.list()` → 6) so neither an empty population nor stale state:
+//   - the sweep never leaves the FIRST call's detail page for this step;
+//     'only 1 rows' is that page's own title matching the 'Call ·' prefix.
+//   - clicking the sidebar 'Calls' from an open call does not return to the
+//     list, and neither does the detail page's 'Back' — both were tried, each
+//     with waits, and both left the sweep on the detail page.
+//
+// So this step is honest but inert: it reports a skip with a true reason. Do
+// NOT read its 'defects: 0' as coverage of a second call detail page — that
+// state has still never been swept. Fixing it needs someone to work out how
+// this build navigates back out of a call, which is a question about the app's
+// routing rather than about this script.
 await click('Calls')
-await wait(1000)
+await wait(1500)
+await click('Past')
+await wait(1500)
 bucket = []
 await visit('Call detail (4th)', await click('Call ·', 'prefix', 3))
 for (const s of ['Pipeline', 'Coaching', 'Library', 'Rise', 'Home']) await visit(s, await click(s))
