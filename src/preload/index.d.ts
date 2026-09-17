@@ -1951,6 +1951,14 @@ export interface VirtualMicStatus {
   denoiseActive: boolean
   /** Resolved helper binary path, or null if not found (diagnostics). */
   helperPath: string | null
+  /**
+   * This Mac can actually run the shipped driver and helper — i.e. it is Apple
+   * silicon. False on Intel, where both binaries are arm64-only. The UI shows a
+   * plain "not supported yet" message instead of the setup controls, because an
+   * Intel install otherwise SUCCEEDS and then produces no device at all. See
+   * virtualmic.ts for the detection and why it is not `process.arch`.
+   */
+  architectureSupported: boolean
 }
 
 export type AiKeyName =

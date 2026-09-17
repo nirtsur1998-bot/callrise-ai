@@ -20,6 +20,12 @@ function errorMessage(code: string): string {
       return "Couldn't install — the audio device wasn't found on disk."
     case 'install failed':
       return "Couldn't install — something went wrong copying the audio device. Try again."
+    case 'unsupported-architecture':
+      // Belt and braces: the card returns early on an Intel Mac so this should
+      // be unreachable from the UI. It exists because virtualmic.ts can return
+      // the code to any caller, and a bare code leaking into the interface is
+      // exactly the unexplained-failure shape this refusal was added to remove.
+      return 'Noise cancellation needs a Mac with Apple silicon (M1 or later). This Mac has an Intel processor.'
     default:
       return `Couldn't turn on (${code}). Try again in a moment.`
   }
@@ -43,6 +49,30 @@ export function NoiseCancellationCard(): React.JSX.Element | null {
         <div className="flex items-center gap-2 text-[13px] text-faint">
           <Loader2 className="h-4 w-4 animate-spin" /> Checking noise cancellation…
         </div>
+      </Card>
+    )
+  }
+
+  // Intel Mac: the driver and the helper are both arm64-only, so nothing here
+  // can work. Say so plainly INSTEAD of rendering the controls.
+  //
+  // The alternative — showing "Set up" as normal — is the failure this replaces:
+  // the install would succeed, the user would type an admin password, and no
+  // microphone would ever appear, with nothing anywhere explaining why. Told
+  // "not supported yet", they have something to act on; left with a silently
+  // missing device, they have a mystery and a support ticket.
+  if (!status.architectureSupported) {
+    return (
+      <Card className="mb-5">
+        <div className="mb-2 flex items-center gap-2">
+          <AudioLines className="h-4 w-4 text-faint" />
+          <h3 className="text-sm font-medium">Noise cancellation</h3>
+        </div>
+        <p className="text-[13px] leading-relaxed text-faint">
+          Not available on this Mac yet. Noise cancellation currently requires Apple silicon (M1 or
+          later) — this Mac has an Intel processor. Everything else in CallRise works normally, and
+          your microphone is unaffected.
+        </p>
       </Card>
     )
   }

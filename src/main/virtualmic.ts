@@ -67,6 +67,18 @@ export interface VirtualMicStatus {
   denoiseActive: boolean
   /** Absolute path to the helper binary we resolved, or null if not found (for diagnostics). */
   helperPath: string | null
+  /**
+   * This Mac can actually run the shipped driver and helper — i.e. it is Apple
+   * Silicon. False on Intel, where BOTH binaries are arm64-only.
+   *
+   * WHY THIS FIELD EXISTS. Without it an Intel user gets the worst possible
+   * outcome: the install "succeeds" (cp -R copies an arm64 bundle happily),
+   * coreaudiod then cannot load it, and the device never appears — no error,
+   * no explanation, nothing to act on. A user told "this Mac isn't supported
+   * yet" has information; a user with a silently missing microphone has a
+   * mystery. See docs/M40-stage2-shipping-the-virtual-mic.md.
+   */
+  architectureSupported: boolean
 }
 
 let child: ChildProcess | null = null
@@ -147,6 +159,14 @@ async function installDriver(): Promise<{ ok: boolean; error?: string }> {
   if (process.platform !== 'darwin') {
     return { ok: false, error: 'noise cancellation is only available on macOS' }
   }
+  // REFUSE BEFORE INSTALLING, not after. `cp -R` of an arm64 bundle onto an
+  // Intel Mac succeeds — coreaudiod then silently cannot load it, so the user
+  // is left with a successful install, an admin password they typed for
+  // nothing, and no microphone. Refusing here is the difference between
+  // information and a mystery.
+  if (!isAppleSilicon()) {
+    return { ok: false, error: 'unsupported-architecture' }
+  }
   const source = resolveDriverBundleSource()
   if (!source) return { ok: false, error: 'driver bundle not found' }
   if (existsSync(DRIVER_PATH)) return { ok: true } // already installed
@@ -169,6 +189,40 @@ async function installDriver(): Promise<{ ok: boolean; error?: string }> {
   }
 }
 
+/**
+ * Is this Mac's HARDWARE Apple Silicon?
+ *
+ * Deliberately NOT `process.arch`, which answers a different question: the x86_64
+ * slice of a universal app running under Rosetta on an M-series Mac reports
+ * 'x64' while the machine can run the arm64 driver perfectly well. What matters
+ * is what `coreaudiod` can load, and coreaudiod always runs native.
+ *
+ * `hw.optional.arm64` describes the silicon: it is `1` on Apple Silicon (still 1
+ * under Rosetta, because the hardware has not changed) and ABSENT on Intel, where
+ * sysctl exits non-zero and we fall through to false.
+ *
+ * Memoised: hardware does not change mid-run, and getStatus() is called on every
+ * IPC poll and every broadcast — a synchronous exec on each would be wasteful.
+ */
+let appleSiliconCache: boolean | null = null
+function isAppleSilicon(): boolean {
+  if (appleSiliconCache !== null) return appleSiliconCache
+  if (process.platform !== 'darwin') {
+    appleSiliconCache = false
+    return false
+  }
+  try {
+    const out = execFileSync('/usr/sbin/sysctl', ['-n', 'hw.optional.arm64'], {
+      encoding: 'utf8'
+    })
+    appleSiliconCache = out.trim() === '1'
+  } catch {
+    // Intel: the key does not exist and sysctl exits non-zero.
+    appleSiliconCache = false
+  }
+  return appleSiliconCache
+}
+
 function getStatus(): VirtualMicStatus {
   const helperPath = resolveHelperPath()
   return {
@@ -176,7 +230,8 @@ function getStatus(): VirtualMicStatus {
     helperAvailable: helperPath !== null,
     helperRunning: child !== null,
     denoiseActive,
-    helperPath
+    helperPath,
+    architectureSupported: isAppleSilicon()
   }
 }
 
@@ -194,6 +249,12 @@ async function startHelper(): Promise<{ ok: boolean; error?: string }> {
   // that explicit instead of relying on a hardcoded path never resolving.
   if (process.platform !== 'darwin') {
     return { ok: false, error: 'noise cancellation is only available on macOS' }
+  }
+  // michelper is arm64-only (build.sh hardcodes -arch arm64, and it statically
+  // links an arm64 libdf.a). Refuse loudly rather than exec'ing a binary this
+  // machine cannot run and reporting a generic launch failure.
+  if (!isAppleSilicon()) {
+    return { ok: false, error: 'unsupported-architecture' }
   }
   if (child) return { ok: true } // already running
   if (starting) return { ok: false, error: 'already starting' }
