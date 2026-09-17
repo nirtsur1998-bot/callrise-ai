@@ -10,6 +10,7 @@ import type {
   TranscriptionHealthEvent
 } from '../../../../preload/index.d'
 import { addSeenApp } from '@renderer/features/settings/prefs'
+import { runNoteTakerAutoBehaviours } from './noteTakerAutoBehaviours'
 
 type LivePhase = Exclude<LiveStatus, 'paused'>
 
@@ -312,28 +313,11 @@ export function useTranscription(
         // the dev app disagreed about whether this feature was on while
         // sharing every other setting. 137 of 191 calls went untitled.
         //
-        // Read here rather than from a hook so the value is the one in force
-        // at the moment the call ENDS, not the one that was in force when the
-        // screen mounted.
-        const noteTaker = await window.api.settings
-          .get()
-          .then((s) => s.aiNoteTaker)
-          .catch(() => null)
-        if (noteTaker?.autoSummarize)
-          void window.api.calls.summarizeCall(saved.id).catch(() => {})
-        if (noteTaker?.autoGenerateTitle)
-          void window.api.calls.generateTitle(saved.id).catch(() => {})
-        // §4.6 — the brief lands on the clipboard without anyone clicking.
-        // Main does the clipboard write, so this works while the rep is still
-        // looking at Zoom and our window has no focus.
-        if (noteTaker?.autoPostCallBrief) {
-          void window.api.calls
-            .postCallBrief(saved.id)
-            .then((res) => {
-              if (res.ok && res.copied) setBriefCopied(true)
-            })
-            .catch(() => {})
-        }
+        // Read at the moment the call ENDS (inside the helper), not when the
+        // screen mounted. BUG-230 — the block itself now lives in
+        // noteTakerAutoBehaviours.ts so the crash-recovery path runs the
+        // identical sequence instead of nothing.
+        await runNoteTakerAutoBehaviours(saved.id, { onBriefCopied: () => setBriefCopied(true) })
         onSavedRef.current?.(saved.id)
       })
       .catch(() => {
