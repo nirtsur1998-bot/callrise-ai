@@ -1651,16 +1651,29 @@ export function LiveView({
         {!glance && (cue || suggestions.length > 0) && (
           <div
             ref={cueRailRef}
-            className="pointer-events-none absolute top-3 right-4 bottom-4 z-40 flex w-64 flex-col items-end justify-end gap-2"
+            className="pointer-events-none absolute top-3 right-4 bottom-4 z-40 flex w-64 flex-col justify-end"
           >
-            {/* M34 3c — in Quiet the rail collapses to a count the rep can
-                open; the interrupt cue below it is untouched. */}
-            <SuggestionRail
-              suggestions={suggestions}
-              onDismiss={dismissSuggestion}
-              collapsed={quiet}
-            />
-            {cue && <CueCard key={cue.id} cue={cue} onDismiss={dismiss} />}
+            {/* STICKY inside the column, not just bottom-anchored. The column
+                spans the whole transcript container, and the container is
+                taller than the window on any real call (the PAGE scrolls —
+                BUG-161), so a stack pinned to the column's bottom sat below
+                the fold for most of the call (measured on the sandbox: the
+                rail fully in view at 1 of 5 scroll positions). `sticky
+                bottom-4` keeps the stack at the window's lower edge while the
+                column's end is out of view, and lets it rest at the column's
+                end when that is in view — "lowest, nearest the eye" either
+                way. The measured width the transcript reserves (`cueRailRef`)
+                is the column's, unchanged. */}
+            <div className="sticky bottom-4 flex w-full flex-col items-end gap-2">
+              {/* M34 3c — in Quiet the rail collapses to a count the rep can
+                  open; the interrupt cue below it is untouched. */}
+              <SuggestionRail
+                suggestions={suggestions}
+                onDismiss={dismissSuggestion}
+                collapsed={quiet}
+              />
+              {cue && <CueCard key={cue.id} cue={cue} onDismiss={dismiss} />}
+            </div>
           </div>
         )}
         {/* M24 — mounted in the OPPOSITE corner from the coaching-cue column
@@ -1681,7 +1694,12 @@ export function LiveView({
         {!quiet && dealIntelligenceEnabled && liveSurfaceVisible && (
           <div
             ref={dealPanelRef}
-            className="pointer-events-none absolute top-3 left-4 z-40 flex w-80 flex-col items-start"
+            // Same fix as the cue column, opposite corner: the panel was pinned
+            // to the container's top and scrolled away with the first screen
+            // of transcript. `sticky top-3` keeps it at the window's upper
+            // edge while the container's top is out of view. The reserved
+            // height the transcript keeps clear (`dealPanelRef`) is unchanged.
+            className="pointer-events-none sticky top-3 left-4 z-40 flex w-80 flex-col items-start"
           >
             <DealIntelligencePanel
               enabled={dealIntelligenceEnabled}
