@@ -1316,6 +1316,48 @@ CALLRISE_USER_DATA_DIR=<copy> npx electron out/main/index.js --remote-debugging-
 Both lines are the check. If you do not see them, you are driving the real profile. (The second is
 BUG-186's guard — it is what makes signing a copy in safe.)
 
+### macOS: `HOME` does NOT redirect Electron's userData either — and there is NO packaged-app sandbox
+
+**Added 2026-09-17 (M40).** The macOS counterpart to the `APPDATA` trap above, tested because the
+Windows one is documented and the Mac one was not. It fails the same way, and the shape of the
+failure is worse: **the environment variable IS set, and the path ignores it.**
+
+Measured, same Electron (39.8.10), one run each:
+
+```
+HOME unset (normal):
+  process.env.HOME   = /Users/nirtsur
+  getPath('appData') = /Users/nirtsur/Library/Application Support
+
+HOME=/tmp/.../fakehome:
+  process.env.HOME   = /tmp/.../fakehome     ← the override took
+  getPath('home')    = /Users/nirtsur        ← ignored it
+  getPath('appData') = /Users/nirtsur/Library/Application Support   ← THE REAL PROFILE
+```
+
+Electron resolves the home directory from the system (the passwd entry), not `$HOME`. A sandbox
+built on `HOME` therefore *looks* correct from inside the process — `process.env.HOME` reads back
+exactly what you set — while every read and write lands on the real profile.
+
+**The consequence that matters: a PACKAGED build cannot be sandboxed at all.** The supported
+override is gated on `!app.isPackaged` (`src/main/index.ts:85`), and `HOME` does not work, so there
+is no mechanism. Driving `dist/mac-arm64/CallRise AI.app` means driving the founder's real profile —
+which on this machine is 271 MB with 42 calls, 11 contacts and 9 tasks. **Ask first; do not infer
+permission from the task.**
+
+**What you can do without launching it.** Most packaged-build questions do not need the app to run.
+Require the shipped addon out of the `.app` from a throwaway Electron process instead — that answers
+"does it load" (the real question) rather than "is the file present" (the one that looks like it):
+
+```js
+// tiny electron main.js, in a scratch dir, that quits immediately
+const m = require('<App>.app/Contents/Resources/app.asar.unpacked/native/.../x.node')
+console.log(Object.keys(m))
+```
+
+This is how the M40 packaged-build check was done: the detection addon was confirmed **LOADED**,
+with its real exports, without CallRise ever starting.
+
 ### A second app instance exits with code 0 — it is not "the launch failed"
 
 Start a second instance while one is running and it loses `requestSingleInstanceLock()`, calls

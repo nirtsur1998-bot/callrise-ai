@@ -180,6 +180,68 @@ the x86_64 Rust build is the long pole, not the runner.
 
 ---
 
+---
+
+## The packaged build: the addon loads, and the virtual mic is reachable
+
+Checked **without launching CallRise**, because the packaged app cannot be sandboxed — see the next
+section. The shipped addons were `require()`d straight out of the `.app` from a throwaway Electron
+process, which answers *"does it load"* rather than the weaker *"is the file present"*:
+
+```
+electron=39.8.10  node=22.22.1  modules=140          ← Electron's ABI, not system Node's
+
+detection addon (mac-audio-activity)  arm64  LOADED
+   exports=[getRunningConferencingProcesses, isMacOS14OrLater, getVirtualMicDeviceUID,
+            getAudioInputActivity, getWindowTitles]
+better-sqlite3                        arm64  LOADED
+michelper (packaged path)                    exists=true
+driver bundle (packaged)                     exists=true
+DFN3 model (packaged)                        exists=true
+```
+
+**The `asarUnpack` path works on macOS.** The addon sits at
+`app.asar.unpacked/native/mac-audio-activity/build/Release/mac_audio_activity.node` and loads with
+its real exports — so the silent-never-loads failure CLAUDE.md documents is **not** present here.
+
+The three virtual-mic resources are at exactly the paths `virtualmic.ts`'s `resolveHelperPath()` and
+`resolveDriverBundleSource()` probe (`process.resourcesPath/virtualmic/...`), so the packaged build
+is wired correctly. *Path-reachable is not the same as working* — nothing was started.
+
+### One near-miss worth recording
+
+My probe initially reported `active-win … FAILED  Module did not self-register`, which looks exactly
+like a broken native module. **It was the probe.** `active-win` on macOS does not load a `.node` at
+all — `index.js` routes darwin to `lib/macos.js`, which `execFile`s a separately compiled helper
+binary (`node_modules/active-win/main`). I had required a `.node` the product never touches on this
+platform.
+
+The helper itself is fine: unpacked, executable, **universal (x86_64 + arm64)**, at
+`app.asar.unpacked/node_modules/active-win/main`. Fourth instance this session of a probe reporting
+a fact about itself as a fact about the app.
+
+### Signing state of the shipped binaries
+
+All ad-hoc, as expected for `CSC_IDENTITY_AUTO_DISCOVERY=false`: the `.app` bundle
+(`ai.callrise.app`, `flags=0x2(adhoc)`), the detection addon, and active-win's helper. A real
+Developer ID build is what changes these, and has not been done.
+
+---
+
+## Why the packaged app was not launched
+
+`CALLRISE_USER_DATA_DIR` is gated on `!app.isPackaged` (`src/main/index.ts:85`), and **`HOME`
+override does not move `appData` on macOS** — measured: `process.env.HOME` reads back the override
+while `getPath('appData')` still returns `/Users/nirtsur/Library/Application Support`. Same shape as
+the documented Windows `APPDATA` trap, now recorded in
+[`scripts/verification/README.md`](../scripts/verification/README.md).
+
+So there is **no sandbox mechanism for a packaged build**, and launching it would drive the real
+profile — 271 MB, 42 calls, 11 contacts, 1 deal, 9 tasks — putting real client names into any
+screenshot. That needs the founder's explicit say-so, not my inference.
+
+---
+
 ## What this audit did NOT verify
 
 - **No signed build, no notarization round-trip.** Both need the certificates. Nothing here says

@@ -203,7 +203,26 @@ mac:
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
   target:
+    # What a human downloads and drags into Applications.
     - dmg
+    # What electron-updater actually consumes, and the reason this list has two
+    # entries. With dmg alone, latest-mac.yml lists only a DMG and EVERY update
+    # check on a shipped Mac throws — from the installed updater's own source,
+    # node_modules/electron-updater/out/MacUpdater.js:
+    #
+    #     const zipFileInfo = findFile(files, "zip", ["pkg", "dmg"]);
+    #     if (zipFileInfo == null)
+    #       throw newError(`ZIP file not provided: ...`, "ERR_UPDATER_ZIP_FILE_NOT_FOUND");
+    #
+    # "zip" is what it looks for; ["pkg","dmg"] is the explicit EXCLUSION list.
+    # So a DMG-only feed does not mean "updates are slow" — it means a Mac user
+    # is pinned to whatever version they first installed, permanently, with
+    # nothing on screen to say so.
+    #
+    # Verified rather than reasoned: building both targets makes latest-mac.yml's
+    # `path:` the zip (CallRise-AI-<version>-arm64-mac.zip), which is what
+    # findFile follows. The dmg stays listed in `files:` for humans.
+    - zip
   # The noise-cancellation engine (michelper + DFN3 Standard model + the HAL
   # driver bundle) lives in the separate salesos-virtualmic repo, built as a
   # sibling checkout next to this one. This copies its ALREADY-BUILT output
