@@ -73,31 +73,33 @@ export function NudgeCard({
 
   return (
     <CollapseTransition open={!closing} onCollapsed={onDismiss}>
+      {/* INSTRUMENT PANEL: the same card material as CueCard — surface, 1px
+          line, --shadow-hud, --radius-card — with the newest nudge carrying a
+          3px left rule in its channel's colour instead of a tinted ring, and
+          no glass or sheen over the transcript beneath. */}
       <div
         className={cn(
-          'glass-hud pointer-events-auto relative overflow-hidden rounded-2xl p-3 ring-1 ring-inset transition-[opacity,transform] duration-300',
-          isNewest ? meta.ring : 'ring-line-soft',
+          'pointer-events-auto relative overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface p-3 shadow-[var(--shadow-hud)] transition-[opacity,transform] duration-300',
+          isNewest && cn('border-l-[3px]', meta.rule),
           !isNewest && 'opacity-90 hover:opacity-100',
           closing ? 'opacity-0' : shown ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
         )}
       >
-        <span className="glass-sheen rounded-2xl" />
-
         <div className="flex items-start gap-2.5">
-          <div className={cn('grid h-7 w-7 shrink-0 place-items-center rounded-lg', meta.badgeBg)}>
+          <div className={cn('grid h-6 w-6 shrink-0 place-items-center rounded-md', meta.badgeBg)}>
             <Icon className={cn('h-3.5 w-3.5', meta.text)} />
           </div>
 
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline gap-1.5">
-              <span className={cn('text-[10px] font-semibold tracking-wide uppercase', meta.text)}>
+              <span className={cn('text-2xs font-semibold tracking-wide uppercase', meta.text)}>
                 {meta.label}
               </span>
-              <span className="truncate text-[11px] font-medium text-muted">
+              <span className="truncate text-2xs font-medium text-muted">
                 {formatSubtype(nudge.subtype)}
               </span>
             </div>
-            <p className="mt-1 text-[13px] leading-snug font-semibold text-ink">
+            <p className="mt-1 text-dense leading-snug font-semibold text-ink">
               {nudge.suggestedCue}
             </p>
           </div>

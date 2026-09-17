@@ -21,6 +21,10 @@ export interface NudgeTone {
   ring: string
   /** Left-edge accent border on the always-visible evidence block. */
   border: string
+  /** The newest card's 3px left rule (Instrument Panel) — a border-l-* colour
+   *  only, so it composes with the card's own `border-line` on the other
+   *  three sides instead of recolouring them the way `border` above would. */
+  rule: string
   /** Solid fill for the confidence meter's filled segments. */
   fill: string
 }
@@ -41,6 +45,7 @@ export const NUDGE_META: Record<NudgeType, NudgeTone> = {
     badgeBg: 'bg-danger-soft',
     ring: 'ring-danger/40',
     border: 'border-danger/40',
+    rule: 'border-l-danger',
     fill: 'bg-danger'
   },
   opportunity: {
@@ -50,6 +55,7 @@ export const NUDGE_META: Record<NudgeType, NudgeTone> = {
     badgeBg: 'bg-positive-soft',
     ring: 'ring-positive/40',
     border: 'border-positive/40',
+    rule: 'border-l-positive',
     fill: 'bg-positive'
   },
   tactical: {
@@ -59,6 +65,7 @@ export const NUDGE_META: Record<NudgeType, NudgeTone> = {
     badgeBg: 'bg-accent-soft',
     ring: 'ring-accent/40',
     border: 'border-accent/40',
+    rule: 'border-l-accent',
     fill: 'bg-accent'
   }
 }

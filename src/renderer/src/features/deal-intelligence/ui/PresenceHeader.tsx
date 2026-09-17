@@ -24,7 +24,8 @@ const STATUS_DESCRIPTION: Record<DealIntelligenceStatus, string> = {
   // BUG-057 Phase 2 — same dot/label as 'paused' (the compact pill has no
   // room for the distinction), but the full-sentence screen-reader text and
   // StatusNotice's own card (which DOES have room) say something true.
-  'timed-out': 'Deal intelligence paused — the model is taking too long to respond, resumes automatically',
+  'timed-out':
+    'Deal intelligence paused — the model is taking too long to respond, resumes automatically',
   // BUG-058 Phase 3 — same reasoning as 'timed-out' above.
   'quota-exhausted':
     "Deal intelligence paused — a configured model's free-tier quota is used up, add another provider's key or wait for it to reset"
@@ -66,7 +67,8 @@ function PresenceDot({ status, justArrived }: PresenceDotProps): React.JSX.Eleme
           // silently renders no colour at all rather than a compile error —
           // checked explicitly for exactly that reason). BUG-058 Phase 3 —
           // 'quota-exhausted' too.
-          (status === 'paused' || status === 'timed-out' || status === 'quota-exhausted') && 'bg-warning',
+          (status === 'paused' || status === 'timed-out' || status === 'quota-exhausted') &&
+            'bg-warning',
           // One-shot accent glow — the app's existing "this just changed"
           // idiom (see PipelineBoard's flash-on-move) reused here for "a
           // signal just arrived" instead of a new keyframe.
@@ -95,7 +97,7 @@ export function PresenceHeader({
   justArrived: boolean
 }): React.JSX.Element {
   return (
-    <div className="glass-hud pointer-events-auto flex items-center gap-2 rounded-full px-3 py-1.5">
+    <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1.5 shadow-[var(--shadow-hud)]">
       <PresenceDot status={status} justArrived={justArrived} />
       <span className="sr-only">{STATUS_DESCRIPTION[status]}</span>
       <span

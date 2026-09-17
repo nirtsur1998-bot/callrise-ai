@@ -39,9 +39,7 @@ export function HealthScoreCard({ healthScore }: HealthScoreCardProps): React.JS
   const TrendIcon = trend.icon
 
   return (
-    <div className="glass-hud pointer-events-auto relative overflow-hidden rounded-2xl p-3">
-      <span className="glass-sheen rounded-2xl" aria-hidden="true" />
-
+    <div className="pointer-events-auto relative overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface p-3 shadow-[var(--shadow-hud)]">
       <div className="flex items-center gap-2">
         <span className="sr-only">
           Deal health score {healthScore.score} out of 100, {trend.label}.

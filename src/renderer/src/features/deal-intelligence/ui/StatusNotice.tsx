@@ -40,15 +40,15 @@ export function StatusNotice({ variant }: { variant: NoticeVariant }): React.JSX
   return (
     <div
       className={cn(
-        'glass-hud pointer-events-auto rounded-2xl px-3 py-2.5',
-        isPaused && 'ring-1 ring-warning/30 ring-inset'
+        'pointer-events-auto rounded-[var(--radius-card)] border border-line bg-surface px-3 py-2.5 shadow-[var(--shadow-hud)]',
+        isPaused && 'border-l-[3px] border-l-warning'
       )}
     >
       <div className="flex items-start gap-2">
         {isPaused && (
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />
         )}
-        <p className="text-[12px] leading-snug text-muted">{COPY[variant]}</p>
+        <p className="text-dense leading-snug text-muted">{COPY[variant]}</p>
       </div>
     </div>
   )
