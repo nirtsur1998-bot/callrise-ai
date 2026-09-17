@@ -131,6 +131,45 @@ a door nobody was watching.
 
 ## 4. TEST — three suites fail on macOS; at least one is genuinely platform-dependent
 
+> ### RESOLVED 2026-09-18 — it was the Node version, not the platform
+>
+> The full suite on this Mac reported **14 files / 79 tests failed**, eleven of them dying
+> identically at `localStorage.clear()`. Proven both directions on one file, one machine:
+>
+> ```
+> Node 26.4.0 (this Mac)          →  4 failed
+> Node 22.23.2 (npx -y node@22)   →  4 passed
+> ```
+>
+> Node ≥ 25 ships its own `localStorage` global, default-on, which vitest's DOM environment does
+> not replace — so a bare `localStorage` in a test resolves to Node's unconfigured stub, not
+> happy-dom's. `sessionStorage` is untouched, which is the tell. **CI pins Node 22**, where the global
+> did not exist yet. So the escalation ("are these red on Windows too?") answers itself: **not if
+> Windows runs Node 22**, and nothing here suggests otherwise.
+>
+> Nothing had pinned the Node version, which is how a machine drifted onto 26 with no message naming
+> the cause. Now: `.nvmrc` + `package.json#engines` say `22.x`, and a setup-file guard
+> (`src/__tests__/setup/node-webstorage-guard.ts`) turns the seventy-nine failures into **one** that
+> names the fix. Red/green/quiet all verified (`19827f8`).
+>
+> Of the original three: `tier1-diagnostics` was the genuinely Mac-only one (Windows path
+> separators) and is fixed (`2459f36`); `Tier1SettingsCard` and `recorder.tier1` were this.
+>
+> **The full suite under Node 22 on macOS, read from the suite's own summary lines, real exit 0:**
+>
+> ```
+> Test Files  468 passed | 3 skipped (471)
+>      Tests  4517 passed | 15 skipped (4532)
+> ```
+>
+> No failing files, no stray `Errors` line. **There are no macOS-specific test failures left.**
+>
+> One more of the 14 was **mine** — `no-false-locality-claims` correctly flagged the Intel-refusal
+> copy's "on this Mac" as a locality-claim detector hit. Accounted for with a reason, not reworded
+> (`9222f67`); the entry says plainly it is not yet founder-approved.
+
+*The original entry, kept for the record:*
+
 `verify-green.mjs` reports `NOT GREEN` on macOS. Run individually:
 
 | suite | result on macOS |

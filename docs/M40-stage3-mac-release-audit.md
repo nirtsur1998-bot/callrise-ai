@@ -242,6 +242,47 @@ screenshot. That needs the founder's explicit say-so, not my inference.
 
 ---
 
+## BLOCKER 3 (found 2026-09-18) — CI cannot build the Mac denoiser at all
+
+Bigger than the certificates, because certificates are a form and this is build infrastructure.
+
+`scripts/verify-build-inputs.js` (BUG-117) requires three paths on darwin and **refuses to package**
+without them — correctly. Two of the three exist **only on this Mac**:
+
+```
+GITIGNORED  ../salesos-virtualmic/build/michelper
+GITIGNORED  ../salesos-virtualmic/build/SalesOSMicrophone.driver
+TRACKED     ../salesos-virtualmic/phase2/models/DeepFilterNet3_onnx.tar.gz
+```
+
+A macOS runner checks out both repos, finds the model, and stops. Producing the other two in CI
+means rebuilding `libdf.a` (gitignored, 147 MB) from a ~1 GB vendored Rust tree at the pinned
+DeepFilterNet commit, then `build.sh` — **and** a PAT to check out the private sibling repo, since
+`GITHUB_TOKEN` is scoped to this repo only.
+
+**This is the `TMP`-hardcoded-to-one-machine finding one level up:** the shipped denoiser can
+currently only be produced on one computer. The macOS release job was deliberately **not written**
+until the route is chosen, because its shape depends on it:
+
+| route | cost | what it buys |
+|---|---|---|
+| **1. build virtualmic from source in CI** *(recommended)* | slow CI; Rust toolchain + cache | the denoiser becomes reproducible instead of machine-bound |
+| 2. publish virtualmic's build output as release assets, download in CI | fast CI | artifacts still born on one machine, now trusted at a distance |
+| 3. commit the binaries to the virtualmic repo | trivial | 32 MB+ of binaries in git, drifting from source |
+
+All three need the PAT (or making the sibling repo public). **Founder decision.**
+
+### Also for the first signed release: `safeStorage` and the signature change
+
+`safeStorage` on macOS binds its Keychain item to the app's code signature. Measured here: the dev
+Electron binary **cannot decrypt** the session file the packaged app wrote (`DECRYPT FAILED`, both
+copies, `isEncryptionAvailable = true`). Sessions, Google/Outlook tokens and every AI key are stored
+this way. The first Developer-ID-signed build is a new signature. Whether existing users are
+silently signed out and lose their keys on that upgrade is **reasoned, not measured** — and it must
+be tested on a machine that has data under the old signature *before* that release goes out.
+
+---
+
 ## What this audit did NOT verify
 
 - **No signed build, no notarization round-trip.** Both need the certificates. Nothing here says

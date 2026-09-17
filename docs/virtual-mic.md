@@ -637,6 +637,49 @@ at runtime here — that needs a real call, and macOS Screen Recording permissio
 
 ---
 
+## The macOS floor — declared 12.0, built against 12.0, never executed on 12.0
+
+**Decided 2026-09-17 on reasoning, not measurement, and recorded as such:** there are no users yet,
+only the founder's two machines, and the arm64-only build already excludes every Intel Mac — so
+Big Sur (11) is a population of zero by construction. If real users later appear on older hardware,
+the number was never checked against usage data because none existed.
+
+What moved: all 8 `-mmacosx-version-min` flags in `build.sh`, 11.0 → 12.0, so the **linked**
+binaries — the ones whose declared floor actually gates launch — now agree with the app's
+`Info.plist` (`LSMinimumSystemVersion 12.0`):
+
+```
+driver     minos 11.0 → 12.0
+michelper  minos 11.0 → 12.0
+```
+
+What did NOT move, and the founder's instruction assumed otherwise. `libdf.a` does not "inherit
+26.0" — it is a **mix**, measured with `otool -l`:
+
+```
+326 objects @ 11.0   df, tract_*, regex*, tar, rustix   ← the project's own crates (cargo's to rebuild)
+393 objects @ 26.0   compiler_builtins + prebuilt std   ← shipped precompiled with Homebrew's rustc
+ 31 objects @ 15.5   another prebuilt blob
+```
+
+Cleaning one crate and rebuilding with `MACOSX_DEPLOYMENT_TARGET=12.0` moved exactly **17** objects
+— proving the mechanism works and bounding what it can reach. The other 424 are not cargo's; moving
+them needs `-Z build-std` on nightly. `rustc --print deployment-target` says **11.0** for this
+target, so the 26.0 stamps are an artifact of the machine Homebrew built its toolchain on, not a
+Rust requirement. `libdf.a` was **restored byte-identical** to the verified backup rather than
+left half-converted — a partially converted static lib is worse than either state.
+
+Verified after the rebuild: `kSampleRate` still 48000, `rtsafetytest` PASS (max 35 µs, 0 over
+budget), `underruntest` 562/562 Ok with 0 discontinuities once the writer is primed first (an
+intermediate 7.2 % stale reading was the harness starting the reader before the writer — not a
+regression), signature valid, still arm64.
+
+**It stays open.** The project's rule asks for a floor that is both *built against* and *run
+against*, and only the first is met — no macOS 12 machine or VM exists here. Do not let the numbers
+agreeing read as the floor being tested.
+
+---
+
 ## Still open, carried forward
 
 1. **Uninstall gap** — `installDriver()` with no `uninstallDriver()`. Dragging the app to

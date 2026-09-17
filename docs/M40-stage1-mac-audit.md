@@ -208,6 +208,12 @@ Clean at 1280px and 1100px. **Not a defect, and not Mac-specific.**
 
 ## `verify-green.mjs`: NOT GREEN — but not Mac-specific
 
+> **Resolved 2026-09-18, and the guess below was right for the wrong reason.** It was not
+> BUG-141's concurrency shape — it was the **Node version**: this Mac runs Node 26, CI pins 22, and
+> Node ≥ 25's own `localStorage` global shadows happy-dom's. Under Node 22 the full suite is
+> **468 files / 4517 tests passed, exit 0** on this Mac. Full account in
+> [`M40-known-issues.md`](M40-known-issues.md) §4 and the verification README.
+
 ```
 VERDICT: NOT GREEN     (0 typecheck errors; ~14 main-process test FILES failing)
 ```
@@ -239,6 +245,22 @@ Worth reading before trusting any of the above as "Mac parity is done".
 - **Packaged build never produced.** Everything above is the dev build. **Superseded** — a real
   `--mac dmg zip` package was built for the Stage 3 audit. The detection addon's asar-unpacked path
   is still untested, and nothing was signed or notarized.
+
+> ### The stale checkout had a second cost nobody predicted: obeying the wrong rules
+>
+> The `CLAUDE.md` in the 0.1.0 tree said *"work in the main folder and commit directly to
+> `main`."* The real one — superseded at M26/M27 — says main is never edited directly. The session
+> inherited the stale rule from a checkout **841 commits behind and followed it faithfully for 12
+> commits**, and nothing in the session would have surfaced it: the file was read once, at start,
+> before the fast-forward replaced it.
+>
+> **Not just auditing the wrong code: obeying the wrong rules.** A `CLAUDE.md` is the one file where
+> being 841 commits behind means following superseded policy with full confidence. The commits were
+> moved onto `claude/m40-mac-parity` non-destructively (verified: `main == origin/main`, all 12
+> present with the same SHAs, branch tree byte-identical to the old main's).
+>
+> **First-step rule, for every session: check the checkout's position (`git fetch && git rev-list
+> --left-right --count main...origin/main`) BEFORE reading its instructions, not after.**
 
 > ### CORRECTION — two claims above were read off the stale 0.1.0 tree
 >

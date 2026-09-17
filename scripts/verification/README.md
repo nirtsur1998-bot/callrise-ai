@@ -1,5 +1,17 @@
 # Verification tooling — read this before driving the app
 
+> ## Step zero, before reading anything below: is this checkout current?
+>
+> ```
+> git fetch origin && git rev-list --left-right --count main...origin/main
+> ```
+>
+> On 2026-09-17 a session started on a checkout **841 commits behind**, read that tree's
+> `CLAUDE.md`, and followed a rule it had superseded three milestones earlier — twelve commits
+> straight onto `main`. The file this README belongs to did not even exist in that tree. A stale
+> checkout does not just show you old code; it hands you old instructions with full confidence.
+> Check the position first. Then read.
+
 > ## Reading the rules is not running them.
 >
 > Added 2026-09-17 (M40), after a session produced **six** wrong readings in one sitting —
@@ -1523,6 +1535,65 @@ taskkill /T /F /PID <the pid you spawned>
 
 And tie the CDP target to *this* launch — the renderer port the launch printed, not "it is a dev
 build".
+
+# A RUNTIME-VERSION MISMATCH READS AS A PLATFORM DEFECT — 2026-09-18 (M40, Mac)
+
+The full suite on the Mac: **14 files / 79 tests failed**, eleven with the identical
+`Cannot read properties of undefined (reading 'clear')` at `localStorage.clear()`, all in suites
+declaring `// @vitest-environment happy-dom`. happy-dom was installed, matched the lockfile, and
+its Window exposes `localStorage`. Every obvious explanation was checked and was wrong, and the
+shape of it — renderer suites, only on the new platform — read exactly like *"the render tests are
+broken on macOS"*.
+
+It was Node. Same file, same machine:
+
+```
+Node 26.4.0                     →  4 failed
+Node 22.23.2  (npx -y node@22)  →  4 passed
+```
+
+Node ≥ 25 ships its own `localStorage` global. Without `--localstorage-file` it reads as
+`undefined`, and vitest's DOM environment does not replace it. CI pins Node 22, so CI is green. The
+tell, worth knowing by sight: **`sessionStorage` is an object while `localStorage` is undefined.**
+
+**Two rules from it.**
+
+1. **Before calling a failure platform-specific, diff the RUNTIME, not just the OS.** `node
+   --version` against `.github/workflows/*.yml`'s `node-version` is one command. Nothing had pinned
+   it; `.nvmrc` and `package.json#engines` now do.
+2. **Seventy-nine failures from one cause is an instrument problem, and it got a mechanical fix**
+   rather than a paragraph: `src/__tests__/setup/node-webstorage-guard.setup.ts` fails once, with the
+   cause and the exact remedy, when a DOM environment has no `localStorage`. Pure logic in a sibling
+   file, pin test drives it with fabricated inputs, verified red (Node 26: one failure, old symptom
+   count 0), green (Node 22: silent, tests pass) and quiet (node-env suites: silent) — the same
+   three directions any guard has to hold.
+
+Not the fix: `NODE_OPTIONS=--localstorage-file=<path>`. It makes the error vanish by handing tests
+**Node's** storage rather than happy-dom's — a check going green by changing what it looks at.
+
+## macOS: the two-file sandbox sign-in technique is WINDOWS-ONLY
+
+The section above on `CALLRISE_USER_DATA_DIR` says to sign a sandbox in by copying exactly two
+files out of the real profile — `Local State` and `supabase-auth.json`. **On macOS there is no
+`Local State`** (it is Chromium's Windows OSCrypt key file), and the session file alone does not
+decrypt. Measured with a throwaway Electron probe that never printed token material:
+
+```
+isEncryptionAvailable = true
+real profile session file: 2435 bytes, header=v10 → DECRYPT FAILED
+sandbox copy:                                     → DECRYPT FAILED
+```
+
+`safeStorage` on macOS is Keychain-backed, and the Keychain item's ACL is bound to the **code
+signature** of the app that wrote it. The dev Electron binary is a different signature from whatever
+wrote the founder's file, so it is refused — and there is no key file to carry across. **A Mac dev
+sandbox needs its own login. Do not enter the founder's credentials to get one; ask.**
+
+The consequence worth flagging beyond testing: `safeStorage` also protects the Google/Outlook
+tokens and every AI key. **The first Developer-ID-signed release changes the app's signature.**
+Whether shipped users' sessions and keys survive that transition is *reasoned, not measured* — it
+depends on the designated requirement in the Keychain ACL — and it belongs on the Stage 2 list
+before that release ships, not after.
 
 # AUDIO INSTRUMENTS — four failures in one session, 2026-09-17 (M40, Mac)
 
