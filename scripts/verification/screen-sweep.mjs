@@ -230,25 +230,17 @@ await click('Past')
 await wait(1200)
 bucket = []
 await visit('Call detail (newest)', await click('Call ·', 'prefix', 0))
-// KNOWN LIMITATION — 'Call detail (4th)' still does not reach a second call,
-// and the cause is NOT yet established. Recorded rather than guessed at.
+// Leave the call via the detail page's own 'Past Calls' link, NOT the sidebar's
+// 'Calls'. This is working around a PRODUCT bug, not a quirk of this script:
+// clicking the sidebar 'Calls' while a call is open does nothing at all —
+// measured twice from independent probes, page-text hash identical before and
+// after, still on the detail page. There is also no 'Back' control on that page.
+// 'Past Calls' is the only exit confirmed to work (hash changes, detail-only
+// controls disappear). See docs/M40-known-issues.md.
 //
-// What IS established, from a freshly launched app with six saved calls
-// (`calls.list()` → 6) so neither an empty population nor stale state:
-//   - the sweep never leaves the FIRST call's detail page for this step;
-//     'only 1 rows' is that page's own title matching the 'Call ·' prefix.
-//   - clicking the sidebar 'Calls' from an open call does not return to the
-//     list, and neither does the detail page's 'Back' — both were tried, each
-//     with waits, and both left the sweep on the detail page.
-//
-// So this step is honest but inert: it reports a skip with a true reason. Do
-// NOT read its 'defects: 0' as coverage of a second call detail page — that
-// state has still never been swept. Fixing it needs someone to work out how
-// this build navigates back out of a call, which is a question about the app's
-// routing rather than about this script.
-await click('Calls')
-await wait(1500)
-await click('Past')
+// That no-op is why this step used to report `only 1 rows`: the sweep never
+// left the first call, and the one match was that page's own title.
+await click('Past Calls')
 await wait(1500)
 bucket = []
 await visit('Call detail (4th)', await click('Call ·', 'prefix', 3))

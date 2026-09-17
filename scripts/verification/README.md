@@ -61,6 +61,14 @@ is pasted into the tracker with the screenshot hashes — see "THE SECOND RULE" 
   passed by habit. Why: three months of "one writer" as a convention produced two violations; the
   second (2026-09-06 00:50) killed the dev app with a path-matched sweep meant for a sandbox. Self-test:
   `src/__tests__/protected-instances.test.ts` runs that exact sweep against fake rows.
+- **If you are writing a click helper, you already have one.** `ui-driver.mjs` and `cdp.mjs` exist;
+  `screen-sweep.mjs` has a leaf-matching `click()`. Re-implementing one is how three findings on
+  this project have died — the dossier screenshot script re-implemented the dossier and hid the bug
+  it was taking a picture of, and on 2026-09-17 three probes in a row reported things about the app
+  that were facts about the probe: a too-narrow `Home` selector, a trace that never clicked out of
+  Settings, and a hand-rolled click helper whose "Back does not work" nearly got written up as a
+  product bug. Generalises past clicking: **a re-implementation shares no bugs with the original,
+  which is exactly why it cannot be used to check it.**
 - **Never write code through a shell heredoc.** Use the file tool (Write/Edit). Why: four times in
   one night a heredoc turned an escape into a real character — a backslash-b into a backspace byte inside a
   regex, a backslash-n into a newline inside a string — and the file parsed nowhere or matched nothing.
