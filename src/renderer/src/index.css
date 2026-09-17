@@ -135,6 +135,16 @@
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.28), 0 1px 3px rgb(0 0 0 / 0.16);
   --shadow-pop: 0 8px 28px -6px rgb(0 0 0 / 0.5), 0 2px 6px rgb(0 0 0 / 0.3);
 
+  /* ── INSTRUMENT PANEL (M36 HUD restyle) ──────────────────────────────
+     The live screen's card material: an opaque surface, a 1px --color-line
+     edge, one radius, and a shadow that is a hairline of inset light plus a
+     short drop — not the 30px-blur glass the cue card and rail used to float
+     on over scrolling transcript text. Both tokens are palette-neutral: they
+     read the same with the First Light flag off, so neither needs a legacy
+     counterpart in the `:root:not(.first-light)` blocks below. */
+  --radius-card: 12px;
+  --shadow-hud: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 4px 12px -6px rgb(0 0 0 / 0.35);
+
   /* ── MOTION (M31 Stage 5) ─────────────────────────────────────────────
      A vocabulary, defined BEFORE anything uses it. Every animation written
      before this stage hardcoded its own cubic-bezier — several different
@@ -183,6 +193,17 @@
        cool streak now that everything around it is warm. */
     --scrollbar-thumb: #3a352e;
     --scrollbar-thumb-hover: #4a443a;
+
+    /* The glance line's two motions, composed from the Stage 5 vocabulary
+       rather than added to it: a cue arrives on the entrance curve and
+       leaves on the exit curve, and both are shorter than --motion-base
+       because the line sits in peripheral vision — anything longer reads
+       as movement, and nothing else on that screen is allowed to move.
+       Defined HERE, in :root, and not in @theme, because motion-tokens.test
+       pins the @theme vocabulary at exactly three durations: these are
+       compositions of it, not a fourth and fifth word. */
+    --motion-cue-in: 220ms var(--ease-entrance);
+    --motion-cue-out: 160ms var(--ease-exit);
   }
 
   /* color-scheme is NOT part of the identity preview — it tells the OS how to
@@ -695,6 +716,13 @@
       background-image: none;
       background-color: var(--color-elevated);
     }
+    /* A STATIC ring, not an empty one. The blanket rule at the bottom of the
+       file would run the countdown to its END state in 0.001ms — a ring at
+       0%, which reads as "already expired" the moment the cue appears. The
+       cue still expires on its timer; the ring simply no longer moves. */
+    .cue-ring {
+      animation: none;
+    }
   }
 
   /* Countdown bar for live cues — consumer sets animation-duration inline
@@ -709,6 +737,66 @@
     }
     to {
       transform: scaleX(0);
+    }
+  }
+
+  /* ── INSTRUMENT PANEL (M36 HUD restyle) ──────────────────────────────
+     The glance line's arrival and departure. Keyed on the cue id by the
+     component, so a NEW cue re-runs the entrance and a replaced one never
+     animates out — one cue at a time means one motion at a time. The exit
+     is applied to a pointer-inert ghost the component keeps for exactly the
+     animation's length; see GlanceLine.tsx. */
+  .glance-in {
+    animation: glance-in var(--motion-cue-in) both;
+  }
+  .glance-out {
+    animation: glance-out var(--motion-cue-out) both;
+  }
+  @keyframes glance-in {
+    from {
+      opacity: 0;
+      translate: 0 4px;
+    }
+    to {
+      opacity: 1;
+      translate: 0 0;
+    }
+  }
+  @keyframes glance-out {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+    }
+  }
+
+  /* The interrupt cue's lifetime, drawn as a ring around its Dismiss button
+     instead of a 2px bar along the card's bottom edge: the countdown now
+     sits on the control it counts down TO. A registered custom property is
+     what lets the conic angle animate at all — an unregistered one snaps.
+     Consumer sets animation-duration inline to the cue's real time-to-live,
+     exactly as .cue-countdown does. */
+  .cue-ring {
+    --cue-ring-progress: 100%;
+    background: conic-gradient(
+      var(--cue-ring-color, var(--color-accent)) var(--cue-ring-progress),
+      transparent 0
+    );
+    -webkit-mask: radial-gradient(
+      farthest-side,
+      transparent calc(100% - 2px),
+      #000 calc(100% - 1px)
+    );
+    mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
+    animation: cue-ring 10s linear forwards;
+  }
+  @keyframes cue-ring {
+    from {
+      --cue-ring-progress: 100%;
+    }
+    to {
+      --cue-ring-progress: 0%;
     }
   }
 
@@ -750,6 +838,14 @@
       box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 0%, transparent);
     }
   }
+}
+
+/* Registered so the conic angle in .cue-ring can interpolate. Top level on
+   purpose: @property is not valid inside @layer. */
+@property --cue-ring-progress {
+  syntax: '<percentage>';
+  inherits: false;
+  initial-value: 100%;
 }
 
 /* Honor the OS "reduce motion" setting for every animation above. */
