@@ -1458,3 +1458,147 @@ taskkill /T /F /PID <the pid you spawned>
 
 And tie the CDP target to *this* launch — the renderer port the launch printed, not "it is a dev
 build".
+
+# AUDIO INSTRUMENTS — four failures in one session, 2026-09-17 (M40, Mac)
+
+All four happened while verifying the virtual mic's 48 kHz fix on the Mac. None of them was a
+product defect. Three produced a wrong reading; one produced a wrong *finding that was about to be
+written into this file as a rule*, which is the worst of the four and is recorded first.
+
+## The one that nearly became a rule: inferring a tool's blindness from its output shape
+
+`tools/underruntest` (in the `salesos-virtualmic` repo) counts cycles where `RingReader::Pull()`
+returns something other than `Ok` — its own header calls each one *"a moment of forced silence a
+real recording would hear as a dropout."*
+
+From that description alone this session concluded, and reported with confidence:
+
+> ~~"The project's dropout detector is structurally blind to frame repetition."~~
+> ~~"A clean underruntest run is not evidence of a clean pipe."~~
+
+**Both are wrong.** And the way they nearly landed here matters more than the claims themselves: the
+founder read the analysis, found it convincing, and **instructed** that the second sentence be added
+to this file. It was one edit from becoming a rule. Neither of us had read `ReadContinuous()`.
+
+That is the failure mode this file is most exposed to. **A wrong entry here costs more than a wrong
+entry anywhere else, because this is the document sessions consult *instead of* checking.** An
+approved-but-unverified lesson does not sit inert — it actively replaces the investigation that
+would have caught it. Treat an instruction to add a rule here as a trigger to verify the rule, not
+as authority that it is correct.
+
+Reading `ReadContinuous()` is what settled it, and it takes about a minute:
+
+```cpp
+CopyFramesFrom(m, readCursor_, dst, frameCount);
+readCursor_ += frameCount;      // every Ok cycle, exactly frameCount, always
+return ReadStatus::Ok;
+```
+
+The cursor advances by exactly `frameCount` on every `Ok`. The only other thing that moves it is a
+resync (`streaming_ = false`), and a resync is only ever *reached through* a non-Ok cycle — which
+`underruntest` counts. So zero non-Ok genuinely does imply zero repetition. The guarantee was real;
+it was merely **implicit**, and the tool's output could not correct a reader who assumed otherwise.
+
+**The general shape.** A tool's stated purpose ("counts dropouts") describes what it *reports*, not
+the set of defects its mechanism happens to exclude. Reasoning from the description to "therefore it
+cannot see X" is a guess wearing the clothes of an analysis. Read the mechanism, or say you have not.
+
+### The real defect, found underneath the invented one
+
+Chasing the imaginary bug surfaced a genuine one. The tool was never blind to repetition — **its
+verdict line was blind to its own continuity data.** The headline read only the dropout count, so a
+100%-discontinuous stream printed:
+
+```
+PERFECT: zero dropouts
+```
+
+That is **species 114**: a well-behaved silence indistinguishable from a feature that never ran. The
+continuity information existed; nothing reported it, so "clean" and "never examined" produced
+identical output.
+
+**Fixed** (`salesos-virtualmic`, commit `4f19e3d`): continuity is measured every cycle — actual
+cursor advance vs expected — and printed **unconditionally, including the zero case**, so a clean run
+shows the check was *made*. The verdict now reads both failure modes. Red-checked both ways
+(`bufFrames + 1` so every Ok cycle registers as a repeat), file restored byte-identically by SHA:
+
+```
+GREEN  0 discontinuities, 0 repeated, 0 skipped   → "PERFECT: zero dropouts, stream continuous"
+RED    374 discontinuities, 374 repeated          → "BROKEN: stream is discontinuous (374 cycles)
+                                                     — dropouts were 0 (0.0%)"
+```
+
+The RED line is the useful artifact: **dropouts 0.0%, stream broken.** Before the change, that exact
+run printed `PERFECT`.
+
+## A single coherent-looking measurement is not a measurement
+
+The same session recorded the device with a known 440 Hz tone and got a result that *looked*
+diagnostic — correct amplitude, plausible frequency, a clean story about repeated frames:
+
+```
+maxAbs = 0.24411   maxAdjDelta = 0.14346 (vs 0.01406 theoretical)   freq = 432.6 Hz
+```
+
+It was written up as a finding. Two clean re-runs of the identical command:
+
+```
+run 1:  maxAbs = 0.00189   freq = 19554.6 Hz   near-zero = 94.69%
+run 2:  maxAbs = 0.28152   freq = 11896.3 Hz   near-zero = 70.27%
+```
+
+19 kHz and 11 kHz for a 440 Hz tone are nonsense; the recordings were 70–95% silence. The harness
+never sequenced `tonehelper`'s priming against `recordwav`'s start, so each run captured a different
+arbitrary slice of startup. **The first run was not the signal and the others noise — all three were
+noise, and the first one happened to look like an answer.**
+
+> ### A number that arrives with a ready-made explanation is the one to re-run first.
+
+That is the rule worth carrying, and the reason is in *why* the bad reading survived. It did not
+survive because the number was plausible — it survived because it came with a **story that fit**:
+repeated frames, a live-monitor ring that documents itself as tolerating exactly that, a 1.7%
+stretch matching the discontinuity count. Every piece corroborated every other piece.
+
+**The story is what made it believable, and the story is what should have made it suspect.** A
+measurement that explains itself on arrival has skipped the step where you find out whether it is
+real. Re-run it before writing it up — not after someone questions it.
+
+## `log` is a zsh builtin, and it shadows `/usr/bin/log`
+
+```bash
+log show --predicate 'subsystem == "com.salesos.virtualmic"'   # -> (eval):log:2: too many arguments
+/usr/bin/log show --predicate '...'                            # the actual macOS tool
+```
+
+The failure was reported as *"no log entries"* — i.e. read as a fact about the driver — when the
+command had never run. Same species as reading a count next to the answer: **an empty result from a
+command that errored is not an empty result.** Always check the invocation before believing a zero.
+
+Related, once the right binary was running: `os_log` **info**-level messages are not persisted to the
+archive, so `log show` after the fact returns nothing for them even when they were emitted. Use
+`log stream` *during* the event — and note that streaming out of `coreaudiod` produced nothing useful
+here either, so a HAL plugin's own logs are not yet a reliable instrument on this machine.
+
+## Two more, both the same species as "read the answer, not a number next to it"
+
+**An `awk` range expression that printed a false zero for every row.** Tabulating per-device channel
+counts printed `in=- out=-` for *every* device, including the built-in mic. Read as "no device
+reports channels"; actually the parser never matched. `system_profiler -json` piped to `node` gave
+correct counts immediately. When a sweep reports the *same* answer for every member of a population,
+suspect the sweep, not the population.
+
+**A threshold calibrated for one signal, applied to another.** `capturetest` verdicts
+`DISCONTINUOUS` above `maxAdjDelta > 0.03`, and its own header says that ceiling is for *"a clean
+440 Hz [sine]"* from `tonehelper`. It was fed live **speech**, which has legitimately large
+sample-to-sample deltas, and duly returned `DISCONTINUOUS`. The tool was right; the harness was
+asking it a question it does not answer. Before reporting a flow broken, confirm your harness calls
+the instrument the way the instrument documents.
+
+## What this session got right, for contrast
+
+The one check that held up was a **red/green using a real state, not a synthetic one**: between
+rebuilding the 48 kHz helper and installing the matching driver, the machine was genuinely in the
+half-updated state the `FormatMismatch` guard exists for. Under deliberately loud audio it recorded
+`maxAbs=0.00000, verdict: SILENCE`; after the matching install, same harness, same audio,
+`maxAbs=0.59723`. That one reproduced, asserted a **change** rather than a match, and was confirmed
+independently by the founder's ears.
