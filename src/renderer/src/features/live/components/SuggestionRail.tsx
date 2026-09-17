@@ -5,14 +5,31 @@ import { cn } from '@renderer/lib/cn'
 import { IconButton } from '@renderer/components/IconButton'
 import type { CueKind, LiveCue } from '../useLiveCues'
 
-const META: Partial<Record<CueKind, { icon: LucideIcon; label: string; tint: string }>> = {
+const META: Partial<
+  Record<CueKind, { icon: LucideIcon; label: string; tint: string; rule: string }>
+> = {
   // Deterministic, so it lands in ~400ms — but still reference material rather
   // than a nudge, which is why it shares the rail instead of interrupting.
-  battlecard: { icon: Zap, label: 'Battlecard', tint: 'text-accent' },
-  objection: { icon: AlertTriangle, label: 'Objection', tint: 'text-warning' },
-  discovery: { icon: Search, label: 'Discovery', tint: 'text-accent' },
-  'next-question': { icon: MessageCircleQuestion, label: 'Ask', tint: 'text-accent' },
-  'buying-signal': { icon: TrendingUp, label: 'Buying signal', tint: 'text-positive' }
+  battlecard: { icon: Zap, label: 'Battlecard', tint: 'text-accent', rule: 'border-l-accent' },
+  objection: {
+    icon: AlertTriangle,
+    label: 'Objection',
+    tint: 'text-warning',
+    rule: 'border-l-warning'
+  },
+  discovery: { icon: Search, label: 'Discovery', tint: 'text-accent', rule: 'border-l-accent' },
+  'next-question': {
+    icon: MessageCircleQuestion,
+    label: 'Ask',
+    tint: 'text-accent',
+    rule: 'border-l-accent'
+  },
+  'buying-signal': {
+    icon: TrendingUp,
+    label: 'Buying signal',
+    tint: 'text-positive',
+    rule: 'border-l-positive'
+  }
 }
 
 /**
@@ -26,6 +43,12 @@ const META: Partial<Record<CueKind, { icon: LucideIcon; label: string; tint: str
  *
  * If this ever starts animating in or stealing the eye, it has quietly become
  * an interrupt again and the split is gone.
+ *
+ * INSTRUMENT PANEL: the same card material as CueCard (surface, line,
+ * --shadow-hud, --radius-card) at reduced ink and with no sheen; only the
+ * newest card carries a left rule in its kind's colour, and the older ones
+ * recede by opacity as before. The collapsed Quiet-mode pill is a bordered
+ * chip with the count — its text is exactly the count, nothing else.
  */
 export function SuggestionRail({
   suggestions,
@@ -53,7 +76,7 @@ export function SuggestionRail({
         type="button"
         onClick={() => setPeek(true)}
         aria-label={`Show ${suggestions.length} coaching suggestion${suggestions.length === 1 ? '' : 's'}`}
-        className="glass-hud pointer-events-auto rounded-full px-3 py-1 text-[11px] font-medium text-muted hover:text-ink"
+        className="pointer-events-auto rounded-full border border-line bg-surface px-3 py-1 font-mono text-2xs font-medium text-muted tabular-nums shadow-[var(--shadow-hud)] hover:border-line-strong hover:text-ink"
       >
         {suggestions.length} suggestion{suggestions.length === 1 ? '' : 's'}
       </button>
@@ -83,18 +106,17 @@ export function SuggestionRail({
           <div
             key={s.id}
             className={cn(
-              'glass-hud pointer-events-auto relative w-full rounded-2xl p-2.5 transition-opacity',
-              isNewest ? 'opacity-100' : 'opacity-55 hover:opacity-90'
+              'pointer-events-auto relative w-full rounded-[var(--radius-card)] border border-line bg-surface p-2.5 shadow-[var(--shadow-hud)] transition-opacity',
+              isNewest ? cn('border-l-[3px] opacity-100', meta.rule) : 'opacity-55 hover:opacity-90'
             )}
           >
-            <span className="glass-sheen rounded-2xl" />
             <div className="flex items-start gap-2">
               <Icon className={cn('mt-0.5 h-3.5 w-3.5 shrink-0', meta.tint)} />
               <div className="min-w-0 flex-1">
-                <p className="text-[10px] font-semibold tracking-wide text-faint uppercase">
+                <p className="text-2xs font-semibold tracking-wide text-faint uppercase">
                   {meta.label}
                 </p>
-                <p className="text-[13px] leading-snug text-ink">{s.text}</p>
+                <p className="text-dense leading-snug text-muted">{s.text}</p>
               </div>
               <IconButton
                 icon={X}

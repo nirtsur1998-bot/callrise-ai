@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import {
   MessageCircleQuestion,
   Gauge,
@@ -15,11 +15,13 @@ import { AUTO_DISMISS_MS, type CueKind, type LiveCue } from '../useLiveCues'
 interface CueStyle {
   icon: LucideIcon
   label: string
-  ring: string
+  /** The 3px left rule, in the kind's colour — the one place the card says
+   *  what kind of cue it is without a coloured surface. */
+  rule: string
   iconBg: string
   iconText: string
-  /** Solid bar color for the countdown bar (matches iconBg's hue). */
-  bar: string
+  /** The countdown ring's colour, as a CSS value (matches the rule's hue). */
+  ringColor: string
 }
 
 // Partial on purpose: this component renders the INTERRUPT channel, and most
@@ -29,52 +31,52 @@ interface CueStyle {
 const NEUTRAL: CueStyle = {
   icon: Gauge,
   label: 'Cue',
-  ring: 'ring-line',
+  rule: 'border-l-line-strong',
   iconBg: 'bg-elevated',
   iconText: 'text-muted',
-  bar: 'bg-muted'
+  ringColor: 'var(--color-muted)'
 }
 
 const META: Partial<Record<CueKind, CueStyle>> = {
   objection: {
     icon: AlertTriangle,
     label: 'Objection',
-    ring: 'ring-warning/45',
+    rule: 'border-l-warning',
     iconBg: 'bg-warning-soft',
     iconText: 'text-warning',
-    bar: 'bg-warning'
+    ringColor: 'var(--color-warning)'
   },
   discovery: {
     icon: Search,
     label: 'Discovery',
-    ring: 'ring-accent/45',
+    rule: 'border-l-accent',
     iconBg: 'bg-accent-soft',
     iconText: 'text-accent',
-    bar: 'bg-accent'
+    ringColor: 'var(--color-accent)'
   },
   'next-question': {
     icon: MessageCircleQuestion,
     label: 'Ask',
-    ring: 'ring-accent/45',
+    rule: 'border-l-accent',
     iconBg: 'bg-accent-soft',
     iconText: 'text-accent',
-    bar: 'bg-accent'
+    ringColor: 'var(--color-accent)'
   },
   'buying-signal': {
     icon: TrendingUp,
     label: 'Buying signal',
-    ring: 'ring-positive/45',
+    rule: 'border-l-positive',
     iconBg: 'bg-positive-soft',
     iconText: 'text-positive',
-    bar: 'bg-positive'
+    ringColor: 'var(--color-positive)'
   },
   pace: {
     icon: Gauge,
     label: 'Pace',
-    ring: 'ring-line',
+    rule: 'border-l-line-strong',
     iconBg: 'bg-elevated',
     iconText: 'text-muted',
-    bar: 'bg-muted'
+    ringColor: 'var(--color-muted)'
   }
 }
 
@@ -86,9 +88,12 @@ const META: Partial<Record<CueKind, CueStyle>> = {
  * which is a guarantee two independently-positioned absolute elements can only
  * ever approximate.
  *
- * Visually this is the loud sibling of the same glass material the rail uses —
- * same system, more weight — so "this one matters" reads instantly without the
- * live screen looking like two different apps.
+ * INSTRUMENT PANEL: an opaque card on the live screen's shared material
+ * (surface, 1px line, --shadow-hud, --radius-card) rather than glass floating
+ * over scrolling transcript text; a 3px left rule carries the kind's colour
+ * instead of a tinted ring. The lifetime is a ring around the Dismiss button —
+ * the countdown sits on the control it counts down to — and it is a static
+ * ring, not an empty one, when the OS asks for reduced motion (index.css).
  */
 export function CueCard({
   cue,
@@ -105,32 +110,39 @@ export function CueCard({
 
   const meta = META[cue.kind] ?? NEUTRAL
   const Icon = meta.icon
+  const ringStyle = {
+    animationDuration: `${AUTO_DISMISS_MS}ms`,
+    '--cue-ring-color': meta.ringColor
+  } as CSSProperties
 
   return (
     <div
       role="status"
       className={cn(
-        'glass-hud pointer-events-auto relative w-full overflow-hidden rounded-2xl p-3 ring-1 ring-inset transition-all duration-300',
-        meta.ring,
+        'pointer-events-auto relative w-full rounded-[var(--radius-card)] border border-line border-l-[3px] bg-surface p-3 shadow-[var(--shadow-hud)] transition-all duration-300',
+        meta.rule,
         shown ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
       )}
     >
       <div className="flex items-start gap-2.5">
-        <div className={cn('grid h-7 w-7 shrink-0 place-items-center rounded-lg', meta.iconBg)}>
-          <Icon className={cn('h-4 w-4', meta.iconText)} />
+        <div className={cn('grid h-6 w-6 shrink-0 place-items-center rounded-md', meta.iconBg)}>
+          <Icon className={cn('h-3.5 w-3.5', meta.iconText)} />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-faint">
-            {meta.label}
-          </p>
+          <p className="text-2xs font-semibold tracking-wide text-faint uppercase">{meta.label}</p>
           <p className="text-sm font-medium text-ink">{cue.text}</p>
         </div>
-        <IconButton icon={X} onClick={onDismiss} label="Dismiss" />
+        {/* One Dismiss button, with the cue's remaining life drawn around it.
+            The ring is a decorative span behind the button, never a control. */}
+        <span className="relative grid h-8 w-8 shrink-0 place-items-center">
+          <span
+            aria-hidden="true"
+            className="cue-ring pointer-events-none absolute inset-0 rounded-full"
+            style={ringStyle}
+          />
+          <IconButton icon={X} onClick={onDismiss} label="Dismiss" className="rounded-full" />
+        </span>
       </div>
-      <div
-        className={cn('cue-countdown absolute inset-x-0 bottom-0 h-0.5 origin-left', meta.bar)}
-        style={{ animationDuration: `${AUTO_DISMISS_MS}ms` }}
-      />
     </div>
   )
 }

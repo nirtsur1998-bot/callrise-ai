@@ -770,6 +770,20 @@
       opacity: 0;
     }
   }
+  /* Fade only — no rise. For a state change inside a slot that is already
+     reserved (the identity chip's accepted line), where any movement would
+     be movement for its own sake. */
+  .fade-in {
+    animation: fade-in var(--motion-cue-in) both;
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
 
   /* The interrupt cue's lifetime, drawn as a ring around its Dismiss button
      instead of a 2px bar along the card's bottom edge: the countdown now

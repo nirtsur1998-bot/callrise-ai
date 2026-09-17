@@ -1,4 +1,5 @@
 import { AlertTriangle, Check, Link2, Sparkles, UserPlus, Users, X } from 'lucide-react'
+import { cn } from '@renderer/lib/cn'
 import { Button } from '@renderer/components/Button'
 import { IconButton } from '@renderer/components/IconButton'
 import type { LiveIdentityOffer } from './liveIdentityOffer'
@@ -43,6 +44,12 @@ interface LiveIdentityOfferChipProps {
  * accepted state below is: "Linked to Kerry when this call saves." A control
  * that silently does nothing until later is indistinguishable from one that
  * failed.
+ *
+ * INSTRUMENT PANEL: the chip reserves its slot for as long as an offer
+ * exists, so accepting it — which shrinks the card to a single 32px line —
+ * does not move the transcript underneath. Same card material as the cue
+ * card, with the 3px left rule carrying the tone. The accepted line fades in
+ * and nothing rises or slides; the strings and buttons are untouched.
  */
 export function LiveIdentityOfferChip({
   offer,
@@ -57,91 +64,109 @@ export function LiveIdentityOfferChip({
   const spokenName = offer.spokenName
 
   const tone = isDisagreement
-    ? { ring: 'border-warning/30 bg-warning-soft/30', icon: 'text-warning' }
-    : { ring: 'border-accent/30 bg-accent-soft/40', icon: 'text-accent' }
+    ? { rule: 'border-l-warning', icon: 'text-warning' }
+    : { rule: 'border-l-accent', icon: 'text-accent' }
+
+  // The slot: the height of the full offer (statement, hint, button row), held
+  // in both states so the accepted line does not collapse the space beneath.
+  const slot = 'min-h-[90px]'
 
   if (acceptedName) {
     return (
-      <div className={`rounded-xl border ${tone.ring} px-3 py-2.5`}>
-        {/* The sentence is ONE flex child, not three. With the text bare, the
-            row's `gap-2` applied between every run — so an 8px gap opened on
-            both sides of the bold name and the line read "Linked to  Harvey
-            when this call saves." Invisible in the source, obvious in a
-            screenshot, which is the only reason it was found. */}
-        <p className="flex items-center gap-2 text-[12px] font-medium text-ink">
-          <Check className="h-3.5 w-3.5 shrink-0 text-positive" />
-          <span>
-            Linked to <span className="font-semibold">{acceptedName}</span> when this call saves.
-          </span>
-        </p>
+      <div className={cn('flex items-start', slot)}>
+        <div
+          className={cn(
+            'fade-in flex h-8 items-center rounded-[var(--radius-card)] border border-line border-l-[3px] bg-surface px-3 shadow-[var(--shadow-hud)]',
+            tone.rule
+          )}
+        >
+          {/* The sentence is ONE flex child, not three. With the text bare, the
+              row's `gap-2` applied between every run — so an 8px gap opened on
+              both sides of the bold name and the line read "Linked to  Harvey
+              when this call saves." Invisible in the source, obvious in a
+              screenshot, which is the only reason it was found. */}
+          <p className="flex items-center gap-2 text-dense font-medium text-ink">
+            <Check className="h-3.5 w-3.5 shrink-0 text-positive" />
+            <span>
+              Linked to <span className="font-semibold">{acceptedName}</span> when this call saves.
+            </span>
+          </p>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className={`rounded-xl border ${tone.ring} px-3 py-2.5`}>
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 items-start gap-2">
-          {isDisagreement ? (
-            <AlertTriangle className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${tone.icon}`} />
-          ) : (
-            <Sparkles className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${tone.icon}`} />
-          )}
-          <div className="min-w-0">
-            <p className="text-[12px] font-medium leading-snug text-ink">
-              Detected <span className="font-semibold">{spokenName}</span> on this call —{' '}
-              {isDisagreement ? (
-                <>
-                  but it&rsquo;s linked to{' '}
-                  <span className="font-semibold">{offer.disagreement.linkedContact.name}</span>.
-                </>
-              ) : (
-                <>no contact linked yet.</>
-              )}
-            </p>
-            <p className="mt-0.5 text-[11px] leading-snug text-muted">
-              {suggestion.kind === 'link'
-                ? `Matches your existing contact ${suggestion.contact.name}.`
-                : suggestion.kind === 'create'
-                  ? 'Confirm before creating a contact.'
-                  : `${suggestion.candidates.length} of your contacts are called that — pick the right one after the call.`}
-            </p>
+    <div className={cn('flex items-start', slot)}>
+      <div
+        className={cn(
+          'w-full rounded-[var(--radius-card)] border border-line border-l-[3px] bg-surface px-3 py-2.5 shadow-[var(--shadow-hud)]',
+          tone.rule
+        )}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 items-start gap-2">
+            {isDisagreement ? (
+              <AlertTriangle className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${tone.icon}`} />
+            ) : (
+              <Sparkles className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${tone.icon}`} />
+            )}
+            <div className="min-w-0">
+              <p className="text-dense leading-snug font-medium text-ink">
+                Detected <span className="font-semibold">{spokenName}</span> on this call —{' '}
+                {isDisagreement ? (
+                  <>
+                    but it&rsquo;s linked to{' '}
+                    <span className="font-semibold">{offer.disagreement.linkedContact.name}</span>.
+                  </>
+                ) : (
+                  <>no contact linked yet.</>
+                )}
+              </p>
+              <p className="mt-0.5 text-2xs leading-snug text-muted">
+                {suggestion.kind === 'link'
+                  ? `Matches your existing contact ${suggestion.contact.name}.`
+                  : suggestion.kind === 'create'
+                    ? 'Confirm before creating a contact.'
+                    : `${suggestion.candidates.length} of your contacts are called that — pick the right one after the call.`}
+              </p>
+            </div>
           </div>
+          <IconButton icon={X} label="Not now" onClick={onDismiss} />
         </div>
-        <IconButton icon={X} label="Not now" onClick={onDismiss} />
-      </div>
-      <div className="mt-2 flex justify-end">
-        {suggestion.kind === 'link' && (
-          <Button
-            size="sm"
-            icon={Link2}
-            disabled={busy}
-            onClick={() => onLink(suggestion.contact.id, suggestion.contact.name)}
-          >
-            Link to {suggestion.contact.name}
-          </Button>
-        )}
-        {suggestion.kind === 'create' && (
-          <Button
-            size="sm"
-            variant="secondary"
-            icon={UserPlus}
-            disabled={busy}
-            onClick={() => onCreate(spokenName)}
-          >
-            Create contact for {spokenName}
-          </Button>
-        )}
-        {suggestion.kind === 'ambiguous' && (
-          // No default button, exactly as on the Call Detail page. Picking one
-          // of several identically-named contacts is the rep's call; offering
-          // one would be right about a third of the time and silently wrong
-          // the rest — and mid-call they cannot check.
-          <span className="flex items-center gap-1.5 text-[11px] text-muted">
-            <Users className="h-3 w-3" />
-            Choose after the call
-          </span>
-        )}
+        <div className="mt-2 flex justify-end">
+          {suggestion.kind === 'link' && (
+            <Button
+              size="sm"
+              icon={Link2}
+              disabled={busy}
+              onClick={() => onLink(suggestion.contact.id, suggestion.contact.name)}
+            >
+              Link to {suggestion.contact.name}
+            </Button>
+          )}
+          {suggestion.kind === 'create' && (
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={UserPlus}
+              disabled={busy}
+              onClick={() => onCreate(spokenName)}
+            >
+              Create contact for {spokenName}
+            </Button>
+          )}
+          {suggestion.kind === 'ambiguous' && (
+            // No default button, exactly as on the Call Detail page. Picking one
+            // of several identically-named contacts is the rep's call; offering
+            // one would be right about a third of the time and silently wrong
+            // the rest — and mid-call they cannot check.
+            <span className="flex items-center gap-1.5 text-2xs text-muted">
+              <Users className="h-3 w-3" />
+              Choose after the call
+            </span>
+          )}
+        </div>
       </div>
     </div>
   )
