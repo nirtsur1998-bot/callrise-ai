@@ -48,16 +48,30 @@ jobs:
       #
       # WHAT FILLS IT: not `npm ci` (a prebuilt hit never touches node-gyp) but
       # the native addon build below, which runs node-gyp on EVERY run and so
-      # downloads the headers into this directory the first time. `actions/cache`
-      # saves only if the path exists at post-job, so if that step is ever
+      # downloads headers into this directory the first time — the ELECTRON
+      # headers (electronjs.org/headers/v<electron>/…), because the addon is
+      # built against Electron's ABI; the Node headers (nodejs.org) only land
+      # here when `npm ci` falls back to compiling a dependency. Both live in
+      # the same directory, one subfolder per version. `actions/cache` saves
+      # only if the path exists at post-job, so if the addon step is ever
       # removed this cache goes silent — the log line to look for is
       # "Cache saved with key node-gyp-…" on a first run and "Cache restored
-      # from key …" plus NO `gyp http GET …headers.tar.gz` on the next.
+      # from key …" plus NO `gyp http GET …headers.tar.gz` on the next
+      # (measured 2026-09-17: run 35243375818, attempt 1 saved, attempt 2
+      # restored with zero node-gyp downloads).
+      #
+      # THE KEY carries the lockfile hash because a saved cache is immutable
+      # per key: keyed on the Node version alone, an Electron bump would keep
+      # restoring the old headers and never save the new ones. `restore-keys`
+      # falls back to the newest cache for the same Node version so a lockfile
+      # change still starts from the previous headers and saves a superset.
       - name: Cache node-gyp headers
         uses: actions/cache@v4
         with:
           path: ~\AppData\Local\node-gyp\Cache
-          key: node-gyp-${{ runner.os }}-${{ steps.node.outputs.node-version }}
+          key: node-gyp-${{ runner.os }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            node-gyp-${{ runner.os }}-${{ steps.node.outputs.node-version }}-
 
       - name: Install dependencies
         run: npm ci
