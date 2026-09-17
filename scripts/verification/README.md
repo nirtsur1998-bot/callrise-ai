@@ -1,5 +1,19 @@
 # Verification tooling — read this before driving the app
 
+> ## Reading the rules is not running them.
+>
+> Added 2026-09-17 (M40), after a session produced **six** wrong readings in one sitting —
+> **two of them failure modes described in this very file, which that session had read an hour
+> earlier**: `echo $?` after a pipe (reporting `tail`'s exit code, not the command's), and a
+> self-inflicted `| tail -45` that discarded the failure text it then went hunting for.
+>
+> Knowing a rule does not fire it. So where a rule can be made **mechanical**, make it mechanical
+> and delete the remembering: those two are now `run.mjs` (below), which has no pipe, states how
+> many lines it is hiding, and exits with the child's own code.
+>
+> When you catch yourself about to add a paragraph here, ask first whether it could be a script
+> instead. A paragraph is what you fall back on when the shape cannot be designed out.
+
 > **When an investigation needs four corrected instruments, the instruments ARE the
 > investigation.** BUG-141 (2026-09-09) needed four: a record buffer that lost records, a CPU
 > counter that under-reports 25x here, a Defender counter whose "0.0 s" was access denial, and a
@@ -31,6 +45,7 @@
 | `five-checks.mjs` | The five release-feed checks: manifest, hash, staged percentage, installer name, download. | network | `node scripts/verification/five-checks.mjs vX.Y.Z 100` | any check failing prints which and exits non-zero; a missing asset is not a pass. |
 | `artifact-version.mjs` | **CHECK 6, added 2026-09-08; second half added 2026-09-09.** Two questions about the built artifact, never about the plan. (a) Does it report the version being released, read from the exe's own ProductVersion? (b) Does it POST-DATE the last commit that touched shipped source? | a built dist/ | `node scripts/verification/artifact-version.mjs 1.11.0` | exits 1 and says DO NOT TAG. (a) was earned by an installer built from merged main that installed cleanly, ran correctly, and reported 1.10.0 because package.json was never bumped — a release that would have reached nobody with every other check green. (b) was earned the next night by the opposite shape: a rebuild exited 1 partway through, the wrapper reported "BUILD DONE, version 1.11.0" after reading it out of the `latest.yml` the failed build never rewrote, and (a) then passed over an artifact 67 minutes OLDER than the fix it was supposed to carry. Version-correct is not the same as current. Compared against shipped source rather than HEAD on purpose — against HEAD it fails on every test-only commit and demands a rebuild that cannot change a byte, and a check that cries wolf on correct states is one people learn to wave through. **CAVEAT on (b), and it matters: it compares file MTIME.** That is the build time for a LOCAL artifact and the DOWNLOAD time for a fetched one — so against anything you just downloaded it always passes, over any binary at all, and is not evidence of anything. Only (a) means something there. The script prints this in its own output when `--exe` names a file written in the last hour. To ask whether a SHIPPED artifact is current, read the release run's `headSha` instead: `gh run view <id> --json headSha`. |
 | `sweep-record.mjs` | **THE RAMP NUMBER.** Reads the BUG-215 quote sweep's record out of a profile and gives a verdict on `rescuedByFileCheck` — the M37 ramp criterion. | any userData profile | `node scripts/verification/sweep-record.mjs [profile]` | five outcomes, distinct exit codes, red-checked against synthetic profiles for each: **MEANINGFUL ZERO** (0 over a non-empty population — exit 0, ramp supported), **TRIVIALLY ZERO** (`callsSwept` 0, so the guard was never exercised — exit 2, NOT evidence), **STOP THE RAMP** (non-zero — exit 1), **SKIPPED**, **HAS NOT RUN**. It refuses to print a bare number, because a zero over an empty population is the absence of evidence wearing a green tick. Also detects a record with NO `rescuedByFileCheck` field — written by a build predating BUG-236 — and says *absent is not zero*. |
+| `run.mjs` | **Did that command actually succeed, and am I seeing all of its output?** Makes species 69's two commonest shapes impossible rather than discouraged: there is no pipe, so nothing is truncated; the exit code printed is the CHILD's, on its own labelled line, and this process re-exits with it, so `$?` afterwards is still the child's. | nothing | `node scripts/verification/run.mjs [--tail N] [--grep S] [--log P] -- <cmd> [args…]` | refuses (exit 2) when the command cannot start, or when the full-output log cannot be written — rather than running blind and leaving you with a tail again. Any elision is stated as `last N of M lines (K HIDDEN)`. `--grep` prints the matching LINES, never a bare count, and says explicitly that zero matches is a claim about the pattern. Red-checked against a 200-line command exiting 7: the piped shape reports `$? = 0`, this reports `EXIT CODE OF "node": 7`. |
 | one-offs: `bug141-fsync-probe.mjs`, `bug176-corpus-check.mjs`, `bugd-partition.mjs`, `drive-call-deal-picker.mjs`, `bug237-erase-drive.mjs` | evidence for a single bug, kept because the tracker cites them | varies | see each file's header | — |
 
 **Which ones CI runs:** only `verify-green.mjs` (and the instruments' own self-tests). Everything
