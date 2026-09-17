@@ -37,6 +37,11 @@ import { coachCall } from './coach'
 import { extractCommitments } from './commitments'
 import { generateCallTitle, type GenerateTitleResult } from './call-title'
 import { mineObjections, makeVerifier, type ObjectionMiningResult } from './objection-mining'
+import {
+  autoMineJobResult,
+  failedMineOutcome,
+  type MineCallOutcome
+} from './objection-mine-outcome'
 import { addToQueue, purgeQueueForCall } from './objection-queue-fs'
 import { purgeJournalForCall } from './live/call-journal'
 import { purgeCompanionFiles } from './companion-files'
@@ -159,22 +164,9 @@ function enqueueCascadeJob(type: string, callId: string): void {
   }
 }
 
-/** What happened to one call's mining attempt. `skipped` is deliberately
- *  DISTINCT from `ok: false` — see mineCallIntoQueue's own doc comment. */
-export interface MineCallOutcome {
-  ok: boolean
-  added: number
-  /** True when nothing was attempted because this exact call was already
-   *  being mined by the other trigger right now. Not a failure — the other
-   *  attempt is still running and will mark the call mined itself. */
-  skipped?: boolean
-  /** True when there was simply nothing to mine (no transcript). Also not a
-   *  failure: separated out because the auto-mine JOB surfaces its outcome
-   *  in the Activity Center, where reporting a transcript-less call as
-   *  "Looking for objections — failed" would be a false alarm about a call
-   *  that was never minable in the first place. */
-  nothingToMine?: boolean
-}
+// BUG-274 — the outcome type and the job's verdict live in
+// objection-mine-outcome.ts (testable without this module's IPC surface).
+export type { MineCallOutcome } from './objection-mine-outcome'
 
 /** Mine one call and stage any grounded candidates in the review queue, then
  *  mark the call as mined — shared by the new-call auto-mine hook and the
@@ -205,7 +197,15 @@ async function mineCallIntoQueue(
     // call after the caller built its eligible list.
     if (call.objectionsMinedAt) return { ok: true, added: 0 }
     const result = await mineObjections(speechSegments(call.segments), { signal: opts?.signal })
-    if (!result.ok) return { ok: false, added: 0 }
+    // BUG-274 — the miner's own classification travels with the failure. This
+    // used to be a bare `{ ok: false, added: 0 }`, which is where a rate
+    // limit, a missing key and a parser failure all became the same thing.
+    if (!result.ok) {
+      console.warn(
+        `[objections] mining failed for call ${callId}: ${result.error}${result.message ? ` — ${result.message}` : ''}`
+      )
+      return failedMineOutcome(result)
+    }
     const items = await addToQueue(objectionQueueDir(), result.candidates, callId, call.title)
     await setCallObjectionsMined(callsDir(), callId)
     return { ok: true, added: items.length }
@@ -366,13 +366,10 @@ export function registerCalls(): void {
         // queue long enough for the rep to turn it off in between.
         if (!isObjectionMiningEnabled()) return 'skipped — objection mining is off'
         const res = await mineCallIntoQueue(input.callId, { signal: handle.signal })
-        if (res.skipped) return 'already being mined by the past-calls scan'
-        if (res.nothingToMine) return 'no transcript to mine'
-        // Only a genuine AI/mining failure reaches here — a transcript-less
-        // call is reported above as the non-event it is, rather than as a
-        // red "failed" row in the Activity Center.
-        if (!res.ok) throw new Error('Could not mine this call for objections.')
-        return `found ${res.added} suggestion${res.added === 1 ? '' : 's'}`
+        // Skips and transcript-less calls are reported as the non-events they
+        // are; only a genuine AI/mining failure throws — and (BUG-274) it
+        // throws with the miner's CAUSE, not one sentence for every cause.
+        return autoMineJobResult(res)
       }
     }
   })
