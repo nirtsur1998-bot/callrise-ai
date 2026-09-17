@@ -1,16 +1,36 @@
 // The five release-feed checks, from docs/release-feed-verification.md.
-// usage: node five-checks.mjs v1.5.2 100
+// usage: node five-checks.mjs v1.5.2 100 [--mac]
+//
+// MACOS, added 2026-09-17 (M40). These five read the feed electron-updater
+// actually follows. On macOS that feed is a DIFFERENT file — `latest-mac.yml`,
+// not `latest.yml` — so without `--mac` a Mac release would be checked against
+// Windows' manifest, which either 404s or, worse, passes against the wrong
+// platform's artifact.
+//
+// `--mac` changes three things and nothing else: which manifest is fetched,
+// which assets check 3 expects, and (because the Mac feed's `path:` is the ZIP,
+// not the DMG — see electron-builder.yml's mac.target comment) what check 4
+// downloads and hashes. Default is unchanged, so the existing Windows
+// invocation needs no edit.
 import { execSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createWriteStream, statSync, unlinkSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
 const TAG = process.argv[2] || 'v1.5.2'
 const EXPECT_PERCENT = Number(process.argv[3] ?? 100)
+const MAC = process.argv.includes('--mac')
 const REPO = 'nirtsur1998-bot/callrise-ai'
-let INSTALLER = 'CallRise-AI-Windows.exe' // replaced from the manifest in check 4
-const TMP = 'C:/Users/User/AppData/Local/Temp/claude/C--Users-User-Desktop-CALLRISE-AI/b67a90c5-bdae-4aa9-8edd-0a0897da3f23/scratchpad/_feedcheck-installer.exe'
+const MANIFEST = MAC ? 'latest-mac.yml' : 'latest.yml'
+// A guess, replaced from the manifest's own `path:` below — which is the point
+// of fetching the manifest first (see the note above check 2).
+let INSTALLER = MAC ? 'CallRise-AI-mac.zip' : 'CallRise-AI-Windows.exe'
+// Was a hardcoded absolute path under C:/Users/User/... — i.e. this script could
+// only ever run on one machine. The OS temp dir works on both.
+const TMP = join(tmpdir(), `callrise-feedcheck-artifact${MAC ? '.zip' : '.exe'}`)
 
 const sh = (c) => execSync(c, { encoding: 'utf8', maxBuffer: 1e8 }).trim()
 const results = []
@@ -48,22 +68,34 @@ const record = (n, name, pass, detail) => {
 // 0.0 MB" and a mismatching sha512 that looked exactly like a real feed problem.
 // The manifest's path is what electron-updater actually follows, so verifying
 // THAT is both more robust and more correct than any guess.
-let manifest = await (await fetch(`https://github.com/${REPO}/releases/latest/download/latest.yml`)).text()
+let manifest = await (
+  await fetch(`https://github.com/${REPO}/releases/latest/download/${MANIFEST}`)
+).text()
 const fromManifest = manifest.match(/^path:\s*(.+)$/m)?.[1]?.trim()
 if (fromManifest) {
-  console.log(`[setup] installer name taken from latest.yml's own path: ${fromManifest}`)
+  console.log(`[setup] artifact name taken from ${MANIFEST}'s own path: ${fromManifest}`)
   INSTALLER = fromManifest
 } else {
-  console.log('[setup] *** latest.yml has no path: field — falling back to a guess ***')
+  console.log(`[setup] *** ${MANIFEST} has no path: field — falling back to a guess ***`)
 }
 
 // ── 3 ─────────────────────────────────────────────────────────────────────
 let assets = []
 {
   assets = JSON.parse(sh(`gh release view ${TAG} --repo ${REPO} --json assets`)).assets.map((a) => a.name)
-  const want = [INSTALLER, 'CallRise-AI-Windows-Portable.exe', `${INSTALLER}.blockmap`, 'latest.yml']
+  // On macOS the expected set is DERIVED from the manifest's own `files:` rather
+  // than hardcoded, for the same reason check 2 takes the installer name from
+  // `path:`: a hardcoded guess is how check 4 once hashed a 404 page. Windows
+  // keeps its explicit list, which also pins the portable exe — an artifact the
+  // manifest deliberately does not mention.
+  const want = MAC
+    ? [...new Set([...manifest.matchAll(/^\s*-?\s*url:\s*(.+)$/gm)].map((m) => m[1].trim())), MANIFEST]
+    : [INSTALLER, 'CallRise-AI-Windows-Portable.exe', `${INSTALLER}.blockmap`, MANIFEST]
   const missing = want.filter((w) => !assets.includes(w))
-  record(3, 'all four assets attached', missing.length === 0,
+  // Counted, not spelled "four": the Mac set is three, and a check whose own
+  // name disagrees with what it checked is the first thing a reader stops
+  // trusting.
+  record(3, `all ${want.length} expected assets attached`, missing.length === 0,
     `attached: ${assets.join(', ')}` + (missing.length ? `\nMISSING: ${missing.join(', ')}` : ''))
 }
 
@@ -88,7 +120,7 @@ let _unusedManifestDecl
   })
   const actual = hash.digest('base64')
 
-  record(4, 'latest.yml from the PUBLIC url matches the ACTUAL installer bytes',
+  record(4, `${MANIFEST} from the PUBLIC url matches the ACTUAL artifact bytes`,
     version === TAG.replace(/^v/, '') && sha512 === actual,
     `version in manifest : ${version}   (tag ${TAG})\n` +
       `sha512 in manifest  : ${sha512}\n` +
