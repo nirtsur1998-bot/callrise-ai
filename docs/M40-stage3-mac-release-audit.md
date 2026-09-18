@@ -272,7 +272,45 @@ until the route is chosen, because its shape depends on it:
 
 All three need the PAT (or making the sibling repo public). **Founder decision.**
 
+### Which route makes the denoiser REPRODUCIBLE, not just reachable
+
+The founder's framing, and it is the right one: a binary nobody can rebuild in CI is a bus-factor
+problem before it is a packaging one. Split by component, because they differ:
+
+- **The driver is already reproducible from source.** libASPL is vendored and tracked, `Driver.cpp`
+  is ~170 lines, and `build.sh` needs only the Command Line Tools' `clang++`. A runner can build the
+  `.driver` today with no Rust at all.
+- **`michelper` is not.** It statically links `libdf.a`, which comes from a ~1 GB vendored
+  DeepFilterNet tree (`phase2/vendor/`, gitignored) at a pinned commit, via `cargo build --release
+  -p deep_filter --features "capi,tract"`. That build has only ever happened on one Mac.
+
+So: **route 1 is the only one that makes `michelper` reproducible.** Routes 2 and 3 make it
+*reachable* (a runner can obtain it) while it stays born on one machine; if that machine is lost,
+so is the ability to change the denoiser. Route 1's costs, honestly: the DeepFilterNet clone at the
+pinned commit plus a **cold Rust build whose duration on a `macos-latest` runner is unmeasured**
+(this Mac only ever did incremental builds; a cold `cargo clean && cargo build` here would give a
+lower bound — say the word), cached thereafter with `actions/cache` on `target/`. Rust is
+preinstalled on GitHub's macOS runners *(to confirm on first run, not assumed)*. And the PAT, for
+the private sibling checkout, on every route.
+
+Recommended: **route 1, driver and helper both built from source in CI, `target/` cached.** Route 2
+is an acceptable *interim* if the first Mac release must not wait on a Rust pipeline — but it should
+carry an explicit expiry, or it becomes the permanent state the way the hardcoded `TMP` path did.
+
 ### Also for the first signed release: `safeStorage` and the signature change
+
+**PLAN, per the founder 2026-09-18 — the FIRST thing after signing works, before anything ships:**
+sign a build with the Developer ID certificate, install it *over* the current ad-hoc build on this
+Mac (which holds a real session and sealed keys under the old signature), and read back whether the
+session and the keys survive. Two outcomes, both need deciding in advance:
+
+- **They survive** → nothing to do; record the measurement.
+- **They do not** → every existing user re-authenticates and re-enters keys on first update. That is
+  a release-note item *at minimum*, and possibly a migration (e.g. re-sealing under the new signature
+  while the old one can still read). Decide which before tagging, not after the first support ticket.
+
+Until that test runs, the risk is reasoned, not measured, and the release gate should treat it as
+open.
 
 `safeStorage` on macOS binds its Keychain item to the app's code signature. Measured here: the dev
 Electron binary **cannot decrypt** the session file the packaged app wrote (`DECRYPT FAILED`, both
