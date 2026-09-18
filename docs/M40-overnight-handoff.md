@@ -197,8 +197,11 @@ every step up to packaging**: libdf.a from source **179 s** cold on `macos-15` (
 22 s, npm ci 23 s, addon 3 s, full suite 304 s. Failed at electron-builder's certificate import —
 `MAC verification failed during PKCS12 import (wrong password?)` — i.e. the `MAC_CERT_PASSWORD`
 secret did not match the `.p12`. Human-entered; fix is re-saving the secret and re-running the
-failed job. **Not yet reached:** `mac.binaries` signing of the nested denoiser, notarization,
-stapling, check 6, the upload, go-live and checks 1–5.
+failed job. Re-run with a fresh `.p12`: certificate imported, identity found, signing started — and
+**`mac.binaries` failed**: app-builder-lib resolves relative entries against the `.app` root
+(`path.resolve(appPath, d)`), not `Contents/` as its own comment claims; the paths now carry the
+`Contents/` prefix (`30347da`). Run 3 (`35349005291`) is the first to get past that line.
+**Not yet reached as of run 2:** notarization, stapling, check 6, the upload, go-live, checks 1–5.
 
 **Secrets and certificates, done this morning:** fine-grained PAT (`callrise-ai-release-ci-virtualmic`,
 `salesos-virtualmic` only, Contents + Metadata read-only, expires 2027-09-18); Developer ID
