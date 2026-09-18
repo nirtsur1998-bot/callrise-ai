@@ -201,7 +201,20 @@ failed job. Re-run with a fresh `.p12`: certificate imported, identity found, si
 **`mac.binaries` failed**: app-builder-lib resolves relative entries against the `.app` root
 (`path.resolve(appPath, d)`), not `Contents/` as its own comment claims; the paths now carry the
 `Contents/` prefix (`30347da`). Run 3 (`35349005291`) is the first to get past that line.
-**Not yet reached as of run 2:** notarization, stapling, check 6, the upload, go-live, checks 1–5.
+Run 3 got past signing — the `.app` **and both nested denoiser binaries signed with the Developer
+ID** — and failed notarization with HTTP 401: the app-specific password secret carried a trailing
+newline from a triple-click copy (clipboard was 20 chars; the password is 19). A fresh app-specific
+password was generated, **verified against Apple from this Mac first** (`xcrun notarytool history`
+→ authenticated), stored trimmed, and the job re-run. That re-run's submission
+(`58e2e693-ff5b-4011-adb5-e88acde4ad18`, "CallRise AI.zip") was **In Progress at Apple** for 20+
+minutes at time of writing — first submissions from a new team can take an hour.
+**Not yet reached as of run 3's re-run:** the notarization verdict, stapling, check 6, the upload,
+go-live, checks 1–5.
+
+**Lesson worth keeping:** every credential that a human pasted failed once (PAT name too long;
+`.p12` password mismatch; app-specific password with a newline). Every value that was verified
+by a command *before* being stored worked first time. The runbook should say: test the credential
+locally, then store it.
 
 **Secrets and certificates, done this morning:** fine-grained PAT (`callrise-ai-release-ci-virtualmic`,
 `salesos-virtualmic` only, Contents + Metadata read-only, expires 2027-09-18); Developer ID
