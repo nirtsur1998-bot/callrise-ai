@@ -151,8 +151,7 @@ const ACCOUNTED_FOR: {
     checkedOn: '2026-09-18',
     entries: [],
     because:
-      'M40 (Mac parity), 2026-09-18. NOT yet founder-approved - added by the session that wrote ' +
-      'the sentence, and it should be read once by a human. Same species as the BUG-250 and ' +
+      'M40 (Mac parity), founder-approved 2026-09-18. Same species as the BUG-250 and ' +
       'BUG-201 entries below: a claim about what THIS MACHINE CAN RUN, not about where data ' +
       'lives. The driver and helper are arm64-only, so on an Intel Mac the card says the ' +
       'feature is unavailable on this hardware instead of offering an install that succeeds ' +
