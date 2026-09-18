@@ -48,7 +48,9 @@ import type { SettingsPageId } from '@renderer/features/settings/settings-nav'
 // yet paid to parse the entire CRM/Calendar/Coaching/Analytics/Settings/
 // Knowledge/Team code along with everything else.
 const SampleCallView = lazy(() =>
-  import('@renderer/features/sample-call/SampleCallView').then((m) => ({ default: m.SampleCallView }))
+  import('@renderer/features/sample-call/SampleCallView').then((m) => ({
+    default: m.SampleCallView
+  }))
 )
 const HomeView = lazy(() =>
   import('@renderer/features/home/HomeView').then((m) => ({ default: m.HomeView }))
@@ -582,15 +584,29 @@ export function MainApp({
       }
       copilotCollapsed={effectiveCopilotCollapsed}
       fullBleed={active === 'assistant'}
+      clampContent={active === 'calendar' || active === 'pipeline'}
     >
       {/* Keyed on the active screen so each view fades/slides in on switch.
           The assistant screen additionally needs the wrapper to be a real
           flex link in the height chain — audit G traced the dead-void layout
-          bug to exactly this div swallowing h-full. */}
+          bug to exactly this div swallowing h-full.
+
+          BUG-266 — the calendar needs the same link, for the same reason:
+          WeekGrid's time grid is `flex-1 overflow-y-auto` inside
+          CalendarView's `h-full` column, and with this wrapper at
+          height:auto that column grew to 24 hours tall instead of clamping,
+          so the grid never scrolled — its "open centred on now" was a no-op
+          (WeekGrid.tsx said so, and pointed here) and the week opened on the
+          night hours with the day's meetings off screen. Under the 7-item IA
+          the calendar is a tab of the Pipeline hub, so that screen gets the
+          link too — PipelineHub passes it on only while its Calendar tab is
+          showing. */}
       <div
         key={active}
         className={
-          active === 'assistant' ? 'animate-view flex min-h-0 flex-1 flex-col' : 'animate-view'
+          active === 'assistant' || active === 'calendar' || active === 'pipeline'
+            ? 'animate-view flex min-h-0 flex-1 flex-col'
+            : 'animate-view'
         }
       >
         <Suspense
@@ -682,14 +698,20 @@ export function MainApp({
             />
           ) : active === 'coaching' ? (
             navPreviewEnabled ? (
-              <CoachingHub initialTab={pendingHubTab} onInitialTabConsumed={() => setPendingHubTab(null)} />
+              <CoachingHub
+                initialTab={pendingHubTab}
+                onInitialTabConsumed={() => setPendingHubTab(null)}
+              />
             ) : (
               <CoachingView />
             )
           ) : active === 'analytics' ? (
             <AnalyticsView />
           ) : active === 'library' ? (
-            <LibraryHub initialTab={pendingHubTab} onInitialTabConsumed={() => setPendingHubTab(null)} />
+            <LibraryHub
+              initialTab={pendingHubTab}
+              onInitialTabConsumed={() => setPendingHubTab(null)}
+            />
           ) : active === 'knowledge' ? (
             <KnowledgeView />
           ) : active === 'team' ? (

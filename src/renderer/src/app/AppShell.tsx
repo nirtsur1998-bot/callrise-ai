@@ -18,6 +18,14 @@ interface AppShellProps {
    *  column is a height-constrained flex parent so `flex-1` children truly
    *  fill the viewport. Ordinary document-style screens leave this off. */
   fullBleed?: boolean
+  /** BUG-266 — a screen that keeps the normal padded, page-scrolling column
+   *  but needs its `flex-1` child to be able to CLAMP to the column's
+   *  height (the calendar's week grid scrolls inside itself). The column
+   *  becomes a flex column; a child that is taller than it still scrolls
+   *  the page as before (a column flex item never shrinks below its
+   *  content), so screens that share this flag and don't clamp are
+   *  unaffected. */
+  clampContent?: boolean
   /** The active view, rendered in the center column. */
   children: ReactNode
 }
@@ -34,6 +42,7 @@ export default function AppShell({
   title,
   headerActions,
   fullBleed = false,
+  clampContent = false,
   children
 }: AppShellProps): React.JSX.Element {
   const mainScrollRef = useRef<HTMLDivElement>(null)
@@ -80,7 +89,9 @@ export default function AppShell({
               'relative',
               fullBleed
                 ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
-                : 'flex-1 overflow-y-auto px-8 py-7'
+                : clampContent
+                  ? 'flex min-h-0 flex-1 flex-col overflow-y-auto px-8 py-7'
+                  : 'flex-1 overflow-y-auto px-8 py-7'
             )}
           >
             {children}

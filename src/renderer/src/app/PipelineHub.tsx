@@ -74,7 +74,13 @@ export function PipelineHub({
   }, [deepLinkEventId])
 
   return (
-    <div>
+    // BUG-266 — while the Calendar tab shows, this hub is a real flex link in
+    // the height chain (MainApp's wrapper is one for the Pipeline screen), so
+    // CalendarView's `h-full` column clamps and WeekGrid's time grid can
+    // scroll — which is what lets the week open centred on now instead of on
+    // the night hours. CRM and Tasks keep the plain block wrapper they always
+    // had: they are page content, and the page is what scrolls for them.
+    <div className={tab === 'calendar' ? 'flex min-h-0 flex-1 flex-col' : undefined}>
       <SegmentedControl options={TABS} value={tab} onChange={setTab} className="mb-4" />
       {tab === 'calendar' ? (
         <CalendarView

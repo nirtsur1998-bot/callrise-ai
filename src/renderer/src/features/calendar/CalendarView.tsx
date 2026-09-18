@@ -117,7 +117,9 @@ export function CalendarView({
   // 'month', nothing read from or written to localStorage. See
   // docs/M31-calendar-research.md §2.2 for why Week.
   const { enabled: calendarPreview } = useDesignPreview()
-  const [view, setViewState] = useState<View>(() => (calendarPreview ? loadCalendarView() : 'month'))
+  const [view, setViewState] = useState<View>(() =>
+    calendarPreview ? loadCalendarView() : 'month'
+  )
   const setView = (next: View): void => {
     setViewState(next)
     if (calendarPreview) saveCalendarView(next)
@@ -131,7 +133,9 @@ export function CalendarView({
   // one place that knows how to reconcile local/Google/Outlook ids.
   useEffect(() => {
     if (!deepLinkEventId) return
-    const match = [...events, ...googleEvents, ...outlookEvents].find((e) => e.id === deepLinkEventId)
+    const match = [...events, ...googleEvents, ...outlookEvents].find(
+      (e) => e.id === deepLinkEventId
+    )
     // eslint-disable-next-line react-hooks/set-state-in-effect -- responding to a deep link arriving, not deriving from render
     if (match) setPrepBriefMeeting(meetingFromEvent(match))
     onDeepLinkConsumed?.()
@@ -234,7 +238,12 @@ export function CalendarView({
   }
 
   return (
-    <div className="flex h-full flex-col">
+    // BUG-266 — `min-h-0 flex-1`, not `h-full`: this view sits in a flex
+    // column (AppShell's clamped content box → MainApp's wrapper → the
+    // Pipeline hub, which also holds its tab strip). `h-full` asked for 100%
+    // of the hub and overflowed it by the strip's height, so the page grew a
+    // scrollbar for 25px of nothing; a flex item takes what is left instead.
+    <div className="flex min-h-0 flex-1 flex-col">
       {/* Header */}
       <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
