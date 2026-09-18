@@ -188,3 +188,47 @@ either platform and that is worth knowing before a release gate depends on it.
 Separately, some full-suite failures do **not** reproduce when a file is run
 alone (`calls-fs.app-version.test.ts` passes 14/14 solo), which is BUG-141's
 documented concurrency shape rather than a platform issue.
+
+---
+
+## 5. PRODUCT — a sidebar RECENT row for a call that no longer exists does nothing
+
+**Severity: low on its own. Filed because it is the third stale-list symptom in
+one region — see the note to the Windows session below.**
+**For the Windows session.** Found on macOS on 2026-09-18, but nothing in the
+path is platform-specific.
+
+**Observed, twice.** The sandbox profile inherited `salesos.recentlyViewed` from
+the founder's real profile, so its RECENT rows name calls (`Call · Aug 6, 2026,
+5:42 AM`, …) that do not exist in the sandbox. Clicking one highlights the row;
+the main view stays exactly where it was (screenshot: `call-detail-dark.png` in
+the first tour run — Past Calls list still showing, sidebar row selected). No
+error, no toast, no console message (screen-sweep's console probe was armed on
+the same profile: 0), and the stale row is not removed, so it does the same thing
+next time.
+
+**Code path, as far as read (not stepped through):** `Sidebar.onSelectRecent` →
+`recentTarget(item)` (a pure function, `features/navigation/recentTarget.ts`,
+which fixed the earlier "every call row went to the same screen" bug) →
+`MainApp.openRecent` → the calls screen with the id as its one-shot preselect.
+The calls screen can only select an id that is in its loaded list; a missing id
+selects nothing and the list stays. Nothing along that path checks that the
+record exists, and nothing prunes `recentlyViewed` when a call, contact or deal
+is deleted — `recentlyViewed.ts` has no remove-by-id caller outside its own
+ring-buffer logic (grep'd, not proven).
+
+**A user hits this by deleting a call** — the 6-second-undo delete leaves the
+RECENT row behind. Same for contacts and deals, presumably (not tested).
+
+**Why this is routed rather than fixed here (founder, 2026-09-18):** it is the
+third symptom in the same region — (1) the sidebar "Calls" no-op from an open
+call (§1 above), (2) the recovered-call delay/no-title (`BUG-230`, M37), and
+(3) this. "Three in one region suggests one cause." The common thread I can see
+without stepping through is that navigation and the record stores agree on ids
+but never on *existence* — each screen trusts whatever id it is handed. That is a
+hypothesis, not a finding; the Windows session has the M37 context to test it.
+
+**Not established:** whether contacts/deals behave the same; whether the
+command palette's recent rows (a separate list — `CommandPalette.tsx`) share
+the symptom; what a user *should* see (open the list with a "that call was
+deleted" note, or drop the row).
