@@ -313,7 +313,7 @@ import { registerGoogle } from './google'
 import { registerOutlook } from './outlook'
 import { registerBackup } from './backup'
 import { registerVirtualMic, disposeVirtualMic } from './virtualmic'
-import { registerTier1, disposeTier1 } from './tier1'
+import { registerTier1, registerTier1Unsupported, disposeTier1 } from './tier1'
 import { registerTier1Diagnostics } from './tier1-diagnostics'
 import { registerKnowledge } from './knowledge'
 import { registerObjectionQueue } from './objection-queue'
@@ -846,6 +846,14 @@ app.whenReady().then(async () => {
   if (process.platform === 'win32') {
     registerTier1()
     registerTier1Diagnostics()
+  } else {
+    // NOT "register nothing". The first version of this gate did exactly that,
+    // and recorder.ts's teardown — `void tier1Api.stop()`, guarded only on the
+    // API object existing — then threw "No handler registered for 'tier1:stop'"
+    // on every Live-screen teardown on macOS. screen-sweep's console probe
+    // caught it. Off Windows the channels stay registered with answers that
+    // are true for this platform; see registerTier1Unsupported.
+    registerTier1Unsupported()
   }
   registerKnowledge()
   registerObjectionQueue()

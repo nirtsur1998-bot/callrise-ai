@@ -455,3 +455,43 @@ export function registerTier1(): void {
 export function disposeTier1(): void {
   stop()
 }
+
+/**
+ * The IPC surface for platforms where Tier 1 does not exist (everything but
+ * Windows). Registers the same four channels with answers that are TRUE for
+ * this platform, so the contract every renderer caller was written against
+ * still holds: getStatus resolves (engine unavailable), start refuses with a
+ * named reason, stop and exportDiagnostics resolve as no-ops.
+ *
+ * WHY THIS EXISTS. M40 gated registerTier1() to win32 at the call site — the
+ * right layer, since this module's tests exercise the Windows logic on any OS
+ * and its engineAvailable invariant must stay single-sourced. But gating
+ * REGISTRATION removed the channels, and recorder.ts's teardown calls
+ * `void tier1Api.stop()` unconditionally (it guards only on the API object
+ * existing). On macOS that became "No handler registered for 'tier1:stop'",
+ * an unhandled rejection on every Live-screen teardown — found by
+ * screen-sweep's console-error probe, on a change whose author had claimed
+ * every caller was covered. Absent handlers are not the same as inert ones.
+ *
+ * Deliberately touches none of the Windows-shaped code above: no
+ * resolveEnginePath(), no status file, no spawn.
+ */
+export function registerTier1Unsupported(): void {
+  const status: Tier1Status = {
+    engineAvailable: false,
+    engineRunning: false,
+    connected: false,
+    denoisingActive: null,
+    enginePath: null
+  }
+  ipcMain.handle('tier1:getStatus', () => status)
+  ipcMain.handle('tier1:start', () => ({
+    ok: false,
+    error: 'noise-cancellation engine is Windows-only on this build'
+  }))
+  ipcMain.handle('tier1:stop', () => ({ ok: true }))
+  ipcMain.handle('tier1:exportDiagnostics', () => ({
+    ok: false,
+    error: 'noise-cancellation engine is Windows-only on this build'
+  }))
+}
