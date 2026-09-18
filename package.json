@@ -3,7 +3,7 @@
   "version": "1.14.0",
   "description": "CallRise AI — desktop AI assistant for sales calls",
   "engines": {
-    "node": "22.x"
+    "node": ">=22 <25"
   },
   "main": "./out/main/index.js",
   "author": "",
