@@ -147,6 +147,26 @@ If a CI setup later needs the certificate (Stage 3), that is done by exporting a
 it as an encrypted **GitHub secret** — pasted directly into GitHub's own secret field, never into
 a chat, a file, or a commit.
 
+### How it actually went on 2026-09-18, and the rule that fell out of it
+
+Three credentials were stored by hand and **all three failed once**: the PAT's name was over
+GitHub's 40-character limit; the `.p12` password in the secret did not match the file; the
+app-specific password picked up a trailing newline from a triple-click copy (20 chars, not 19).
+Every value that was **tested by a command before being stored** worked first time. So:
+
+1. Export + verify in one line (the `&&` makes the verify prove the password you just typed):
+   ```bash
+   security export -k ~/Library/Keychains/login.keychain-db -t identities -f pkcs12 -P 'PASS' -o ~/Desktop/devid.p12 \
+     && openssl pkcs12 -in ~/Desktop/devid.p12 -noout -passin pass:'PASS'     # must print: MAC verified OK
+   ```
+2. Verify the app-specific password against Apple before storing it:
+   ```bash
+   xcrun notarytool history --apple-id <apple-id> --team-id THC746RHPV --password '<asp>'
+   ```
+   "No submission history" or a list = authenticated. HTTP 401 = wrong.
+3. Store with `gh secret set NAME < file` or `printf '%s' "$V" | gh secret set NAME` — never a
+   pasted value with an Enter after it. Delete the `.p12` from the Desktop afterwards.
+
 ---
 
 ## Troubleshooting
