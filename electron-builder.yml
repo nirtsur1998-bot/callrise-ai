@@ -257,7 +257,12 @@ mac:
     - from: ../salesos-virtualmic/phase2/models/DeepFilterNet3_onnx.tar.gz
       to: virtualmic/phase2/models/DeepFilterNet3_onnx.tar.gz
 dmg:
-  artifactName: CallRise AI Mac (${arch}).${ext}
+  # Hyphenated on purpose: GitHub rewrites spaces and parentheses in asset
+  # names, so "CallRise AI Mac (arm64).dmg" would appear under a name nobody
+  # wrote down. The Windows installer already shows as CallRise-AI-Windows.exe
+  # for the same reason; this is the name the release notes can promise.
+  # arm64-only build, so the arch is not in the name (see mac.target comment).
+  artifactName: CallRise-AI-Mac.${ext}
 linux:
   target:
     - AppImage
