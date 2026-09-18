@@ -236,7 +236,10 @@ jobs:
             done
             echo "## dist/ contents"
             echo '```'
-            find dist -maxdepth 1 2>/dev/null
+            # `|| true`: under `bash -e`, a missing dist/ (the build never got
+            # that far) made THIS step fail and hide the diagnostics it exists
+            # to surface - seen live on the v1.15.0-test.1 run.
+            find dist -maxdepth 1 2>/dev/null || true
             echo '```'
           } > FAILURE-DIAGNOSTICS.md
 
