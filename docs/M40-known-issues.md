@@ -232,3 +232,14 @@ hypothesis, not a finding; the Windows session has the M37 context to test it.
 command palette's recent rows (a separate list — `CommandPalette.tsx`) share
 the symptom; what a user *should* see (open the list with a "that call was
 deleted" note, or drop the row).
+
+**Assessed by the Windows session, 2026-09-18 — tracker numbers `BUG-286` (§1) and
+`BUG-287` (this).** Both reproduce on Windows; neither is macOS-specific. Corrections to the
+above: (1) the "one cause" hypothesis is **wrong** — every path *does* check the record exists;
+none of them *reports* it (calls bounce out of the detail silently, contacts resolve through a
+`.find()` over the loaded list, nothing prunes the trail). The fix is a response, not an existence
+check. (2) `BUG-230` is not in this family (no id, no lookup, no navigation) — dropped from the
+grouping. (3) The command palette is **not** a separate list: it renders the same trail
+(`CommandPalette.tsx:203`, `:272`), so it has this symptom too. (4) §1 is targeted, not a trap:
+from an open call detail, Home / Pipeline / Coaching all navigate; only the sidebar item for the
+screen you are already on is dead — and Pipeline does the same from a contact detail.
