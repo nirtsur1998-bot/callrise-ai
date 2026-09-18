@@ -208,6 +208,14 @@ mac:
   # local unsigned build still works, and release.yml's macos job verifies
   # the ARTIFACT (stapler validate, spctl) rather than trusting that exit code.
   notarize: true
+  # The ZIP (what electron-updater downloads) must have NO SPACES in its name.
+  # electron-builder writes the file with a space ("CallRise AI-1.15.0-arm64-
+  # mac.zip") but writes latest-mac.yml's `path:` with a hyphen; `gh release
+  # upload` keeps the space and GitHub turns it into a DOT, so the manifest
+  # pointed at a file that did not exist. Caught by the release job's
+  # read-back check on the first notarized run (v1.15.0-test.1). The dmg has
+  # its own artifactName below and is unaffected.
+  artifactName: CallRise-AI-${version}-${arch}-mac.${ext}
   # Extra Mach-O binaries to sign. RELATIVE TO THE .app ROOT, not Contents/ —
   # app-builder-lib's own comment says "from the artifact's app Contents path"
   # but the code is `path.resolve(appPath, d)` (MacTargetHelper.js:81), and
