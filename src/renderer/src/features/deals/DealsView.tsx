@@ -12,6 +12,7 @@ import {
   List
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { useStepOutToken } from '@renderer/app/useStepOutToken'
 import { Badge } from '@renderer/components/Badge'
 import { Button } from '@renderer/components/Button'
 import { IconButton } from '@renderer/components/IconButton'
@@ -58,11 +59,14 @@ interface DealsViewProps {
   /** Called once the initial selection above has been applied, so the parent
    *  can clear it (otherwise a later plain visit would reopen the same deal). */
   onInitialViewConsumed?: () => void
+  /** BUG-286 — the sidebar asking this already-active screen for its list. */
+  stepOutToken?: number
 }
 
 export function DealsView({
   initialViewDealId = null,
-  onInitialViewConsumed
+  onInitialViewConsumed,
+  stepOutToken
 }: DealsViewProps = {}): React.JSX.Element {
   const { deals, loading, create, update, remove, undoDelete, refresh } = useDeals()
   const { stages, loading: stagesLoading, save: saveStages } = useDealStages()
@@ -102,6 +106,9 @@ export function DealsView({
       onInitialViewConsumed?.()
     }
   }, [initialViewDealId, onInitialViewConsumed])
+
+  // BUG-286 — sidebar "Pipeline" while already on Pipeline: show the list.
+  useStepOutToken(stepOutToken, () => setViewingId(null))
 
   useEffect(() => {
     let active = true

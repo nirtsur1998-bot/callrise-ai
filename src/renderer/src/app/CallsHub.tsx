@@ -28,6 +28,11 @@ interface CallsHubProps {
   remotePauseToken: number
   initialCallId: string | null
   onInitialCallConsumed: () => void
+  /** BUG-286 — the sidebar's "Calls" clicked while this hub is already
+   *  active. Forwarded to Past Calls, which closes its detail. The TAB is
+   *  deliberately left alone: the founder's call is that you land on the list
+   *  you were reading from, not on this hub's default tab. */
+  stepOutToken?: number
 }
 
 /** M31 Stage 2 — Live Calls and Past Calls as tabs of one "Calls" screen,
@@ -65,7 +70,8 @@ export function CallsHub({
   initialCallId,
   onInitialCallConsumed,
   initialTab,
-  onInitialTabConsumed
+  onInitialTabConsumed,
+  stepOutToken
 }: CallsHubProps): React.JSX.Element {
   const [tab, setTab] = useState<CallsTab>(
     initialTab === 'past' || initialCallId ? 'past' : 'live'
@@ -107,6 +113,7 @@ export function CallsHub({
         <PastCallsView
           initialSelectedId={initialCallId}
           onInitialSelectionConsumed={onInitialCallConsumed}
+          stepOutToken={stepOutToken}
         />
       )}
     </div>

@@ -22,6 +22,7 @@ import {
 import type { RecentItem } from '@renderer/lib/recentlyViewed'
 import { shortcutKeys, shortcutLabel } from '@renderer/features/navigation/shortcuts'
 import { recentTarget } from '@renderer/features/navigation/recentTarget'
+import { sidebarIntent } from '@renderer/features/navigation/sidebarIntent'
 import { useDesignPreview } from '@renderer/features/settings/useDesignPreview'
 import { draftToInput } from '@renderer/features/calendar/items'
 import { notifyEventsChangedLocally } from '@renderer/features/calendar/eventsChanged'
@@ -157,6 +158,37 @@ export function MainApp({
     // not clobber whichever tab the user last chose there.
     if (hub) setPendingHubTab(OLD_TO_HUB_TAB[id] ?? null)
     setActive(hub ?? id)
+  }
+
+  // BUG-286 — clicking the sidebar item for the screen you are ALREADY on.
+  //
+  // `navigateTo` ends in `setActive(same value)`, React bails out, and nothing
+  // in that subtree unmounts — so a hub's private view state (PastCallsView's
+  // `selectedId`, ContactsView's `viewingId`) survives and the page does not
+  // change at all. Measured on the running app before this fix: open a call,
+  // click sidebar "Calls", and the whole page-text hash is IDENTICAL
+  // (314106bb5885 -> 314106bb5885). Every OTHER sidebar item works, because
+  // changing `active` unmounts the subtree and takes the detail state with it
+  // — which is also why leaving and coming back lands on the hub's default
+  // tab rather than on the detail. Reproduced on two hubs (Calls, Pipeline),
+  // so this is not a Calls bug.
+  //
+  // The fix is a signal, not a re-navigation: bump a counter the hubs watch,
+  // and have them step OUT of their detail while staying on the tab the user
+  // is looking at. That last part is the founder's call (2026-09-18) — the
+  // page's own "Past Calls" back link goes to the list, and a rep reading a
+  // saved call who clicks "Calls" means the list, not the Live tab.
+  //
+  // Wired to the SIDEBAR only, deliberately, not into `navigateTo` itself. An
+  // internal navigation (a save opening its call, a deep link, a palette
+  // result) targets a specific record and sets a preselect id in the same
+  // commit; bumping there would race the two effects and clear the very
+  // record the caller asked to open.
+  const [stepOutToken, setStepOutToken] = useState(0)
+  const navigateFromSidebar = (id: NavId): void => {
+    const intent = sidebarIntent(id, active, navPreviewEnabled)
+    if (intent.kind === 'step-out') setStepOutToken((n) => n + 1)
+    else navigateTo(intent.id)
   }
 
   // M29 A3 — one coarse usage counter per section OPEN, from the single
@@ -565,7 +597,7 @@ export function MainApp({
       sidebar={
         <Sidebar
           active={active}
-          onSelect={navigateTo}
+          onSelect={navigateFromSidebar}
           user={user}
           onSignOut={signOut}
           onOpenPalette={() => setPaletteOpen(true)}
@@ -643,11 +675,13 @@ export function MainApp({
               remotePauseToken={remotePauseToken}
               initialCallId={openCallId}
               onInitialCallConsumed={() => setOpenCallId(null)}
+              stepOutToken={stepOutToken}
             />
           ) : active === 'past-calls' ? (
             <PastCallsView
               initialSelectedId={openCallId}
               onInitialSelectionConsumed={() => setOpenCallId(null)}
+              stepOutToken={stepOutToken}
             />
           ) : active === 'tasks' ? (
             <TasksView />
@@ -664,6 +698,7 @@ export function MainApp({
               deepLinkEventId={deepLinkEventId}
               onDeepLinkConsumed={() => setDeepLinkEventId(null)}
               onOpenCall={openCallFromPalette}
+              stepOutToken={stepOutToken}
             />
           ) : active === 'crm' ? (
             <CrmView
@@ -673,6 +708,7 @@ export function MainApp({
                 setOpenContactId(null)
                 setOpenDealId(null)
               }}
+              stepOutToken={stepOutToken}
             />
           ) : active === 'calendar' ? (
             <CalendarView

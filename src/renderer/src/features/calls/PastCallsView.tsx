@@ -8,6 +8,7 @@ import { SkeletonRows } from '@renderer/components/Skeleton'
 import { Badge } from '@renderer/components/Badge'
 import { overallTier, TONE_TO_BADGE } from '@renderer/features/coaching/meta'
 import { useToast } from '@renderer/features/notifications/useToast'
+import { useStepOutToken } from '@renderer/app/useStepOutToken'
 import { useCalls } from './useCalls'
 import { CallDetail } from './CallDetail'
 import { formatDate, formatDuration } from './format'
@@ -18,11 +19,15 @@ interface PastCallsViewProps {
   /** Called once the initial selection above has been applied, so the parent
    *  can clear it (otherwise a later plain visit would reopen the same call). */
   onInitialSelectionConsumed?: () => void
+  /** BUG-286 — bumped when the sidebar's "Calls" is clicked while this screen
+   *  is already the active one; closes the detail and shows the list. */
+  stepOutToken?: number
 }
 
 export function PastCallsView({
   initialSelectedId = null,
-  onInitialSelectionConsumed
+  onInitialSelectionConsumed,
+  stepOutToken
 }: PastCallsViewProps = {}): React.JSX.Element {
   const { calls, loading, remove, undoDelete, refresh } = useCalls()
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId)
@@ -49,6 +54,15 @@ export function PastCallsView({
       onInitialSelectionConsumed?.()
     }
   }, [initialSelectedId, onInitialSelectionConsumed])
+
+  // BUG-286 — the sidebar asking this screen to go back to its list. Also
+  // clears `consumedIdRef`, so the SAME call can be reopened from the trail
+  // afterwards; without that, stepping out of a call and clicking its recent
+  // row again would be the no-op the ref was added to prevent elsewhere.
+  useStepOutToken(stepOutToken, () => {
+    setSelectedId(null)
+    consumedIdRef.current = null
+  })
 
   // --- Detail view ---------------------------------------------------------
   if (selectedId) {
