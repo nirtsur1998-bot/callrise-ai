@@ -263,9 +263,58 @@ plus the PAT above.
 macos job builds the denoiser from source (`phase2/build-libdf.sh` → `build.sh`), packages with
 `--publish never`, and uploads only after reading the artifact: Developer ID authority on the
 `.app` and on both nested denoiser binaries, `stapler validate`, `spctl`, the "notarization
-successful" log line, check 6. It refuses up front without all six secrets, by name. **It has never
-run.** Before the first run: (1) add the six secrets; (2) merge `salesos-virtualmic`'s
-`claude/m40-mac-parity` into its `main`, or point the checkout `ref` at the branch — `build-libdf.sh`
-does not exist on `main`; (3) expect `mac.binaries` and notarization to be tested for the first time
-there, not here. A prerelease tag (`v1.15.0-test.1`) is the safe first run: invisible to the updater.
-The release notes still say "for Windows" and name no Mac asset — yours to change, a test pins them.
+successful" log line, check 6. It refuses up front without all six secrets, by name.
+**Superseded — it has now run, four times, green on the fourth (see §6 continuation below and §7):**
+all six secrets exist, `salesos-virtualmic` `main` is fast-forwarded to the branch with
+`build-libdf.sh` on it, `mac.binaries` and notarization are proven, and the release notes cover
+both platforms (`7f424b1`).
+
+**Run-by-run, what each failure was (none flake, none repeated):**
+1. A runner-timing test (`multichannel-fallback`) — untouched file, green on rerun; and the
+   diagnostics step died under `bash -e` when `dist/` didn't exist (`9eab8ff`).
+2. `mac.binaries` paths resolve against the `.app` ROOT in this electron-builder version, not
+   `Contents/` as its own comment claims (`30347da`).
+3. A human-pasted app-specific password carried a trailing newline (20 chars stored, 19 real) —
+   `security: SecKeychainItemImport … wrong password?`-shaped failures upstream of this were the
+   same class. Runbook now says: verify every credential by command before storing it.
+4. Apple **accepted** notarization, every artifact check passed, and the upload step's read-back
+   caught `latest-mac.yml` pointing at a ZIP name GitHub had rewritten (space → dot) — a shipped
+   Mac updater would have 404'd on every check, silently. Fixed with a space-free
+   `mac.artifactName` (`80f6042`).
+
+**Run 4 (`35359158524`): GREEN END TO END.** Published `v1.15.0-test.1` as a **prerelease**
+(`/releases/latest` stayed `v1.14.0` throughout — invisible to every shipped updater), both
+manifests staged at 10%, nine assets. Verified from a **clean download on this Mac**, not the
+runner's own log: `spctl --assess` → `accepted, source=Notarized Developer ID`; `stapler validate`
+OK; the `.app`, `michelper` and the `.driver` all carry `Developer ID Application: Nir Tsur
+(THC746RHPV)`; version and floor correct.
+
+## 7. Signature-survival test — PASSED (2026-09-18, evening)
+
+Installed the notarized `v1.15.0-test.1` build (the downloaded one, not a local build) into
+`/Applications`, backed up the real profile first
+(`~/Library/Application Support/sales-os.bak-2026-09-18-before-signed-install`, 271M, verified
+identical at copy time), then launched the signed app directly on the real profile with
+`--remote-debugging-port` so the result could be read rather than eyeballed.
+
+**First launch hung** — CDP accepted the TCP connection but the main process never answered, the
+exact shape of a native dialog blocking the main thread: macOS Keychain asking to re-authorize the
+new Developer ID signature against the `CallRise AI Safe Storage` item. Expected, one-time,
+resolved by the founder clicking **Always Allow**.
+
+**After that, read through CDP — no clicks, no typed input:**
+- Signed in as `test user` / `back2gam1@gmail.com` — founder-confirmed correct.
+- Home checklist: **"Add a transcription key" → Added**, **"Add an AI provider key" → Added** —
+  both `safeStorage`-encrypted values decrypted successfully under the new signature. This is the
+  actual test; it passed.
+- `window.api.calls.list()` / `tasks.list()` / `deals.list()` returned real records.
+
+**Side effect, not a defect, flagged and confirmed before going further:** opening the app
+triggered the existing auto-sync-on-open (M16 cloud backup) and pulled 160 calls from the cloud
+that weren't yet local on this machine (42 → 202, `backup-state.json`'s `lastSyncAt` moved to
+today). Diffed against the pre-test backup: additions only, nothing deleted or overwritten.
+Founder confirmed the data and the account are expected.
+
+**Conclusion: existing users' sessions and encrypted keys survive the signature change. No
+migration is needed.** This closes the Stage 3 audit's one open "reasoned, not measured" item —
+it is now measured. App quit cleanly afterward; nothing left running.
