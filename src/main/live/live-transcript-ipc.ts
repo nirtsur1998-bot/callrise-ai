@@ -95,7 +95,12 @@ export async function listRecoverableCalls(): Promise<RecoverableCall[]> {
 //   that threw turned a SAVED call into `{ ok: false }` — the rep was told
 //   the rescue failed, the journal stayed an orphan with no marker, and the
 //   next "Save this call" minted a duplicate.
-export type RecoverStep = 'read-journal' | 'replay' | 'save'
+//
+//   `read-call` is the one deciding step that is not about the journal: an
+//   earlier attempt already produced a Call record and this attempt could
+//   not read it back. Named on its own so the rep is not told the RECORDING
+//   was unreadable when it is the saved call that could not be opened.
+export type RecoverStep = 'read-journal' | 'read-call' | 'replay' | 'save'
 export type RecoverCleanupStep = 'mark-recovered' | 'retire-journal' | 'redact-journal'
 
 export type RecoverOutcome =
@@ -155,7 +160,7 @@ export async function recoverCallDetailed(id: string, callsDir: string): Promise
     try {
       existing = await getCall(callsDir, alreadyRecoveredCallId)
     } catch (err) {
-      return failed('read-journal', err)
+      return failed('read-call', err)
     }
     await cleanupStep('retire-journal', degraded, () => retireJournal(id))
     await cleanupStep('redact-journal', degraded, () => redactJournalConsentIfNeeded(id))

@@ -123,17 +123,24 @@ describe('InterruptedCallPrompt — a failed rescue is SAID, not swallowed (BUG-
   it('different steps read differently — the whole point of naming them', async () => {
     installMockApi([
       { ok: false, reason: 'step-failed', step: 'read-journal', message: 'EIO' },
-      { ok: false, reason: 'step-failed', step: 'save', message: 'ENOSPC' }
+      { ok: false, reason: 'step-failed', step: 'save', message: 'ENOSPC' },
+      { ok: false, reason: 'step-failed', step: 'read-call', message: 'EIO' }
     ])
     await mount()
     await click('Save this call')
     const first = alertText()
     await click('Try again')
     const second = alertText()
+    await click('Try again')
+    const third = alertText()
 
     expect(first).toContain('could not be read from disk')
     expect(second).toContain('could not be written to your call list')
-    expect(first).not.toBe(second)
+    // The saved COPY could not be opened — not the recording. A rep told the
+    // recording was unreadable would look for the wrong thing.
+    expect(third).toContain('already saved once')
+    expect(third).not.toContain('recording')
+    expect(new Set([first, second, third]).size).toBe(3)
   })
 
   it('"Try again" that succeeds clears the warning, advances, and titles the call', async () => {

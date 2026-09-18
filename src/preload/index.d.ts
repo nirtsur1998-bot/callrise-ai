@@ -3249,7 +3249,7 @@ export interface LiveApi {
     | {
         ok: false
         reason: 'step-failed'
-        step: 'read-journal' | 'replay' | 'save' | 'unknown'
+        step: 'read-journal' | 'read-call' | 'replay' | 'save' | 'unknown'
         message: string
       }
   >

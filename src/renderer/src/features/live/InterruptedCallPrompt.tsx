@@ -47,6 +47,7 @@ function formatStarted(iso: string): string {
  *  because the most important fact is the same for all of them. */
 const RECOVER_STEP_TEXT: Record<string, string> = {
   'read-journal': 'The recording of this call could not be read from disk.',
+  'read-call': 'This call was already saved once, but that saved copy could not be opened.',
   replay: 'The recording could not be turned back into a transcript.',
   save: 'The call could not be written to your call list.',
   unknown: 'Something unexpected went wrong while saving it.'

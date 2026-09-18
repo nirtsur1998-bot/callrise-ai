@@ -18,6 +18,7 @@ const fail = vi.hoisted(() => ({
   markRecovered: false,
   retire: false,
   readJournal: false,
+  readCall: false,
   save: false
 }))
 
@@ -49,6 +50,10 @@ vi.mock('../calls-fs', async (importOriginal) => {
     saveCall: async (...args: Parameters<typeof real.saveCall>) => {
       if (fail.save) throw new Error('ENOSPC: no space left on device')
       return real.saveCall(...args)
+    },
+    getCall: async (...args: Parameters<typeof real.getCall>) => {
+      if (fail.readCall) throw new Error('EIO: call record unreadable')
+      return real.getCall(...args)
     }
   }
 })
@@ -67,7 +72,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'journal-steps-'))
   callsDir = mkdtempSync(join(tmpdir(), 'calls-steps-'))
   setCallJournalsDirForTests(dir)
-  fail.markRecovered = fail.retire = fail.readJournal = fail.save = false
+  fail.markRecovered = fail.retire = fail.readJournal = fail.readCall = fail.save = false
 })
 
 afterEach(() => {
@@ -183,6 +188,30 @@ describe('a DECIDING step failing says which one, and loses nothing', () => {
     const res = await recoverCallForIpc(id, callsDir)
 
     expect(res).toMatchObject({ ok: false, reason: 'step-failed', step: 'read-journal' })
+  })
+
+  it('an ALREADY-recovered call whose saved copy cannot be opened: step "read-call", not "read-journal"', async () => {
+    // First attempt saves the call and lands the marker, but retirement fails
+    // — the state a second attempt meets through the idempotency branch.
+    const id = await interruptedCall()
+    fail.retire = true
+    const first = await recoverCallDetailed(id, callsDir)
+    expect(first.ok).toBe(true)
+    fail.retire = false
+
+    // Now the SAVED CALL is unreadable. The recording is fine; the sentence
+    // the rep gets must say which one it was.
+    fail.readCall = true
+    const res = await recoverCallForIpc(id, callsDir)
+
+    expect(res).toMatchObject({
+      ok: false,
+      reason: 'step-failed',
+      step: 'read-call',
+      message: 'EIO: call record unreadable'
+    })
+    // Nothing minted twice, nothing lost: the one call is still there.
+    expect(await listCalls(callsDir)).toHaveLength(1)
   })
 })
 
