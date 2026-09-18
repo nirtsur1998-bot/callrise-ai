@@ -11,6 +11,13 @@
 // was saved, which mints a duplicate. BUG-271's shape, in the path every call
 // takes.
 //
+// Two halves, because this wrapper alone only closes the first. Swallowing a
+// throw from `endCall` keeps the save reported as saved — but if that throw
+// landed before the journal was marked complete, the journal would still be
+// offered next launch. So endCall settles the journal in a `finally`
+// (live-transcript.ts, end-call-settles-journal.test.ts); this module is the
+// half that keeps the IPC result honest.
+//
 // This is the same discipline as recovery's `cleanupStep`: a follow-up can
 // fail; it cannot cost the result. Kept in its own module so it can be
 // tested without standing up calls.ts's IPC surface.
