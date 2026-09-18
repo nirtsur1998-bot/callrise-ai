@@ -106,6 +106,12 @@ screens swept for the first time on any platform), `run.mjs`, tier1-diagnostics 
   Primed first → 562/562.
 - Three different sandbox-navigation probes measured the wrong page (Settings replaces the
   sidebar; a stale-coordinate re-entry; a predicate that looked for collapsed transcript text).
+- **Morning:** a background `npm test` picked up Node 26 from `PATH` (`.nvmrc` says 22; nothing
+  enforces it for a bare `npm test`) and reported **53 failed files**. `node-webstorage-guard`
+  fired once with its full message — the first time it has caught the real thing rather than its
+  own red-check. Re-run with `npx -y node@22 node_modules/vitest/vitest.mjs run`. The lesson is
+  the guard's own: a Node-version problem that reads as 53 platform failures, and a runner that
+  does not pin its Node is a runner that will produce this again.
 
 ---
 
