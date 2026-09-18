@@ -208,15 +208,18 @@ mac:
   # local unsigned build still works, and release.yml's macos job verifies
   # the ARTIFACT (stapler validate, spctl) rather than trusting that exit code.
   notarize: true
-  # Extra Mach-O binaries to sign, relative to the .app's Contents/. The
-  # denoiser ships under Resources, which osx-sign does not walk on its own —
-  # an unsigned helper inside a notarized app fails notarization (or, worse,
-  # passes here and is killed by Gatekeeper on the user's Mac). Unverified
-  # until the first signed CI run; the job's codesign --verify on both paths
-  # is what turns this from a claim into a check.
+  # Extra Mach-O binaries to sign. RELATIVE TO THE .app ROOT, not Contents/ —
+  # app-builder-lib's own comment says "from the artifact's app Contents path"
+  # but the code is `path.resolve(appPath, d)` (MacTargetHelper.js:81), and
+  # the first signed CI run failed with "…CallRise AI.app/Resources/…: No
+  # such file" when these lacked the Contents/ prefix. The denoiser ships
+  # under Resources, which osx-sign does not walk on its own — an unsigned
+  # helper inside a notarized app fails notarization (or, worse, passes here
+  # and is killed by Gatekeeper on the user's Mac). The job's codesign
+  # --verify on both paths is what turns this from a claim into a check.
   binaries:
-    - Resources/virtualmic/build/michelper
-    - Resources/virtualmic/build/SalesOSMicrophone.driver
+    - Contents/Resources/virtualmic/build/michelper
+    - Contents/Resources/virtualmic/build/SalesOSMicrophone.driver
   target:
     # What a human downloads and drags into Applications.
     - dmg
