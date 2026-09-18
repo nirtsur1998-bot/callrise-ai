@@ -109,13 +109,80 @@ screens swept for the first time on any platform), `run.mjs`, tier1-diagnostics 
 
 ---
 
-## To resume the sandbox tomorrow
+## To resume the sandbox
 
 ```bash
 cd /Users/nirtsur/callrise-ai
-CALLRISE_USER_DATA_DIR=/private/tmp/claude-501/-Users-nirtsur-callrise-ai/adb440c9-f048-474a-8d09-6c00976cfdbe/scratchpad/sandbox2 \
+CALLRISE_USER_DATA_DIR=/private/tmp/claude-501/-Users-nirtsur-callrise-ai/adb440c9-f048-474a-8d09-6c00976cfdbe/scratchpad/sandbox3 \
+SALESOS_MICHELPER_PATH=/Users/nirtsur/salesos-virtualmic/build/michelper \
   npx electron out/main/index.js --remote-debugging-port=9401
 ```
 
-Log in once with the **test** account. Then say so, and the authenticated tour runs — every screen,
-both themes, screenshots — plus the Remove control's rendering (still not clicked).
+`sandbox3` is already signed in (the founder's real profile copied minus every data store, then
+seeded with invented records). **The `SALESOS_MICHELPER_PATH` override is required in this launch
+shape** — see §6 below for why.
+
+---
+
+## 6. Morning update — 2026-09-18, after the founder's answers
+
+**Sign-in solved without credentials.** The founder's instruction was to load the existing profile
+into the dev app. `sandbox3` = the real `userData` minus calls/tasks/contacts/deals/events/knowledge
+(so no real client name can reach a screenshot), seeded through the app's own IPC with obviously
+fictional records. The sealed API keys came with it — **the API keys page is never visited**.
+
+**The authenticated tour ran: 10 screens × 2 themes, 20/20 verified.** Each screen asserts a
+destination marker that is not the sidebar, the rendered `body` background moved between themes,
+and the PNG hashes differ. Contact sheets delivered (`M40-mac-tour-dark.png`, `-light.png`).
+The **Remove control is now seen rendered** in both themes (Settings → Audio), still never clicked.
+
+**One console error found and fixed — `ca70a25`.** The tier1 gate I added earlier registered
+*nothing* off Windows, and `recorder.ts`'s teardown calls `tier1Api.stop()` unconditionally, so
+every Live-screen teardown on macOS threw `No handler registered for 'tier1:stop'`. screen-sweep's
+console probe caught it (1 error), `registerTier1Unsupported()` keeps the four channels registered
+with platform-true answers, sweep re-run → 0 with the same teardown path exercised. The lesson is in
+the code comment: **absent handlers are not the same as inert ones.**
+
+**Capture started by itself on Calls → Live — expected, not a defect.** The copied profile carries
+your real preference `salesos.settings.autoStartListening = true` ("Auto-start when you join a
+call"), so opening the Live tab starts mic capture by design. In the sandbox, transcription was
+refused by the egress gate (Deepgram is blocked), no call was saved, and the capture died with the
+page reload. I set that preference to `false` **in the sandbox only** so the tour is read-only again.
+Your real profile is untouched.
+
+**Sidebar RECENT rows that point at calls which no longer exist do nothing.** The copied
+`salesos.recentlyViewed` names calls absent from the sandbox; clicking one highlights the row and
+opens nothing — no error, no removal of the stale row. Observed twice, not investigated; a user who
+deleted a call could see the same. Logged here rather than in known-issues because severity is
+unassessed.
+
+**"The noise-cancellation engine couldn't be found on disk" on Settings → Audio is a launch-shape
+artefact, measured.** `resolveHelperPath()`'s dev candidate is `app.getAppPath()/../salesos-virtualmic/
+build/michelper`. Under `npx electron out/main/index.js`, `app.getAppPath()` is **`out/main`**
+(measured with a probe), so the candidate resolves to `out/salesos-virtualmic/…`, which does not
+exist. `npm run dev` and the packaged app take other candidates (root, `resourcesPath`) — the
+packaged one is the one `verify-build-inputs.js` guards. Relaunched with `SALESOS_MICHELPER_PATH`
+→ `helperAvailable: true`, `helperRunning: false`. Nothing was started.
+
+**Route 1 inputs, measured on this Mac (the founder's three asks):**
+
+- **Cold `cargo build` of libdf: 48 s** (`cargo clean` first), M-series, *without*
+  `MACOSX_DEPLOYMENT_TARGET`. **With `MACOSX_DEPLOYMENT_TARGET=12.0` the cold build fails**
+  (`E0463`, can't find crate `time_macros`), reproduced from a full clean; the env var is the
+  reproducible trigger, the mechanism is not established. So CI must **not** set it for cargo; the 12.0 floor is
+  applied by `build.sh`'s `-mmacosx-version-min=12.0` at link time, which is where it was verified.
+  `libdf.a` was restored byte-identical after every attempt (`b6079d8b…`).
+- **Rust is preinstalled on GitHub's `macos-15` runner** (runner image README: Cargo 1.98.1,
+  Rustup 1.29.0, Node 22.23.2) — no `dtolnay/rust-toolchain` step needed, though pinning one is
+  cheap insurance against image drift.
+- **Cargo.lock drift:** the vendored DeepFilterNet's `Cargo.lock` as built on this Mac differs from
+  the pinned commit's. Both are backed up (`~/CallRiseAI-VirtualMic-Backup/source-build-artifacts/`,
+  `DeepFilterNet-Cargo.lock.as-built-on-this-mac` sha `6e54b54e…`). CI should build with
+  `--locked` against the **as-built** lock to reproduce this binary, not the pinned one.
+- **PAT — minimum scopes.** Fine-grained token, **Repository access: only `salesos-virtualmic`**,
+  permissions **Contents: Read-only** and **Metadata: Read-only** (Metadata is added automatically).
+  Nothing else. Read-only is sufficient: the job only clones. Store as `VIRTUALMIC_REPO_TOKEN`.
+
+**Still needs you (delta from §3):** §3.3 is done. §3.1 certificates ("done" per your message —
+I have not verified them on this machine), §3.4 approved (`8d89928`), §3.5 and §3.6 unchanged,
+plus the PAT above. The macOS release job is next on my side.

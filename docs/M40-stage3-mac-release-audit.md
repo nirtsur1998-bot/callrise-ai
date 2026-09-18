@@ -287,11 +287,15 @@ problem before it is a packaging one. Split by component, because they differ:
 So: **route 1 is the only one that makes `michelper` reproducible.** Routes 2 and 3 make it
 *reachable* (a runner can obtain it) while it stays born on one machine; if that machine is lost,
 so is the ability to change the denoiser. Route 1's costs, honestly: the DeepFilterNet clone at the
-pinned commit plus a **cold Rust build whose duration on a `macos-latest` runner is unmeasured**
-(this Mac only ever did incremental builds; a cold `cargo clean && cargo build` here would give a
-lower bound — say the word), cached thereafter with `actions/cache` on `target/`. Rust is
-preinstalled on GitHub's macOS runners *(to confirm on first run, not assumed)*. And the PAT, for
-the private sibling checkout, on every route.
+pinned commit plus a cold Rust build — **measured 2026-09-18 on this M-series Mac: 48 s from
+`cargo clean`**, a lower bound for a runner, cached thereafter with `actions/cache` on `target/`.
+Two conditions from that measurement: the build must run **without `MACOSX_DEPLOYMENT_TARGET`**
+(with it set to 12.0 the cold build fails, `E0463` `time_macros`, reproduced from clean — the floor
+is applied at link time by `build.sh` instead), and against the **as-built `Cargo.lock`** (backed
+up; it differs from the pinned commit's). Rust is preinstalled on GitHub's `macos-15` image
+(Cargo 1.98.1 per the image README — confirmed from the README, not yet from a run). And the PAT,
+for the private sibling checkout, on every route: fine-grained, `salesos-virtualmic` only,
+Contents + Metadata read-only.
 
 Recommended: **route 1, driver and helper both built from source in CI, `target/` cached.** Route 2
 is an acceptable *interim* if the first Mac release must not wait on a Rust pipeline — but it should
