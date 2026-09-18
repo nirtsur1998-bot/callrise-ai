@@ -208,8 +208,14 @@ password was generated, **verified against Apple from this Mac first** (`xcrun n
 → authenticated), stored trimmed, and the job re-run. That re-run's submission
 (`58e2e693-ff5b-4011-adb5-e88acde4ad18`, "CallRise AI.zip") was **In Progress at Apple** for 20+
 minutes at time of writing — first submissions from a new team can take an hour.
-**Not yet reached as of run 3's re-run:** the notarization verdict, stapling, check 6, the upload,
-go-live, checks 1–5.
+**Run 3's re-run: Apple ACCEPTED the notarization** (51 minutes in the queue), and every artifact
+check passed on the runner — Developer ID authority on the `.app` and on both nested denoiser
+binaries, `stapler validate`, `spctl`, check 6. It then failed at the upload step's read-back:
+`latest-mac.yml` said `CallRise-AI-1.15.0-test.1-arm64-mac.zip`, GitHub had stored the file as
+`CallRise.AI-…` (space → dot). **A shipped Mac updater would have 404'd on every check** — the
+read-back exists for exactly this. Fixed by a space-free `mac.artifactName` (`80f6042`); run 4
+(`35359158524`) is the first that can reach go-live.
+**Not yet reached as of run 3:** the upload read-back, go-live, checks 1–5.
 
 **Lesson worth keeping:** every credential that a human pasted failed once (PAT name too long;
 `.p12` password mismatch; app-specific password with a newline). Every value that was verified
