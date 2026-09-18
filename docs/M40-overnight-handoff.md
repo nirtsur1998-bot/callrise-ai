@@ -189,6 +189,23 @@ packaged one is the one `verify-build-inputs.js` guards. Relaunched with `SALESO
   permissions **Contents: Read-only** and **Metadata: Read-only** (Metadata is added automatically).
   Nothing else. Read-only is sufficient: the job only clones. Store as `VIRTUALMIC_REPO_TOKEN`.
 
+**First runs on GitHub, 2026-09-18 (tag `v1.15.0-test.1`, throwaway branch `m40-mac-test-run`):**
+run 1 (`35327765759`) — Windows failed on one real-time test (`multichannel-fallback`, untouched,
+green on the next run: a runner-timing flake) and its diagnostics step hid the artifact (`find dist`
+under `bash -e`, fixed `9eab8ff`). Run 2 (`35330742059`) — **Windows green; macOS green through
+every step up to packaging**: libdf.a from source **179 s** cold on `macos-15` (48 s here), `build.sh`
+22 s, npm ci 23 s, addon 3 s, full suite 304 s. Failed at electron-builder's certificate import —
+`MAC verification failed during PKCS12 import (wrong password?)` — i.e. the `MAC_CERT_PASSWORD`
+secret did not match the `.p12`. Human-entered; fix is re-saving the secret and re-running the
+failed job. **Not yet reached:** `mac.binaries` signing of the nested denoiser, notarization,
+stapling, check 6, the upload, go-live and checks 1–5.
+
+**Secrets and certificates, done this morning:** fine-grained PAT (`callrise-ai-release-ci-virtualmic`,
+`salesos-virtualmic` only, Contents + Metadata read-only, expires 2027-09-18); Developer ID
+Application and Installer certificates issued under Team `THC746RHPV` (expire 2031-09-17), installed
+and chain-verified on this Mac; all six repo secrets present. `salesos-virtualmic` `main` is
+fast-forwarded to the M40 branch and pushed (`build-libdf.sh` is on `main`).
+
 **Still needs you (delta from §3):** §3.3 is done. §3.1 certificates ("done" per your message —
 I have not verified them on this machine), §3.4 approved (`8d89928`), §3.5 and §3.6 unchanged,
 plus the PAT above.
