@@ -25,8 +25,11 @@ public information, printed inside every signed app on your machine.
 
 ## Part 1 — Create one CSR (Certificate Signing Request)
 
-This generates a private key **in your keychain** and a request file to upload. One CSR is reused
-for both certificates.
+This generates a private key **in your keychain** and a request file to upload. ~~One CSR is reused
+for both certificates.~~ **Wrong — measured 2026-09-18:** Apple refuses a second certificate from
+the same CSR ("The uploaded CSR file has already been used to generate another certificate"). Make
+**one CSR per certificate** — run this Part twice, with a different Common Name the second time
+(`Nir Tsur Developer ID Installer`). Each CSR is its own key pair in the keychain.
 
 1. Open **Keychain Access** (⌘-Space → "Keychain Access").
 2. Menu bar: **Keychain Access → Certificate Assistant → Request a Certificate From a Certificate
@@ -124,8 +127,12 @@ I will verify by running:
 security find-identity -v
 ```
 
-and confirming three identities are present, including `Developer ID Application: … (X7C2XR7YZ7)`
-and `Developer ID Installer: … (X7C2XR7YZ7)`. Identity names and Team IDs are public — they are
+and confirming three identities are present, including `Developer ID Application: … (THC746RHPV)`
+and `Developer ID Installer: … (THC746RHPV)`. **The Team ID is `THC746RHPV`, not the `X7C2XR7YZ7`
+on the Apple Development certificate** — that one is the personal team Xcode makes for a free
+account; Developer ID certificates come from the paid Developer Program team, and `APPLE_TEAM_ID`
+for notarization must be the Program team (measured 2026-09-18: both certificates issued under
+`THC746RHPV`). Identity names and Team IDs are public — they are
 printed inside every signed application on your Mac (Krisp's reads
 `Developer ID Application: Krisp Technologies, Inc. (U5R26XM5Z2)`).
 
