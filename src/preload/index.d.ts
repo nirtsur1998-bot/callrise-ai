@@ -1389,11 +1389,50 @@ export interface CrmNoteReview {
   skipped?: string[]
 }
 
+/** 2026-09-18 — the drafted note as PARTS. A note generated as one paragraph
+ *  has no line breaks in it, so it pasted into another CRM as one long row;
+ *  sections give the card real headings and bullets to render and to put on
+ *  the clipboard. Mirrors src/main/crm-note-format.ts. */
+export interface CrmNoteSections {
+  /** Outcome first: what was decided or what changed. */
+  summary: string
+  /** What the buyer needs, in their own words where they gave them. */
+  needs?: string[]
+  discussed?: string[]
+  concerns?: string[]
+  /** Who else is involved, and who actually decides. */
+  stakeholders?: string[]
+  /** Where the deal stands, plus timing. */
+  status?: string
+  /** Each one "who — what — when". */
+  nextSteps?: string[]
+}
+
+export interface CrmNoteHeader {
+  contactName?: string
+  callDate?: string
+}
+
+/** BUG-288 — copying, from main. `navigator.clipboard` is permission-denied in
+ *  this app (a file:// document; index.ts grants `media` and nothing else), so
+ *  it fails with NotAllowedError wherever it is called. `html` is written
+ *  alongside the text, never instead of it: a rich-text CRM field collapses
+ *  plain-text newlines, which is half of why a pasted note arrived as one row.
+ *  `{ ok: false }` means nothing reached the clipboard — the caller must say so
+ *  rather than showing "Copied". */
+export interface ClipboardApi {
+  write: (payload: { text: string; html?: string }) => Promise<{ ok: boolean }>
+}
+
 /** What a `crmNote:generate` job carries in Job.resultData. */
 export interface CrmNoteJobResult {
   note: string
   facts: KycFact[]
   review?: CrmNoteReview
+  /** Absent on every note drafted before sections shipped — `note` is then
+   *  the whole note and the card renders it as the paragraph it is. */
+  sections?: CrmNoteSections
+  header?: CrmNoteHeader
 }
 
 /** M23 Workstream C — the standalone "Generate CRM note" card on the
@@ -3302,6 +3341,7 @@ declare global {
       prepBrief: PrepBriefApi
       salesBrain: SalesBrainApi
       telemetry: TelemetryApi
+      clipboard: ClipboardApi
       updater: UpdaterApi
       jobs: JobsApi
       live: LiveApi

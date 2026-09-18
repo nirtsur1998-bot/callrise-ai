@@ -15,8 +15,18 @@ import { app, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { listCalls, getCall } from './calls-fs'
 import { getContact, addComment } from './contacts-fs'
-import { generateCrmNote } from './crm-notes'
+import { generateStructuredCrmNote } from './crm-notes'
 import { sanitizeCrmNoteLength, type CrmNoteLength } from './crm-note-length'
+import { formatCrmNoteText, type CrmNoteHeader } from './crm-note-format'
+
+/** The header's date, in the rep's own locale. A bad/absent timestamp simply
+ *  omits the date rather than writing "Invalid Date" into their CRM. */
+function noteDate(startedAt: unknown): string | undefined {
+  if (typeof startedAt !== 'string') return undefined
+  const d = new Date(startedAt)
+  if (Number.isNaN(d.getTime())) return undefined
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+}
 import { crmNoteSourceFromCall, harvestKycFacts } from './crm-note-generator'
 import {
   asCrmNoteJobResult,
@@ -118,12 +128,32 @@ export function registerCrmNoteGenerator(): void {
         }
 
         const [noteResult, facts] = await Promise.all([
-          generateCrmNote(source, input.length, { signal: handle.signal }),
+          generateStructuredCrmNote(source, input.length, { signal: handle.signal }),
           harvestKycFacts(source, contact, { signal: handle.signal })
         ])
         if (!noteResult.ok) throw new Error('Could not draft a note. Please try again.')
 
-        return { note: noteResult.note, facts, callId }
+        // 2026-09-18 — `sections` and `header` are ADDITIVE, on purpose. This
+        // job's resultData is persisted and kept until the rep has reviewed it
+        // (retainUntilConsumed above, M26 Phase 3), so a draft sitting on a
+        // real profile right now has to keep rendering after this ships:
+        // `note` stays the plain-text note it has always been, and the card
+        // falls back to it whenever `sections` is missing.
+        const header: CrmNoteHeader = {
+          contactName: contact.name,
+          // `createdAt` is what the Past Calls list and the call header both
+          // show for a call's date. Deliberately NOT `updatedAt`: that is the
+          // sync ordering key (BUG-243/BUG-279), and a backup repush would
+          // silently restamp the date printed on the note.
+          callDate: noteDate(call.createdAt)
+        }
+        return {
+          note: formatCrmNoteText(noteResult.sections, header),
+          sections: noteResult.sections,
+          header,
+          facts,
+          callId
+        }
       }
     }
   })

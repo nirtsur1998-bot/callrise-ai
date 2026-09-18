@@ -698,6 +698,13 @@ const api = {
     onRequestStopCapture: (cb: () => void) => subscribe('detection:requestStopCapture', cb),
     onRequestTogglePause: (cb: () => void) => subscribe('detection:requestTogglePause', cb)
   },
+  // BUG-288 — the renderer's own navigator.clipboard is permission-denied in
+  // this app (a file:// document, and index.ts grants nothing but `media`), so
+  // every copy goes through main's clipboard module instead.
+  clipboard: {
+    write: (payload: { text: string; html?: string }) =>
+      ipcRenderer.invoke('clipboard:write', payload)
+  },
   // M29 A1.3 — opt-in diagnostics: consent, the anonymous id, and the real
   // queued payloads (Settings → Privacy → Diagnostics & telemetry).
   telemetry: {

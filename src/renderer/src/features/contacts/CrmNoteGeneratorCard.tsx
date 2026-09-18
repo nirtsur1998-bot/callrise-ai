@@ -1,10 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Sparkles, Check, X, Loader2, AlertCircle, ChevronDown } from 'lucide-react'
+import { Sparkles, Check, X, Loader2, AlertCircle, ChevronDown, Copy, FileCode } from 'lucide-react'
 import { Card } from '@renderer/components/Card'
 import { Button } from '@renderer/components/Button'
 import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { useJobByTarget } from '@renderer/features/jobs/useJobByTarget'
-import type { CrmNoteJobResult, KycFact } from '../../../../preload/index.d'
+import type {
+  CrmNoteHeader,
+  CrmNoteJobResult,
+  CrmNoteSections,
+  KycFact
+} from '../../../../preload/index.d'
+import {
+  CRM_NOTE_SECTIONS,
+  copyNote,
+  crmNoteHeaderLine,
+  sectionsOf,
+  toHtml,
+  toMarkdown
+} from './crmNoteFormat'
 
 type CrmNoteLength = 'short' | 'medium' | 'detailed'
 
@@ -50,6 +63,52 @@ const KYC_FIELD_LABEL: Record<string, string> = {
   briefingNotes: 'Briefing Notes'
 }
 
+/** The note, rendered as the parts it is. A note drafted before sections
+ *  existed has only a summary, and renders exactly as it always did — one
+ *  paragraph, no empty headings above it. */
+function CrmNoteBody({
+  sections,
+  header
+}: {
+  sections: CrmNoteSections
+  header?: CrmNoteHeader
+}): React.JSX.Element {
+  const head = crmNoteHeaderLine(header)
+  return (
+    <div className="flex flex-col gap-2.5">
+      {head && <p className="text-[11px] font-medium text-faint">{head}</p>}
+      {sections.summary && (
+        <p className="whitespace-pre-wrap text-[13px] text-ink">{sections.summary}</p>
+      )}
+      {CRM_NOTE_SECTIONS.map(([key, label]) => {
+        const value = sections[key]
+        if (!value) return null
+        return (
+          <div key={key}>
+            {/* The same uppercase label the "Suggested updates" block below
+                already uses, so one card does not invent two heading styles. */}
+            <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-faint">
+              {label}
+            </p>
+            {Array.isArray(value) ? (
+              <ul className="flex flex-col gap-1">
+                {value.map((item, i) => (
+                  <li key={i} className="flex gap-1.5 text-[13px] text-ink">
+                    <span className="select-none text-faint">•</span>
+                    <span className="min-w-0">{item}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-[13px] text-ink">{value}</p>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 interface CrmNoteGeneratorCardProps {
   contactId: string
   /** Called after a note save or an accepted KYC update actually changes the
@@ -83,6 +142,7 @@ export function CrmNoteGeneratorCard({
   const [applyingFactId, setApplyingFactId] = useState<string | null>(null)
   const [savingNote, setSavingNote] = useState(false)
   const [showSkipped, setShowSkipped] = useState(false)
+  const [copied, setCopied] = useState<'text' | 'markdown' | null>(null)
   const mountedRef = useRef(true)
 
   useEffect(() => {
@@ -106,6 +166,32 @@ export function CrmNoteGeneratorCard({
   const generatedLength = (job?.input as GenerateInput | undefined)?.length
   const noteHandled = !!result?.review?.noteHandled
   const note = result && !noteHandled ? result.note : null
+  // Sections when the draft has them, the paragraph when it doesn't — a note
+  // generated before this shipped must still render, because an unreviewed
+  // draft is retained across restarts on purpose (M26 Phase 3).
+  const sections = result ? sectionsOf(result) : null
+
+  const copyAs = useCallback(
+    async (flavour: 'text' | 'markdown'): Promise<void> => {
+      if (!result || !sections) return
+      const text = flavour === 'markdown' ? toMarkdown(sections, result.header) : result.note
+      const ok = await copyNote(text, toHtml(sections, result.header))
+      if (!mountedRef.current) return
+      // BUG-288 — never claim "Copied" without knowing it landed. That is the
+      // whole reason this bug survived: a failed clipboard write is silent,
+      // and you only find out at the paste.
+      if (!ok) {
+        setError('Could not copy to the clipboard. Please try again.')
+        return
+      }
+      setError(null)
+      setCopied(flavour)
+      setTimeout(() => {
+        if (mountedRef.current) setCopied(null)
+      }, 1500)
+    },
+    [result, sections]
+  )
 
   const acceptedIds = new Set(result?.review?.accepted ?? [])
   const skippedIds = new Set(result?.review?.skipped ?? [])
@@ -214,7 +300,7 @@ export function CrmNoteGeneratorCard({
 
       {error && <p className="mt-2.5 text-[12px] text-danger">{error}</p>}
 
-      {note && (
+      {note && sections && (
         <div className="mt-3 rounded-xl border border-accent/30 bg-accent-soft p-3.5">
           {lengthChanged && (
             <p className="mb-2 flex items-center gap-1.5 text-[11px] text-warning">
@@ -223,8 +309,33 @@ export function CrmNoteGeneratorCard({
               — click Regenerate to redraft it at {LENGTH_LABEL[length]}.
             </p>
           )}
-          <p className="whitespace-pre-wrap text-[13px] text-ink">{note}</p>
-          <div className="mt-2.5 flex justify-end gap-1.5">
+          <CrmNoteBody sections={sections} header={result?.header} />
+          <div className="mt-2.5 flex items-center justify-end gap-1.5">
+            {/* The founder's complaint this card was built to answer: the
+                note had to be selected by hand, and it pasted into another
+                CRM as one long row. One button now puts the structured text
+                AND its rich-text equivalent on the clipboard; the second
+                offers markdown for the tools that want it. Copying is NOT a
+                decision — it never marks the note handled, because a rep
+                copies first and then decides whether to save. */}
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={copied === 'text' ? Check : Copy}
+              onClick={() => void copyAs('text')}
+              title="Copy with formatting, ready to paste into your CRM"
+            >
+              {copied === 'text' ? 'Copied' : 'Copy'}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={copied === 'markdown' ? Check : FileCode}
+              onClick={() => void copyAs('markdown')}
+              title="Copy as Markdown"
+            >
+              {copied === 'markdown' ? 'Copied' : 'Markdown'}
+            </Button>
             <Button
               size="sm"
               variant="secondary"
