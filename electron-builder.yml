@@ -201,7 +201,22 @@ mac:
     - NSAudioCaptureUsageDescription: CallRise AI records the other party's call audio, only with their consent, so it can transcribe the conversation.
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
-  notarize: false
+  # M40: notarize when credentials are present. electron-builder reads
+  # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID from the
+  # environment (app-builder-lib MacTargetHelper.getNotarizeOptions); with
+  # none of them set it logs "skipped macOS notarization" and exits 0 — so a
+  # local unsigned build still works, and release.yml's macos job verifies
+  # the ARTIFACT (stapler validate, spctl) rather than trusting that exit code.
+  notarize: true
+  # Extra Mach-O binaries to sign, relative to the .app's Contents/. The
+  # denoiser ships under Resources, which osx-sign does not walk on its own —
+  # an unsigned helper inside a notarized app fails notarization (or, worse,
+  # passes here and is killed by Gatekeeper on the user's Mac). Unverified
+  # until the first signed CI run; the job's codesign --verify on both paths
+  # is what turns this from a claim into a check.
+  binaries:
+    - Resources/virtualmic/build/michelper
+    - Resources/virtualmic/build/SalesOSMicrophone.driver
   target:
     # What a human downloads and drags into Applications.
     - dmg
