@@ -33,7 +33,10 @@ function prefersReducedMotion(): boolean {
  * with the evidence it was made from in smaller type beside it. Top of the
  * window, full width; nothing else on the screen animates. Space (while the
  * line is up) or a click marks the cue useful — the absorption instrument.
- * A cue whose evidence is blank does not render at all.
+ * A cue whose evidence is blank does not render at all — and (BUG-282) neither
+ * does a cue whose SENTENCE is blank: seen once on the sandbox after a call
+ * ended, the line showed the label, the mono evidence and the Useful button
+ * with nothing between them. Evidence with no claim is not a cue either.
  *
  * INSTRUMENT PANEL: the line owns a 44px slot that is ALWAYS mounted. Before
  * this it returned null between cues, so every arrival and every expiry
@@ -43,6 +46,13 @@ function prefersReducedMotion(): boolean {
  * `glance-line` test id stays on the cue, not the slot, so "absent when
  * there is no cue" remains exactly the claim it was.
  */
+/** The one render gate: evidence AND a sentence, or the slot stays empty.
+ *  Both the 'shown' record and the paint go through this, so a cue that is
+ *  not drawn is never counted as seen. */
+export function isRenderableCue(cue: GlanceCue | null): cue is GlanceCue {
+  return !!cue && hasEvidence(cue.evidence) && cue.text.trim().length > 0
+}
+
 export function GlanceLine({
   cue,
   onDismiss
@@ -57,9 +67,9 @@ export function GlanceLine({
   const [ghost, setGhost] = useState<GlanceCue | null>(null)
   const [prevLive, setPrevLive] = useState<GlanceCue | null>(null)
 
-  // record 'shown' once per cue id, never for a cue without evidence
+  // record 'shown' once per cue id, never for a cue that is not drawn
   useEffect(() => {
-    if (!cue || !hasEvidence(cue.evidence)) return
+    if (!isRenderableCue(cue)) return
     if (shownRef.current === cue.id) return
     shownRef.current = cue.id
     recordAbsorption({ type: 'shown', cueId: cue.id, kind: cue.kind, at: Date.now() })
@@ -82,7 +92,7 @@ export function GlanceLine({
     return () => window.removeEventListener('keydown', onKey)
   })
 
-  const live = cue && hasEvidence(cue.evidence) ? cue : null
+  const live = isRenderableCue(cue) ? cue : null
 
   // Exit: when the live cue goes away (expiry or dismiss), keep a ghost of it
   // for the fade. A REPLACEMENT never ghosts — one cue at a time means the
