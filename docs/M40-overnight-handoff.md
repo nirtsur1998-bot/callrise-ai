@@ -185,4 +185,17 @@ packaged one is the one `verify-build-inputs.js` guards. Relaunched with `SALESO
 
 **Still needs you (delta from §3):** §3.3 is done. §3.1 certificates ("done" per your message —
 I have not verified them on this machine), §3.4 approved (`8d89928`), §3.5 and §3.6 unchanged,
-plus the PAT above. The macOS release job is next on my side.
+plus the PAT above.
+
+**The macOS release job is written — `a1422a0`** (supersedes §3.2 and §4's "did not write"):
+`release.yml` is three jobs under one tag — `windows` (unchanged apart from go-live moving out),
+`macos`, `go-live` (needs both, stages both manifests, flips, then checks 1–5 per platform). The
+macos job builds the denoiser from source (`phase2/build-libdf.sh` → `build.sh`), packages with
+`--publish never`, and uploads only after reading the artifact: Developer ID authority on the
+`.app` and on both nested denoiser binaries, `stapler validate`, `spctl`, the "notarization
+successful" log line, check 6. It refuses up front without all six secrets, by name. **It has never
+run.** Before the first run: (1) add the six secrets; (2) merge `salesos-virtualmic`'s
+`claude/m40-mac-parity` into its `main`, or point the checkout `ref` at the branch — `build-libdf.sh`
+does not exist on `main`; (3) expect `mac.binaries` and notarization to be tested for the first time
+there, not here. A prerelease tag (`v1.15.0-test.1`) is the safe first run: invisible to the updater.
+The release notes still say "for Windows" and name no Mac asset — yours to change, a test pins them.

@@ -261,7 +261,8 @@ DeepFilterNet commit, then `build.sh` — **and** a PAT to check out the private
 `GITHUB_TOKEN` is scoped to this repo only.
 
 **This is the `TMP`-hardcoded-to-one-machine finding one level up:** the shipped denoiser can
-currently only be produced on one computer. The macOS release job was deliberately **not written**
+currently only be produced on one computer. *(Superseded 2026-09-18: the founder chose route 1 and
+the job now exists — `a1422a0`, never yet run; see the handoff §6.)* The macOS release job was at first deliberately **not written**
 until the route is chosen, because its shape depends on it:
 
 | route | cost | what it buys |
