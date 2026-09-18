@@ -215,7 +215,32 @@ binaries, `stapler validate`, `spctl`, check 6. It then failed at the upload ste
 `CallRise.AI-…` (space → dot). **A shipped Mac updater would have 404'd on every check** — the
 read-back exists for exactly this. Fixed by a space-free `mac.artifactName` (`80f6042`); run 4
 (`35359158524`) is the first that can reach go-live.
-**Not yet reached as of run 3:** the upload read-back, go-live, checks 1–5.
+**Run 4 (`35359158524`) — GREEN END TO END.** Windows ✓, macOS ✓ (notarization accepted in
+minutes this time), go-live ✓: both manifests staged at 10 %, `v1.15.0-test.1` flipped to a
+**prerelease** (`/releases/latest` still `v1.14.0` — invisible to every shipped updater), checks
+1–5 skipped by design on a prerelease tag. Nine assets: Windows installer + portable + blockmap,
+`CallRise-AI-Mac.dmg` + blockmap, `CallRise-AI-1.15.0-test.1-arm64-mac.zip` + blockmap,
+`latest.yml`, `latest-mac.yml`. **Verified from a clean download on this Mac, not from the
+runner's log:** `spctl --assess` → `accepted, source=Notarized Developer ID`; `stapler validate`
+OK; app, `michelper` and the `.driver` all `Developer ID Application: Nir Tsur (THC746RHPV)`;
+`CFBundleShortVersionString 1.15.0-test.1`; `LSMinimumSystemVersion 12.0`; helper arm64.
+
+**What is still open after this, in order:**
+1. **The signature-survival test** (Stage 3 audit §safeStorage) — install this signed build on a
+   Mac that has data under the old (ad-hoc/dev) signature and see whether the session and sealed
+   keys survive. That is this Mac with your real profile; it is an admin-level install of a test
+   build over your daily app, so it is your call when. If keys do not survive, the plan is a
+   migration, not a release note.
+2. **Cleanup per M29 §3:** delete the test release, the tag `v1.15.0-test.1` and the branch
+   `m40-mac-test-run` once (1) is done — or keep the release until then; it is harmless.
+3. **Rotate three values that passed through this chat:** the PAT (regenerate, update
+   `VIRTUALMIC_REPO_TOKEN`), the `.p12` (re-export with a new password, update both `MAC_CERT_*`
+   secrets), the app-specific password (revoke `CallRise notarytool` + `… 2` at account.apple.com,
+   create one, update `APPLE_APP_SPECIFIC_PASSWORD`). Then delete `~/Desktop/callrise-devid*.p12`.
+4. **`engines`:** `">=22 <25"` recommended; awaiting the decision.
+5. **GitHub 2FA by 2026-09-20** or account actions — including releases — get restricted.
+6. **Merge order** with the Windows session's eight branches — the founder's decision; the Mac
+   branch's shippable SHA is the head of `claude/m40-mac-parity` at the time of reading.
 
 **Lesson worth keeping:** every credential that a human pasted failed once (PAT name too long;
 `.p12` password mismatch; app-specific password with a newline). Every value that was verified
