@@ -36,6 +36,7 @@ import { summarize, type SummarizeInput, type SummaryResult } from './summarize'
 import { coachCall } from './coach'
 import { extractCommitments } from './commitments'
 import { generateCallTitle, type GenerateTitleResult } from './call-title'
+import { postSaveStep } from './post-save-step'
 import { mineObjections, makeVerifier, type ObjectionMiningResult } from './objection-mining'
 import { addToQueue, purgeQueueForCall } from './objection-queue-fs'
 import { purgeJournalForCall } from './live/call-journal'
@@ -482,16 +483,25 @@ export function registerCalls(): void {
       // transcript is still on screen", so until this line runs the journal is
       // the only durable copy. Retiring it any earlier would discard the one
       // thing that survives precisely the failure it exists for.
-      endCall({ saved: true })
-      scheduleBackup() // metadata only reaches the cloud (segments never included)
+      //
+      // BUG-285 — from here to the handler's end, every step runs through
+      // postSaveStep(): the record exists, and a follow-up that throws is
+      // logged by name, never allowed to report a SAVED call as a failed
+      // save (which also left the journal unretired — a duplicate on the
+      // next launch). endCall is the consent-clearing safety path; it is
+      // wrapped from the outside and its own order and contents are
+      // untouched.
+      await postSaveStep('end-call', summary.id, () => endCall({ saved: true }))
+      // metadata only reaches the cloud (segments never included)
+      await postSaveStep('schedule-backup', summary.id, () => scheduleBackup())
       // Never blocks the save. Only runs when the Objection Library toggle is
       // on — this is the "new calls going forward" half of the mining scope
       // (the other half is the manual scan below). Checked here to avoid
       // queueing a job that would only no-op, AND again inside the executor,
       // which is the check that actually matters.
-      if (isObjectionMiningEnabled()) {
-        enqueueCascadeJob(AUTO_MINE_JOB_TYPE, summary.id)
-      }
+      await postSaveStep('auto-mine', summary.id, () => {
+        if (isObjectionMiningEnabled()) enqueueCascadeJob(AUTO_MINE_JOB_TYPE, summary.id)
+      })
       // M19 Task 2 step 5 — applied and AWAITED before the cascade below
       // starts, so ordering is deterministic: self-intro lands first as a
       // placeholder, then the cascade (fully async, fire-and-forget) can
@@ -513,20 +523,23 @@ export function registerCalls(): void {
       // written outside consent, as a second line of defense — see its own
       // doc comment in calls-fs.ts — but the write is prevented here too,
       // rather than relying solely on next-read cleanup).
-      if (selfIntro?.key && selfIntro.name && isSelfIntroExtractionAllowed()) {
+      await postSaveStep('self-intro-name', summary.id, async () => {
+        if (!(selfIntro?.key && selfIntro.name && isSelfIntroExtractionAllowed())) return
         const current = await getCall(callsDir(), summary.id)
         if (current?.consent?.recordOtherParty === true) {
           await setSpeakerIdentity(callsDir(), summary.id, selfIntro.key, {
             name: selfIntro.name,
             source: 'self-intro',
             confidence: 'medium'
-          }).catch(() => {})
+          })
         }
-      }
+      })
       // Same as objection mining above — never blocks the save. Fully
       // resolves multichannel calls (channel 0/1 are deterministic); mono
       // calls only get "me" once coaching supplies repSpeaker (see below).
-      enqueueCascadeJob(RESOLVE_CONTACT_JOB_TYPE, summary.id)
+      await postSaveStep('resolve-contact', summary.id, () =>
+        enqueueCascadeJob(RESOLVE_CONTACT_JOB_TYPE, summary.id)
+      )
       // M25 — same fire-and-forget convention, own independent chain (not
       // .then()-ed onto the identity/contact one above): a Sales Brain
       // failure must never be able to affect contact resolution, and vice
@@ -535,7 +548,9 @@ export function registerCalls(): void {
       // M26 Batch 5 — now a BATCH job. 'post-save' means this pass stores NO
       // client-scoped memories, by rule rather than by winning a race with
       // the contact cascade above (see MemoryExtractionPass).
-      enqueueMemoryExtraction(summary.id, { pass: 'post-save' })
+      await postSaveStep('memory-extraction', summary.id, () =>
+        enqueueMemoryExtraction(summary.id, { pass: 'post-save' })
+      )
       return summary
     }
   )
