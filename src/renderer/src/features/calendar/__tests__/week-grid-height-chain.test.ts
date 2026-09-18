@@ -47,6 +47,7 @@ describe('BUG-266 — the height chain from AppShell down to the week grid', () 
       createElement(AppShell, {
         sidebar: createElement('div'),
         copilot: createElement('div'),
+        title: 'Calendar',
         clampContent: true,
         children: createElement('div', { 'data-testid': 'child' })
       })
@@ -61,6 +62,7 @@ describe('BUG-266 — the height chain from AppShell down to the week grid', () 
       createElement(AppShell, {
         sidebar: createElement('div'),
         copilot: createElement('div'),
+        title: 'Home',
         children: createElement('div', { 'data-testid': 'child' })
       })
     )
