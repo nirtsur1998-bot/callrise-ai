@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Plus,
   Handshake,
@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
 import { useStepOutToken } from '@renderer/app/useStepOutToken'
+import { useConsumeId } from '@renderer/app/useConsumeId'
 import { Badge } from '@renderer/components/Badge'
 import { Button } from '@renderer/components/Button'
 import { IconButton } from '@renderer/components/IconButton'
@@ -99,13 +100,15 @@ export function DealsView({
   const [linking, setLinking] = useState(false)
   const [viewingId, setViewingId] = useState<string | null>(initialViewDealId)
 
-  const consumedRef = useRef(false)
-  useEffect(() => {
-    if (initialViewDealId && !consumedRef.current) {
-      consumedRef.current = true
-      onInitialViewConsumed?.()
-    }
-  }, [initialViewDealId, onInitialViewConsumed])
+  // BUG-289 — the same fix PastCallsView already carries from M31, never
+  // brought to this screen: a second RECENT/palette click for a different
+  // deal — reached while already on Pipeline, so nothing remounts this
+  // component — was silently dropped. useConsumeId is the one place that
+  // fix lives now.
+  useConsumeId(initialViewDealId, (id) => {
+    setViewingId(id)
+    onInitialViewConsumed?.()
+  })
 
   // BUG-286 — sidebar "Pipeline" while already on Pipeline: show the list.
   useStepOutToken(stepOutToken, () => setViewingId(null))

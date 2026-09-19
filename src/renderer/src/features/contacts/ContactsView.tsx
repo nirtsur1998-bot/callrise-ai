@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Plus,
   Contact as ContactIcon,
@@ -34,6 +34,7 @@ import { buildContactStats, recencyTone, formatRelative, type ContactStats } fro
 import type { Contact } from './types'
 import { formatDateOnly } from '@renderer/lib/dateOnly'
 import { useStepOutToken } from '@renderer/app/useStepOutToken'
+import { useConsumeId } from '@renderer/app/useConsumeId'
 
 type SortMode = 'recent' | 'name'
 
@@ -74,13 +75,16 @@ export function ContactsView({
     setDeleteBlocked(ok ? null : contact.name)
   }
 
-  const consumedRef = useRef(false)
-  useEffect(() => {
-    if (initialViewId && !consumedRef.current) {
-      consumedRef.current = true
-      onInitialViewConsumed?.()
-    }
-  }, [initialViewId, onInitialViewConsumed])
+  // BUG-289 — M31 already found and fixed this exact shape for
+  // PastCallsView, and it never made it to this screen when Contacts/Deals
+  // were built with the same one-shot-consume prop shape: a second
+  // RECENT/palette click for a different contact — reached while already on
+  // Pipeline, so nothing remounts this component — was silently dropped.
+  // useConsumeId is the one place that fix lives now.
+  useConsumeId(initialViewId, (id) => {
+    setViewingId(id)
+    onInitialViewConsumed?.()
+  })
 
   // BUG-286 — sidebar "Pipeline" while already on Pipeline: show the list.
   useStepOutToken(stepOutToken, () => setViewingId(null))
