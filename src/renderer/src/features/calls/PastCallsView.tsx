@@ -61,7 +61,13 @@ export function PastCallsView({
       <CallDetail
         callId={selectedId}
         onBack={() => setSelectedId(null)}
-        onDeleted={() => setSelectedId(null)}
+        onDeleted={(reason) => {
+          // BUG-287 — the click that landed here (a stale RECENT/palette row)
+          // must not look like a no-op: CallDetail already pruned the trail
+          // entry, this says WHY the rep is back at the list.
+          if (reason === 'missing') toast.info('That call was deleted.')
+          setSelectedId(null)
+        }}
         onChanged={refresh}
       />
     )

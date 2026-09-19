@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useToast } from '@renderer/features/notifications/useToast'
+import { removeRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import type { Deal } from './types'
 
 export type DealCreateInput = Parameters<typeof window.api.deals.create>[0]
@@ -48,9 +49,12 @@ export function useDeals(): UseDeals {
       // the real delete for every deal still pending instead of dropping it.
       for (const [id, handle] of timeouts) {
         clearTimeout(handle)
-        void window.api.deals.delete(id).catch(() => {
-          /* nothing left mounted to report this to; best-effort */
-        })
+        void window.api.deals
+          .delete(id)
+          .then(() => removeRecentlyViewed('deal', id)) // BUG-287
+          .catch(() => {
+            /* nothing left mounted to report this to; best-effort */
+          })
       }
       timeouts.clear()
     }
@@ -108,6 +112,7 @@ export function useDeals(): UseDeals {
         void (async () => {
           try {
             await window.api.deals.delete(id)
+            removeRecentlyViewed('deal', id) // BUG-287
           } catch {
             toast.error('Could not delete the deal. Please try again.')
           }

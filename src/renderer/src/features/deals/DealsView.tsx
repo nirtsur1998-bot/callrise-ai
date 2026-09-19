@@ -14,6 +14,7 @@ import {
 import { cn } from '@renderer/lib/cn'
 import { useStepOutToken } from '@renderer/app/useStepOutToken'
 import { useConsumeId } from '@renderer/app/useConsumeId'
+import { removeRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import { Badge } from '@renderer/components/Badge'
 import { Button } from '@renderer/components/Button'
 import { IconButton } from '@renderer/components/IconButton'
@@ -112,6 +113,18 @@ export function DealsView({
 
   // BUG-286 — sidebar "Pipeline" while already on Pipeline: show the list.
   useStepOutToken(stepOutToken, () => setViewingId(null))
+
+  // BUG-287 — same shape as ContactsView's equivalent check: a deal resolves
+  // synchronously against the already-loaded list, so there is no separate
+  // "not found" state to catch on its own — this is that check, for a stale
+  // RECENT/palette row asking for a deal that's gone.
+  useEffect(() => {
+    if (loading || !viewingId) return
+    if (deals.some((d) => d.id === viewingId)) return
+    removeRecentlyViewed('deal', viewingId)
+    toast.info('That deal was deleted.')
+    setViewingId(null)
+  }, [loading, viewingId, deals, toast])
 
   useEffect(() => {
     let active = true
