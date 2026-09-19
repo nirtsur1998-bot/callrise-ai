@@ -354,3 +354,35 @@ installed here either.
 3. Source a legacy macOS 12 installer through a third-party archive for a VM — not attempted here
    without asking first, since it's the one path that trades a real verification for one of
    uncertain trustworthiness.
+
+## 10. Uninstall-driver button — TESTED LIVE, PASSED (2026-09-19, founder-authorized)
+
+Never executed before tonight — it removes the founder's real working driver, so it had only ever
+been verified to the IPC surface. Founder explicitly authorized a live test after being told the
+exact risk (a brief audio interruption) and the safeguard (a byte-exact backup taken first).
+
+**Sequence:** backed up the live, currently-installed `.driver` bundle (hash
+`7565102b…`) — verified byte-identical to the original with `diff -rq` before touching anything.
+Confirmed the sibling repo's own `build/SalesOSMicrophone.driver` had drifted from what's
+installed (different hash) — using it to "reinstall" would NOT have restored the exact working
+state, so restoration used the fresh backup, not the app's own `installDriver()`. Launched a
+throwaway sandbox instance (not the real profile — this is OS-level, profile-independent) and
+called the real `uninstallDriver()` IPC handler, the same one the Settings button calls.
+
+**Result: clean pass.**
+- The macOS admin-password prompt appeared as designed (founder approved it) — no way around it,
+  by the code's own comment, and none attempted.
+- `.driver` bundle removed; `coreaudiod` restarted; `Sales OS Microphone` gone from
+  `system_profiler`; every other device (`krisp microphone`, `MacBook Pro Microphone`, etc.)
+  untouched.
+- The app's own `getStatus()` correctly reported `driverInstalled: false` immediately after —
+  matches the filesystem, not stale.
+
+**Restored:** copied the verified backup back via the same `osascript … with administrator
+privileges` mechanism (one more founder-approved prompt), then confirmed byte-for-byte identity
+(`diff -rq`, hash match), `coreaudiod` healthy, `Sales OS Microphone` back in the device list, and
+the app's own status back to `driverInstalled: true`. Nothing left running; the throwaway sandbox
+was deleted.
+
+**Conclusion: the uninstall button works correctly and recovers cleanly.** This closes the one
+"wired but never executed" gap called out since Stage 3.
