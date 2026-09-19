@@ -1,7 +1,7 @@
-// The five release-feed checks, from docs/release-feed-verification.md.
+// The release-feed checks, from docs/release-feed-verification.md.
 // usage: node five-checks.mjs v1.5.2 100 [--mac]
 //
-// MACOS, added 2026-09-17 (M40). These five read the feed electron-updater
+// MACOS, added 2026-09-17 (M40). Checks 1-5 read the feed electron-updater
 // actually follows. On macOS that feed is a DIFFERENT file — `latest-mac.yml`,
 // not `latest.yml` — so without `--mac` a Mac release would be checked against
 // Windows' manifest, which either 404s or, worse, passes against the wrong
@@ -12,6 +12,27 @@
 // not the DMG — see electron-builder.yml's mac.target comment) what check 4
 // downloads and hashes. Default is unchanged, so the existing Windows
 // invocation needs no edit.
+//
+// CHECK 6 (Windows only), added 2026-09-19. Read the version back out of the
+// DOWNLOADED ARTIFACT ITSELF — the installer's own VERSIONINFO resource — not
+// out of any manifest, page, or filename. This is the check that caught a
+// release once stamped 1.10.0 that installed fine, ran fine, and would have
+// updated nobody, because nothing had asked the .exe what it actually thought
+// its own version was.
+//
+// It existed for three earlier releases (v1.12.0-v1.14.0) as a SEPARATE script
+// in one session's scratchpad — never checked in, never run by anyone else,
+// never wired into `run.mjs` or any workflow. That is the finding this comment
+// exists to name: a verification step nobody but its author can run is a
+// HABIT, not a GATE — it protects a release only for as long as that one
+// person remembers, from that one machine. Folded into the checked-in script
+// now specifically because it almost happened again: the Mac side built and
+// wired its own PlistBuddy equivalent (reading CFBundleShortVersionString) for
+// M40, so the Mac artifact was getting a version check and the Windows one was
+// not, in the same joint release. Windows-only here — bundle/Info.plist has no
+// VERSIONINFO resource, and duplicating the Mac's own check is not this file's
+// job. `--mac` skips it and says why, rather than silently reporting five of
+// six and letting a reader miss that the sixth never ran.
 import { execSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createWriteStream, statSync, unlinkSync, existsSync } from 'node:fs'
@@ -100,7 +121,7 @@ let assets = []
 }
 
 // ── 4 ─── the expensive one, and the only one you cannot answer from a page
-let _unusedManifestDecl
+let bytes = 0
 {
   const base = `https://github.com/${REPO}/releases/latest/download`
   const version = manifest.match(/^version:\s*(.+)$/m)?.[1]?.trim()
@@ -111,7 +132,7 @@ let _unusedManifestDecl
   if (existsSync(TMP)) unlinkSync(TMP)
   const res = await fetch(`${base}/${encodeURIComponent(INSTALLER)}`)
   await pipeline(Readable.fromWeb(res.body), createWriteStream(TMP))
-  const bytes = statSync(TMP).size
+  bytes = statSync(TMP).size
 
   const hash = createHash('sha512')
   const { createReadStream } = await import('node:fs')
@@ -127,7 +148,14 @@ let _unusedManifestDecl
       `sha512 of download  : ${actual}\n` +
       `downloaded          : ${(bytes / 1e6).toFixed(1)} MB\n` +
       `NOT the manifest against itself — this hash is of the bytes GitHub served.`)
-  unlinkSync(TMP)
+  // NOT deleted here on Windows — check 6 below reads THIS SAME downloaded
+  // file's VERSIONINFO resource. Re-downloading it a second time for that
+  // would work too, but would mean a network hiccup between the two checks
+  // could make them hash and version-check two DIFFERENT bytes without
+  // either check's own pass/fail saying so. Mac has no check 6, so its
+  // artifact is deleted immediately, matching the behaviour before this
+  // comment existed.
+  if (MAC) unlinkSync(TMP)
 }
 
 // ── 5 ─────────────────────────────────────────────────────────────────────
@@ -150,8 +178,64 @@ let _unusedManifestDecl
         : `— expected ${EXPECT_PERCENT}`))
 }
 
+// ── 6 (Windows only) ─── the version READ OUT OF THE ARTIFACT ITSELF, and
+// that the artifact is the NSIS installer (its blockmap covers exactly its
+// bytes) rather than, say, the portable exe served under the wrong name.
+if (MAC) {
+  console.log(
+    '\n[check 6] skipped on --mac — the Mac side reads CFBundleShortVersionString ' +
+      'via its own PlistBuddy step, wired into its own workflow. Not duplicated here.'
+  )
+} else {
+  const info = sh(
+    `pwsh -NoProfile -Command "$v=(Get-Item '${TMP}').VersionInfo; ` +
+      `Write-Output ($v.ProductVersion + '|' + $v.FileVersion + '|' + $v.ProductName + '|' + $v.CompanyName)"`
+  )
+  const [productVersion, fileVersion, productName, company] = info.split('|')
+  const want = TAG.replace(/^v/, '')
+  let blockmapTotal = null
+  try {
+    const bm = await (
+      await fetch(`https://github.com/${REPO}/releases/download/${TAG}/${encodeURIComponent(INSTALLER)}.blockmap`)
+    ).arrayBuffer()
+    const { gunzipSync } = await import('node:zlib')
+    // electron-builder's blockmap: gzipped JSON, files[].sizes is an ARRAY of
+    // block lengths (there is no per-file `size`); the total is every block.
+    const parsed = JSON.parse(gunzipSync(Buffer.from(bm)).toString('utf8'))
+    blockmapTotal = (parsed.files ?? []).reduce(
+      (s, f) => s + (f.sizes ?? []).reduce((a, b) => a + b, 0),
+      0
+    )
+  } catch (e) {
+    blockmapTotal = `unreadable: ${e.message}`
+  }
+  // startsWith, not exact equality, for BOTH fields — verified against the
+  // real installed v1.14.0 exe on this machine before trusting it: its
+  // ProductVersion reads back as "1.14.0.0" (Windows VERSIONINFO's own
+  // four-part convention), not the plain three-part semver, so an exact-match
+  // check here would have FAILED a genuinely correct release. Caught by
+  // testing the mechanism against a real artifact, not by reasoning about it.
+  record(
+    6,
+    'the downloaded artifact itself says it is this version',
+    (productVersion || '').trim().startsWith(want) &&
+      (fileVersion || '').startsWith(want) &&
+      blockmapTotal === bytes,
+    `ProductVersion (from the exe's VERSIONINFO) : ${productVersion}   (expect ${want})\n` +
+      `FileVersion                                : ${fileVersion}\n` +
+      `ProductName / Company                      : ${productName} / ${company}\n` +
+      `blockmap covers                            : ${blockmapTotal} bytes vs downloaded ${bytes} ` +
+      `— the file is the NSIS installer, not the portable`
+  )
+  unlinkSync(TMP)
+}
+
 console.log('\n════════════════════════════════════════')
 results.forEach((r) => console.log(`  ${r.pass ? 'PASS' : 'FAIL'}  ${r.n}. ${r.name}`))
 const failed = results.filter((r) => !r.pass)
-console.log(failed.length ? `\n*** ${failed.length} CHECK(S) FAILED ***` : '\nAll five checks pass.')
+console.log(
+  failed.length
+    ? `\n*** ${failed.length} CHECK(S) FAILED ***`
+    : `\nAll ${results.length} checks pass.`
+)
 process.exit(failed.length ? 1 : 0)
