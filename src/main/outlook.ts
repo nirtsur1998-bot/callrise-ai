@@ -288,12 +288,20 @@ function connect(scopes: string[], mode: SyncMode): Promise<ConnectResult> {
 
 // --- Status / disconnect ----------------------------------------------------
 
-async function getStatus(): Promise<{ connected: boolean; configured: boolean; mode: SyncMode }> {
+async function getStatus(): Promise<{
+  connected: boolean
+  configured: boolean
+  mode: SyncMode
+  account: string | null
+}> {
   const configured = creds() !== null && safeStorage.isEncryptionAvailable()
   const pca = configured ? pcaClient() : null
-  const connected = pca ? (await currentAccount(pca)) !== null : false
+  const account = pca ? await currentAccount(pca) : null
+  const connected = account !== null
   const mode = connected ? await loadMode() : 'readonly'
-  return { connected, configured, mode }
+  // BUG-265 — `account.username` is the mailbox MSAL already resolved to reach
+  // the API at all; it was simply never surfaced. No new scope, no new call.
+  return { connected, configured, mode, account: account?.username ?? null }
 }
 
 /** Exported as disconnectOutlook for BUG-022's device-wipe flow. */

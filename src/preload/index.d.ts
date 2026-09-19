@@ -1873,6 +1873,8 @@ export interface GoogleApi {
     connected: boolean
     configured: boolean
     mode: 'readonly' | 'readwrite'
+    /** BUG-265 — the connected account's address, or null if unresolved/not connected. */
+    account: string | null
   }>
   /** Runs the read-only browser OAuth flow; resolves when the user finishes. */
   connect: () => Promise<{ ok: true } | { ok: false; error: string }>
@@ -1901,6 +1903,8 @@ export interface OutlookApi {
     connected: boolean
     configured: boolean
     mode: 'readonly' | 'readwrite'
+    /** BUG-265 — the connected mailbox address, or null if unresolved/not connected. */
+    account: string | null
   }>
   connect: () => Promise<{ ok: true } | { ok: false; error: string }>
   connectWrite: () => Promise<{ ok: true } | { ok: false; error: string }>

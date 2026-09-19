@@ -243,11 +243,24 @@ function connect(scopes: string[], mode: SyncMode): Promise<ConnectResult> {
 
 // --- Status / disconnect / the proof read ----------------------------------
 
-async function getStatus(): Promise<{ connected: boolean; configured: boolean; mode: SyncMode }> {
+async function getStatus(): Promise<{
+  connected: boolean
+  configured: boolean
+  mode: SyncMode
+  account: string | null
+}> {
   const configured = creds() !== null && safeStorage.isEncryptionAvailable()
   const connected = configured ? (await loadRefreshToken()) !== null : false
   const mode = connected ? await loadMode() : 'readonly'
-  return { connected, configured, mode }
+  // BUG-265 — the primary calendar's id IS the account address for a Google
+  // account (e.g. "you@gmail.com"). getStatus() is on the render path
+  // (CalendarConnectBar blocks on it, plus GoogleConnect/CalendarSection/
+  // HomeView/ActivationChecklist/onboarding all call it on mount), so it must
+  // stay a pure disk read - no network call here, whatever the cost of
+  // resolving the address. cachedPrimaryCalendarId() reads what pullEvents()
+  // already resolved during a real sync; before the first sync (or offline)
+  // this is honestly null rather than blocking the UI on a fetch.
+  return { connected, configured, mode, account: connected ? cachedPrimaryCalendarId() : null }
 }
 
 /** Exported as disconnectGoogle for BUG-022's device-wipe flow. */
@@ -468,6 +481,10 @@ async function fetchCalendars(
 async function pullEvents(): Promise<PullEventsResult> {
   const client = await authedClient()
   if (!client) return { ok: false, error: 'not-connected' }
+  // BUG-265 — resolve+cache the account address here, on the network call a
+  // real sync already makes, so read-only (never-pushed) connections get it
+  // too. Best-effort and never blocks the pull itself on failure.
+  void primaryCalendarId(client).catch(() => {})
   const now = Date.now()
   const timeMin = new Date(now - PULL_BACK_DAYS * DAY_MS).toISOString()
   const timeMax = new Date(now + PULL_FWD_DAYS * DAY_MS).toISOString()
@@ -558,6 +575,14 @@ function calendarIdFromProvider(provider?: string): string {
 // (provider, externalId) match key equals what the pull produces, and the
 // dedup drops the echoed copy instead of showing it twice.
 let cachedPrimaryId: string | null = null
+
+/** BUG-265 — read-only, synchronous, no network: whatever a real sync has
+ *  already resolved and cached, or null before the first one. The render
+ *  path (getStatus) uses this; anything already on the network (pushes,
+ *  pullEvents) uses the async resolver below instead. */
+function cachedPrimaryCalendarId(): string | null {
+  return cachedPrimaryId
+}
 
 async function primaryCalendarId(client: OAuth2Client): Promise<string | null> {
   if (cachedPrimaryId) return cachedPrimaryId

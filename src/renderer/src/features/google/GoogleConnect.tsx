@@ -72,6 +72,7 @@ export function GoogleConnect({
   const [configured, setConfigured] = useState(true)
   const [connected, setConnected] = useState(false)
   const [mode, setMode] = useState<SyncMode>('readonly')
+  const [account, setAccount] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
   // BUG-137 — Google's "Access blocked" page is TERMINAL: it never redirects
   // back to our loopback server, so the app has no event to react to and
@@ -120,6 +121,7 @@ export function GoogleConnect({
     setConfigured(status.configured)
     setConnected(status.connected)
     setMode(status.mode)
+    setAccount(status.account)
     if (status.connected) await loadCalendars()
   }
 
@@ -166,6 +168,7 @@ export function GoogleConnect({
     if (!mounted.current) return
     setConnected(false)
     setMode('readonly')
+    setAccount(null)
     setCalendars([])
     setError(null)
     onChange?.() // clear the Google events from the calendar
@@ -209,6 +212,8 @@ export function GoogleConnect({
           <p className="mt-0.5 text-[12px] text-faint">
             {connected ? (
               <>
+                {account && <span className="text-muted">{account}</span>}
+                {account && ' · '}
                 {mode === 'readwrite' ? 'Two-way sync on' : 'Read-only'}
                 {syncing ? ' · Syncing…' : lastSynced ? ` · Updated ${agoLabel(lastSynced)}` : ''}
               </>

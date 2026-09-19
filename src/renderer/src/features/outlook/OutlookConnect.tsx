@@ -65,6 +65,7 @@ export function OutlookConnect({
   const [configured, setConfigured] = useState(true)
   const [connected, setConnected] = useState(false)
   const [mode, setMode] = useState<SyncMode>('readonly')
+  const [account, setAccount] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
   const [enablingSync, setEnablingSync] = useState(false)
   const [calendars, setCalendars] = useState<Calendar[]>([])
@@ -91,6 +92,7 @@ export function OutlookConnect({
     setConfigured(status.configured)
     setConnected(status.connected)
     setMode(status.mode)
+    setAccount(status.account)
     if (status.connected) await loadCalendars()
   }
 
@@ -137,6 +139,7 @@ export function OutlookConnect({
     if (!mounted.current) return
     setConnected(false)
     setMode('readonly')
+    setAccount(null)
     setCalendars([])
     setError(null)
     onChange?.() // clear the Outlook events from the calendar
@@ -181,6 +184,8 @@ export function OutlookConnect({
           <p className="mt-0.5 text-[12px] text-faint">
             {connected ? (
               <>
+                {account && <span className="text-muted">{account}</span>}
+                {account && ' · '}
                 {mode === 'readwrite' ? 'Two-way sync on' : 'Read-only'}
                 {syncing ? ' · Syncing…' : lastSynced ? ` · Updated ${agoLabel(lastSynced)}` : ''}
               </>
