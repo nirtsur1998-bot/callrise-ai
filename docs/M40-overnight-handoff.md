@@ -455,3 +455,30 @@ notarized copy of the exact same tagged commit was built locally on this Mac (sa
 and all three component signatures verified identical in kind to the CI artifact — and installed
 into `/Applications`, replacing the `v1.15.0-test.1` build from last night. Not launched; opening it
 is the founder's own next step.
+
+## 13. Post-release bug, found and fixed live: silent auto-start on "Calls" (`4d08ce9`)
+
+Founder-reported while actually using the shipped 1.15.0: clicking "Calls" — which lands on the
+idle Live tab — started a real recording within ~2 seconds with zero on-screen warning, because
+his own "Auto-start when you join a call" setting was on. He was right to call this a bug
+regardless of the toggle's existence; silently starting a real recording with no confirmation is
+not acceptable, and the earlier framing ("not a bug, working as designed") was wrong and retracted.
+
+Fixed to a 3-second, visibly-labelled, cancelable countdown ("Starting to listen in 3 seconds… /
+Cancel") instead of an instant `start()` call. Typecheck clean, full suite green (486/4648, no
+regressions) at commit time — but the live-UI behavior itself (the countdown actually ticking, the
+Cancel button actually preventing the recording) could not be verified in-session: the synthetic
+test sandbox's copied auth session had gone stale, and re-authenticating it was correctly refused
+(would mean entering credentials). Shipped anyway on code review + the mechanical checks, with that
+gap stated plainly rather than claimed as tested.
+
+**Live-verified afterward, by the founder himself, on the real installed app** (a signed,
+deliberately-unnotarized local build — see below for why): both halves confirmed — the countdown
+fires and starts the call when uninterrupted, and Cancel genuinely prevents it. This is the
+stronger verification the sandbox attempt would only have approximated.
+
+**Why unnotarized:** the rotated `APPLE_APP_SPECIFIC_PASSWORD` lives only in GitHub's secret store,
+which is write-only by design — it could not be read back for a local notarization run without
+generating yet another one through the Apple flow. For a same-night personal verification build,
+signed (Developer ID, from the local keychain, no external secret needed) was judged sufficient;
+notarization matters for a real release, not for the founder testing his own fix on his own Mac.
