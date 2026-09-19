@@ -198,7 +198,12 @@ export function ChannelsCard({ channels, onDelete, onReload }: ChannelsCardProps
                   </a>
                   <button
                     type="button"
-                    onClick={() => void navigator.clipboard.writeText(pendingTelegram.deepLink ?? '')}
+                    // BUG-288 — navigator.clipboard is permission-denied here
+                    // (file:// document, `media` is the only granted
+                    // permission), so this never copied the link.
+                    onClick={() =>
+                      void window.api.clipboard.write({ text: pendingTelegram.deepLink ?? '' })
+                    }
                     className="text-faint hover:text-ink"
                     title="Copy link"
                   >

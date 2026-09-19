@@ -12,6 +12,7 @@
 // exactly where they left off. This module owns the "what's still
 // outstanding" arithmetic that makes that work.
 import type { KycFact } from './crm-note-generator'
+import type { CrmNoteHeader, CrmNoteSections } from './crm-note-format'
 
 /** The rep's decisions so far. Absent fields mean "nothing decided yet". */
 export interface CrmNoteReview {
@@ -38,6 +39,13 @@ export interface CrmNoteJobResult {
    *  re-resolving "most recent call", which a call linked in between would
    *  get wrong. Absent on jobs from before this field existed. */
   callId?: string
+  /** 2026-09-18 — the note as PARTS, so the card can render headings and
+   *  bullets and put real structure on the clipboard. Absent on every job
+   *  drafted before this shipped, in which case `note` above is the whole
+   *  note and the card shows it as the one paragraph it has always been. */
+  sections?: CrmNoteSections
+  /** What the note is about, so it identifies itself once pasted elsewhere. */
+  header?: CrmNoteHeader
 }
 
 export type CrmNoteDecision =

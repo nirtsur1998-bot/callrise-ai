@@ -546,7 +546,13 @@ export function CallDetail({
           )}: ${seg.text}`
       )
       .join('\n')
-    void navigator.clipboard.writeText(text).then(() => {
+    // BUG-288 — was navigator.clipboard.writeText, which is permission-denied
+    // in this app (a file:// document, and index.ts's handler grants `media`
+    // and nothing else) and rejected with NotAllowedError every time. This
+    // button has never copied anything, and nothing ever said so: the `.then`
+    // simply never ran, so it silently did nothing.
+    void window.api.clipboard.write({ text }).then((res) => {
+      if (!res?.ok || !mountedRef.current) return
       setCopied(true)
       setTimeout(() => {
         if (mountedRef.current) setCopied(false)

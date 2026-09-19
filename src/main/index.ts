@@ -49,6 +49,7 @@ import { registerSalesBrainExport } from './memory/export-ipc'
 import { registerSupportBundle } from './support-bundle'
 import { setIngestConfig, startTelemetrySchedule, stopTelemetrySchedule } from './telemetry/flush'
 import { registerTelemetryIpc } from './telemetry/ipc'
+import { registerClipboardIpc } from './clipboard-ipc'
 import { JobManager, reportPersistFailure } from './jobs/JobManager'
 import { hasUsableAiCapacity, hasUsableCapacityForPurpose } from './ai/capacity'
 import type { AIPurpose } from './ai/types'
@@ -862,6 +863,7 @@ app.whenReady().then(async () => {
   registerActiveApp()
   registerLog()
   registerTelemetryIpc() // M29 A1.3
+  registerClipboardIpc() // BUG-288 — the renderer's own clipboard API is denied
   registerAlerts()
   registerPrepBrief()
   registerCoachingChat()
