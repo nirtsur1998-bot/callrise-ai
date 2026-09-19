@@ -388,12 +388,25 @@ export function step(
             ]
           }
         }
+        // BUG-008: "Keep current" used to leave no trace, so the exact same
+        // declined candidate could sustain past startSustainMs again in
+        // another ~3s and re-offer immediately. Suppress it like any other
+        // recently-ended candidate (the general hysteresisMs window, not the
+        // longer switchBackSuppressMs - the rep never left `state.call`, so
+        // this isn't a switch-away, just "I already said no to this one").
         return {
           context: {
             ...context,
             state: { name: 'capturing', call: state.call, sessionId: state.sessionId },
             pendingOfferedAt: undefined,
-            recentlyEnded
+            recentlyEnded: pruneRecentlyEnded(
+              [
+                ...recentlyEnded,
+                { appId: state.pending.appId, pid: state.pending.pid, endedAt: now, reason: 'ended' }
+              ],
+              now,
+              tuning
+            )
           },
           events: [{ type: 'switch-resolved', decision: 'kept-current' }]
         }
@@ -431,6 +444,10 @@ export function step(
         context.pendingOfferedAt != null &&
         now - context.pendingOfferedAt >= tuning.switchPromptTimeoutMs
       ) {
+        // Same BUG-008 fix as the explicit "Keep current" branch above: a
+        // prompt nobody answered defaults to keeping the current call, and
+        // the un-clicked pending candidate is exactly as re-offerable a
+        // moment later as an explicitly declined one would be.
         return {
           context: {
             ...context,
@@ -440,7 +457,14 @@ export function step(
               sessionId: state.sessionId
             },
             pendingOfferedAt: undefined,
-            recentlyEnded
+            recentlyEnded: pruneRecentlyEnded(
+              [
+                ...recentlyEnded,
+                { appId: state.pending.appId, pid: state.pending.pid, endedAt: now, reason: 'ended' }
+              ],
+              now,
+              tuning
+            )
           },
           events: [{ type: 'switch-resolved', decision: 'timed-out' }]
         }

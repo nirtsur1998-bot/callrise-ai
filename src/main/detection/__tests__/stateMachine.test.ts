@@ -437,6 +437,55 @@ describe('second-call switch prompt', () => {
     expect(kept.events).toEqual([{ type: 'switch-resolved', decision: 'kept-current' }])
   })
 
+  it('BUG-008: keeping current suppresses the declined app from re-offering immediately', () => {
+    let { context, now } = capturingContext()
+    const zoom = candidate({ appId: 'zoom', pid: 1, confidence: 0.7 })
+    const teams = candidate({ appId: 'teams', pid: 2, confidence: 0.65 })
+    now += 1_000
+    context = step(context, { now, candidates: [zoom, teams] }).context
+    now += DETECTION_TUNING.startSustainMs
+    context = step(context, { now, candidates: [zoom, teams] }).context
+    expect(context.state.name).toBe('capturing-with-pending')
+
+    const kept = step(context, {
+      now,
+      candidates: [zoom, teams],
+      command: { type: 'respond-to-switch', decision: 'keep' }
+    }).context
+    expect(kept.state.name).toBe('capturing')
+
+    // Without the fix, teams simply re-sustains from here and re-offers ~3s
+    // later - the exact repeat the bug report describes.
+    now += 1_000
+    let after = step(kept, { now, candidates: [zoom, teams] })
+    now += DETECTION_TUNING.startSustainMs
+    after = step(after.context, { now, candidates: [zoom, teams] })
+    expect(after.context.state.name).toBe('capturing') // NOT capturing-with-pending again
+    expect(after.events).toEqual([])
+  })
+
+  it('BUG-008: a timed-out (unanswered) prompt suppresses the declined app the same way', () => {
+    let { context, now } = capturingContext()
+    const zoom = candidate({ appId: 'zoom', pid: 1, confidence: 0.7 })
+    const teams = candidate({ appId: 'teams', pid: 2, confidence: 0.65 })
+    now += 1_000
+    context = step(context, { now, candidates: [zoom, teams] }).context
+    now += DETECTION_TUNING.startSustainMs
+    context = step(context, { now, candidates: [zoom, teams] }).context
+    expect(context.state.name).toBe('capturing-with-pending')
+
+    now += DETECTION_TUNING.switchPromptTimeoutMs + 1
+    const timedOut = step(context, { now, candidates: [zoom, teams] }).context
+    expect(timedOut.state.name).toBe('capturing')
+
+    now += 1_000
+    let after = step(timedOut, { now, candidates: [zoom, teams] })
+    now += DETECTION_TUNING.startSustainMs
+    after = step(after.context, { now, candidates: [zoom, teams] })
+    expect(after.context.state.name).toBe('capturing')
+    expect(after.events).toEqual([])
+  })
+
   it('defaults to keep-current if the prompt times out with no response', () => {
     let { context, now } = capturingContext()
     const zoom = candidate({ appId: 'zoom', pid: 1, confidence: 0.7 })
