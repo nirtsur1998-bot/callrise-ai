@@ -30,5 +30,16 @@ export function sessionHealthNotice(
   if (health.tier === 'shed') {
     return { label: 'Catching up…', title: `Lag: ${health.lagSec.toFixed(1)}s and recovering.` }
   }
+  // BUG-009 — 'silent' is the ordinary "a quiet meeting" case the watchdog's
+  // own comment says is deliberately NOT fatal (audio is flowing, it's just
+  // digital silence). It was already computed and streamed here every second;
+  // nothing ever showed it, so silence looked identical to a dead session —
+  // the most likely source of the long-standing "it cancels after ~5s"
+  // report, even though no such cutoff exists anywhere in this codebase.
+  // Checked LAST, after every real problem: a genuine lag/reconnect issue
+  // must never be masked by this purely informational label.
+  if (health.liveness === 'silent') {
+    return { label: 'Listening…', title: "Still recording — nobody's spoken in a moment." }
+  }
   return null
 }

@@ -57,4 +57,31 @@ describe('sessionHealthNotice', () => {
     const notice = sessionHealthNotice(health({ liveness: 'capture-dead', tier: 'shed' }))
     expect(notice?.label).toBe('No audio')
   })
+
+  it('BUG-009: surfaces silence as "Listening…", not nothing', () => {
+    // The gap this bug reports: during silence the transcript stops growing
+    // and the UI looked EXACTLY like a healthy session (this test's own
+    // "everything is healthy" case above) — nothing distinguished "still
+    // recording, nobody's talking" from "quietly dead".
+    const notice = sessionHealthNotice(health({ liveness: 'silent' }))
+    expect(notice?.label).toBe('Listening…')
+    expect(notice?.title).toMatch(/still recording/i)
+  })
+
+  it('BUG-009: a real lag problem is never masked by the silence label', () => {
+    // 'silent' is deliberately non-fatal (per liveness.ts's own comment) and
+    // must never outrank an actual reset/shed condition that happens to
+    // coincide with a quiet stretch.
+    expect(sessionHealthNotice(health({ liveness: 'silent', tier: 'reset' }))?.label).toBe(
+      'Resyncing…'
+    )
+    expect(sessionHealthNotice(health({ liveness: 'silent', tier: 'shed' }))?.label).toBe(
+      'Catching up…'
+    )
+  })
+
+  it('BUG-009: capture-dead and socket-dead still outrank silence', () => {
+    expect(sessionHealthNotice(health({ liveness: 'capture-dead' }))?.label).toBe('No audio')
+    expect(sessionHealthNotice(health({ liveness: 'socket-dead' }))?.label).toBe('Reconnecting…')
+  })
 })
