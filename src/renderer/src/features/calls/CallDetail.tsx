@@ -75,7 +75,7 @@ import {
 import { useAppSettings } from '@renderer/features/settings/useAppSettings'
 import { SalesBrainCallToggle } from './SalesBrainCallToggle'
 import type { CalendarEvent } from '@renderer/features/calendar/types'
-import { recordRecentlyViewed } from '@renderer/lib/recentlyViewed'
+import { recordRecentlyViewed, removeRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import { formatDate, formatDuration, formatBytes } from './format'
 import { PracticeMode } from './PracticeMode'
 import { RadarReport } from '@renderer/features/deal-intelligence/ui/RadarReport'
@@ -130,7 +130,12 @@ const DETECT_JOB_TYPE = 'contactIntelligence:detectName'
 interface CallDetailProps {
   callId: string
   onBack: () => void
-  onDeleted: () => void
+  /** BUG-287 — `'missing'` when this callId no longer resolves to a real
+   *  record (a stale sidebar/palette RECENT row, or the record was deleted
+   *  elsewhere while this page was open): the caller should say so, not just
+   *  silently show the list. Omitted for an ordinary explicit delete from
+   *  this page, which already has its own confirmation. */
+  onDeleted: (reason?: 'missing') => void
   onChanged: () => void
 }
 
@@ -270,7 +275,14 @@ export function CallDetail({
     void window.api.calls.get(callId).then((c) => {
       if (!active) return
       if (c) setCall(c)
-      else onDeletedRef.current() // missing/corrupt — back to the list
+      else {
+        // BUG-287 — missing/corrupt. This id was asked for (a RECENT row, a
+        // palette result) but does not exist; the trail entry that pointed
+        // here is exactly as stale, so prune it now rather than leaving it to
+        // fail the same way again on the next click.
+        removeRecentlyViewed('call', callId)
+        onDeletedRef.current('missing')
+      }
     })
     return () => {
       active = false
@@ -556,6 +568,11 @@ export function CallDetail({
 
   const deleteCall = useCallback(async () => {
     await window.api.calls.delete(callId)
+    // BUG-287 — an explicit delete leaves the same stale trail entry the
+    // missing-record bounce above cleans up; the record really is gone the
+    // instant this resolves, so the trail should say so immediately rather
+    // than waiting for someone to click the dead row first.
+    removeRecentlyViewed('call', callId)
     onChanged()
     onDeleted()
   }, [callId, onChanged, onDeleted])

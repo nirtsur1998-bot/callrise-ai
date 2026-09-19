@@ -33,6 +33,8 @@ import { ContactDetail } from './ContactDetail'
 import { buildContactStats, recencyTone, formatRelative, type ContactStats } from './contactStats'
 import type { Contact } from './types'
 import { formatDateOnly } from '@renderer/lib/dateOnly'
+import { useToast } from '@renderer/features/notifications/useToast'
+import { removeRecentlyViewed } from '@renderer/lib/recentlyViewed'
 
 type SortMode = 'recent' | 'name'
 
@@ -64,6 +66,21 @@ export function ContactsView({
   const [editing, setEditing] = useState<Contact | null>(null)
   const [viewingId, setViewingId] = useState<string | null>(initialViewId)
   const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null)
+  const toast = useToast()
+
+  // BUG-287 — unlike CallDetail (an IPC round-trip that can say "not found"),
+  // a contact resolves synchronously against the already-loaded list, so
+  // there is no separate "missing" state to catch — `viewing` is just
+  // `undefined` and the list renders with no signal at all. This is the
+  // equivalent check: a stale RECENT/palette row asked for an id, the list
+  // has finished loading, and that id isn't in it.
+  useEffect(() => {
+    if (loading || !viewingId) return
+    if (contacts.some((c) => c.id === viewingId)) return
+    removeRecentlyViewed('contact', viewingId)
+    toast.info('That contact was deleted.')
+    setViewingId(null)
+  }, [loading, viewingId, contacts, toast])
 
   const handleDelete = async (contact: Contact): Promise<void> => {
     const ok = await remove(contact.id)
