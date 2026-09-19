@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { removeRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import type { Call, CallSummary } from './types'
 
 // A saved call's transcript/audio are more consequential to lose than a task
@@ -58,9 +59,12 @@ export function useCalls(): UseCalls {
       // of dropping it.
       for (const [id, timer] of timers) {
         clearTimeout(timer)
-        void window.api.calls.delete(id).catch(() => {
-          /* nothing left mounted to report this to; best-effort */
-        })
+        void window.api.calls
+          .delete(id)
+          .then(() => removeRecentlyViewed('call', id)) // BUG-287
+          .catch(() => {
+            /* nothing left mounted to report this to; best-effort */
+          })
       }
       timers.clear()
     }
@@ -77,6 +81,9 @@ export function useCalls(): UseCalls {
         void (async () => {
           try {
             await window.api.calls.delete(id)
+            // BUG-287 — the record is really gone now; a RECENT/palette row
+            // still naming it would fail silently the next time it's clicked.
+            removeRecentlyViewed('call', id)
           } catch {
             /* ignore — refresh reflects the true state */
           }

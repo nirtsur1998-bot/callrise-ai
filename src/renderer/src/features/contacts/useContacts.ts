@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useToast } from '@renderer/features/notifications/useToast'
+import { removeRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import type { Contact } from './types'
 
 // Derive the create/update payload shapes straight from the preload bridge so
@@ -80,7 +81,10 @@ export function useContacts(): UseContacts {
       try {
         const res = await window.api.contacts.delete(id)
         await refresh()
-        if (res.ok) toast.success('Contact deleted')
+        if (res.ok) {
+          toast.success('Contact deleted')
+          removeRecentlyViewed('contact', id) // BUG-287
+        }
         return res.ok
       } catch {
         // Not the "still has open deals" block — an actual failure. Report it
