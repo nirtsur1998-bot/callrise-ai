@@ -20,6 +20,9 @@ interface CrmViewProps {
   initialContactId?: string | null
   initialDealId?: string | null
   onInitialSelectionConsumed?: () => void
+  /** BUG-286 — bumped when the sidebar asks this already-active screen to go
+   *  back to its list; forwarded to whichever tab owns a detail view. */
+  stepOutToken?: number
 }
 
 /** The CRM hub: Contacts (Phase 1), Deals (Phase 3), and Follow-ups
@@ -28,7 +31,8 @@ interface CrmViewProps {
 export function CrmView({
   initialContactId = null,
   initialDealId = null,
-  onInitialSelectionConsumed
+  onInitialSelectionConsumed,
+  stepOutToken
 }: CrmViewProps = {}): React.JSX.Element {
   const [tab, setTab] = useState<CrmTab>(initialDealId ? 'deals' : 'contacts')
   const [openDealId, setOpenDealId] = useState<string | null>(initialDealId)
@@ -68,11 +72,13 @@ export function CrmView({
         <ContactsView
           initialViewId={openContactId}
           onInitialViewConsumed={() => setOpenContactId(null)}
+          stepOutToken={stepOutToken}
         />
       ) : tab === 'deals' ? (
         <DealsView
           initialViewDealId={openDealId}
           onInitialViewConsumed={() => setOpenDealId(null)}
+          stepOutToken={stepOutToken}
         />
       ) : (
         <FollowUpDigest onOpenDeal={openDealFromDigest} onOpenContact={openContactFromDigest} />

@@ -33,6 +33,7 @@ import { ContactDetail } from './ContactDetail'
 import { buildContactStats, recencyTone, formatRelative, type ContactStats } from './contactStats'
 import type { Contact } from './types'
 import { formatDateOnly } from '@renderer/lib/dateOnly'
+import { useStepOutToken } from '@renderer/app/useStepOutToken'
 
 type SortMode = 'recent' | 'name'
 
@@ -46,11 +47,14 @@ interface ContactsViewProps {
   /** Called once the initial selection above has been applied, so the parent
    *  can clear it (otherwise a later plain visit would reopen the same contact). */
   onInitialViewConsumed?: () => void
+  /** BUG-286 — the sidebar asking this already-active screen for its list. */
+  stepOutToken?: number
 }
 
 export function ContactsView({
   initialViewId = null,
-  onInitialViewConsumed
+  onInitialViewConsumed,
+  stepOutToken
 }: ContactsViewProps = {}): React.JSX.Element {
   const { contacts, loading, create, update, remove, refresh } = useContacts()
   const { deals } = useDeals()
@@ -77,6 +81,9 @@ export function ContactsView({
       onInitialViewConsumed?.()
     }
   }, [initialViewId, onInitialViewConsumed])
+
+  // BUG-286 — sidebar "Pipeline" while already on Pipeline: show the list.
+  useStepOutToken(stepOutToken, () => setViewingId(null))
 
   useEffect(() => {
     // Read-only glance data for the list ("3 calls · last week") — reuses the

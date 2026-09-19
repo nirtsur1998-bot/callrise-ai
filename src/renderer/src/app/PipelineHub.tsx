@@ -23,6 +23,10 @@ interface PipelineHubProps {
   onDeepLinkConsumed: () => void
   /** M31 Slice B — open the call recorded during a meeting (Calendar tab). */
   onOpenCall: (callId: string) => void
+  /** BUG-286 — the sidebar's "Pipeline" clicked while this hub is already
+   *  active. Forwarded to CRM, which closes whichever record it is showing;
+   *  the tab is left where the user put it. */
+  stepOutToken?: number
 }
 
 /** M31 Stage 2 — CRM, Tasks, and Calendar as tabs of one "Pipeline" screen.
@@ -50,7 +54,8 @@ export function PipelineHub({
   onInitialCrmSelectionConsumed,
   deepLinkEventId,
   onDeepLinkConsumed,
-  onOpenCall
+  onOpenCall,
+  stepOutToken
 }: PipelineHubProps): React.JSX.Element {
   const [tab, setTab] = useState<PipelineTab>(
     deepLinkEventId ? 'calendar' : ((initialTab as PipelineTab) ?? 'crm')
@@ -93,6 +98,7 @@ export function PipelineHub({
           initialContactId={initialContactId}
           initialDealId={initialDealId}
           onInitialSelectionConsumed={onInitialCrmSelectionConsumed}
+          stepOutToken={stepOutToken}
         />
       ) : (
         <TasksView />
