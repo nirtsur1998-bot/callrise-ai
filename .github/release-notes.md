@@ -2,12 +2,12 @@
 
 CallRise AI listens to your sales calls on your own computer, transcribes them, and coaches you live and afterwards. Your calls stay on your machine.
 
-### New in 1.14.0
+### New in 1.15.0
 
-- **A contact's facts now remember when they were true.** Edit a contact's job title, company, budget or any other dated field and the app keeps the old value with the dates it held, so a live cue can say *"Role: CTO (noted 2026-09-14)"*, and a fact you accept from a call is dated to that call, not to the day you clicked. Nothing already on your contacts is back-dated; history starts with the first edit after this update. Clearing a field removes every version of it, on every machine, including the words.
-- **Update every machine you use.** From 1.13.0: a backup bug re-uploaded every record on every sync, and an edit made on one machine could be overwritten by another machine's older copy. Fixed once every machine on your account runs 1.13.0 or later; this update carries that fix.
-- **You can switch off what live coaching remembers.** Since 1.12.0, when a call is matched to a known contact, live coaching now includes what that contact has told you before, sent to your AI provider with the transcript (it applies to some contacts and not others — 30 of 50 on the tested profile). The switch: **Voice AI → "Use what this client told you before"**, or **Turn off** on the call itself. It is on by default.
-- Carried over from 1.13.0: a cleaner name check that never offers to create a duplicate, call saves that no longer touch your calendar, and the contact timeline dots. From 1.12.0: "Since your last call" (deliberately rare — 5 of 50 contacts on the tested profile) and cue timing in support bundles (percentiles and counts only).
+- **CallRise now runs on Mac.** Same app, same features, and the noise-cancellation denoiser ships with it — a "Sales OS Microphone" device you can turn on from the Home screen to clean up your audio before it reaches the call. This is the first Mac release; if anything looks or behaves differently than the Windows app, that's worth reporting.
+- **Live coaching now knows who you're talking to.** When your call's meeting matches a contact you've spoken to before, live coaching now includes what that contact has told you before, sent to your AI provider with the transcript — past objections, promises made and kept, where the deal stands, and what's changed since you last spoke. This needs earlier calls with that contact, so it applies to some contacts and not others: on the tested profile, 30 of 50 contacts got this; "since your last call" specifically — deliberately rare — showed on 5 of 50. The switch: **Voice AI → "Use what this client told you before"**, or **Turn off** on the call itself. It is on by default.
+- **The live call screen has a new look.** A redesigned instrument panel: a chip that shows who CallRise thinks you're talking to, a deal-intelligence panel that stays in view as the transcript scrolls, and a coaching-cue rail that no longer gets covered by the transcript or scrolls out of sight mid-call.
+- Carried over from 1.14.0: dated contact facts that remember when they were true, the backup fix that stops one machine's edit from overwriting another's, a cleaner name check, and the contact timeline dots.
 
 ### Which file to download
 
@@ -19,7 +19,7 @@ CallRise AI listens to your sales calls on your own computer, transcribes them, 
 **Mac**
 
 - **`CallRise-AI-Mac.dmg`** — open it and drag CallRise AI into Applications. This is the one to take.
-- Needs an Apple Silicon Mac (M1 or later) on macOS 12 or newer. There is no Intel build; on an Intel Mac macOS will refuse to open it.
+- Needs an Apple Silicon Mac (M1 or later) on macOS 13 (Ventura) or newer. There is no Intel build; on an Intel Mac macOS will refuse to open it.
 
 The other files (`.zip`, `.blockmap`, `latest.yml`, `latest-mac.yml`) are for the app's own updater. You don't need them.
 
@@ -41,4 +41,4 @@ You will be asked to create an account and to confirm it by email, then a short 
 
 **On a Mac**, two prompts come from macOS itself, not from us: microphone access (needed to hear you at all) and, when you switch on **Noise cancellation** from the Home screen, an administrator password — that step installs the "Sales OS Microphone" audio device, which is what removes background noise before your voice reaches the call. Both are one-time.
 
-Needs Windows 10 or 11, 64-bit, or macOS 12 or newer on Apple Silicon. Questions and problems: open an issue on this repository.
+Needs Windows 10 or 11, 64-bit, or macOS 13 (Ventura) or newer on Apple Silicon. Questions and problems: open an issue on this repository.

@@ -220,6 +220,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win --x64 --publish always > electron-builder.log 2>&1
 
+      # Check 6 existed only for Mac (below, this same workflow) until
+      # 2026-09-19, when the first real dual-platform release was being cut
+      # and nobody had noticed Windows never had it. Reads VERSIONINFO off
+      # the just-packaged .exe via PowerShell — real on windows-latest, which
+      # is exactly why this can't be checked from go-live's ubuntu-latest
+      # runner and has to live here instead, mirroring where the Mac one
+      # lives relative to ITS packaging step.
+      - name: Check 6 — the built .exe carries the tag's version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then TAG="${{ inputs.version }}"; fi
+          node scripts/verification/artifact-version.mjs "$TAG"
+
       - name: Bundle failure diagnostics into one file
         if: always()
         shell: bash
