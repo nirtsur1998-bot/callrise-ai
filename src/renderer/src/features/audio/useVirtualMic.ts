@@ -16,6 +16,9 @@ export interface UseVirtualMic {
   /** One-click driver install (still shows the OS's own admin-password
    *  prompt — that part is a hard OS requirement, not something to remove). */
   installDriver: () => Promise<void>
+  /** Removes the driver again. Same admin prompt; stops the helper first and
+   *  restarts coreaudiod so the device actually disappears. */
+  uninstallDriver: () => Promise<void>
 }
 
 /**
@@ -87,5 +90,21 @@ export function useVirtualMic(): UseVirtualMic {
     }
   }, [refresh])
 
-  return { status, busy, error, start, stop, installDriver }
+  const uninstallDriver = useCallback(async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await window.api.virtualmic.uninstallDriver()
+      if (!result.ok && mountedRef.current) {
+        // Same as install: dismissing the password prompt is a decision, not a
+        // fault, so it must not raise an error banner.
+        if (result.error !== 'cancelled') setError(result.error ?? 'uninstall failed')
+      }
+      await refresh()
+    } finally {
+      if (mountedRef.current) setBusy(false)
+    }
+  }, [refresh])
+
+  return { status, busy, error, start, stop, installDriver, uninstallDriver }
 }

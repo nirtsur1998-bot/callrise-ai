@@ -1,5 +1,31 @@
 # Verification tooling — read this before driving the app
 
+> ## Step zero, before reading anything below: is this checkout current?
+>
+> ```
+> git fetch origin && git rev-list --left-right --count main...origin/main
+> ```
+>
+> On 2026-09-17 a session started on a checkout **841 commits behind**, read that tree's
+> `CLAUDE.md`, and followed a rule it had superseded three milestones earlier — twelve commits
+> straight onto `main`. The file this README belongs to did not even exist in that tree. A stale
+> checkout does not just show you old code; it hands you old instructions with full confidence.
+> Check the position first. Then read.
+
+> ## Reading the rules is not running them.
+>
+> Added 2026-09-17 (M40), after a session produced **six** wrong readings in one sitting —
+> **two of them failure modes described in this very file, which that session had read an hour
+> earlier**: `echo $?` after a pipe (reporting `tail`'s exit code, not the command's), and a
+> self-inflicted `| tail -45` that discarded the failure text it then went hunting for.
+>
+> Knowing a rule does not fire it. So where a rule can be made **mechanical**, make it mechanical
+> and delete the remembering: those two are now `run.mjs` (below), which has no pipe, states how
+> many lines it is hiding, and exits with the child's own code.
+>
+> When you catch yourself about to add a paragraph here, ask first whether it could be a script
+> instead. A paragraph is what you fall back on when the shape cannot be designed out.
+
 > **When an investigation needs four corrected instruments, the instruments ARE the
 > investigation.** BUG-141 (2026-09-09) needed four: a record buffer that lost records, a CPU
 > counter that under-reports 25x here, a Defender counter whose "0.0 s" was access denial, and a
@@ -31,6 +57,7 @@
 | `five-checks.mjs` | The five release-feed checks: manifest, hash, staged percentage, installer name, download. | network | `node scripts/verification/five-checks.mjs vX.Y.Z 100` | any check failing prints which and exits non-zero; a missing asset is not a pass. |
 | `artifact-version.mjs` | **CHECK 6, added 2026-09-08; second half added 2026-09-09.** Two questions about the built artifact, never about the plan. (a) Does it report the version being released, read from the exe's own ProductVersion? (b) Does it POST-DATE the last commit that touched shipped source? | a built dist/ | `node scripts/verification/artifact-version.mjs 1.11.0` | exits 1 and says DO NOT TAG. (a) was earned by an installer built from merged main that installed cleanly, ran correctly, and reported 1.10.0 because package.json was never bumped — a release that would have reached nobody with every other check green. (b) was earned the next night by the opposite shape: a rebuild exited 1 partway through, the wrapper reported "BUILD DONE, version 1.11.0" after reading it out of the `latest.yml` the failed build never rewrote, and (a) then passed over an artifact 67 minutes OLDER than the fix it was supposed to carry. Version-correct is not the same as current. Compared against shipped source rather than HEAD on purpose — against HEAD it fails on every test-only commit and demands a rebuild that cannot change a byte, and a check that cries wolf on correct states is one people learn to wave through. **CAVEAT on (b), and it matters: it compares file MTIME.** That is the build time for a LOCAL artifact and the DOWNLOAD time for a fetched one — so against anything you just downloaded it always passes, over any binary at all, and is not evidence of anything. Only (a) means something there. The script prints this in its own output when `--exe` names a file written in the last hour. To ask whether a SHIPPED artifact is current, read the release run's `headSha` instead: `gh run view <id> --json headSha`. |
 | `sweep-record.mjs` | **THE RAMP NUMBER.** Reads the BUG-215 quote sweep's record out of a profile and gives a verdict on `rescuedByFileCheck` — the M37 ramp criterion. | any userData profile | `node scripts/verification/sweep-record.mjs [profile]` | five outcomes, distinct exit codes, red-checked against synthetic profiles for each: **MEANINGFUL ZERO** (0 over a non-empty population — exit 0, ramp supported), **TRIVIALLY ZERO** (`callsSwept` 0, so the guard was never exercised — exit 2, NOT evidence), **STOP THE RAMP** (non-zero — exit 1), **SKIPPED**, **HAS NOT RUN**. It refuses to print a bare number, because a zero over an empty population is the absence of evidence wearing a green tick. Also detects a record with NO `rescuedByFileCheck` field — written by a build predating BUG-236 — and says *absent is not zero*. |
+| `run.mjs` | **Did that command actually succeed, and am I seeing all of its output?** Makes species 69's two commonest shapes impossible rather than discouraged: there is no pipe, so nothing is truncated; the exit code printed is the CHILD's, on its own labelled line, and this process re-exits with it, so `$?` afterwards is still the child's. | nothing | `node scripts/verification/run.mjs [--tail N] [--grep S] [--log P] -- <cmd> [args…]` | refuses (exit 2) when the command cannot start, or when the full-output log cannot be written — rather than running blind and leaving you with a tail again. Any elision is stated as `last N of M lines (K HIDDEN)`. `--grep` prints the matching LINES, never a bare count, and says explicitly that zero matches is a claim about the pattern. Red-checked against a 200-line command exiting 7: the piped shape reports `$? = 0`, this reports `EXIT CODE OF "node": 7`. |
 | one-offs: `bug141-fsync-probe.mjs`, `bug176-corpus-check.mjs`, `bugd-partition.mjs`, `drive-call-deal-picker.mjs`, `bug237-erase-drive.mjs` | evidence for a single bug, kept because the tracker cites them | varies | see each file's header | — |
 
 **Which ones CI runs:** only `verify-green.mjs` (and the instruments' own self-tests). Everything
@@ -46,6 +73,14 @@ is pasted into the tracker with the screenshot hashes — see "THE SECOND RULE" 
   passed by habit. Why: three months of "one writer" as a convention produced two violations; the
   second (2026-09-06 00:50) killed the dev app with a path-matched sweep meant for a sandbox. Self-test:
   `src/__tests__/protected-instances.test.ts` runs that exact sweep against fake rows.
+- **If you are writing a click helper, you already have one.** `ui-driver.mjs` and `cdp.mjs` exist;
+  `screen-sweep.mjs` has a leaf-matching `click()`. Re-implementing one is how three findings on
+  this project have died — the dossier screenshot script re-implemented the dossier and hid the bug
+  it was taking a picture of, and on 2026-09-17 three probes in a row reported things about the app
+  that were facts about the probe: a too-narrow `Home` selector, a trace that never clicked out of
+  Settings, and a hand-rolled click helper whose "Back does not work" nearly got written up as a
+  product bug. Generalises past clicking: **a re-implementation shares no bugs with the original,
+  which is exactly why it cannot be used to check it.**
 - **Never write code through a shell heredoc.** Use the file tool (Write/Edit). Why: four times in
   one night a heredoc turned an escape into a real character — a backslash-b into a backspace byte inside a
   regex, a backslash-n into a newline inside a string — and the file parsed nowhere or matched nothing.
@@ -1293,6 +1328,48 @@ CALLRISE_USER_DATA_DIR=<copy> npx electron out/main/index.js --remote-debugging-
 Both lines are the check. If you do not see them, you are driving the real profile. (The second is
 BUG-186's guard — it is what makes signing a copy in safe.)
 
+### macOS: `HOME` does NOT redirect Electron's userData either — and there is NO packaged-app sandbox
+
+**Added 2026-09-17 (M40).** The macOS counterpart to the `APPDATA` trap above, tested because the
+Windows one is documented and the Mac one was not. It fails the same way, and the shape of the
+failure is worse: **the environment variable IS set, and the path ignores it.**
+
+Measured, same Electron (39.8.10), one run each:
+
+```
+HOME unset (normal):
+  process.env.HOME   = /Users/nirtsur
+  getPath('appData') = /Users/nirtsur/Library/Application Support
+
+HOME=/tmp/.../fakehome:
+  process.env.HOME   = /tmp/.../fakehome     ← the override took
+  getPath('home')    = /Users/nirtsur        ← ignored it
+  getPath('appData') = /Users/nirtsur/Library/Application Support   ← THE REAL PROFILE
+```
+
+Electron resolves the home directory from the system (the passwd entry), not `$HOME`. A sandbox
+built on `HOME` therefore *looks* correct from inside the process — `process.env.HOME` reads back
+exactly what you set — while every read and write lands on the real profile.
+
+**The consequence that matters: a PACKAGED build cannot be sandboxed at all.** The supported
+override is gated on `!app.isPackaged` (`src/main/index.ts:85`), and `HOME` does not work, so there
+is no mechanism. Driving `dist/mac-arm64/CallRise AI.app` means driving the founder's real profile —
+which on this machine is 271 MB with 42 calls, 11 contacts and 9 tasks. **Ask first; do not infer
+permission from the task.**
+
+**What you can do without launching it.** Most packaged-build questions do not need the app to run.
+Require the shipped addon out of the `.app` from a throwaway Electron process instead — that answers
+"does it load" (the real question) rather than "is the file present" (the one that looks like it):
+
+```js
+// tiny electron main.js, in a scratch dir, that quits immediately
+const m = require('<App>.app/Contents/Resources/app.asar.unpacked/native/.../x.node')
+console.log(Object.keys(m))
+```
+
+This is how the M40 packaged-build check was done: the detection addon was confirmed **LOADED**,
+with its real exports, without CallRise ever starting.
+
 ### A second app instance exits with code 0 — it is not "the launch failed"
 
 Start a second instance while one is running and it loses `requestSingleInstanceLock()`, calls
@@ -1458,3 +1535,206 @@ taskkill /T /F /PID <the pid you spawned>
 
 And tie the CDP target to *this* launch — the renderer port the launch printed, not "it is a dev
 build".
+
+# A RUNTIME-VERSION MISMATCH READS AS A PLATFORM DEFECT — 2026-09-18 (M40, Mac)
+
+The full suite on the Mac: **14 files / 79 tests failed**, eleven with the identical
+`Cannot read properties of undefined (reading 'clear')` at `localStorage.clear()`, all in suites
+declaring `// @vitest-environment happy-dom`. happy-dom was installed, matched the lockfile, and
+its Window exposes `localStorage`. Every obvious explanation was checked and was wrong, and the
+shape of it — renderer suites, only on the new platform — read exactly like *"the render tests are
+broken on macOS"*.
+
+It was Node. Same file, same machine:
+
+```
+Node 26.4.0                     →  4 failed
+Node 22.23.2  (npx -y node@22)  →  4 passed
+```
+
+Node ≥ 25 ships its own `localStorage` global. Without `--localstorage-file` it reads as
+`undefined`, and vitest's DOM environment does not replace it. CI pins Node 22, so CI is green. The
+tell, worth knowing by sight: **`sessionStorage` is an object while `localStorage` is undefined.**
+
+**Two rules from it.**
+
+1. **Before calling a failure platform-specific, diff the RUNTIME, not just the OS.** `node
+   --version` against `.github/workflows/*.yml`'s `node-version` is one command. Nothing had pinned
+   it; `.nvmrc` and `package.json#engines` now do.
+2. **Seventy-nine failures from one cause is an instrument problem, and it got a mechanical fix**
+   rather than a paragraph: `src/__tests__/setup/node-webstorage-guard.setup.ts` fails once, with the
+   cause and the exact remedy, when a DOM environment has no `localStorage`. Pure logic in a sibling
+   file, pin test drives it with fabricated inputs, verified red (Node 26: one failure, old symptom
+   count 0), green (Node 22: silent, tests pass) and quiet (node-env suites: silent) — the same
+   three directions any guard has to hold.
+
+Not the fix: `NODE_OPTIONS=--localstorage-file=<path>`. It makes the error vanish by handing tests
+**Node's** storage rather than happy-dom's — a check going green by changing what it looks at.
+
+## macOS: the two-file sandbox sign-in technique is WINDOWS-ONLY
+
+The section above on `CALLRISE_USER_DATA_DIR` says to sign a sandbox in by copying exactly two
+files out of the real profile — `Local State` and `supabase-auth.json`. **On macOS there is no
+`Local State`** (it is Chromium's Windows OSCrypt key file), and the session file alone does not
+decrypt. Measured with a throwaway Electron probe that never printed token material:
+
+```
+isEncryptionAvailable = true
+real profile session file: 2435 bytes, header=v10 → DECRYPT FAILED
+sandbox copy:                                     → DECRYPT FAILED
+```
+
+`safeStorage` on macOS is Keychain-backed, and the Keychain item's ACL is bound to the **code
+signature** of the app that wrote it. The dev Electron binary is a different signature from whatever
+wrote the founder's file, so it is refused — and there is no key file to carry across. **A Mac dev
+sandbox needs its own login. Do not enter the founder's credentials to get one; ask.**
+
+The consequence worth flagging beyond testing: `safeStorage` also protects the Google/Outlook
+tokens and every AI key. **The first Developer-ID-signed release changes the app's signature.**
+Whether shipped users' sessions and keys survive that transition is *reasoned, not measured* — it
+depends on the designated requirement in the Keychain ACL — and it belongs on the Stage 2 list
+before that release ships, not after.
+
+# AUDIO INSTRUMENTS — four failures in one session, 2026-09-17 (M40, Mac)
+
+All four happened while verifying the virtual mic's 48 kHz fix on the Mac. None of them was a
+product defect. Three produced a wrong reading; one produced a wrong *finding that was about to be
+written into this file as a rule*, which is the worst of the four and is recorded first.
+
+## The one that nearly became a rule: inferring a tool's blindness from its output shape
+
+`tools/underruntest` (in the `salesos-virtualmic` repo) counts cycles where `RingReader::Pull()`
+returns something other than `Ok` — its own header calls each one *"a moment of forced silence a
+real recording would hear as a dropout."*
+
+From that description alone this session concluded, and reported with confidence:
+
+> ~~"The project's dropout detector is structurally blind to frame repetition."~~
+> ~~"A clean underruntest run is not evidence of a clean pipe."~~
+
+**Both are wrong.** And the way they nearly landed here matters more than the claims themselves: the
+founder read the analysis, found it convincing, and **instructed** that the second sentence be added
+to this file. It was one edit from becoming a rule. Neither of us had read `ReadContinuous()`.
+
+That is the failure mode this file is most exposed to. **A wrong entry here costs more than a wrong
+entry anywhere else, because this is the document sessions consult *instead of* checking.** An
+approved-but-unverified lesson does not sit inert — it actively replaces the investigation that
+would have caught it. Treat an instruction to add a rule here as a trigger to verify the rule, not
+as authority that it is correct.
+
+Reading `ReadContinuous()` is what settled it, and it takes about a minute:
+
+```cpp
+CopyFramesFrom(m, readCursor_, dst, frameCount);
+readCursor_ += frameCount;      // every Ok cycle, exactly frameCount, always
+return ReadStatus::Ok;
+```
+
+The cursor advances by exactly `frameCount` on every `Ok`. The only other thing that moves it is a
+resync (`streaming_ = false`), and a resync is only ever *reached through* a non-Ok cycle — which
+`underruntest` counts. So zero non-Ok genuinely does imply zero repetition. The guarantee was real;
+it was merely **implicit**, and the tool's output could not correct a reader who assumed otherwise.
+
+**The general shape.** A tool's stated purpose ("counts dropouts") describes what it *reports*, not
+the set of defects its mechanism happens to exclude. Reasoning from the description to "therefore it
+cannot see X" is a guess wearing the clothes of an analysis. Read the mechanism, or say you have not.
+
+### The real defect, found underneath the invented one
+
+Chasing the imaginary bug surfaced a genuine one. The tool was never blind to repetition — **its
+verdict line was blind to its own continuity data.** The headline read only the dropout count, so a
+100%-discontinuous stream printed:
+
+```
+PERFECT: zero dropouts
+```
+
+That is **species 114**: a well-behaved silence indistinguishable from a feature that never ran. The
+continuity information existed; nothing reported it, so "clean" and "never examined" produced
+identical output.
+
+**Fixed** (`salesos-virtualmic`, commit `4f19e3d`): continuity is measured every cycle — actual
+cursor advance vs expected — and printed **unconditionally, including the zero case**, so a clean run
+shows the check was *made*. The verdict now reads both failure modes. Red-checked both ways
+(`bufFrames + 1` so every Ok cycle registers as a repeat), file restored byte-identically by SHA:
+
+```
+GREEN  0 discontinuities, 0 repeated, 0 skipped   → "PERFECT: zero dropouts, stream continuous"
+RED    374 discontinuities, 374 repeated          → "BROKEN: stream is discontinuous (374 cycles)
+                                                     — dropouts were 0 (0.0%)"
+```
+
+The RED line is the useful artifact: **dropouts 0.0%, stream broken.** Before the change, that exact
+run printed `PERFECT`.
+
+## A single coherent-looking measurement is not a measurement
+
+The same session recorded the device with a known 440 Hz tone and got a result that *looked*
+diagnostic — correct amplitude, plausible frequency, a clean story about repeated frames:
+
+```
+maxAbs = 0.24411   maxAdjDelta = 0.14346 (vs 0.01406 theoretical)   freq = 432.6 Hz
+```
+
+It was written up as a finding. Two clean re-runs of the identical command:
+
+```
+run 1:  maxAbs = 0.00189   freq = 19554.6 Hz   near-zero = 94.69%
+run 2:  maxAbs = 0.28152   freq = 11896.3 Hz   near-zero = 70.27%
+```
+
+19 kHz and 11 kHz for a 440 Hz tone are nonsense; the recordings were 70–95% silence. The harness
+never sequenced `tonehelper`'s priming against `recordwav`'s start, so each run captured a different
+arbitrary slice of startup. **The first run was not the signal and the others noise — all three were
+noise, and the first one happened to look like an answer.**
+
+> ### A number that arrives with a ready-made explanation is the one to re-run first.
+
+That is the rule worth carrying, and the reason is in *why* the bad reading survived. It did not
+survive because the number was plausible — it survived because it came with a **story that fit**:
+repeated frames, a live-monitor ring that documents itself as tolerating exactly that, a 1.7%
+stretch matching the discontinuity count. Every piece corroborated every other piece.
+
+**The story is what made it believable, and the story is what should have made it suspect.** A
+measurement that explains itself on arrival has skipped the step where you find out whether it is
+real. Re-run it before writing it up — not after someone questions it.
+
+## `log` is a zsh builtin, and it shadows `/usr/bin/log`
+
+```bash
+log show --predicate 'subsystem == "com.salesos.virtualmic"'   # -> (eval):log:2: too many arguments
+/usr/bin/log show --predicate '...'                            # the actual macOS tool
+```
+
+The failure was reported as *"no log entries"* — i.e. read as a fact about the driver — when the
+command had never run. Same species as reading a count next to the answer: **an empty result from a
+command that errored is not an empty result.** Always check the invocation before believing a zero.
+
+Related, once the right binary was running: `os_log` **info**-level messages are not persisted to the
+archive, so `log show` after the fact returns nothing for them even when they were emitted. Use
+`log stream` *during* the event — and note that streaming out of `coreaudiod` produced nothing useful
+here either, so a HAL plugin's own logs are not yet a reliable instrument on this machine.
+
+## Two more, both the same species as "read the answer, not a number next to it"
+
+**An `awk` range expression that printed a false zero for every row.** Tabulating per-device channel
+counts printed `in=- out=-` for *every* device, including the built-in mic. Read as "no device
+reports channels"; actually the parser never matched. `system_profiler -json` piped to `node` gave
+correct counts immediately. When a sweep reports the *same* answer for every member of a population,
+suspect the sweep, not the population.
+
+**A threshold calibrated for one signal, applied to another.** `capturetest` verdicts
+`DISCONTINUOUS` above `maxAdjDelta > 0.03`, and its own header says that ceiling is for *"a clean
+440 Hz [sine]"* from `tonehelper`. It was fed live **speech**, which has legitimately large
+sample-to-sample deltas, and duly returned `DISCONTINUOUS`. The tool was right; the harness was
+asking it a question it does not answer. Before reporting a flow broken, confirm your harness calls
+the instrument the way the instrument documents.
+
+## What this session got right, for contrast
+
+The one check that held up was a **red/green using a real state, not a synthetic one**: between
+rebuilding the 48 kHz helper and installing the matching driver, the machine was genuinely in the
+half-updated state the `FormatMismatch` guard exists for. Under deliberately loud audio it recorded
+`maxAbs=0.00000, verdict: SILENCE`; after the matching install, same harness, same audio,
+`maxAbs=0.59723`. That one reproduced, asserted a **change** rather than a match, and was confirmed
+independently by the founder's ears.

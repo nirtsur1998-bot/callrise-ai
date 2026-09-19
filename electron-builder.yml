@@ -201,9 +201,54 @@ mac:
     - NSAudioCaptureUsageDescription: CallRise AI records the other party's call audio, only with their consent, so it can transcribe the conversation.
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
-  notarize: false
+  # M40: notarize when credentials are present. electron-builder reads
+  # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID from the
+  # environment (app-builder-lib MacTargetHelper.getNotarizeOptions); with
+  # none of them set it logs "skipped macOS notarization" and exits 0 — so a
+  # local unsigned build still works, and release.yml's macos job verifies
+  # the ARTIFACT (stapler validate, spctl) rather than trusting that exit code.
+  notarize: true
+  # The ZIP (what electron-updater downloads) must have NO SPACES in its name.
+  # electron-builder writes the file with a space ("CallRise AI-1.15.0-arm64-
+  # mac.zip") but writes latest-mac.yml's `path:` with a hyphen; `gh release
+  # upload` keeps the space and GitHub turns it into a DOT, so the manifest
+  # pointed at a file that did not exist. Caught by the release job's
+  # read-back check on the first notarized run (v1.15.0-test.1). The dmg has
+  # its own artifactName below and is unaffected.
+  artifactName: CallRise-AI-${version}-${arch}-mac.${ext}
+  # Extra Mach-O binaries to sign. RELATIVE TO THE .app ROOT, not Contents/ —
+  # app-builder-lib's own comment says "from the artifact's app Contents path"
+  # but the code is `path.resolve(appPath, d)` (MacTargetHelper.js:81), and
+  # the first signed CI run failed with "…CallRise AI.app/Resources/…: No
+  # such file" when these lacked the Contents/ prefix. The denoiser ships
+  # under Resources, which osx-sign does not walk on its own — an unsigned
+  # helper inside a notarized app fails notarization (or, worse, passes here
+  # and is killed by Gatekeeper on the user's Mac). The job's codesign
+  # --verify on both paths is what turns this from a claim into a check.
+  binaries:
+    - Contents/Resources/virtualmic/build/michelper
+    - Contents/Resources/virtualmic/build/SalesOSMicrophone.driver
   target:
+    # What a human downloads and drags into Applications.
     - dmg
+    # What electron-updater actually consumes, and the reason this list has two
+    # entries. With dmg alone, latest-mac.yml lists only a DMG and EVERY update
+    # check on a shipped Mac throws — from the installed updater's own source,
+    # node_modules/electron-updater/out/MacUpdater.js:
+    #
+    #     const zipFileInfo = findFile(files, "zip", ["pkg", "dmg"]);
+    #     if (zipFileInfo == null)
+    #       throw newError(`ZIP file not provided: ...`, "ERR_UPDATER_ZIP_FILE_NOT_FOUND");
+    #
+    # "zip" is what it looks for; ["pkg","dmg"] is the explicit EXCLUSION list.
+    # So a DMG-only feed does not mean "updates are slow" — it means a Mac user
+    # is pinned to whatever version they first installed, permanently, with
+    # nothing on screen to say so.
+    #
+    # Verified rather than reasoned: building both targets makes latest-mac.yml's
+    # `path:` the zip (CallRise-AI-<version>-arm64-mac.zip), which is what
+    # findFile follows. The dmg stays listed in `files:` for humans.
+    - zip
   # The noise-cancellation engine (michelper + DFN3 Standard model + the HAL
   # driver bundle) lives in the separate salesos-virtualmic repo, built as a
   # sibling checkout next to this one. This copies its ALREADY-BUILT output
@@ -223,7 +268,12 @@ mac:
     - from: ../salesos-virtualmic/phase2/models/DeepFilterNet3_onnx.tar.gz
       to: virtualmic/phase2/models/DeepFilterNet3_onnx.tar.gz
 dmg:
-  artifactName: CallRise AI Mac (${arch}).${ext}
+  # Hyphenated on purpose: GitHub rewrites spaces and parentheses in asset
+  # names, so "CallRise AI Mac (arm64).dmg" would appear under a name nobody
+  # wrote down. The Windows installer already shows as CallRise-AI-Windows.exe
+  # for the same reason; this is the name the release notes can promise.
+  # arm64-only build, so the arch is not in the name (see mac.target comment).
+  artifactName: CallRise-AI-Mac.${ext}
 linux:
   target:
     - AppImage

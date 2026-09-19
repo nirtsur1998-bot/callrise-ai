@@ -44,7 +44,9 @@ import { join } from 'node:path'
 
 const expected = (process.argv[2] || '').replace(/^v/, '')
 if (!expected) {
-  console.error('usage: node artifact-version.mjs <expected-version> [--exe <path>]')
+  console.error(
+    'usage: node artifact-version.mjs <expected-version> [--exe <path.exe> | --app <path.app>]'
+  )
   process.exit(2)
 }
 const exeArgIndex = process.argv.indexOf('--exe')
@@ -66,37 +68,87 @@ record(
 )
 
 // ── the built artifact, the thing users actually receive ─────────────────────
+//
+// MACOS, added 2026-09-17 (M40). This check was Windows-only by construction:
+// it shelled out to PowerShell for the exe's VersionInfo.ProductVersion, so on
+// a Mac release there was no sixth check at all. The macOS equivalent of "read
+// the version out of the thing that ships, not out of the plan" is the app
+// bundle's own Info.plist:
+//
+//   /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
+//     "dist/mac-arm64/CallRise AI.app/Contents/Info.plist"
+//
+// `--exe` keeps working untouched so the existing Windows job needs no edit;
+// `--app` is its macOS counterpart. With neither, both default candidate sets
+// are probed and whichever exists is checked — so this runs correctly on either
+// platform without being told which one it is on.
+const appArgIndex = process.argv.indexOf('--app')
+const artifactArgIndex = exeArgIndex > -1 ? exeArgIndex : appArgIndex
+
 const candidates =
-  exeArgIndex > -1
-    ? [process.argv[exeArgIndex + 1]]
+  artifactArgIndex > -1
+    ? [process.argv[artifactArgIndex + 1]]
     : [
         join('dist', 'win-unpacked', 'CallRiseAI.exe'),
-        join('dist', 'win-arm64-unpacked', 'CallRiseAI.exe')
+        join('dist', 'win-arm64-unpacked', 'CallRiseAI.exe'),
+        join('dist', 'mac-arm64', 'CallRise AI.app'),
+        join('dist', 'mac', 'CallRise AI.app'),
+        join('dist', 'mac-universal', 'CallRise AI.app')
       ]
+
+/**
+ * Read the version an artifact reports about ITSELF.
+ *
+ * Dispatches on the artifact's shape rather than on process.platform, because
+ * the question is "what kind of thing is this", and a path is the only evidence
+ * available when someone passes --exe/--app explicitly.
+ *
+ * Returns { version } or { error }.
+ */
+function readArtifactVersion(artifactPath) {
+  if (artifactPath.endsWith('.app')) {
+    const plist = join(artifactPath, 'Contents', 'Info.plist')
+    if (!existsSync(plist)) return { error: `no Info.plist at ${plist}` }
+    try {
+      const out = execFileSync(
+        '/usr/libexec/PlistBuddy',
+        ['-c', 'Print :CFBundleShortVersionString', plist],
+        { encoding: 'utf8' }
+      ).trim()
+      return { version: out }
+    } catch (err) {
+      return { error: err.message }
+    }
+  }
+  // Windows: PowerShell rather than parsing PE ourselves — this is the same
+  // field Windows shows in Properties, and the one electron-updater compares.
+  const ps = `(Get-Item '${artifactPath.replace(/'/g, "''")}').VersionInfo.ProductVersion`
+  try {
+    return { version: execSync(`powershell -NoProfile -Command "${ps}"`, { encoding: 'utf8' }).trim() }
+  } catch (err) {
+    return { error: err.message }
+  }
+}
 
 const found = candidates.filter((p) => p && existsSync(p))
 if (found.length === 0) {
   record(
     'the built artifact reports the version being released',
     false,
-    `no exe found. looked in:\n  ${candidates.join('\n  ')}\nBuild first, or pass --exe.`
+    `no artifact found. looked in:\n  ${candidates.join('\n  ')}\nBuild first, or pass --exe / --app.`
   )
 } else {
-  for (const exe of found) {
-    // PowerShell rather than parsing PE ourselves: this is the same field
-    // Windows shows in Properties, and the same one electron-updater compares.
-    const ps = `(Get-Item '${exe.replace(/'/g, "''")}').VersionInfo.ProductVersion`
-    let actual = ''
-    try {
-      actual = execSync(`powershell -NoProfile -Command "${ps}"`, { encoding: 'utf8' }).trim()
-    } catch (err) {
-      record(`artifact version: ${exe}`, false, `could not read: ${err.message}`)
+  for (const artifact of found) {
+    const { version: actual, error } = readArtifactVersion(artifact)
+    if (error) {
+      record(`artifact version: ${artifact}`, false, `could not read: ${error}`)
       continue
     }
-    // electron-builder stamps ProductVersion as x.y.z.0 or x.y.z.
+    // electron-builder stamps Windows ProductVersion as x.y.z.0 or x.y.z;
+    // CFBundleShortVersionString is plain x.y.z.
     const normalised = actual.replace(/\.0$/, '')
     record(
-      `the built artifact reports the version being released (${exe})`,
+      `the built artifact reports the version being released (${artifact})`,
       normalised === expected || actual === expected,
       `artifact  ${actual}\nexpected  ${expected}`
     )
@@ -150,16 +202,19 @@ try {
   const srcTime = Number(stamp) * 1000
   if (!stamp || Number.isNaN(srcTime)) throw new Error('no commit found touching shipped source')
   const srcCommit = gitLog('%h %s')
-  for (const exe of found) {
-    const built = statSync(exe).mtimeMs
+  for (const artifact of found) {
+    // For a .app this is the bundle directory's own mtime, which electron-builder
+    // writes when it finishes assembling it — the same "when was this produced
+    // here" question the exe's mtime answers, with the same download caveat below.
+    const built = statSync(artifact).mtimeMs
     const skewMin = Math.round((built - srcTime) / 60000)
     // mtime means "when this file was written here". For a local build that is
     // the build. For a DOWNLOAD it is when the transfer finished — always now,
     // so it always passes, including over a binary built from the wrong commit.
     // Say so in the output rather than only in a comment nobody opens.
-    const downloadedRecently = exeArgIndex > -1 && Date.now() - built < 60 * 60 * 1000
+    const downloadedRecently = artifactArgIndex > -1 && Date.now() - built < 60 * 60 * 1000
     record(
-      `the artifact post-dates the last change to shipped source (${exe})`,
+      `the artifact post-dates the last change to shipped source (${artifact})`,
       built >= srcTime,
       `last shipped-source commit  ${new Date(srcTime).toISOString()}  ${srcCommit}\n` +
         `artifact built              ${new Date(built).toISOString()}\n` +

@@ -5,6 +5,29 @@
 // card's "no call audio, recordings or transcripts" copy without anyone
 // noticing — so the input list is pinned by test.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { join } from 'path'
+
+// Build the expected engine paths the way the code under test does, instead of
+// hardcoding Windows separators.
+//
+// Tier 1 is a Windows feature, so these fixtures use a Windows-shaped
+// LOCALAPPDATA root — but `engineDiagnosticFiles` composes with `path.join`,
+// which emits `/` when the suite runs on macOS or Linux. Hardcoded `\\` made
+// these two tests pass on Windows and fail everywhere else, which is a
+// platform-dependent suite: green on one machine, red on another, for a
+// difference the product does not have.
+//
+// This does NOT weaken the check. What the test exists to pin is the exact SET
+// of files — three, in this order, with these names — after a real bug where
+// the rotated log was called `kern_bridge.prev.log`, a name that appears
+// nowhere in the engine source, so `existsSync` was always false and the file
+// was silently collected by nothing. Those names are still written out
+// literally here; only the separator now comes from `path`.
+const LOCAL_APP_DATA = 'C:\\Users\\x\\AppData\\Local'
+const ENGINE_ROOT = join(LOCAL_APP_DATA, 'CallRiseAI')
+const ENGINE_LOG = join(ENGINE_ROOT, 'logs', 'kern_bridge.log')
+const ENGINE_LOG_ROTATED = join(ENGINE_ROOT, 'logs', 'kern_bridge.log.1')
+const ENGINE_STATUS = join(ENGINE_ROOT, 'kern_bridge_status.json')
 
 vi.mock('electron', () => ({
   app: {
@@ -94,7 +117,7 @@ const { engineDiagnosticFiles, buildAppDiagnostics, exportTier1Diagnostics } =
   await import('../tier1-diagnostics')
 
 beforeEach(() => {
-  process.env['LOCALAPPDATA'] = 'C:\\Users\\x\\AppData\\Local'
+  process.env['LOCALAPPDATA'] = LOCAL_APP_DATA
   saveDialogResult = { canceled: false, filePath: 'C:\\out\\diag.zip' }
   copied.length = 0
   existingFiles = new Set()
@@ -109,21 +132,15 @@ afterEach(() => {
 
 describe('the collected set is enumerated, pinned, and nothing more', () => {
   it('lists exactly the two engine logs and the status sidecar', () => {
-    const files = engineDiagnosticFiles('C:\\Users\\x\\AppData\\Local')
-    expect(files).toEqual([
-      'C:\\Users\\x\\AppData\\Local\\CallRiseAI\\logs\\kern_bridge.log',
-      'C:\\Users\\x\\AppData\\Local\\CallRiseAI\\logs\\kern_bridge.log.1',
-      'C:\\Users\\x\\AppData\\Local\\CallRiseAI\\kern_bridge_status.json'
-    ])
+    const files = engineDiagnosticFiles(LOCAL_APP_DATA)
+    expect(files).toEqual([ENGINE_LOG, ENGINE_LOG_ROTATED, ENGINE_STATUS])
   })
 
   it('copies only files that exist — a missing log is skipped, not fatal', async () => {
-    existingFiles.add('C:\\Users\\x\\AppData\\Local\\CallRiseAI\\logs\\kern_bridge.log')
+    existingFiles.add(ENGINE_LOG)
     const res = await exportTier1Diagnostics({})
     expect(res.ok).toBe(true)
-    expect(copied.map((c) => c.from)).toEqual([
-      'C:\\Users\\x\\AppData\\Local\\CallRiseAI\\logs\\kern_bridge.log'
-    ])
+    expect(copied.map((c) => c.from)).toEqual([ENGINE_LOG])
   })
 })
 

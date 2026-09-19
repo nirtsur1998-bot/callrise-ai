@@ -20,6 +20,14 @@ function errorMessage(code: string): string {
       return "Couldn't install — the audio device wasn't found on disk."
     case 'install failed':
       return "Couldn't install — something went wrong copying the audio device. Try again."
+    case 'uninstall failed':
+      return "Couldn't remove the audio device — it's still installed. Try again."
+    case 'unsupported-architecture':
+      // Belt and braces: the card returns early on an Intel Mac so this should
+      // be unreachable from the UI. It exists because virtualmic.ts can return
+      // the code to any caller, and a bare code leaking into the interface is
+      // exactly the unexplained-failure shape this refusal was added to remove.
+      return 'Noise cancellation needs a Mac with Apple silicon (M1 or later). This Mac has an Intel processor.'
     default:
       return `Couldn't turn on (${code}). Try again in a moment.`
   }
@@ -29,7 +37,7 @@ function errorMessage(code: string): string {
  *  cleans the mic and publishes it as the "Sales OS Microphone" device — which
  *  the user then selects in Zoom/Meet (or here) so the buyer hears clean audio. */
 export function NoiseCancellationCard(): React.JSX.Element | null {
-  const { status, busy, error, start, stop, installDriver } = useVirtualMic()
+  const { status, busy, error, start, stop, installDriver, uninstallDriver } = useVirtualMic()
 
   // The noise-cancellation engine is a macOS Core Audio driver — it doesn't
   // exist on other platforms (a Windows version is its own future project), so
@@ -43,6 +51,30 @@ export function NoiseCancellationCard(): React.JSX.Element | null {
         <div className="flex items-center gap-2 text-[13px] text-faint">
           <Loader2 className="h-4 w-4 animate-spin" /> Checking noise cancellation…
         </div>
+      </Card>
+    )
+  }
+
+  // Intel Mac: the driver and the helper are both arm64-only, so nothing here
+  // can work. Say so plainly INSTEAD of rendering the controls.
+  //
+  // The alternative — showing "Set up" as normal — is the failure this replaces:
+  // the install would succeed, the user would type an admin password, and no
+  // microphone would ever appear, with nothing anywhere explaining why. Told
+  // "not supported yet", they have something to act on; left with a silently
+  // missing device, they have a mystery and a support ticket.
+  if (!status.architectureSupported) {
+    return (
+      <Card className="mb-5">
+        <div className="mb-2 flex items-center gap-2">
+          <AudioLines className="h-4 w-4 text-faint" />
+          <h3 className="text-sm font-medium">Noise cancellation</h3>
+        </div>
+        <p className="text-[13px] leading-relaxed text-faint">
+          Not available on this Mac yet. Noise cancellation currently requires Apple silicon (M1 or
+          later) — this Mac has an Intel processor. Everything else in CallRise works normally, and
+          your microphone is unaffected.
+        </p>
       </Card>
     )
   }
@@ -106,6 +138,30 @@ export function NoiseCancellationCard(): React.JSX.Element | null {
           >
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Install
+          </button>
+        </div>
+      )}
+
+      {/* The counterpart to Install, which had none.
+          Dragging CallRise to the Trash cannot remove a driver from
+          /Library/Audio/Plug-Ins/HAL, so without this the only way off a
+          machine was a `sudo rm -rf` the user would have to be told. Kept
+          deliberately quiet — small, plain text, no destructive-red styling —
+          because it must be findable without competing with Turn on/off.
+          Shown only when there is actually something to remove. */}
+      {driverInstalled && (
+        <div className="mt-3 flex items-center justify-between gap-3 border-t border-line-soft pt-2.5">
+          <p className="text-[11px] text-faint">
+            Removes the &ldquo;Sales OS Microphone&rdquo; audio device from this Mac. Noise
+            cancellation stops working until you install it again.
+          </p>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void uninstallDriver()}
+            className="shrink-0 rounded-lg border border-line px-2.5 py-1 text-[11px] font-medium text-faint transition hover:bg-elevated hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Remove
           </button>
         </div>
       )}

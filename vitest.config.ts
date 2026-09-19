@@ -16,7 +16,14 @@ export default defineConfig({
     include: ['src/**/*.test.ts'],
     // BUG-277 — strip the developer's real provider keys from process.env
     // before any test file is imported. See the setup file's header.
-    setupFiles: ['./src/__tests__/setup/strip-provider-env.setup.ts'],
+    setupFiles: [
+      './src/__tests__/setup/strip-provider-env.setup.ts',
+      // M40 — one clear failure naming the fix when Node's own localStorage
+      // global shadows the DOM environment's (Node >= 25 vs CI's Node 22).
+      // Without it that mismatch surfaced as 79 failures across 11 render
+      // suites that read exactly like a platform defect. See the file.
+      './src/__tests__/setup/node-webstorage-guard.setup.ts'
+    ],
     /**
      * 20s, raised from vitest's 5s DEFAULT on 2026-08-31 (M32).
      *

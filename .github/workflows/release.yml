@@ -18,6 +18,19 @@ name: Publish a real release (auto-update feed)
 #   git tag v1.1.7 && git push origin v1.1.7
 # (or use workflow_dispatch below with a version input, which does the tag
 # push for you against whatever's currently on main).
+#
+# M40 (2026-09-18) — THREE JOBS, ONE RELEASE. `windows` is the proven flow,
+# unchanged except that the go-live step moved out of it. `macos` builds the
+# Mac app AND its denoiser from source (Route 1 of
+# docs/M40-stage3-mac-release-audit.md) and uploads into the same draft.
+# `go-live` runs after BOTH, stages the rollout into BOTH manifests, and
+# flips the draft. A failure in either build leaves the draft invisible —
+# "nothing shipped", never "Windows shipped, Mac didn't" under one tag.
+# The macOS job runs AFTER windows rather than beside it so the draft
+# release already exists when it uploads (the same create-race that bit
+# v1.1.9/v1.1.10 between two Windows targets would otherwise bite between
+# two runners). Set the `mac` input to false on a manual dispatch to ship
+# Windows alone.
 on:
   push:
     tags:
@@ -31,6 +44,11 @@ on:
         description: "Staged rollout percentage (0-100). Installs whose stable cohort number falls under this see the update; everyone else sees 'up to date'. 100 = everyone at once."
         required: false
         default: "10"
+      mac:
+        description: "Also build and publish the macOS app (signed + notarized; needs the five MAC_/APPLE_ secrets and VIRTUALMIC_REPO_TOKEN)"
+        type: boolean
+        required: false
+        default: true
 
 # M29 A4.2 — every release is born a DRAFT and only flipped live as the very
 # last step, after every asset (installers + the patched latest.yml) is in
@@ -47,7 +65,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -159,51 +177,7 @@ jobs:
       # suite pass".
       - name: Prove the channel-swap tests actually ran (BUG-120 evidence)
         shell: bash
-        run: |
-          # NAMES, NOT COUNTS -- and PASSED, not merely PRINTED.
-          #
-          # First draft of this step grepped for the four test names and
-          # passed. It was wrong: vitest --reporter=verbose prints SKIPPED
-          # tests by name too, marked with a down-arrow instead of a check.
-          # So the check reported "4 of 4 found" while all four were skipped
-          # -- the exact hollow-green shape this step exists to close,
-          # reproduced inside the step itself. Caught by hiding the built
-          # worklet and watching the check pass anyway.
-          #
-          # Markers are matched as explicit BYTES via printf, not as literals
-          # in this file, so the check cannot break if the YAML's encoding is
-          # ever normalised.
-          PASS_MARK=$(printf '\xe2\x9c\x93')   # U+2713 check  -> ran and passed
-          SKIP_MARK=$(printf '\xe2\x86\x93')   # U+2193 arrow  -> collected but skipped
-
-          echo "--- suite tally (compare the TOTAL; skip counts are environment-dependent) ---"
-          grep -E "Test Files|Tests " test.log | tail -4 || true
-          echo ""
-          echo "--- the four build-gated worklet tests ---"
-          ran=0
-          for pat in             "loads successfully from the built renderer output"             "passes the channel self-test"             "mono mode: real worklet emits only channel 0"             "proves the self-test actually detects a swap"
-          do
-            line=$(grep -F "$pat" test.log | head -1)
-            if [ -z "$line" ]; then
-              echo "  NOT COLLECTED : $pat"
-            elif printf '%s' "$line" | grep -qF "$SKIP_MARK"; then
-              echo "  SKIPPED       : $pat"
-            elif printf '%s' "$line" | grep -qF "$PASS_MARK"; then
-              echo "  RAN + PASSED  : $pat"
-              ran=$((ran + 1))
-            else
-              echo "  UNKNOWN STATE : $line"
-            fi
-          done
-
-          echo ""
-          echo "channel-swap tests that actually ran: $ran of 4"
-          if [ "$ran" -ne 4 ]; then
-            echo "::error::BUG-120 has regressed - the channel-swap tests did not run."
-            echo "electron-vite build must run BEFORE vitest, or real-worklet-render.test.ts"
-            echo "skips itself (it is gated on out/renderer/assets/pcm-processor*)."
-            exit 1
-          fi
+        run: bash scripts/verification/prove-channel-tests-ran.sh test.log
 
       - name: Ensure GitHub release exists
         shell: bash
@@ -246,56 +220,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win --x64 --publish always > electron-builder.log 2>&1
 
-      - name: Stage rollout percentage + go live (the release stops being a draft HERE)
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME#v}"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then TAG="${{ inputs.version }}"; fi
-          TAG="v$TAG"
-          PERCENT="${{ inputs.rollout_percent }}"
-          if [ -z "$PERCENT" ]; then PERCENT="$ROLLOUT_DEFAULT"; fi
-          # An unparseable percentage must fail loudly here, in CI, where it
-          # costs nothing — electron-updater treats a NaN stagingPercentage
-          # as 100% with only a warning, which is the wrong place to learn
-          # about a typo (docs/M29-rollout-runbook.md §1.5).
-          if ! [[ "$PERCENT" =~ ^[0-9]+$ ]] || [ "$PERCENT" -gt 100 ]; then
-            echo "::error::rollout_percent must be an integer 0-100, got: $PERCENT"
-            exit 1
-          fi
-          if [ ! -f dist/latest.yml ]; then
-            echo "::error::dist/latest.yml was not produced by electron-builder - refusing to go live without a manifest."
-            exit 1
-          fi
-          if [ "$PERCENT" -lt 100 ]; then
-            printf '\nstagingPercentage: %s\n' "$PERCENT" >> dist/latest.yml
-            gh release upload "$TAG" dist/latest.yml --clobber --repo "${{ github.repository }}"
-            # Prove the patched manifest is the one on the release - read it
-            # back rather than trusting the upload's exit code.
-            rm -rf _verify && mkdir _verify
-            gh release download "$TAG" --pattern latest.yml --dir _verify --repo "${{ github.repository }}"
-            grep -q "^stagingPercentage: $PERCENT$" _verify/latest.yml || {
-              echo "::error::re-downloaded latest.yml does not carry stagingPercentage: $PERCENT - leaving the release as a draft."
-              exit 1
-            }
-            echo "Manifest staged at $PERCENT%."
-          else
-            echo "Rollout 100% - manifest left pristine."
-          fi
-          # A semver-prerelease tag (v1.4.0-test.1, v1.4.0-beta.2) goes live
-          # as a GitHub PRERELEASE: visible on the releases page, but
-          # /releases/latest ignores prereleases, so the shipped updater
-          # (allowPrerelease=false) never sees it. That is the test channel.
-          if [[ "$TAG" == *-* ]]; then
-            gh release edit "$TAG" --draft=false --prerelease --repo "${{ github.repository }}"
-            echo "Published $TAG as a PRERELEASE (invisible to the updater)."
-          else
-            gh release edit "$TAG" --draft=false --latest --repo "${{ github.repository }}"
-            echo "Published $TAG live at $PERCENT% rollout."
-          fi
-
       - name: Bundle failure diagnostics into one file
         if: always()
         shell: bash
@@ -312,7 +236,10 @@ jobs:
             done
             echo "## dist/ contents"
             echo '```'
-            find dist -maxdepth 1 2>/dev/null
+            # `|| true`: under `bash -e`, a missing dist/ (the build never got
+            # that far) made THIS step fail and hide the diagnostics it exists
+            # to surface - seen live on the v1.15.0-test.1 run.
+            find dist -maxdepth 1 2>/dev/null || true
             echo '```'
           } > FAILURE-DIAGNOSTICS.md
 
@@ -320,5 +247,347 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: failure-diagnostics
+          name: failure-diagnostics-windows
           path: FAILURE-DIAGNOSTICS.md
+
+  # ── macOS ──────────────────────────────────────────────────────────────────
+  # Route 1 (docs/M40-stage3-mac-release-audit.md, Blocker 3): the denoiser is
+  # BUILT FROM SOURCE here — libdf.a via cargo, then michelper + the HAL
+  # driver via build.sh — from a checkout of the private sibling repo. Nothing
+  # binary is fetched or committed. scripts/verify-build-inputs.js (the
+  # electron-builder beforePack hook) then refuses to package unless all three
+  # inputs exist at ../salesos-virtualmic/…, which is why the two repos are
+  # checked out as SIBLINGS under the workspace and every app step runs with
+  # working-directory: callrise-ai.
+  #
+  # Secrets this job needs, all of them, or it fails at the first step with
+  # the missing names — it never ships an unsigned or un-notarized Mac app:
+  #   VIRTUALMIC_REPO_TOKEN        fine-grained PAT, salesos-virtualmic only,
+  #                                Contents + Metadata read-only
+  #   MAC_CERT_P12_BASE64          Developer ID Application cert, base64 of
+  #                                the .p12 (electron-builder's CSC_LINK
+  #                                accepts base64 directly)
+  #   MAC_CERT_PASSWORD            the .p12 password (CSC_KEY_PASSWORD)
+  #   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
+  #                                notarytool credentials, read by
+  #                                electron-builder's getNotarizeOptions()
+  # The Developer ID INSTALLER certificate (for the driver .pkg, Stage 2) is
+  # not used here yet — the app installs the driver from its own resources.
+  macos:
+    needs: windows
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mac }}
+    # macos-15 is Apple Silicon, matching the arm64-only build (the helper is
+    # arm64-only by build.sh; the app refuses Intel — see virtualmic.ts).
+    # Rust (cargo/rustc) is preinstalled on this image per its README.
+    runs-on: macos-15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Refuse to run without every secret this job needs
+        env:
+          VIRTUALMIC_REPO_TOKEN: ${{ secrets.VIRTUALMIC_REPO_TOKEN }}
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=""
+          for name in VIRTUALMIC_REPO_TOKEN MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::macOS release refused - missing repository secret(s):$missing"
+            echo "Add them under Settings > Secrets and variables > Actions, or dispatch with mac=false to ship Windows alone."
+            exit 1
+          fi
+          echo "all six secrets present (values not printed)"
+
+      - uses: actions/checkout@v4
+        with:
+          path: callrise-ai
+
+      - name: Check out the sibling denoiser repo (salesos-virtualmic)
+        uses: actions/checkout@v4
+        with:
+          repository: nirtsur1998-bot/salesos-virtualmic
+          token: ${{ secrets.VIRTUALMIC_REPO_TOKEN }}
+          path: salesos-virtualmic
+          # The M40 work (48 kHz ring, 12.0 floor, build-libdf.sh, the
+          # as-built Cargo.lock) lives on that repo's claude/m40-mac-parity
+          # branch until the founder merges it. Change this ref, or merge,
+          # before the first Mac release - build-libdf.sh does not exist on
+          # main yet and the job fails at "Build libdf.a" if it is absent.
+          ref: main
+
+      - name: Toolchain versions (what this binary was built with)
+        run: |
+          echo "clang:  $(clang++ --version | head -1)"
+          echo "cargo:  $(cargo --version)"
+          echo "rustc:  $(rustc --version)"
+          echo "node:   $(node --version)"
+          echo "arch:   $(uname -m)"
+          [ "$(uname -m)" = "arm64" ] || { echo "::error::expected an arm64 runner (the helper is arm64-only)"; exit 1; }
+
+      # Cold cargo build of libdf measured at 48 s on an M-series Mac; cached
+      # on the lock's hash so a re-release with no dependency change skips it.
+      - name: Cache the DeepFilterNet cargo target
+        uses: actions/cache@v4
+        with:
+          path: salesos-virtualmic/phase2/vendor/DeepFilterNet/target
+          key: libdf-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('salesos-virtualmic/phase2/DeepFilterNet-Cargo.lock') }}
+
+      - name: Build libdf.a from source (pinned commit, as-built Cargo.lock, --locked)
+        working-directory: salesos-virtualmic
+        # build-libdf.sh unsets MACOSX_DEPLOYMENT_TARGET itself and says so;
+        # with it set the cold build fails (E0463). Do not "fix" that by
+        # setting it here.
+        run: bash phase2/build-libdf.sh > ../libdf-build.log 2>&1 || { tail -40 ../libdf-build.log; exit 1; }
+
+      - name: Build michelper + the HAL driver (build.sh)
+        working-directory: salesos-virtualmic
+        run: |
+          bash build.sh > ../virtualmic-build.log 2>&1 || { tail -40 ../virtualmic-build.log; exit 1; }
+          for f in build/michelper build/SalesOSMicrophone.driver phase2/models/DeepFilterNet3_onnx.tar.gz; do
+            [ -e "$f" ] || { echo "::error::build.sh finished but $f is missing"; exit 1; }
+          done
+          echo "michelper: $(file build/michelper | sed 's/.*: //')"
+          echo "minos:     $(otool -l build/michelper | grep -A2 LC_BUILD_VERSION | grep minos | head -1)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        working-directory: callrise-ai
+        run: npm ci > ../install.log 2>&1
+
+      - name: Verify package.json version matches the tag
+        working-directory: callrise-ai
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then TAG="${{ inputs.version }}"; fi
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag version ($TAG) doesn't match package.json version ($PKG). Bump package.json first."
+            exit 1
+          fi
+
+      - name: Build native addon (mac-audio-activity, Electron ABI)
+        working-directory: callrise-ai
+        run: npm run native:build:mac > ../native-build.log 2>&1
+
+      - name: Typecheck
+        working-directory: callrise-ai
+        run: npm run typecheck > ../typecheck.log 2>&1
+
+      # Same order, same reason as the Windows job: BUG-120. Build BEFORE test.
+      - name: Build renderer/main (electron-vite)
+        working-directory: callrise-ai
+        run: npx electron-vite build > ../vite-build.log 2>&1
+
+      - name: Test
+        working-directory: callrise-ai
+        run: npx vitest run --reporter=verbose > ../test.log 2>&1
+
+      - name: Prove the channel-swap tests actually ran (BUG-120 evidence)
+        working-directory: callrise-ai
+        run: bash scripts/verification/prove-channel-tests-ran.sh ../test.log
+
+      # `--publish never`: package, VERIFY, then upload with gh below. That
+      # way nothing reaches the draft until the signature, the notarization
+      # ticket and the version have all been read back from the artifact.
+      # electron-builder still writes latest-mac.yml because the publish
+      # provider is configured in electron-builder.yml.
+      - name: Package, sign and notarize (electron-builder)
+        working-directory: callrise-ai
+        env:
+          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder --mac --arm64 --publish never > ../electron-builder.log 2>&1 || { tail -60 ../electron-builder.log; exit 1; }
+
+      # Read the artifact, not the log. A build that skipped signing or
+      # notarization prints a WARNING and exits 0 (MacTargetHelper.js:264),
+      # so exit status proves nothing here.
+      - name: Verify the .app is signed with Developer ID, notarized and stapled
+        working-directory: callrise-ai
+        run: |
+          APP="dist/mac-arm64/CallRise AI.app"
+          [ -d "$APP" ] || { echo "::error::$APP not found"; ls dist; exit 1; }
+          echo "--- codesign (deep, strict) ---"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dvv "$APP" 2>&1 | grep -E "^Authority=Developer ID Application" || { echo "::error::not signed with a Developer ID Application certificate"; codesign -dvv "$APP"; exit 1; }
+          echo "--- the denoiser inside the bundle must carry the SAME Developer ID, not build.sh's ad-hoc seal ---"
+          # `codesign --verify` passes for an ad-hoc signature too, so validity
+          # alone would be hollow here; the Authority line is the real check.
+          for nested in "$APP/Contents/Resources/virtualmic/build/michelper" "$APP/Contents/Resources/virtualmic/build/SalesOSMicrophone.driver"; do
+            codesign --verify --strict --verbose=2 "$nested"
+            codesign -dvv "$nested" 2>&1 | grep -E "^Authority=Developer ID Application" || { echo "::error::$nested is not signed with the Developer ID (mac.binaries in electron-builder.yml did not take)"; codesign -dvv "$nested"; exit 1; }
+          done
+          echo "--- notarization ticket stapled? ---"
+          xcrun stapler validate "$APP"
+          echo "--- Gatekeeper's own verdict ---"
+          spctl --assess --type execute --verbose=2 "$APP"
+          grep -q "notarization successful" ../electron-builder.log || { echo "::error::electron-builder never logged 'notarization successful'"; grep -n "notariz" ../electron-builder.log; exit 1; }
+
+      # Check 6 (artifact-version.mjs --app): the .app reports the version the
+      # tag says, read from its own Info.plist. Only the version half is
+      # meaningful in CI; the mtime half is noise for anything not built
+      # locally (the script's own header says so).
+      - name: Check 6 — the built .app carries the tag's version
+        working-directory: callrise-ai
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then TAG="${{ inputs.version }}"; fi
+          node scripts/verification/artifact-version.mjs "$TAG" --app "dist/mac-arm64/CallRise AI.app"
+
+      - name: Upload the Mac assets into the draft release
+        working-directory: callrise-ai
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then TAG="${{ inputs.version }}"; fi
+          TAG="v$TAG"
+          gh release view "$TAG" --repo "${{ github.repository }}" --json isDraft --jq '.isDraft' | grep -q true || { echo "::error::release $TAG is not a draft - refusing to upload into a live release"; exit 1; }
+          [ -f dist/latest-mac.yml ] || { echo "::error::dist/latest-mac.yml was not produced"; ls dist; exit 1; }
+          ls -la dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml
+          gh release upload "$TAG" dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml --clobber --repo "${{ github.repository }}"
+          # Read back: the manifest's own `path:` must name an asset that is now on the release.
+          ZIP="$(grep -E '^path:' dist/latest-mac.yml | head -1 | sed 's/^path: *//')"
+          gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' | grep -Fx "$ZIP" || { echo "::error::latest-mac.yml points at '$ZIP' but no such asset is on the release"; exit 1; }
+          echo "uploaded; manifest path '$ZIP' present on $TAG"
+
+      - name: Bundle failure diagnostics into one file
+        if: always()
+        run: |
+          {
+            echo "# macOS release diagnostics"
+            for f in libdf-build.log virtualmic-build.log install.log native-build.log typecheck.log test.log vite-build.log electron-builder.log; do
+              if [ -f "$f" ]; then
+                echo "## $f (last 300 lines)"
+                echo '```'
+                tail -n 300 "$f"
+                echo '```'
+              fi
+            done
+            echo "## dist/ contents"
+            echo '```'
+            find callrise-ai/dist -maxdepth 1 2>/dev/null
+            echo '```'
+          } > FAILURE-DIAGNOSTICS.md
+
+      - name: Upload failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-diagnostics-macos
+          path: FAILURE-DIAGNOSTICS.md
+
+  # ── go live ────────────────────────────────────────────────────────────────
+  # Runs only when windows succeeded and macos either succeeded or was
+  # deliberately skipped (mac=false). A macOS FAILURE stops the release: the
+  # draft stays a draft, Windows users see nothing, and the fix is a re-run.
+  # That is the founder's "parallel Mac+Windows releases" intent — one tag,
+  # both platforms, or neither.
+  go-live:
+    needs: [windows, macos]
+    if: ${{ always() && needs.windows.result == 'success' && (needs.macos.result == 'success' || needs.macos.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage rollout percentage + go live (the release stops being a draft HERE)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAC_BUILT: ${{ needs.macos.result == 'success' }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then TAG="${{ inputs.version }}"; fi
+          TAG="v$TAG"
+          PERCENT="${{ inputs.rollout_percent }}"
+          if [ -z "$PERCENT" ]; then PERCENT="$ROLLOUT_DEFAULT"; fi
+          # An unparseable percentage must fail loudly here, in CI, where it
+          # costs nothing — electron-updater treats a NaN stagingPercentage
+          # as 100% with only a warning, which is the wrong place to learn
+          # about a typo (docs/M29-rollout-runbook.md §1.5).
+          if ! [[ "$PERCENT" =~ ^[0-9]+$ ]] || [ "$PERCENT" -gt 100 ]; then
+            echo "::error::rollout_percent must be an integer 0-100, got: $PERCENT"
+            exit 1
+          fi
+          # The manifests live on the draft now (uploaded by the build jobs),
+          # not in this job's workspace - fetch them from the release itself.
+          MANIFESTS="latest.yml"
+          if [ "$MAC_BUILT" = "true" ]; then MANIFESTS="latest.yml latest-mac.yml"; fi
+          rm -rf _feed && mkdir _feed
+          for m in $MANIFESTS; do
+            gh release download "$TAG" --pattern "$m" --dir _feed --repo "${{ github.repository }}" || {
+              echo "::error::$m is not on release $TAG - refusing to go live without a manifest."
+              exit 1
+            }
+          done
+          if [ "$PERCENT" -lt 100 ]; then
+            for m in $MANIFESTS; do
+              printf '\nstagingPercentage: %s\n' "$PERCENT" >> "_feed/$m"
+              gh release upload "$TAG" "_feed/$m" --clobber --repo "${{ github.repository }}"
+            done
+            # Prove the patched manifests are the ones on the release - read
+            # them back rather than trusting the upload's exit code.
+            rm -rf _verify && mkdir _verify
+            for m in $MANIFESTS; do
+              gh release download "$TAG" --pattern "$m" --dir _verify --repo "${{ github.repository }}"
+              grep -q "^stagingPercentage: $PERCENT$" "_verify/$m" || {
+                echo "::error::re-downloaded $m does not carry stagingPercentage: $PERCENT - leaving the release as a draft."
+                exit 1
+              }
+            done
+            echo "Manifests ($MANIFESTS) staged at $PERCENT%."
+          else
+            echo "Rollout 100% - manifests left pristine."
+          fi
+          # A semver-prerelease tag (v1.4.0-test.1, v1.4.0-beta.2) goes live
+          # as a GitHub PRERELEASE: visible on the releases page, but
+          # /releases/latest ignores prereleases, so the shipped updater
+          # (allowPrerelease=false) never sees it. That is the test channel.
+          if [[ "$TAG" == *-* ]]; then
+            gh release edit "$TAG" --draft=false --prerelease --repo "${{ github.repository }}"
+            echo "Published $TAG as a PRERELEASE (invisible to the updater)."
+          else
+            gh release edit "$TAG" --draft=false --latest --repo "${{ github.repository }}"
+            echo "Published $TAG live at $PERCENT% rollout."
+          fi
+
+      # Checks 1-5 read the feed electron-updater actually follows, per
+      # platform. They run AFTER the flip because check 2 reads
+      # /releases/latest/download/, which a draft does not serve. A failure
+      # here does not un-publish (there is no safe automatic way to); it
+      # fails the run so the runbook's manual verification is not skipped.
+      # Prerelease tags are excluded: /releases/latest ignores them by
+      # design, so checks 1 and 5 would fail for the right reason.
+      - uses: actions/setup-node@v4
+        if: ${{ !contains(github.ref_name, '-') && !contains(inputs.version, '-') }}
+        with:
+          node-version: "22"
+
+      - name: Checks 1-5 against the live feed (Windows, and Mac when built)
+        if: ${{ !contains(github.ref_name, '-') && !contains(inputs.version, '-') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAC_BUILT: ${{ needs.macos.result == 'success' }}
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then TAG="${{ inputs.version }}"; fi
+          PERCENT="${{ inputs.rollout_percent }}"
+          if [ -z "$PERCENT" ]; then PERCENT="$ROLLOUT_DEFAULT"; fi
+          node scripts/verification/five-checks.mjs "v$TAG" "$PERCENT"
+          if [ "$MAC_BUILT" = "true" ]; then
+            node scripts/verification/five-checks.mjs "v$TAG" "$PERCENT" --mac
+          fi

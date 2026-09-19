@@ -215,10 +215,33 @@ await wait(800)
 bucket = []
 
 console.log('--- screens and detail pages ---')
+// The Calls screen opens on its LIVE tab. The saved calls — the only things
+// that match the 'Call ·' prefix below — are on the PAST tab, so without this
+// click the next two visits can never find a row.
+//
+// They did not fail loudly. They reported `SKIP … only 0 rows`, which reads as
+// "this profile has no calls" and is a claim about the POPULATION when the real
+// cause was the TAB. With three seeded calls present and `calls.list()`
+// returning 3, the sweep still said 0 — so these two states had almost certainly
+// never been exercised on any platform, while the summary line counted them as
+// deliberate skips. Found 2026-09-17 (M40) running the first populated sweep.
 await visit('Calls list', await click('Calls'))
+await click('Past')
+await wait(1200)
+bucket = []
 await visit('Call detail (newest)', await click('Call ·', 'prefix', 0))
-await click('Calls')
-await wait(1000)
+// Leave the call via the detail page's own 'Past Calls' link, NOT the sidebar's
+// 'Calls'. This is working around a PRODUCT bug, not a quirk of this script:
+// clicking the sidebar 'Calls' while a call is open does nothing at all —
+// measured twice from independent probes, page-text hash identical before and
+// after, still on the detail page. There is also no 'Back' control on that page.
+// 'Past Calls' is the only exit confirmed to work (hash changes, detail-only
+// controls disappear). See docs/M40-known-issues.md.
+//
+// That no-op is why this step used to report `only 1 rows`: the sweep never
+// left the first call, and the one match was that page's own title.
+await click('Past Calls')
+await wait(1500)
 bucket = []
 await visit('Call detail (4th)', await click('Call ·', 'prefix', 3))
 for (const s of ['Pipeline', 'Coaching', 'Library', 'Rise', 'Home']) await visit(s, await click(s))

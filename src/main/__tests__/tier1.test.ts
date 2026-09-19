@@ -91,8 +91,15 @@ vi.mock('child_process', () => ({
   }
 }))
 
-const { start, stop, getStatus, registerTier1, parsePcmChunk, readEngineStatus } =
-  await import('../tier1')
+const {
+  start,
+  stop,
+  getStatus,
+  registerTier1,
+  registerTier1Unsupported,
+  parsePcmChunk,
+  readEngineStatus
+} = await import('../tier1')
 
 /** A well-formed status file for the pid FakeChild reports. */
 function statusJson(over: Record<string, unknown> = {}): string {
@@ -459,6 +466,38 @@ describe('readEngineStatus parses the engine sidecar directly', () => {
   it('returns null when pid is missing — the file cannot be attributed', () => {
     statusFileContents = JSON.stringify({ modelLoaded: true })
     expect(readEngineStatus()).toBeNull()
+  })
+})
+
+describe('registerTier1Unsupported keeps the IPC contract on platforms without Tier 1', () => {
+  // The channels recorder.ts, useTier1.ts and useMicTest.ts invoke must all
+  // RESOLVE off Windows. "No handler registered" is a rejection, and
+  // recorder.ts's teardown `void`s its stop() call — so an absent handler was
+  // an unhandled exception on every Live-screen teardown on macOS (M40).
+  it('registers all four channels, and every one resolves rather than rejects', async () => {
+    registerTier1Unsupported()
+    for (const ch of ['tier1:getStatus', 'tier1:start', 'tier1:stop', 'tier1:exportDiagnostics']) {
+      expect(handlers.has(ch), `${ch} must be registered`).toBe(true)
+    }
+    // ipcMain.handle accepts a sync return; `await` covers both shapes.
+    expect(await handlers.get('tier1:stop')!({})).toEqual({ ok: true })
+    const started = (await handlers.get('tier1:start')!({}, 'Some Mic', 60)) as {
+      ok: boolean
+      error?: string
+    }
+    expect(started.ok).toBe(false)
+    expect(String(started.error)).toMatch(/Windows-only/)
+    const status = await handlers.get('tier1:getStatus')!({})
+    // True for this platform: nothing available, nothing running, nothing
+    // claimed about denoising. The single-sourced engineAvailable invariant of
+    // the real module is untouched — this never calls into it.
+    expect(status).toEqual({
+      engineAvailable: false,
+      engineRunning: false,
+      connected: false,
+      denoisingActive: null,
+      enginePath: null
+    })
   })
 })
 

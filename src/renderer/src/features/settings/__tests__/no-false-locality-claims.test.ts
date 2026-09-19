@@ -146,6 +146,19 @@ const ACCOUNTED_FOR: {
   checkedOn?: string
 }[] = [
   {
+    file: 'features/audio/NoiseCancellationCard.tsx',
+    contains: 'Not available on this Mac yet',
+    checkedOn: '2026-09-18',
+    entries: [],
+    because:
+      'M40 (Mac parity), founder-approved 2026-09-18. Same species as the BUG-250 and ' +
+      'BUG-201 entries below: a claim about what THIS MACHINE CAN RUN, not about where data ' +
+      'lives. The driver and helper are arm64-only, so on an Intel Mac the card says the ' +
+      'feature is unavailable on this hardware instead of offering an install that succeeds ' +
+      'and produces no device. "on this Mac" is the detector hit; the sentence asserts nothing ' +
+      'about upload, storage or retention.'
+  },
+  {
     file: 'features/home/HomeView.tsx',
     contains: "Your saved Deepgram key can't be read on this computer",
     checkedOn: '2026-09-09',

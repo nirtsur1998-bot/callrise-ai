@@ -313,7 +313,7 @@ import { registerGoogle } from './google'
 import { registerOutlook } from './outlook'
 import { registerBackup } from './backup'
 import { registerVirtualMic, disposeVirtualMic } from './virtualmic'
-import { registerTier1, disposeTier1 } from './tier1'
+import { registerTier1, registerTier1Unsupported, disposeTier1 } from './tier1'
 import { registerTier1Diagnostics } from './tier1-diagnostics'
 import { registerKnowledge } from './knowledge'
 import { registerObjectionQueue } from './objection-queue'
@@ -820,8 +820,41 @@ app.whenReady().then(async () => {
   // which is the macOS Core-Audio-driver design — different platform,
   // different architecture (an out-of-band named pipe here, not a capture
   // device), no shared state between them.
-  registerTier1()
-  registerTier1Diagnostics()
+  //
+  // GATED HERE, AT THE CALL SITE, AND DELIBERATELY NOT INSIDE tier1.ts.
+  // The comment above already said "(Windows)" while the registration was
+  // unconditional, so the module's Windows-only-ness was a convention rather
+  // than a fact. It was never unsafe — tier1.ts contains no write of any
+  // kind, and resolveEnginePath() finds no kern_bridge.exe off Windows — but
+  // it did leave Windows-shaped path arithmetic (statusFilePath() builds on
+  // %LOCALAPPDATA%, which is undefined on macOS and yields a RELATIVE path)
+  // reachable in principle from an exported function.
+  //
+  // The gate is NOT inside tier1.ts because that module's tests deliberately
+  // exercise the Windows logic on any OS, and because tier1.test.ts defends
+  // an explicitly named invariant — "engineAvailable is the ONLY gate, and it
+  // is engine-binary-exists" — that was earned by a real incident where a
+  // second gate made the feature silently dead for every shipped user while
+  // green in dev. Adding a platform condition inside would both contradict
+  // that invariant and make the suite pass on Windows and fail on macOS.
+  //
+  // Safe because every renderer caller of this IPC surface either catches
+  // (useTier1.ts, useMicTest.ts both use .catch) or is unreachable once
+  // getStatus() resolves to null: planDenoisedHalf(null, …) returns
+  // { run: false } via `!status?.engineAvailable`, so tier1.start/stop are
+  // never reached, and Tier1SettingsCard renders null off Windows anyway.
+  if (process.platform === 'win32') {
+    registerTier1()
+    registerTier1Diagnostics()
+  } else {
+    // NOT "register nothing". The first version of this gate did exactly that,
+    // and recorder.ts's teardown — `void tier1Api.stop()`, guarded only on the
+    // API object existing — then threw "No handler registered for 'tier1:stop'"
+    // on every Live-screen teardown on macOS. screen-sweep's console probe
+    // caught it. Off Windows the channels stay registered with answers that
+    // are true for this platform; see registerTier1Unsupported.
+    registerTier1Unsupported()
+  }
   registerKnowledge()
   registerObjectionQueue()
   registerAppSettings()
