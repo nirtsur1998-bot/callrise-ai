@@ -386,3 +386,24 @@ was deleted.
 
 **Conclusion: the uninstall button works correctly and recovers cleanly.** This closes the one
 "wired but never executed" gap called out since Stage 3.
+
+## 11. The floor moved to 13.0 — LOWERED to match what's verified, not raised (2026-09-19)
+
+Founder decision, ahead of cutting 1.15.0. Checking §9's "12.0 was never something we set" claim
+first: it wasn't — `node_modules/electron`'s own `Info.plist` template declares `minos`/
+`LSMinimumSystemVersion` **12.0** as Electron 39.8.10's own baseline default. This project never
+overrode it; "the floor is 12.0" was a claim about Electron, not about anything tested here.
+
+Now explicit at **13.0** in both repos — `electron-builder.yml`'s `mac.minimumSystemVersion`
+(`2b09802`) and `salesos-virtualmic/build.sh`'s eight `-mmacosx-version-min` flags (`0260ef9`) —
+because 13.0 (Ventura) is the oldest installer this Mac's own `softwareupdate
+--list-full-installers` can still produce (§9), i.e. the oldest floor anyone here could actually
+build a real installer for and test on. **This is the same rule as before, applied correctly**: a
+declared floor is one built AND tested against; 12.0 failed that rule (declared, never executed);
+13.0 still hasn't been executed on real Ventura hardware either, but it is now at least the
+floor this project's own tooling can reach, which 12.0 never was and, on this hardware, never
+could be.
+
+Verified, not assumed: driver and `michelper` both rebuilt, `otool -l` confirms `minos 13.0` on
+both; `rtsafetytest` still PASS (463 calls, 0 over-budget — the rebuild changed nothing about the
+RT-safety fix); a local unsigned build's `Info.plist` reads `LSMinimumSystemVersion 13.0`.
