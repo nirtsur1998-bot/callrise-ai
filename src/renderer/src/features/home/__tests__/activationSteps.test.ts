@@ -162,3 +162,16 @@ describe('the blocked-step machinery survives the calendar cut', () => {
     expect(activationProgress(steps).complete).toBe(false)
   })
 })
+
+describe('BUG-217 — the sales-brain step must not promise a consumer it does not have', () => {
+  it('does not claim summaries consume the Sales Brain', () => {
+    // summarize.ts carries zero Sales Brain data (no repProfileSection, no
+    // memories) — a rep who switched this on for better summaries got
+    // byte-for-byte the same summary with it off. "Summaries consume the
+    // Sales Brain" is a real, separate, unbuilt feature; the copy must only
+    // name consumers that are actually true today.
+    const why = buildActivationSteps(nothing).find((s) => s.id === 'sales-brain')!.why
+    expect(why.toLowerCase()).not.toContain('summaries')
+    expect(why.toLowerCase()).not.toContain('summary')
+  })
+})
