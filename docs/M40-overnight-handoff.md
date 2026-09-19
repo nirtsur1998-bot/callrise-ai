@@ -318,3 +318,39 @@ Founder confirmed the data and the account are expected.
 **Conclusion: existing users' sessions and encrypted keys survive the signature change. No
 migration is needed.** This closes the Stage 3 audit's one open "reasoned, not measured" item —
 it is now measured. App quit cleanly afterward; nothing left running.
+
+## 8. The Krisp A/B — BLOCKED, not attempted
+
+Set up to be a genuinely fair comparison: both virtual mic devices are visible to recording tools
+(`krisp microphone`, `Sales OS Microphone`), `michelper` runs and denoises correctly, and a
+same-instant simultaneous capture from both devices was worked out (so the comparison is against
+literally the same spoken audio, not two separate takes).
+
+**Blocked at the last step, checked rather than assumed:** Krisp's own control panel, read via
+`app_screenshot` (not inferred), shows **"My noise" toggled OFF** and a **"Limited mode"** badge —
+its 7-day free trial has ended. Recording through `krisp microphone` right now would capture raw,
+unprocessed audio, so a comparison against it would show "on beats off," not "CallRise vs. Krisp."
+
+Founder's call, standing until then: **skip Krisp for now.** `michelper` was stopped afterward
+(it was not running before this test; state restored). Re-run this the moment Krisp's trial is
+extended or upgraded — the setup above is otherwise ready to go, no re-work needed.
+
+## 9. macOS 12 — checked for feasibility, not yet verified on real hardware
+
+This Mac cannot be the test machine for this: `sw_vers` reports macOS 27.2, and
+`softwareupdate --list-full-installers` — the official channel for older installers — only goes
+back to **macOS Ventura (13.7.8)**. macOS 12 (Monterey) is not offered through any Apple-sanctioned
+path on this machine any more; getting it would mean either real hardware that was never upgraded
+past Monterey, or an unofficial installer image of uncertain provenance, which is not a
+substitution I'd make without saying so plainly first. No VM tooling (UTM, Parallels, etc.) is
+installed here either.
+
+**Options, founder's call:**
+1. Find or borrow a real Mac still on macOS 12 and install the signed build there.
+2. Accept Ventura (13) — the oldest Apple will still hand this machine — as the practical floor
+   actually verified, and either lower `LSMinimumSystemVersion`/the declared floor to 13.0, or keep
+   claiming 12.0 as "built against, reasoned not measured" (status quo, now with the reason why
+   it stayed unmeasured written down).
+3. Source a legacy macOS 12 installer through a third-party archive for a VM — not attempted here
+   without asking first, since it's the one path that trades a real verification for one of
+   uncertain trustworthiness.
