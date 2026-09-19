@@ -241,7 +241,16 @@ function snoozeDetection(minutes: number): void {
 
 export function startDetectionService(): void {
   if (detector) return
-  detector = new CallDetector({ adapter: pickAdapter(), ourPid: process.pid })
+  detector = new CallDetector({
+    adapter: pickAdapter(),
+    ourPid: process.pid,
+    // BUG-007: read live so a Settings change to an app's override takes
+    // effect on the very next tick, not just for calls detected afterward.
+    isAppBlocked: (appId) => {
+      const { autoCapturePolicy, appOverrides } = loadAppSettings().detection.capturePolicy
+      return (appOverrides[appId] ?? autoCapturePolicy) === 'never'
+    }
+  })
   detector.onEvent(handleDetectorEvent)
   if (isAmbientDetectionEnabled()) {
     detector.start()

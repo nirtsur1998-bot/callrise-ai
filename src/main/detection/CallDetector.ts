@@ -1,5 +1,5 @@
 import { isOwnProcess } from './appRegistry'
-import { fuseSignals, type FusedCandidate } from './fusion'
+import { fuseSignals, groupKeyFor, type FusedCandidate } from './fusion'
 import { initialFsmContext, step, type FsmCommand, type FsmContext } from './stateMachine'
 import {
   DETECTION_TUNING,
@@ -17,6 +17,25 @@ export interface CallDetectorOptions {
   now?: () => number
   /** Our own process id, to exclude self-signals (the virtual mic + our own capture must never self-trigger). */
   ourPid?: number
+  /**
+   * BUG-007: an app the user set to 'never' in per-app capture policy must
+   * never raise ANY prompt for it - not the initial detection ask (already
+   * handled downstream by policy.decideCaptureAction), and not a mid-capture
+   * switch offer either (that path never consulted policy at all; a 'never'
+   * app could still interrupt an active capture asking to switch to it).
+   * Read live (a function, not a snapshot) since the Settings screen can
+   * change overrides while detection is running. Candidates for a blocked
+   * app are dropped before the FSM ever sees them, so the fix is one seam
+   * rather than duplicated inside every state that picks a candidate.
+   *
+   * NEVER applied to the call actively being captured (see `tick()`) - this
+   * gates what gets OFFERED, not what the FSM is already recording. Filtering
+   * the live call's own signal out mid-capture would read as the call ending
+   * (confidence -> 0 -> `ending` -> `capture-ended` after endSustainMs), so a
+   * Settings edit made mid-call would silently stop a real recording -
+   * exactly the class of bug this project treats as worst-severity.
+   */
+  isAppBlocked?: (appId: string) => boolean
 }
 
 /**
@@ -33,6 +52,7 @@ export class CallDetector {
   private readonly tuning: DetectionTuning
   private readonly now: () => number
   private readonly ourPid?: number
+  private readonly isAppBlocked?: (appId: string) => boolean
 
   private signalBuffer: DetectionSignal[] = []
   private fsmContext: FsmContext = initialFsmContext
@@ -46,6 +66,7 @@ export class CallDetector {
     this.tuning = options.tuning ?? DETECTION_TUNING
     this.now = options.now ?? Date.now
     this.ourPid = options.ourPid
+    this.isAppBlocked = options.isAppBlocked
   }
 
   start(): void {
@@ -99,12 +120,25 @@ export class CallDetector {
     this.signalBuffer.push(signal)
   }
 
+  /** The call presently being recorded, if any - its own candidate must never
+   *  be dropped by `isAppBlocked` (see the option's doc comment). */
+  private activeCallKey(): string | undefined {
+    const state = this.fsmContext.state
+    if (state.name === 'capturing' || state.name === 'capturing-with-pending' || state.name === 'ending') {
+      return groupKeyFor(state.call.appId, state.call.pid)
+    }
+    return undefined
+  }
+
   /** Advance the detector by one tick. Exposed directly for tests to drive with an explicit `now`. */
   tick(now: number = this.now()): void {
     this.signalBuffer = this.signalBuffer.filter(
       (s) => now - s.observedAt <= this.tuning.signalWindowMs
     )
-    const candidates = fuseSignals(this.signalBuffer, now, this.tuning)
+    const activeKey = this.activeCallKey()
+    const candidates = fuseSignals(this.signalBuffer, now, this.tuning).filter(
+      (c) => c.key === activeKey || !this.isAppBlocked?.(c.appId)
+    )
 
     const command = this.pendingCommand
     this.pendingCommand = undefined
