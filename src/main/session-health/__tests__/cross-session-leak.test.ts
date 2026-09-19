@@ -33,6 +33,21 @@
 // socket + queue/lag/liveness) — which rules that layer out and points at the
 // renderer / getUserMedia / AudioWorklet / Electron side. That negative is a
 // finding, not a failure, and the numbers printed below are the evidence.
+//
+// BUG-247 — this file deliberately stays on WALL time (unlike
+// multichannel-fallback.test.ts, which now runs on vitest's fake clock):
+// two of its probes only mean something against real time — the Node
+// 'Timeout' handle census (a faked setTimeout creates no handle, so the
+// timer-leak probe would read 0 forever) and the loop wall/nominal ratio
+// (the main-thread starvation witness). The price is that a few numbers
+// here move with machine load: the loop overruns its nominal time by ~7%
+// idle and more under load, which changes WHERE in the lag sawtooth a run
+// ends. The positive control below therefore asserts whole-run properties
+// (max lag, share of samples in a corrective tier, resets) and not the
+// end-of-run phase (last-5 average, final median, final tier) — the latter
+// failed at 3x CPU load with medianLagFinal = 4.96 against a 5.0 threshold,
+// a sawtooth phase, not a regression. The 1.0x sessions' thresholds sit
+// ~20x above their observed values and are not load-sensitive in practice.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MockDeepgram } from './mock-deepgram'
@@ -185,6 +200,10 @@ interface SessionReport {
   lagMax: number
   lagFinal: number
   medianLagFinal: number
+  /** Share of the per-tick lag samples at/above `shedLagSec` — how much of
+   *  the run the watchdog spent in a corrective tier. A whole-run number,
+   *  so it does not depend on where in a reset sawtooth the run ended. */
+  correctiveShare: number
   submittedSec: number
   acknowledgedSec: number
   queuedSec: number
@@ -258,6 +277,10 @@ async function runSession(
     lagMax: Math.round(Math.max(0, ...lag) * 1000) / 1000,
     lagFinal: lag.at(-1) ?? -1,
     medianLagFinal: health.medianLagSec,
+    correctiveShare: lag.length
+      ? Math.round((lag.filter((l) => l >= HEALTH_TUNING.shedLagSec).length / lag.length) * 100) /
+        100
+      : 0,
     submittedSec: health.submittedSec,
     acknowledgedSec: health.acknowledgedSec,
     queuedSec: health.queuedSec,
@@ -291,6 +314,7 @@ function table(reports: SessionReport[]): void {
     'lag last5 (s)': r.lagLastAvg,
     'lag max (s)': r.lagMax,
     'median lag (s)': r.medianLagFinal,
+    'corrective share': r.correctiveShare,
     'pushed (s)': r.pushedSec,
     'submitted (s)': r.submittedSec,
     'acked (s)': r.acknowledgedSec,
@@ -487,13 +511,16 @@ describe('positive control — the harness CAN see the reported symptom', () => 
     // The reported magnitude: seconds, not milliseconds. Every 1.0x session
     // above topped out at 0.1s — this is two orders of magnitude worse.
     expect(s.lagMax).toBeGreaterThan(10)
-    expect(s.lagLastAvg).toBeGreaterThan(5)
-    // And it is a RATCHET, not a spike: it ends far above where it started.
-    expect(s.lagLastAvg).toBeGreaterThan(s.lagFirstAvg + 5)
-    // The watchdog is pinned in a corrective tier for the whole back half...
-    expect(s.medianLagFinal).toBeGreaterThanOrEqual(HEALTH_TUNING.shedLagSec)
-    expect(['shed', 'reset']).toContain(s.tier)
-    // ...and only the reset safety net bounds it at all (shedding cannot: the
+    // And it is a RATCHET, not a spike: it started from nothing (a fresh
+    // socket) and the watchdog spent MOST of the run in a corrective tier.
+    // Whole-run properties on purpose (BUG-247, see the header): the lag at
+    // the END of the run — last-5 average, final median, final tier — is the
+    // phase of a reset sawtooth, which shifts with machine load. Measured
+    // idle: reset at ~11s, corrective share ~0.7; at 3x load the same run
+    // ended 4.96s median against a 5.0 threshold for exactly that reason.
+    expect(s.lagFirstAvg).toBeLessThan(1)
+    expect(s.correctiveShare).toBeGreaterThan(0.5)
+    // Only the reset safety net bounds it at all (shedding cannot: the
     // queue is empty, because the socket accepts every byte). Note this is
     // ALSO why acknowledgedSec is not a useful witness here — a reset
     // deliberately declares the discarded backlog acknowledged.
