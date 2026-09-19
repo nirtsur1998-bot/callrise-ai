@@ -21,6 +21,7 @@ import { AlertTriangle, Save, Trash2 } from 'lucide-react'
 import { Modal } from '@renderer/components/Modal'
 import { Button } from '@renderer/components/Button'
 import type { RecoverableCall } from '../../../../preload/index.d'
+import { runNoteTakerAutoBehaviours } from './noteTakerAutoBehaviours'
 
 function formatDuration(ms: number): string {
   const totalSec = Math.round(ms / 1000)
@@ -72,7 +73,14 @@ export function InterruptedCallPrompt(): React.JSX.Element | null {
     if (!current || busy) return
     setBusy(true)
     try {
-      await window.api.live.recoverCall(current.id)
+      const res = await window.api.live.recoverCall(current.id)
+      // BUG-230 — a recovered call is a saved call: give it the same AI Note
+      // Taker treatment the live save path gives (title, summary, brief —
+      // each behind its own toggle, read now). Without this the one call a
+      // rep was not present for stayed "Call · <date>" forever. Dispatched
+      // after the prompt advances, never awaited: a slow model must not hold
+      // the next recoverable call hostage.
+      if (res.ok && res.call) void runNoteTakerAutoBehaviours(res.call.id)
     } catch {
       /* Leave the journal in place — better to ask again than to lose it. */
     }
