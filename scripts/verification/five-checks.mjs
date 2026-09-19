@@ -51,15 +51,34 @@ const record = (n, name, pass, detail) => {
 // ── 2 ─────────────────────────────────────────────────────────────────────
 {
   sh('git fetch origin --tags')
+  sh('git fetch origin main')
   // `rev-list -n 1` rather than `rev-parse TAG^{commit}`: the caret is an escape
   // character in the Windows shell this runs through, so `^{commit}` arrived as
   // `{commit}` and git refused. Same answer, no caret.
   const tagSha = sh(`git rev-list -n 1 ${TAG}`)
   const originMain = sh('git rev-parse origin/main')
   const head = sh('git rev-parse HEAD')
-  record(2, 'the tag names the commit that actually shipped',
-    tagSha === originMain && tagSha === head,
-    `tag        ${tagSha}\norigin/main ${originMain}\nHEAD        ${head}`)
+  // NOT tagSha === originMain. That was wrong from the start for any repo
+  // where main keeps moving after a tag is cut — which is the normal case,
+  // not an edge case: v1.15.0 shipped this exact way, tagged mid-sequence
+  // while a second, independent branch-merge sequence kept landing on main
+  // in parallel. The exact-equality version failed CHECK 2 on the very
+  // first real dual-platform release even though the tag was byte-correct
+  // (proven separately by check 4's hash match) — a false alarm from an
+  // assumption, not a finding about the release. What actually matters:
+  // the tag's commit must be an ANCESTOR of main (it was really merged in,
+  // not built from an orphaned/force-pushed ref main never had), and HEAD
+  // (what this checkout built from) must be the tag. Ordering, not equality.
+  let isAncestor = false
+  try {
+    sh(`git merge-base --is-ancestor ${tagSha} origin/main`)
+    isAncestor = true
+  } catch {
+    isAncestor = false
+  }
+  record(2, "the tag's commit is really on main's history, and HEAD matches it",
+    isAncestor && tagSha === head,
+    `tag        ${tagSha}\norigin/main ${originMain}  (${isAncestor ? 'tag is an ancestor — OK, main may have since moved further' : 'tag is NOT reachable from main — real problem'})\nHEAD        ${head}`)
 }
 
 // Fetch the manifest FIRST and take the installer filename from its own `path:`.

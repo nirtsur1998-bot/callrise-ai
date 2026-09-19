@@ -601,7 +601,26 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then TAG="${{ inputs.version }}"; fi
           PERCENT="${{ inputs.rollout_percent }}"
           if [ -z "$PERCENT" ]; then PERCENT="$ROLLOUT_DEFAULT"; fi
+          # v1.15.0's real release: a Windows-only false alarm in check 2
+          # (fixed separately — it compared the tag against main's CURRENT
+          # tip, which fails as soon as anything else merges after tagging)
+          # aborted this step under bash -e before the Mac checks ever ran —
+          # so the run REPORTED nothing about Mac at all, silently, on a
+          # dual-platform release. Both platforms' checks now run
+          # unconditionally and every failure is collected, not the first.
+          set +e
+          win_exit=0
+          mac_exit=0
           node scripts/verification/five-checks.mjs "v$TAG" "$PERCENT"
+          win_exit=$?
           if [ "$MAC_BUILT" = "true" ]; then
             node scripts/verification/five-checks.mjs "v$TAG" "$PERCENT" --mac
+            mac_exit=$?
+          fi
+          set -e
+          echo "windows checks exit=$win_exit"
+          [ "$MAC_BUILT" = "true" ] && echo "mac checks exit=$mac_exit"
+          if [ "$win_exit" -ne 0 ] || [ "$mac_exit" -ne 0 ]; then
+            echo "::error::at least one platform's checks failed - see the PASS/FAIL lines above for BOTH platforms, not just the first failure"
+            exit 1
           fi
