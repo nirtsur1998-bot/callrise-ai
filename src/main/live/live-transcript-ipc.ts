@@ -6,7 +6,7 @@
 // directions — a phantom call that never happened, or a real 40-minute
 // conversation thrown away without anyone seeing it — so neither is allowed to
 // happen automatically. The rep is asked.
-import { ipcMain } from 'electron'
+import { BrowserWindow, ipcMain } from 'electron'
 import { currentAppVersion } from '../app-version'
 import { getCall, saveCall, toSummary, type CallSummary } from '../calls-fs'
 import {
@@ -284,7 +284,23 @@ export function registerLiveTranscriptIpc(callsDir: () => string): void {
 
   // BUG-271 — answers with WHICH step failed, and never reports a saved call
   // as a failure because its tidy-up stumbled. See recoverCallDetailed.
-  ipcMain.handle('live:recoverCall', (_event, id: unknown) => recoverCallForIpc(id, callsDir()))
+  ipcMain.handle('live:recoverCall', async (_event, id: unknown) => {
+    const result = await recoverCallForIpc(id, callsDir())
+    // BUG-290 — the record now exists on disk, but no already-mounted screen
+    // knew to re-read: useCalls() only refreshes on mount, after its own
+    // remove(), or on 'backup:changed'. Reuse that same event rather than
+    // inventing a second one - notifyDataChanged's own comment already
+    // describes it as "tasks/calls changed on disk, re-read", which is
+    // exactly this. A rep sitting on an already-mounted Past Calls list
+    // when the interrupted-call prompt fires (e.g. at launch) now sees the
+    // recovered call without navigating away and back.
+    if (result.ok) {
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed()) w.webContents.send('backup:changed')
+      }
+    }
+    return result
+  })
 
   ipcMain.handle('live:discardRecoverable', async (_event, id: unknown) => {
     if (typeof id !== 'string' || !id) return { ok: false as const }
