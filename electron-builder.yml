@@ -194,6 +194,15 @@ nsis:
 portable:
   artifactName: CallRise AI Windows Portable.${ext}
 mac:
+  # LSMinimumSystemVersion. Lowered from the 12.0 we declared but never
+  # executed on (Electron 39.8.10's own default, never explicitly set by us —
+  # verified 2026-09-19 by reading node_modules/electron's own Info.plist
+  # template) to 13.0: the oldest macOS `softwareupdate --list-full-installers`
+  # can still produce on Apple Silicon, and therefore the oldest floor this
+  # project can actually build a real installer for and run on. A floor
+  # lowered to match what's verifiable, not raised for a technical reason —
+  # nothing about the app needs Ventura; 12.0 was simply never testable.
+  minimumSystemVersion: '13.0'
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
