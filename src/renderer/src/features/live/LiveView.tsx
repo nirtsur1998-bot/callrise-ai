@@ -845,14 +845,32 @@ export function LiveView({
   // Start. This one genuinely IS once-per-mount — it means "start when the app
   // opens", not "start after every call" — so it keeps its own latch that the
   // reset above deliberately does not touch.
+  //
+  // Founder-reported bug, 2026-09-19: this used to call start() the instant
+  // the effect ran — a real recording began with zero on-screen warning,
+  // triggered by nothing more than clicking the "Calls" nav item and landing
+  // on the idle Live tab. Fixed to a short, visibly-countable, cancelable
+  // countdown: start() only fires if nobody clicks Cancel within it. This is
+  // the ONLY thing that changed — the toggle's meaning ("don't make me click
+  // Start") is preserved; what it lost is the ability to start a recording
+  // with literally no chance to stop it before it begins.
+  const AUTO_START_COUNTDOWN_SECONDS = 3
+  const [autoStartCountdown, setAutoStartCountdown] = useState<number | null>(null)
+  const autoStartTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [autoStartListening] = useAutoStartListening()
   const appOpenAutoStartedRef = useRef(false)
+  const cancelAutoStartCountdown = useCallback((): void => {
+    if (autoStartTimerRef.current) {
+      clearInterval(autoStartTimerRef.current)
+      autoStartTimerRef.current = null
+    }
+    setAutoStartCountdown(null)
+  }, [])
   useEffect(() => {
     if (!autoStartListening || status !== 'idle') return
     if (appOpenAutoStartedRef.current || autoStartedRef.current) return
     appOpenAutoStartedRef.current = true
     autoStartedRef.current = true
-    armIdleStop()
     void (async () => {
       // Exclusion checks the app the rep was using BEFORE switching here —
       // the frontmost app right now is always this app itself (the user just
@@ -862,8 +880,28 @@ export function LiveView({
       const previousApp = await window.api.app.getLastExternalApp().catch(() => null)
       if (previousApp) addSeenApp(previousApp)
       if (previousApp && getExcludedApps().includes(previousApp)) return
-      start()
+      let remaining = AUTO_START_COUNTDOWN_SECONDS
+      setAutoStartCountdown(remaining)
+      autoStartTimerRef.current = setInterval(() => {
+        remaining -= 1
+        if (remaining <= 0) {
+          if (autoStartTimerRef.current) clearInterval(autoStartTimerRef.current)
+          autoStartTimerRef.current = null
+          setAutoStartCountdown(null)
+          armIdleStop()
+          start()
+          return
+        }
+        setAutoStartCountdown(remaining)
+      }, 1000)
     })()
+    return () => {
+      if (autoStartTimerRef.current) {
+        clearInterval(autoStartTimerRef.current)
+        autoStartTimerRef.current = null
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStartListening, status, start, armIdleStop])
 
   // Detected-call auto-start (banner click, or the Auto-transcribe setting) —
@@ -993,7 +1031,20 @@ export function LiveView({
           <IdleHero
             onStart={start}
             banner={
-              currentMeeting ? (
+              autoStartCountdown !== null ? (
+                <InlineBanner tone="warning">
+                  <span className="flex min-w-0 items-center gap-2 text-left">
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                    <span className="truncate">
+                      Starting to listen in {autoStartCountdown}
+                      {autoStartCountdown === 1 ? ' second' : ' seconds'}…
+                    </span>
+                  </span>
+                  <Button variant="secondary" size="sm" onClick={cancelAutoStartCountdown}>
+                    Cancel
+                  </Button>
+                </InlineBanner>
+              ) : currentMeeting ? (
                 <InlineBanner tone="positive">
                   <span className="flex min-w-0 flex-col gap-0.5 text-left">
                     <span className="flex min-w-0 items-center gap-2">
