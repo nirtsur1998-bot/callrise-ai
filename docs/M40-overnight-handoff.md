@@ -407,3 +407,51 @@ could be.
 Verified, not assumed: driver and `michelper` both rebuilt, `otool -l` confirms `minos 13.0` on
 both; `rtsafetytest` still PASS (463 calls, 0 over-budget — the rebuild changed nothing about the
 RT-safety fix); a local unsigned build's `Info.plist` reads `LSMinimumSystemVersion 13.0`.
+
+## 12. v1.15.0 — the first real dual-platform release, and what went wrong shipping it
+
+Cut 2026-09-19: `package.json` → 1.15.0, release notes rewritten and founder-approved verbatim
+before publishing, tag `v1.15.0` pushed directly (`git tag && git push origin v1.15.0`). Windows
+and macOS both built, signed, notarized (macOS this time in a few minutes, not the ~50 of the test
+run), and the draft flipped live. **Two real problems found only because the checks were read, not
+trusted — both fixed, both closed before this section was written.**
+
+**Problem 1 — shipped at 10% rollout, not the 100% instructed.** Pushing the tag directly, rather
+than `workflow_dispatch` with `rollout_percent: 100`, meant `inputs.rollout_percent` didn't exist
+and the workflow's own `ROLLOUT_DEFAULT: "10"` applied silently. Caught by manually reading the
+live manifests. Fixed per the M29 runbook's own documented procedure — "no line → 100%" — by
+downloading both manifests, removing the `stagingPercentage` line, and re-uploading; verified via
+`gh release download` (API-backed, bypasses the asset CDN's short cache) and confirmed absent, then
+confirmed a second time via `five-checks.mjs` CHECK 5 explicitly reporting
+`stagingPercentage -> (absent) — correctly ABSENT for a 100% release` on **both** manifests.
+**Mine to own:** I chose the tag-push path without translating the founder's "Rollout 100%" into the
+one flag that actually sets it. Should have used `workflow_dispatch`.
+
+**Problem 2 — CHECK 2 had a false premise, and its failure silently hid the Mac checks.**
+`five-checks.mjs`'s CHECK 2 asserted `tagSha === origin/main` exactly. That's wrong for a repo where
+`main` keeps moving after a tag is cut — which is what actually happened: this tag was cut while
+the Windows session's own, independent branch-merge sequence kept landing on `main` in parallel, so
+`origin/main` was correctly several commits ahead within seconds of the tag existing. CHECK 2 failed
+on that non-problem. Worse: the go-live step runs under `bash -e`, so CHECK 2's non-zero exit killed
+the shell before the `if [ "$MAC_BUILT" = true ]` line was ever reached — **the Mac checks never
+ran, silently, and the run reported nothing about them at all**, on the first release where they
+mattered. Both fixed (`94b11eb`): CHECK 2 now asserts `git merge-base --is-ancestor` (the tag is
+reachable from main's history — the real invariant) plus `tagSha === head` (this checkout actually
+built the tagged commit), and the go-live step runs both platforms' checks unconditionally under
+`set +e`, collecting both exit codes before failing at the end — one failure can no longer make the
+run silent about the other platform.
+
+**What was verified about the actual release, independent of either bug:** CHECK 4 (download the
+real artifact from the public URL, hash it, compare to the manifest's `sha512`) passed for both
+platforms in the original CI run, before either fix — that is the check that would have caught a
+wrong or corrupted artifact, and it was never in question. After both fixes and the rollout
+correction, a clean manual run of all five checks passes on both platforms (CHECK 2 additionally
+confirmed via `git merge-base --is-ancestor d64e829 origin/main` → true, independent of which script
+version is asking).
+
+**Also done in parallel, at the founder's direction:** a second, independently-built signed and
+notarized copy of the exact same tagged commit was built locally on this Mac (same certificates,
+`electron-builder --mac --arm64 --publish never`) while CI's own build ran — `spctl`, `stapler`,
+and all three component signatures verified identical in kind to the CI artifact — and installed
+into `/Applications`, replacing the `v1.15.0-test.1` build from last night. Not launched; opening it
+is the founder's own next step.
