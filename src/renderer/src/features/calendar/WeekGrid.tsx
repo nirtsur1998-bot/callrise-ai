@@ -57,17 +57,17 @@ export function WeekGrid({
   // Week is the default view (M31 Slice A), where every visit would open on
   // a headerless grid.
   //
-  // KNOWN LIMITATION, verified in the running app rather than assumed: this
-  // container is not itself scrollable today, so the assignment below is a
-  // no-op and the week opens at midnight instead of centred on now. The
-  // cause is one level up — MainApp wraps non-assistant screens in a plain
-  // `.animate-view` div with height:auto, so CalendarView's `h-full` has no
-  // definite height to resolve against and the whole column grows instead of
-  // clamping. (The assistant screen already special-cases exactly this.)
-  // Fixing it means changing that shared wrapper, which every screen renders
-  // through — deliberately out of scope here and flagged instead of quietly
-  // re-architected. Once the chain clamps, this code starts centring with no
-  // further change.
+  // BUG-266 — this WAS a no-op for a long time (the "known limitation" that
+  // used to be documented here): the chain above did not clamp, so this
+  // container measured the full 24 hours and could not scroll, and the page
+  // scrolled instead — the week opened on the night hours. The break was
+  // one level higher than the old note said: AppShell's padded content box
+  // is `display: block`, which makes every `flex-1` below it inert. The
+  // chain is now a flex column all the way down for the calendar screens
+  // (AppShell `clampContent`, MainApp's wrapper, PipelineHub, CalendarView),
+  // measured in the running app: container 396px, scrollTop 418 for a 14:00
+  // "now", page overflow 0. This effect did not change; it just started
+  // working. The two-frame wait below is still needed for the lazy chunk.
   useEffect(() => {
     // Two frames, not one: the first only guarantees the mount's own paint.
     // The lazy-loaded chunk plus the `.animate-view` page transition mean
@@ -247,7 +247,11 @@ export function WeekGrid({
                         if (editable && item.event) onEditEvent(item.event)
                       }}
                       className={cn(
-                        'absolute overflow-hidden rounded-md px-1.5 py-0.5 text-left text-[11px] leading-tight',
+                        // BUG-267 — `overflow-clip`, not `overflow-hidden`: both
+                        // clip the text, but `hidden` makes the block a scroll
+                        // container for `sticky`, which would pin the title to
+                        // the block instead of to the grid's visible edge.
+                        'absolute overflow-clip rounded-md px-1.5 py-0.5 text-left text-[11px] leading-tight',
                         style.block,
                         editable ? 'cursor-pointer hover:brightness-110' : 'cursor-default'
                       )}
@@ -258,7 +262,18 @@ export function WeekGrid({
                         width: `calc(${laneWidth}% - 4px)`
                       }}
                     >
-                      <div className="flex items-center gap-1">
+                      {/* BUG-267 — the title line sticks to the top of the
+                          grid's viewport while the block is scrolled
+                          partly out of it, so a block that straddles the top
+                          edge still reads as a meeting with a name instead
+                          of a bare colour sliver under the all-day row. It
+                          never leaves its own block: sticky is bounded by
+                          the containing block, so a fully scrolled-out
+                          meeting leaves nothing behind. */}
+                      <div
+                        className="sticky top-0 flex items-center gap-1"
+                        data-testid="week-block-title"
+                      >
                         {item.context?.risk && (
                           <span
                             aria-hidden
@@ -266,14 +281,21 @@ export function WeekGrid({
                           />
                         )}
                         {item.context?.notSynced && (
-                          <span aria-label="not on your calendar" className="shrink-0 text-warning" data-testid="chip-not-synced">
+                          <span
+                            aria-label="not on your calendar"
+                            className="shrink-0 text-warning"
+                            data-testid="chip-not-synced"
+                          >
                             ⚠
                           </span>
                         )}
                         <span className="truncate font-medium">{item.title}</span>
                         {item.context?.callId ? (
                           // Outcome supersedes plan on the same chip — never both.
-                          <PhoneCall aria-hidden className="ml-auto h-2.5 w-2.5 shrink-0 opacity-70" />
+                          <PhoneCall
+                            aria-hidden
+                            className="ml-auto h-2.5 w-2.5 shrink-0 opacity-70"
+                          />
                         ) : (
                           item.context?.brief && (
                             <span

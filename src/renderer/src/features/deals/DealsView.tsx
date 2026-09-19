@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Plus,
   Handshake,
@@ -12,6 +12,9 @@ import {
   List
 } from 'lucide-react'
 import { cn } from '@renderer/lib/cn'
+import { useStepOutToken } from '@renderer/app/useStepOutToken'
+import { useConsumeId } from '@renderer/app/useConsumeId'
+import { removeRecentlyViewed } from '@renderer/lib/recentlyViewed'
 import { Badge } from '@renderer/components/Badge'
 import { Button } from '@renderer/components/Button'
 import { IconButton } from '@renderer/components/IconButton'
@@ -58,11 +61,14 @@ interface DealsViewProps {
   /** Called once the initial selection above has been applied, so the parent
    *  can clear it (otherwise a later plain visit would reopen the same deal). */
   onInitialViewConsumed?: () => void
+  /** BUG-286 — the sidebar asking this already-active screen for its list. */
+  stepOutToken?: number
 }
 
 export function DealsView({
   initialViewDealId = null,
-  onInitialViewConsumed
+  onInitialViewConsumed,
+  stepOutToken
 }: DealsViewProps = {}): React.JSX.Element {
   const { deals, loading, create, update, remove, undoDelete, refresh } = useDeals()
   const { stages, loading: stagesLoading, save: saveStages } = useDealStages()
@@ -95,13 +101,30 @@ export function DealsView({
   const [linking, setLinking] = useState(false)
   const [viewingId, setViewingId] = useState<string | null>(initialViewDealId)
 
-  const consumedRef = useRef(false)
+  // BUG-289 — the same fix PastCallsView already carries from M31, never
+  // brought to this screen: a second RECENT/palette click for a different
+  // deal — reached while already on Pipeline, so nothing remounts this
+  // component — was silently dropped. useConsumeId is the one place that
+  // fix lives now.
+  useConsumeId(initialViewDealId, (id) => {
+    setViewingId(id)
+    onInitialViewConsumed?.()
+  })
+
+  // BUG-286 — sidebar "Pipeline" while already on Pipeline: show the list.
+  useStepOutToken(stepOutToken, () => setViewingId(null))
+
+  // BUG-287 — same shape as ContactsView's equivalent check: a deal resolves
+  // synchronously against the already-loaded list, so there is no separate
+  // "not found" state to catch on its own — this is that check, for a stale
+  // RECENT/palette row asking for a deal that's gone.
   useEffect(() => {
-    if (initialViewDealId && !consumedRef.current) {
-      consumedRef.current = true
-      onInitialViewConsumed?.()
-    }
-  }, [initialViewDealId, onInitialViewConsumed])
+    if (loading || !viewingId) return
+    if (deals.some((d) => d.id === viewingId)) return
+    removeRecentlyViewed('deal', viewingId)
+    toast.info('That deal was deleted.')
+    setViewingId(null)
+  }, [loading, viewingId, deals, toast])
 
   useEffect(() => {
     let active = true

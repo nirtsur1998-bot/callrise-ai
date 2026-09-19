@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { isToday, isYesterday, isThisWeek } from 'date-fns'
 import { Trash2, Clock, Users, PhoneCall, Sparkles, Paperclip } from 'lucide-react'
 import { EmptyState } from '@renderer/components/EmptyState'
@@ -8,6 +8,8 @@ import { SkeletonRows } from '@renderer/components/Skeleton'
 import { Badge } from '@renderer/components/Badge'
 import { overallTier, TONE_TO_BADGE } from '@renderer/features/coaching/meta'
 import { useToast } from '@renderer/features/notifications/useToast'
+import { useStepOutToken } from '@renderer/app/useStepOutToken'
+import { useConsumeId } from '@renderer/app/useConsumeId'
 import { useCalls } from './useCalls'
 import { CallDetail } from './CallDetail'
 import { formatDate, formatDuration } from './format'
@@ -18,37 +20,40 @@ interface PastCallsViewProps {
   /** Called once the initial selection above has been applied, so the parent
    *  can clear it (otherwise a later plain visit would reopen the same call). */
   onInitialSelectionConsumed?: () => void
+  /** BUG-286 — bumped when the sidebar's "Calls" is clicked while this screen
+   *  is already the active one; closes the detail and shows the list. */
+  stepOutToken?: number
 }
 
 export function PastCallsView({
   initialSelectedId = null,
-  onInitialSelectionConsumed
+  onInitialSelectionConsumed,
+  stepOutToken
 }: PastCallsViewProps = {}): React.JSX.Element {
   const { calls, loading, remove, undoDelete, refresh } = useCalls()
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId)
   const toast = useToast()
 
-  // M31 — track WHICH id was applied, not merely THAT one was.
-  //
-  // This was a boolean latch that was set once and never reset, so
-  // initialSelectedId only ever took effect on the first mount. That was
-  // invisible while the only caller was the command palette (which opens one
-  // record and you navigate away), and it became a real bug the moment the
-  // sidebar RECENT trail started opening records too: the first click worked,
-  // and every later one silently did nothing while the page kept showing the
-  // previous call. Found by clicking two recent calls in a row and reading
-  // the title, rather than by trusting the first one that worked.
-  //
-  // Keyed by id, so a REPEAT of the same id is still consumed once (no reopen
-  // loop on a plain revisit) while a DIFFERENT id always applies.
-  const consumedIdRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (initialSelectedId && consumedIdRef.current !== initialSelectedId) {
-      consumedIdRef.current = initialSelectedId
-      setSelectedId(initialSelectedId)
-      onInitialSelectionConsumed?.()
-    }
-  }, [initialSelectedId, onInitialSelectionConsumed])
+  // M31 — track WHICH id was applied, not merely THAT one was. Found by
+  // clicking two recent calls in a row and reading the title, rather than
+  // trusting the first one that worked: a boolean latch fires once EVER, so
+  // the first click worked and every later one silently did nothing while
+  // the page kept showing the previous call. BUG-289 is the same shape a
+  // second and third time (ContactsView, DealsView), never carried across
+  // when they were built — useConsumeId is the one place it lives now.
+  const { reset: resetConsumedId } = useConsumeId(initialSelectedId, (id) => {
+    setSelectedId(id)
+    onInitialSelectionConsumed?.()
+  })
+
+  // BUG-286 — the sidebar asking this screen to go back to its list. Also
+  // resets useConsumeId's memory, so the SAME call can be reopened from the
+  // trail afterwards; without that, stepping out of a call and clicking its
+  // recent row again would be the no-op the hook exists to prevent elsewhere.
+  useStepOutToken(stepOutToken, () => {
+    setSelectedId(null)
+    resetConsumedId()
+  })
 
   // --- Detail view ---------------------------------------------------------
   if (selectedId) {
@@ -56,7 +61,13 @@ export function PastCallsView({
       <CallDetail
         callId={selectedId}
         onBack={() => setSelectedId(null)}
-        onDeleted={() => setSelectedId(null)}
+        onDeleted={(reason) => {
+          // BUG-287 — the click that landed here (a stale RECENT/palette row)
+          // must not look like a no-op: CallDetail already pruned the trail
+          // entry, this says WHY the rep is back at the list.
+          if (reason === 'missing') toast.info('That call was deleted.')
+          setSelectedId(null)
+        }}
         onChanged={refresh}
       />
     )

@@ -23,6 +23,10 @@ interface PipelineHubProps {
   onDeepLinkConsumed: () => void
   /** M31 Slice B — open the call recorded during a meeting (Calendar tab). */
   onOpenCall: (callId: string) => void
+  /** BUG-286 — the sidebar's "Pipeline" clicked while this hub is already
+   *  active. Forwarded to CRM, which closes whichever record it is showing;
+   *  the tab is left where the user put it. */
+  stepOutToken?: number
 }
 
 /** M31 Stage 2 — CRM, Tasks, and Calendar as tabs of one "Pipeline" screen.
@@ -50,7 +54,8 @@ export function PipelineHub({
   onInitialCrmSelectionConsumed,
   deepLinkEventId,
   onDeepLinkConsumed,
-  onOpenCall
+  onOpenCall,
+  stepOutToken
 }: PipelineHubProps): React.JSX.Element {
   const [tab, setTab] = useState<PipelineTab>(
     deepLinkEventId ? 'calendar' : ((initialTab as PipelineTab) ?? 'crm')
@@ -74,7 +79,13 @@ export function PipelineHub({
   }, [deepLinkEventId])
 
   return (
-    <div>
+    // BUG-266 — while the Calendar tab shows, this hub is a real flex link in
+    // the height chain (MainApp's wrapper is one for the Pipeline screen), so
+    // CalendarView's `h-full` column clamps and WeekGrid's time grid can
+    // scroll — which is what lets the week open centred on now instead of on
+    // the night hours. CRM and Tasks keep the plain block wrapper they always
+    // had: they are page content, and the page is what scrolls for them.
+    <div className={tab === 'calendar' ? 'flex min-h-0 flex-1 flex-col' : undefined}>
       <SegmentedControl options={TABS} value={tab} onChange={setTab} className="mb-4" />
       {tab === 'calendar' ? (
         <CalendarView
@@ -87,6 +98,7 @@ export function PipelineHub({
           initialContactId={initialContactId}
           initialDealId={initialDealId}
           onInitialSelectionConsumed={onInitialCrmSelectionConsumed}
+          stepOutToken={stepOutToken}
         />
       ) : (
         <TasksView />

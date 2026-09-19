@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { PageHeader } from '@renderer/components/PageHeader'
 import { SegmentedControl } from '@renderer/components/SegmentedControl'
 import { ContactsView } from '@renderer/features/contacts/ContactsView'
 import { DealsView } from '@renderer/features/deals/DealsView'
 import { FollowUpDigest } from '@renderer/features/deals/FollowUpDigest'
+import { useConsumeId } from './useConsumeId'
 
 type CrmTab = 'contacts' | 'deals' | 'followups'
 
@@ -15,11 +16,16 @@ const TABS: { id: CrmTab; label: string }[] = [
 
 interface CrmViewProps {
   /** The command palette's "jump to a specific contact/deal" — preselects
-   *  that record and switches to its tab on mount. Same one-shot-consume
-   *  shape as PastCallsView's initialSelectedId. */
+   *  that record and switches to its tab. Consumed id-keyed (BUG-289), the
+   *  same shape as PastCallsView's initialSelectedId: a REPEAT of the same
+   *  id applies once, a DIFFERENT id always applies, whether or not this
+   *  component happens to remount in between. */
   initialContactId?: string | null
   initialDealId?: string | null
   onInitialSelectionConsumed?: () => void
+  /** BUG-286 — bumped when the sidebar asks this already-active screen to go
+   *  back to its list; forwarded to whichever tab owns a detail view. */
+  stepOutToken?: number
 }
 
 /** The CRM hub: Contacts (Phase 1), Deals (Phase 3), and Follow-ups
@@ -28,19 +34,31 @@ interface CrmViewProps {
 export function CrmView({
   initialContactId = null,
   initialDealId = null,
-  onInitialSelectionConsumed
+  onInitialSelectionConsumed,
+  stepOutToken
 }: CrmViewProps = {}): React.JSX.Element {
   const [tab, setTab] = useState<CrmTab>(initialDealId ? 'deals' : 'contacts')
   const [openDealId, setOpenDealId] = useState<string | null>(initialDealId)
   const [openContactId, setOpenContactId] = useState<string | null>(initialContactId)
 
-  const consumedRef = useRef(false)
-  useEffect(() => {
-    if ((initialDealId || initialContactId) && !consumedRef.current) {
-      consumedRef.current = true
-      onInitialSelectionConsumed?.()
-    }
-  }, [initialDealId, initialContactId, onInitialSelectionConsumed])
+  // BUG-289 — `openDealId`/`openContactId`/`tab` above were seeded from
+  // props exactly once (a `useState` initializer). That was invisible while
+  // a rep's second RECENT/palette click always meant leaving CRM first (a
+  // genuine `active` change remounts this component fresh); it became a
+  // real bug once a second click could target CRM WHILE ALREADY ON IT —
+  // nothing remounts, so the new id never reached `openDealId`/
+  // `openContactId` at all. Two separate useConsumeId calls, so a contact
+  // click and a deal click never share one memory of "the last id seen".
+  useConsumeId(initialDealId, (id) => {
+    setOpenDealId(id)
+    setTab('deals')
+    onInitialSelectionConsumed?.()
+  })
+  useConsumeId(initialContactId, (id) => {
+    setOpenContactId(id)
+    setTab('contacts')
+    onInitialSelectionConsumed?.()
+  })
 
   // The Follow-ups tab always shows — it now covers risk flags, open linked
   // tasks, and this week's meetings, none of which depend on the cadence
@@ -68,11 +86,13 @@ export function CrmView({
         <ContactsView
           initialViewId={openContactId}
           onInitialViewConsumed={() => setOpenContactId(null)}
+          stepOutToken={stepOutToken}
         />
       ) : tab === 'deals' ? (
         <DealsView
           initialViewDealId={openDealId}
           onInitialViewConsumed={() => setOpenDealId(null)}
+          stepOutToken={stepOutToken}
         />
       ) : (
         <FollowUpDigest onOpenDeal={openDealFromDigest} onOpenContact={openContactFromDigest} />

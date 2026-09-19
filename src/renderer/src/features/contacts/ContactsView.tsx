@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Plus,
   Contact as ContactIcon,
@@ -33,6 +33,10 @@ import { ContactDetail } from './ContactDetail'
 import { buildContactStats, recencyTone, formatRelative, type ContactStats } from './contactStats'
 import type { Contact } from './types'
 import { formatDateOnly } from '@renderer/lib/dateOnly'
+import { useStepOutToken } from '@renderer/app/useStepOutToken'
+import { useConsumeId } from '@renderer/app/useConsumeId'
+import { useToast } from '@renderer/features/notifications/useToast'
+import { removeRecentlyViewed } from '@renderer/lib/recentlyViewed'
 
 type SortMode = 'recent' | 'name'
 
@@ -46,11 +50,14 @@ interface ContactsViewProps {
   /** Called once the initial selection above has been applied, so the parent
    *  can clear it (otherwise a later plain visit would reopen the same contact). */
   onInitialViewConsumed?: () => void
+  /** BUG-286 — the sidebar asking this already-active screen for its list. */
+  stepOutToken?: number
 }
 
 export function ContactsView({
   initialViewId = null,
-  onInitialViewConsumed
+  onInitialViewConsumed,
+  stepOutToken
 }: ContactsViewProps = {}): React.JSX.Element {
   const { contacts, loading, create, update, remove, refresh } = useContacts()
   const { deals } = useDeals()
@@ -64,19 +71,40 @@ export function ContactsView({
   const [editing, setEditing] = useState<Contact | null>(null)
   const [viewingId, setViewingId] = useState<string | null>(initialViewId)
   const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null)
+  const toast = useToast()
+
+  // BUG-287 — unlike CallDetail (an IPC round-trip that can say "not found"),
+  // a contact resolves synchronously against the already-loaded list, so
+  // there is no separate "missing" state to catch — `viewing` is just
+  // `undefined` and the list renders with no signal at all. This is the
+  // equivalent check: a stale RECENT/palette row asked for an id, the list
+  // has finished loading, and that id isn't in it.
+  useEffect(() => {
+    if (loading || !viewingId) return
+    if (contacts.some((c) => c.id === viewingId)) return
+    removeRecentlyViewed('contact', viewingId)
+    toast.info('That contact was deleted.')
+    setViewingId(null)
+  }, [loading, viewingId, contacts, toast])
 
   const handleDelete = async (contact: Contact): Promise<void> => {
     const ok = await remove(contact.id)
     setDeleteBlocked(ok ? null : contact.name)
   }
 
-  const consumedRef = useRef(false)
-  useEffect(() => {
-    if (initialViewId && !consumedRef.current) {
-      consumedRef.current = true
-      onInitialViewConsumed?.()
-    }
-  }, [initialViewId, onInitialViewConsumed])
+  // BUG-289 — M31 already found and fixed this exact shape for
+  // PastCallsView, and it never made it to this screen when Contacts/Deals
+  // were built with the same one-shot-consume prop shape: a second
+  // RECENT/palette click for a different contact — reached while already on
+  // Pipeline, so nothing remounts this component — was silently dropped.
+  // useConsumeId is the one place that fix lives now.
+  useConsumeId(initialViewId, (id) => {
+    setViewingId(id)
+    onInitialViewConsumed?.()
+  })
+
+  // BUG-286 — sidebar "Pipeline" while already on Pipeline: show the list.
+  useStepOutToken(stepOutToken, () => setViewingId(null))
 
   useEffect(() => {
     // Read-only glance data for the list ("3 calls · last week") — reuses the

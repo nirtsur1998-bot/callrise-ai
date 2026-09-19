@@ -303,14 +303,26 @@ export function endCall(opts: { saved: boolean }): void {
   const call = current
   current = null
 
-  // M39 — release this call's frozen client dossier. It is deliberately held
-  // for the whole call (dossier-store.ts explains why rebuilding per cue is
-  // both expensive and self-defeating), so something has to be the moment it
-  // stops being held, and this is the one place that knows a call is over.
-  // Written rather than assumed: `clearDossier` shipped for one commit with a
-  // doc line reading "called when a call ends" and no caller anywhere — the
-  // installed-guard-not-in-the-gate shape, one layer down.
-  if (call) clearDossier(call.id)
+  // BUG-285 — everything between here and the journal settle runs inside a
+  // try/finally, so the journal's fate (`complete()` for a saved call, which
+  // is what stops it being offered for recovery) is decided even if a step
+  // above it throws. Today each of those steps is exception-safe on its own
+  // (Map ops, a counter read, a try-wrapped unlink), so this is a structural
+  // guarantee rather than a fix for a throw anyone has seen: a future step
+  // added above the settle cannot leave a SAVED call looking recoverable,
+  // which is the duplicate-record shape save-in-flight-race.test.ts guards
+  // from the other side. The throw itself still propagates — the caller
+  // (calls.ts's post-save step) decides what a failed follow-up costs.
+  try {
+    // M39 — release this call's frozen client dossier. It is deliberately
+    // held for the whole call (dossier-store.ts explains why rebuilding per
+    // cue is both expensive and self-defeating), so something has to be the
+    // moment it stops being held, and this is the one place that knows a
+    // call is over. Written rather than assumed: `clearDossier` shipped for
+    // one commit with a doc line reading "called when a call ends" and no
+    // caller anywhere — the installed-guard-not-in-the-gate shape, one layer
+    // down.
+    if (call) clearDossier(call.id)
 
   // BUG-164 — report how much microphone echo this call carried, so the rate
   // is MEASURED across real calls rather than inferred from the one machine it
@@ -353,16 +365,25 @@ export function endCall(opts: { saved: boolean }): void {
   // ordinary mono<->multichannel restart, which mints a fresh session id
   // mid-call — trading an invisible leak for capture that visibly dies in
   // front of a buyer.
-  clearActiveConsent()
+    clearActiveConsent()
 
-  // M26 4.5.1 — real call-end is the one lifecycle point this and
-  // beginCall's implicit endCall({saved:false}) both funnel through, so
-  // this is the single place a poller's interim buffer must be cleared:
-  // never on a renderer attach/detach, only here.
-  resetInterim()
-  if (!call) return
+    // M26 4.5.1 — real call-end is the one lifecycle point this and
+    // beginCall's implicit endCall({saved:false}) both funnel through, so
+    // this is the single place a poller's interim buffer must be cleared:
+    // never on a renderer attach/detach, only here.
+    resetInterim()
+  } finally {
+    if (call) settleJournal(call, opts.saved)
+  }
+}
+
+/** The journal's fate, once the call is over — split out of endCall so it can
+ *  sit in that function's `finally` (BUG-285). `complete()` marks a saved
+ *  call's journal spent; `close()` leaves an unsaved one as a recovery
+ *  candidate. */
+function settleJournal(call: LiveCall, saved: boolean): void {
   try {
-    if (opts.saved) call.journal?.complete()
+    if (saved) call.journal?.complete()
     else call.journal?.close()
   } catch (err) {
     console.error('[live-transcript] could not close journal:', err)
@@ -370,11 +391,11 @@ export function endCall(opts: { saved: boolean }): void {
   // 1.2.5 hotfix (privacy) — the journal has no consent-retention strip of
   // its own; this is what applies it, now that the call (and this journal's
   // final consent state) is settled. Fire-and-forget, same as everything
-  // else in this function: journaling — and now its cleanup — must never be
-  // on the hot path a caller waits on. Only reachable when the call was
-  // actually saved; an unsaved journal stays an untouched recovery candidate
-  // until the rep decides its fate, same as retireJournal/discardJournal.
-  if (opts.saved && call.journal) {
+  // else in endCall: journaling — and now its cleanup — must never be on the
+  // hot path a caller waits on. Only reachable when the call was actually
+  // saved; an unsaved journal stays an untouched recovery candidate until
+  // the rep decides its fate, same as retireJournal/discardJournal.
+  if (saved && call.journal) {
     void redactJournalConsentIfNeeded(call.journal.id).catch((err) =>
       console.error('[live-transcript] consent redaction failed:', err)
     )

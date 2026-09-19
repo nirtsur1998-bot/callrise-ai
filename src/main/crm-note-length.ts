@@ -40,6 +40,27 @@ export function crmNoteLengthClause(length: CrmNoteLength): string {
   }
 }
 
+/** The STRUCTURED note's budget — deliberately bigger than the prose one
+ *  below, because the output is a JSON object with up to six sections and
+ *  their bullets, not 2-3 sentences of prose.
+ *
+ *  Measured, not guessed. At the prose budget (512 for 'medium') the tool call
+ *  came back TRUNCATED and every model in the chain rejected it —
+ *  `400 Failed to parse tool call arguments as JSON` — which reached the rep
+ *  as "Could not draft a note. Please try again." A schema that grew needs an
+ *  output budget that grows with it. */
+export function crmNoteSectionsMaxTokens(length: CrmNoteLength): number {
+  switch (length) {
+    case 'short':
+      return 500
+    case 'detailed':
+      return 2000
+    case 'medium':
+    default:
+      return 1200
+  }
+}
+
 /** Output-token budget per length — 'medium' matches crm-notes.ts's original
  *  fixed maxTokens exactly; 'detailed' gets headroom so a longer note isn't
  *  cut off mid-sentence by the token cap. */

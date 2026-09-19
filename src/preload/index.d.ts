@@ -705,8 +705,7 @@ export interface AssistantApi {
      *  including a different client's scoped one. */
     conversationId: string
   ) => Promise<
-    | { ok: true; attachment: AssistantAttachment; preview: string }
-    | { ok: false; message: string }
+    { ok: true; attachment: AssistantAttachment; preview: string } | { ok: false; message: string }
   >
   discardAttachment: (id: string) => Promise<boolean>
   /** M28 Phase 3 — one-shot voice-note transcription (Deepgram prerecorded
@@ -1133,9 +1132,7 @@ export interface CallsApi {
    *  action in the app with no Activity Center row, no progress and no Stop.
    *  The `{ ok: true; title }` variant survives only as the fallback for when
    *  enqueue itself throws. */
-  generateTitle: (
-    callId: string
-  ) => Promise<
+  generateTitle: (callId: string) => Promise<
     | { ok: true; jobId: string }
     | { ok: true; title: string }
     // BUG-228 — the reason travels, so a caller can tell a refusal from an
@@ -1389,11 +1386,50 @@ export interface CrmNoteReview {
   skipped?: string[]
 }
 
+/** 2026-09-18 — the drafted note as PARTS. A note generated as one paragraph
+ *  has no line breaks in it, so it pasted into another CRM as one long row;
+ *  sections give the card real headings and bullets to render and to put on
+ *  the clipboard. Mirrors src/main/crm-note-format.ts. */
+export interface CrmNoteSections {
+  /** Outcome first: what was decided or what changed. */
+  summary: string
+  /** What the buyer needs, in their own words where they gave them. */
+  needs?: string[]
+  discussed?: string[]
+  concerns?: string[]
+  /** Who else is involved, and who actually decides. */
+  stakeholders?: string[]
+  /** Where the deal stands, plus timing. */
+  status?: string
+  /** Each one "who — what — when". */
+  nextSteps?: string[]
+}
+
+export interface CrmNoteHeader {
+  contactName?: string
+  callDate?: string
+}
+
+/** BUG-288 — copying, from main. `navigator.clipboard` is permission-denied in
+ *  this app (a file:// document; index.ts grants `media` and nothing else), so
+ *  it fails with NotAllowedError wherever it is called. `html` is written
+ *  alongside the text, never instead of it: a rich-text CRM field collapses
+ *  plain-text newlines, which is half of why a pasted note arrived as one row.
+ *  `{ ok: false }` means nothing reached the clipboard — the caller must say so
+ *  rather than showing "Copied". */
+export interface ClipboardApi {
+  write: (payload: { text: string; html?: string }) => Promise<{ ok: boolean }>
+}
+
 /** What a `crmNote:generate` job carries in Job.resultData. */
 export interface CrmNoteJobResult {
   note: string
   facts: KycFact[]
   review?: CrmNoteReview
+  /** Absent on every note drafted before sections shipped — `note` is then
+   *  the whole note and the card renders it as the paragraph it is. */
+  sections?: CrmNoteSections
+  header?: CrmNoteHeader
 }
 
 /** M23 Workstream C — the standalone "Generate CRM note" card on the
@@ -3252,8 +3288,24 @@ export interface LiveApi {
     samples: { deterministic: number[]; model: number[] }
   }) => void
   listRecoverable: () => Promise<RecoverableCall[]>
-  /** Turn one into a real saved call, on the rep's explicit say-so. */
-  recoverCall: (id: string) => Promise<{ ok: boolean; call?: CallSummary }>
+  /** Turn one into a real saved call, on the rep's explicit say-so.
+   *  BUG-271 — mirrors main's RecoverCallIpcResult: a failure names the step
+   *  that failed, and a saved call whose tidy-up stumbled is still `ok: true`
+   *  (the stumbles are listed in `degraded`). */
+  recoverCall: (id: string) => Promise<
+    | {
+        ok: true
+        call: CallSummary
+        degraded: Array<'mark-recovered' | 'retire-journal' | 'redact-journal'>
+      }
+    | { ok: false; reason: 'nothing-to-recover' | 'bad-request' }
+    | {
+        ok: false
+        reason: 'step-failed'
+        step: 'read-journal' | 'read-call' | 'replay' | 'save' | 'unknown'
+        message: string
+      }
+  >
   /** Throw one away, on the rep's explicit say-so. */
   discardRecoverable: (id: string) => Promise<{ ok: boolean }>
 }
@@ -3316,6 +3368,7 @@ declare global {
       prepBrief: PrepBriefApi
       salesBrain: SalesBrainApi
       telemetry: TelemetryApi
+      clipboard: ClipboardApi
       updater: UpdaterApi
       jobs: JobsApi
       live: LiveApi

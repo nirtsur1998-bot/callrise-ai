@@ -21,6 +21,7 @@ import { AlertTriangle, Save, Trash2 } from 'lucide-react'
 import { Modal } from '@renderer/components/Modal'
 import { Button } from '@renderer/components/Button'
 import type { RecoverableCall } from '../../../../preload/index.d'
+import { runNoteTakerAutoBehaviours } from './noteTakerAutoBehaviours'
 
 function formatDuration(ms: number): string {
   const totalSec = Math.round(ms / 1000)
@@ -41,10 +42,24 @@ function formatStarted(iso: string): string {
   })
 }
 
+/** BUG-271 — which step of the rescue failed, as a sentence a rep can act on.
+ *  Keyed by main's RecoverStep; every sentence ends the same way on purpose,
+ *  because the most important fact is the same for all of them. */
+const RECOVER_STEP_TEXT: Record<string, string> = {
+  'read-journal': 'The recording of this call could not be read from disk.',
+  'read-call': 'This call was already saved once, but that saved copy could not be opened.',
+  replay: 'The recording could not be turned back into a transcript.',
+  save: 'The call could not be written to your call list.',
+  unknown: 'Something unexpected went wrong while saving it.'
+}
+
 export function InterruptedCallPrompt(): React.JSX.Element | null {
   const [pending, setPending] = useState<RecoverableCall[]>([])
   const [busy, setBusy] = useState(false)
   const [dismissed, setDismissed] = useState(false)
+  /** BUG-271 — what went wrong with the last "Save this call", in the rep's
+   *  words. Null when nothing has failed. */
+  const [failure, setFailure] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -71,17 +86,42 @@ export function InterruptedCallPrompt(): React.JSX.Element | null {
   const handleRecover = useCallback(async () => {
     if (!current || busy) return
     setBusy(true)
+    setFailure(null)
+    let res: Awaited<ReturnType<typeof window.api.live.recoverCall>>
     try {
-      await window.api.live.recoverCall(current.id)
-    } catch {
-      /* Leave the journal in place — better to ask again than to lose it. */
+      res = await window.api.live.recoverCall(current.id)
+    } catch (err) {
+      res = {
+        ok: false,
+        reason: 'step-failed',
+        step: 'unknown',
+        message: err instanceof Error ? err.message : String(err)
+      }
     }
+    // BUG-271 — a failed rescue used to look exactly like a successful one:
+    // the prompt advanced either way and the rep was told nothing. A DECIDING
+    // step failing means the call is NOT in the call list, so say so, say
+    // which step, and stay on this call — the journal is untouched, and
+    // "Decide later" is still one click away.
+    if (!res.ok && res.reason === 'step-failed') {
+      setFailure(RECOVER_STEP_TEXT[res.step] ?? RECOVER_STEP_TEXT.unknown)
+      setBusy(false)
+      return
+    }
+    // BUG-230 — a recovered call is a saved call: give it the same AI Note
+    // Taker treatment the live save path gives (title, summary, brief —
+    // each behind its own toggle, read now). Without this the one call a
+    // rep was not present for stayed "Call · <date>" forever. Dispatched
+    // after the prompt advances, never awaited: a slow model must not hold
+    // the next recoverable call hostage.
+    if (res.ok) void runNoteTakerAutoBehaviours(res.call.id)
     advance()
   }, [current, busy, advance])
 
   const handleDiscard = useCallback(async () => {
     if (!current || busy) return
     setBusy(true)
+    setFailure(null)
     try {
       await window.api.live.discardRecoverable(current.id)
     } catch {
@@ -138,6 +178,23 @@ export function InterruptedCallPrompt(): React.JSX.Element | null {
           )}
         </div>
 
+        {failure && (
+          <div
+            role="alert"
+            className="mt-4 rounded-xl border border-warning/40 bg-warning-soft p-3 text-sm text-ink"
+          >
+            <p className="font-medium">This call was not saved.</p>
+            <p className="mt-1 text-muted">
+              {/* Deliberately says nothing about WHERE the recording lives:
+                  that would be a locality claim, and
+                  no-false-locality-claims.test.ts is right to refuse new
+                  ones. What the rep needs is that nothing was lost. */}
+              {failure} Nothing was deleted, so the call can still be recovered. You can try again
+              now, or choose “Decide later” and you’ll be asked again next time CallRise starts.
+            </p>
+          </div>
+        )}
+
         <div className="mt-5 flex items-center justify-between gap-3">
           <button
             type="button"
@@ -163,15 +220,15 @@ export function InterruptedCallPrompt(): React.JSX.Element | null {
               disabled={busy}
               onClick={() => void handleRecover()}
             >
-              Save this call
+              {failure ? 'Try again' : 'Save this call'}
             </Button>
           </div>
         </div>
 
         {pending.length > 1 && (
           <p className="mt-3 text-center text-xs text-muted">
-            {pending.length - 1} more interrupted {pending.length - 1 === 1 ? 'call' : 'calls'} after
-            this one
+            {pending.length - 1} more interrupted {pending.length - 1 === 1 ? 'call' : 'calls'}{' '}
+            after this one
           </p>
         )}
       </div>
